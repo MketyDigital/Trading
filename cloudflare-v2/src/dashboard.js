@@ -43,14 +43,27 @@ export function renderDashboard(env) {
         // Database Proxy Client
         const dbProxy = async (table, action, match = {}, payload = {}) => {
             try {
+                if (window.setGlobalDBError) window.setGlobalDBError(null);
                 const res = await fetch('/api/admin/data/proxy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ table, action, match, payload })
                 });
-                return await res.json();
+                const data = await res.json();
+                if (data && data.error) {
+                    console.error("Supabase Database Error:", data.error);
+                    const errMsg = data.error.message || JSON.stringify(data.error);
+                    if (window.setGlobalDBError) {
+                        window.setGlobalDBError("Supabase Database Error [" + table + "]: " + errMsg);
+                    }
+                    return [];
+                }
+                return data;
             } catch (err) {
-                console.error("DB Proxy Error:", err);
+                console.error("DB Proxy Network Error:", err);
+                if (window.setGlobalDBError) {
+                    window.setGlobalDBError("Network / Connection Error: " + err.message);
+                }
                 return [];
             }
         };
@@ -62,7 +75,9 @@ export function renderDashboard(env) {
 
             const load = async () => {
                 const res = await dbProxy(table, 'select');
-                if (Array.isArray(res)) setData(res);
+                if (Array.isArray(res)) {
+                    setData(res);
+                }
                 setLoading(false);
             };
 
@@ -949,7 +964,13 @@ export function renderDashboard(env) {
         const Dashboard = () => {
             const [activeTab, setActiveTab] = useState('overview');
             const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
+            const [dbError, setDbError] = useState(null);
             const { data: workspaces } = useData('workspaces');
+
+            useEffect(() => {
+                window.setGlobalDBError = setDbError;
+                return () => { window.setGlobalDBError = null; };
+            }, []);
 
             useEffect(() => {
                 if (workspaces.length > 0 && !selectedWorkspaceId) {
@@ -959,6 +980,19 @@ export function renderDashboard(env) {
 
             return (
                 <div className="flex flex-col min-h-screen bg-[#fcfbf9]">
+                    {dbError && (
+                        <div className="bg-red-50 border-b border-red-200 px-8 py-4 text-red-800 text-sm font-semibold flex items-center justify-between animate-fade-in z-[100]">
+                            <span className="flex items-center gap-3">
+                                <Icon name="AlertTriangle" size={18} className="text-red-600 animate-pulse" />
+                                <div>
+                                    <span className="font-bold">Database Connectivity Issue:</span> {dbError}
+                                </div>
+                            </span>
+                            <button onClick={() => setDbError(null)} className="text-red-500 hover:text-red-800 bg-white border border-red-200 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all">
+                                Dismiss Warning
+                            </button>
+                        </div>
+                    )}
                     <header className="border-b border-[#e9e6df] bg-white px-8 py-4 sticky top-0 z-50 flex flex-col md:flex-row justify-between items-center gap-4">
                         <div className="flex items-center gap-3">
                             <div className="bg-[#1e1b18] p-2.5 rounded-xl text-white"><Icon name="Activity" size={22} /></div>

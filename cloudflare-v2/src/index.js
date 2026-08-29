@@ -130,9 +130,15 @@ export default {
  */
 async function getSupabaseClient(env) {
     const supabaseUrl = env.SUPABASE_URL;
-    const supabaseKey = env.SUPABASE_ANON_KEY;
+    // Support various naming conventions of Service Role Key or Anon Key
+    const supabaseKey = env.SUPABASE_SERVICE_ROLE || 
+                        env.SUPABASE_SERVICE_ROLE_KEY || 
+                        env.SUPABASE_KEY || 
+                        env.SUPABASE_SERVICE_KEY || 
+                        env.SUPABASE_ANON_KEY;
+
     if (!supabaseUrl || !supabaseKey) {
-        throw new Error("Supabase credentials missing in Cloudflare Environment variables.");
+        throw new Error("Supabase credentials missing in Cloudflare. Please set 'SUPABASE_URL' and either 'SUPABASE_SERVICE_ROLE' or 'SUPABASE_ANON_KEY' in your dashboard environment variables.");
     }
 
     // Dynamic import to support clean tree-shaking
