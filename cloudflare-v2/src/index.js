@@ -15,11 +15,12 @@ export default {
         const path = url.pathname;
         const method = request.method;
 
-        // Load Supabase Client (initialized lazily to prevent crashing on missing keys)
-        const supabase = await getSupabaseClient(env);
+        // Initialize Supabase Client only for API routes that need it
+        let supabase = null;
 
         // Core Route 1: Telegram Bot Webhook (Stars, Bank receipt uploads, VIP administration)
         if (path === "/api/webhook/telegram_bot") {
+            supabase = await getSupabaseClient(env);
             const botToken = env.TELEGRAM_BOT_TOKEN;
             const adminChannelId = env.TELEGRAM_ADMIN_CHANNEL_ID;
             const vipChatId = env.TELEGRAM_VIP_CHAT_ID;
@@ -31,6 +32,7 @@ export default {
 
         // Core Route 2: Process Signals & Executions Webhook (Invoked by MTProto Listener DO)
         if (path === "/api/webhook/process_signal" && method === "POST") {
+            supabase = await getSupabaseClient(env);
             return await handleProcessSignal(request, env, supabase);
         }
 
@@ -279,6 +281,8 @@ export default {
             });
         }
 
+        // Fallback 404 response for other paths (like /favicon.ico)
+        return new Response("Not Found", { status: 404 });
     },
 
     /**
