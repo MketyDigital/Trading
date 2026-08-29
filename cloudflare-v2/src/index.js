@@ -20,68 +20,76 @@ const memoryCache = {
  */
 export default {
     async fetch(request, env) {
-        const url = new URL(request.url);
-        const path = url.pathname;
-        const method = request.method;
+        try {
+            const url = new URL(request.url);
+            const path = url.pathname;
+            const method = request.method;
 
-        // Initialize Supabase Client only for API routes that need it
-        let supabase = null;
+            // Initialize Supabase Client only for API routes that need it
+            let supabase = null;
 
-        // Core Route 1: Telegram Bot Webhook (Dynamic Multi-Tenant)
-        if (path.startsWith("/api/webhook/telegram_bot/")) {
-            supabase = await getSupabaseClient(env);
-            const botToken = path.split("/").pop(); // Extract token from URL
-            
-            // Look up workspace by bot token
-            const { data: workspace } = await supabase.from('workspaces').select('*').eq('tg_bot_token', botToken).maybeSingle();
-            if (!workspace) return new Response("Unauthorized Bot Token", { status: 401 });
+            // Core Route 1: Telegram Bot Webhook (Dynamic Multi-Tenant)
+            if (path.startsWith("/api/webhook/telegram_bot/")) {
+                supabase = await getSupabaseClient(env);
+                const botToken = path.split("/").pop(); // Extract token from URL
+                
+                // Look up workspace by bot token
+                const { data: workspace } = await supabase.from('workspaces').select('*').eq('tg_bot_token', botToken).maybeSingle();
+                if (!workspace) return new Response("Unauthorized Bot Token", { status: 401 });
 
-            const adminChannelId = workspace.tg_admin_chat_id;
-            const vipChatId = workspace.tg_vip_chat_id;
+                const adminChannelId = workspace.tg_admin_chat_id;
+                const vipChatId = workspace.tg_vip_chat_id;
 
-            const vipManager = new VIPMembershipManager(supabase, botToken, adminChannelId, vipChatId, workspace.id);
-            const update = await request.json();
-            return await vipManager.handleWebhookUpdate(update);
-        }
-
-        // Core Route 2: Process Signals & Executions Webhook (Invoked by MTProto Listener DO)
-        if (path === "/api/webhook/process_signal" && method === "POST") {
-            supabase = await getSupabaseClient(env);
-            return await handleProcessSignal(request, env, supabase);
-        }
-
-        // Core Route 3: Admin Controls - Link & Configure MTProto Durable Object Nodes
-        if (path.startsWith("/api/admin/listener/")) {
-            return await handleListenerNodeControl(request, env, path);
-        }
-
-        // Core Route 4: SaaS Dashboard Admin APIs (Zitadel OIDC Protected)
-        if (path.startsWith("/api/admin/data")) {
-            // Optional Zitadel Enterprise Gateway Check
-            if (env.ZITADEL_JWKS_URL) {
-                const authHeader = request.headers.get("Authorization");
-                if (!authHeader || !authHeader.startsWith("Bearer ")) {
-                    return new Response("Unauthorized. Missing Bearer Token.", { status: 401 });
-                }
-                // JWT cryptographic validation against ZITADEL_JWKS_URL would execute here.
+                const vipManager = new VIPMembershipManager(supabase, botToken, adminChannelId, vipChatId, workspace.id);
+                const update = await request.json();
+                return await vipManager.handleWebhookUpdate(update);
             }
-            
-            supabase = await getSupabaseClient(env);
-            return await handleAdminAPI(request, supabase, path, method);
-        }
 
-        // Fallback Status Endpoint - Renders a premium, interactive testing dashboard
-        if (path === "/" || path === "/admin") {
-            const html = renderDashboard(env);
+            // Core Route 2: Process Signals & Executions Webhook (Invoked by MTProto Listener DO)
+            if (path === "/api/webhook/process_signal" && method === "POST") {
+                supabase = await getSupabaseClient(env);
+                return await handleProcessSignal(request, env, supabase);
+            }
 
-            return new Response(html, {
-                status: 200,
+            // Core Route 3: Admin Controls - Link & Configure MTProto Durable Object Nodes
+            if (path.startsWith("/api/admin/listener/")) {
+                return await handleListenerNodeControl(request, env, path);
+            }
+
+            // Core Route 4: SaaS Dashboard Admin APIs (Zitadel OIDC Protected)
+            if (path.startsWith("/api/admin/data")) {
+                // Optional Zitadel Enterprise Gateway Check
+                if (env.ZITADEL_JWKS_URL) {
+                    const authHeader = request.headers.get("Authorization");
+                    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+                        return new Response("Unauthorized. Missing Bearer Token.", { status: 401 });
+                    }
+                    // JWT cryptographic validation against ZITADEL_JWKS_URL would execute here.
+                }
+                
+                supabase = await getSupabaseClient(env);
+                return await handleAdminAPI(request, supabase, path, method);
+            }
+
+            // Fallback Status Endpoint - Renders a premium, interactive testing dashboard
+            if (path === "/" || path === "/admin") {
+                const html = renderDashboard(env);
+
+                return new Response(html, {
+                    status: 200,
+                    headers: { "Content-Type": "text/html; charset=utf-8" }
+                });
+            }
+
+            // Fallback 404 response for other paths (like /favicon.ico)
+            return new Response("Not Found", { status: 404 });
+        } catch (err) {
+            console.error("Worker fetch exception caught:", err);
+            return new Response(`<h3>Worker Fetch Exception Caught</h3><pre>${err.message}\n\nStack:\n${err.stack}</pre>`, {
+                status: 500,
                 headers: { "Content-Type": "text/html; charset=utf-8" }
             });
         }
-
-        // Fallback 404 response for other paths (like /favicon.ico)
-        return new Response("Not Found", { status: 404 });
     },
 
     /**
