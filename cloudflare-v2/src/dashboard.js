@@ -36,7 +36,12 @@ export function renderDashboard(env) {
 
     <script type="text/babel">
         const { useState, useEffect } = React;
-        const supabase = window.supabase.createClient(window.ENV.SUPABASE_URL, window.ENV.SUPABASE_ANON_KEY);
+        
+        // Safely instantiate Supabase only if environment variables are provided
+        const hasEnv = !!window.ENV.SUPABASE_URL && window.ENV.SUPABASE_URL !== 'undefined' && window.ENV.SUPABASE_URL.trim() !== '';
+        const supabase = hasEnv 
+            ? window.supabase.createClient(window.ENV.SUPABASE_URL, window.ENV.SUPABASE_ANON_KEY)
+            : null;
 
         // Utility: Fetch data
         const useData = (table, workspaceId = 'default_workspace') => {
@@ -44,18 +49,22 @@ export function renderDashboard(env) {
             const [loading, setLoading] = useState(true);
 
             const fetchData = async () => {
+                if (!supabase) {
+                    setLoading(false);
+                    return;
+                }
                 setLoading(true);
-                const { data: result, error } = await supabase.from(table).select('*').order('created_at', { ascending: false }).limit(50);
-                if (!error && result) setData(result);
+                try {
+                    const { data: result, error } = await supabase.from(table).select('*').order('created_at', { ascending: false }).limit(50);
+                    if (!error && result) setData(result);
+                } catch (e) {
+                    console.error("Supabase fetch error:", e);
+                }
                 setLoading(false);
             };
 
             useEffect(() => {
-                if (window.ENV.SUPABASE_URL) {
-                    fetchData();
-                } else {
-                    setLoading(false);
-                }
+                fetchData();
             }, [table]);
 
             return { data, loading, refetch: fetchData };
