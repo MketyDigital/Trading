@@ -816,7 +816,7 @@ export function renderDashboard(env) {
                                             <div className="font-semibold text-[#1e1b18]">{dep.username ? "@" + dep.username : 'Private User'}</div>
                                             <span className="text-xs text-[#a59984] font-mono">ID: {dep.telegram_id}</span>
                                         </td>
-                                        <td className="px-6 py-4 font-mono font-bold text-[#1e1b18]">${dep.amount}</td>
+                                        <td className="px-6 py-4 font-mono font-bold text-[#1e1b18]">\${dep.amount}</td>
                                         <td className="px-6 py-4">
                                             <span className="text-xs font-semibold px-2 py-1 bg-[#f5f3ef] text-[#1e1b18] rounded uppercase">
                                                 {dep.plan_requested}
