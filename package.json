@@ -9,7 +9,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@mtcute/web": "^0.19.6",
+    "@mtcute/web": "^0.31.0",
     "@supabase/supabase-js": "^2.48.1"
   },
   "devDependencies": {
