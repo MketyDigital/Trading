@@ -1,0 +1,8 @@
+{
+  "name": "starpips-dashboard",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "build": "node -e 'console.log(\"Build complete\")'"
+  }
+}

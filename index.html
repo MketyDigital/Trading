@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard | Trading Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/feather-icons"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans min-h-screen flex flex-col">
+
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="p-2 bg-indigo-600 rounded-lg shadow-sm text-white">
+            <i data-feather="cpu"></i>
+          </div>
+          <div>
+            <h1 class="font-bold text-lg leading-tight">Admin Dashboard</h1>
+            <p class="text-xs text-slate-500 font-medium">Control Panel & AI Engine</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col md:flex-row gap-8">
+    <!-- Sidebar Navigation -->
+    <div class="w-full md:w-64 shrink-0 overflow-x-auto pb-2 md:pb-0">
+      <nav class="flex md:flex-col gap-2 md:gap-1 min-w-max md:min-w-0" id="sidebar-nav">
+        <button onclick="switchTab('routes')" id="btn-routes" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors bg-indigo-50 text-indigo-700 whitespace-nowrap">
+          <i data-feather="git-branch" class="w-4 h-4"></i> Routing Matrix
+        </button>
+        <button onclick="switchTab('template')" id="btn-template" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+          <i data-feather="layout" class="w-4 h-4"></i> Rebranding Format
+        </button>
+        <button onclick="switchTab('ai')" id="btn-ai" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+          <i data-feather="terminal" class="w-4 h-4"></i> AI Prompt Engine
+        </button>
+        <button onclick="switchTab('integrations')" id="btn-integrations" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+          <i data-feather="zap" class="w-4 h-4"></i> Auto-Execution
+        </button>
+        <button onclick="switchTab('logs')" id="btn-logs" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+          <i data-feather="activity" class="w-4 h-4"></i> Signal Logs
+        </button>
+        <div class="hidden md:block pt-4 mt-4 border-t border-slate-200"></div>
+        <button onclick="switchTab('connection')" id="btn-connection" class="flex-1 md:w-full flex items-center gap-2 md:gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100 whitespace-nowrap">
+          <i data-feather="link" class="w-4 h-4"></i> Connection
+        </button>
+      </nav>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 bg-white border border-slate-200 rounded-xl shadow-sm p-4 sm:p-6 overflow-hidden w-full" id="main-content">
+      
+      <!-- Panel: Connection (Removed all setup guides/Cloudflare text) -->
+      <div id="panel-connection" class="hidden">
+        <h2 class="text-xl font-bold mb-1">Engine Connection</h2>
+        <p class="text-sm text-slate-500 mb-6">Link this interface to your backend engine API URL.</p>
+        
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-5 mb-8">
+          <label class="block text-sm font-semibold text-slate-700 mb-2">Engine API Endpoint</label>
+          <div class="flex gap-3">
+            <input type="text" id="workerUrlInput" placeholder="https://api.yourdomain.com" class="flex-1 px-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+            <button onclick="saveWorkerUrl()" class="bg-indigo-600 text-white px-6 py-2 rounded-md font-medium text-sm hover:bg-indigo-700">Connect</button>
+          </div>
+          <p class="text-xs text-slate-500 mt-2">The root URL where your backend engine is deployed.</p>
+        </div>
+      </div>
+
+      <!-- Panel: Routing Matrix -->
+      <div id="panel-routes" class="hidden">
+        <div class="flex justify-between items-end mb-6">
+          <div>
+            <h2 class="text-xl font-bold mb-1">Routing Matrix</h2>
+            <p class="text-sm text-slate-500">Map source channels to destination channels.</p>
+          </div>
+        </div>
+
+        <form id="routeForm" class="flex flex-col sm:flex-row gap-4 items-end mb-8 p-4 bg-slate-50 border border-slate-200 rounded-lg" onsubmit="addRoute(event)">
+          <div class="flex-1 w-full">
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Source Chat ID</label>
+            <input type="text" id="inputSource" placeholder="e.g. -1001234567" required class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+          </div>
+          <div class="flex-1 w-full">
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Destination Chat ID</label>
+            <input type="text" id="inputDest" placeholder="e.g. -1009876543" required class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+          </div>
+          <div class="flex-1 w-full">
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Bot Token (Optional)</label>
+            <input type="text" id="inputBotToken" placeholder="Leave blank for Global Bot" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+          </div>
+          <button type="submit" class="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium text-sm flex items-center justify-center gap-2 h-[38px] shrink-0">
+            <i data-feather="plus" class="w-4 h-4"></i> Add Route
+          </button>
+        </form>
+
+        <div class="border border-slate-200 rounded-lg overflow-x-auto">
+          <table class="w-full text-left text-sm min-w-[600px]">
+            <thead class="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+              <tr>
+                <th class="px-4 py-3">Source Channel</th>
+                <th class="px-4 py-3">Destination Channel</th>
+                <th class="px-4 py-3">Broadcaster Bot</th>
+                <th class="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="routesTableBody" class="divide-y divide-slate-200">
+              <tr><td colspan="3" class="px-4 py-8 text-center text-slate-500">Loading routes...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Panel: Formatting Template -->
+      <div id="panel-template" class="hidden">
+        <h2 class="text-xl font-bold mb-1">Rebranding Format</h2>
+        <p class="text-sm text-slate-500 mb-6">Design your output format using dynamic data variables.</p>
+
+        <div class="flex gap-6 max-md:flex-col">
+          <div class="flex-1">
+            <input type="hidden" id="templateId">
+            <textarea id="templateFormat" class="w-full h-80 px-4 py-3 font-mono text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none" placeholder="Loading..."></textarea>
+            <button onclick="saveTemplate()" class="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-lg font-medium text-sm flex items-center gap-2">
+              <i data-feather="save" class="w-4 h-4"></i> Save Format
+            </button>
+          </div>
+          <div class="w-72 shrink-0 max-md:w-full">
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-4">
+              <h3 class="text-sm font-semibold mb-3">Drag-and-Drop Variables</h3>
+              <ul class="space-y-2 font-mono text-xs text-slate-600">
+                <li class="flex justify-between p-2 bg-white rounded border border-slate-200"><span class="text-indigo-600">{symbol}</span> <span>XAUUSD</span></li>
+                <li class="flex justify-between p-2 bg-white rounded border border-slate-200"><span class="text-indigo-600">{action}</span> <span>BUY</span></li>
+                <li class="flex justify-between p-2 bg-white rounded border border-slate-200"><span class="text-indigo-600">{entry}</span> <span>1950.50</span></li>
+                <li class="flex justify-between p-2 bg-white rounded border border-slate-200"><span class="text-indigo-600">{sl}</span> <span>1940.00</span></li>
+                <li class="flex justify-between p-2 bg-white rounded border border-slate-200"><span class="text-indigo-600">{tp}</span> <span>1960.00</span></li>
+              </ul>
+              <p class="text-[11px] text-slate-500 mt-4 leading-tight">Place these variables anywhere in the text area to dynamically order the fields.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: AI Prompt Engine -->
+      <div id="panel-ai" class="hidden">
+        <h2 class="text-xl font-bold mb-1">AI Prompt Engine</h2>
+        <p class="text-sm text-slate-500 mb-6">Instruct the AI how to parse messy incoming signals.</p>
+
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-5">
+           <label class="block text-sm font-semibold text-slate-700 mb-2">System Instructions</label>
+           <textarea id="aiPromptInput" class="w-full h-48 px-4 py-3 font-mono text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none mb-4" placeholder="Parse the following trading signal..."></textarea>
+           <button onclick="saveSetting('ai_prompt', document.getElementById('aiPromptInput').value)" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-lg font-medium text-sm flex items-center gap-2">
+             <i data-feather="save" class="w-4 h-4"></i> Save Prompt Instructions
+           </button>
+        </div>
+      </div>
+
+      <!-- Panel: Integrations (Auto-Execution & Live Price) -->
+      <div id="panel-integrations" class="hidden">
+        <h2 class="text-xl font-bold mb-1">Auto-Execution & Live APIs</h2>
+        <p class="text-sm text-slate-500 mb-6">Configure Telegram Broadcaster, MT5, and Deriv integrations.</p>
+
+        <div class="space-y-6">
+           <!-- Telegram Bot Broadcaster -->
+           <div class="bg-slate-50 border border-slate-200 rounded-lg p-5">
+             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-1"><i data-feather="message-circle" class="w-4 h-4 text-blue-500"></i> Telegram Bot Token (Broadcaster)</h3>
+             <p class="text-xs text-slate-500 mb-3">The BotFather token used to broadcast the final signals to your destination channels safely.</p>
+             <div class="flex gap-3">
+               <input type="text" id="botTokenInput" placeholder="123456789:ABCdefGHIjklmNOPqrsTUVwxyz" class="flex-1 px-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+               <button onclick="saveSetting('bot_token', document.getElementById('botTokenInput').value)" class="bg-indigo-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-indigo-700">Update</button>
+             </div>
+           </div>
+
+           <!-- MT5 Algo Copying -->
+           <div class="bg-slate-50 border border-slate-200 rounded-lg p-5">
+             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-1"><i data-feather="activity" class="w-4 h-4 text-indigo-500"></i> MT5 Webhook URL</h3>
+             <p class="text-xs text-slate-500 mb-3">Forward extracted JSON signals directly to your MT5 Python or EA terminal for auto-execution.</p>
+             <div class="flex gap-3">
+               <input type="text" id="mt5WebhookInput" placeholder="http://your-vps-ip:8000/execute-mt5" class="flex-1 px-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+               <button onclick="saveSetting('mt5_webhook', document.getElementById('mt5WebhookInput').value)" class="bg-indigo-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-indigo-700">Update</button>
+             </div>
+           </div>
+
+           <!-- Deriv Synthetic Algo Copying -->
+           <div class="bg-slate-50 border border-slate-200 rounded-lg p-5">
+             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-1"><i data-feather="pie-chart" class="w-4 h-4 text-orange-500"></i> Deriv API Webhook URL</h3>
+             <p class="text-xs text-slate-500 mb-3">Execute synthetic indices (Volatility 75, Boom/Crash) signals via your Deriv execution endpoint.</p>
+             <div class="flex gap-3">
+               <input type="text" id="derivWebhookInput" placeholder="http://your-vps-ip:8000/execute-deriv" class="flex-1 px-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+               <button onclick="saveSetting('deriv_webhook', document.getElementById('derivWebhookInput').value)" class="bg-indigo-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-indigo-700">Update</button>
+             </div>
+           </div>
+
+           <!-- Live Price Injection -->
+           <div class="bg-slate-50 border border-slate-200 rounded-lg p-5">
+             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2 mb-1"><i data-feather="trending-up" class="w-4 h-4 text-emerald-500"></i> Live Price Injection API</h3>
+             <p class="text-xs text-slate-500 mb-3">Prevent slippage by overwriting outdated VIP entry prices with the actual live market price.</p>
+             <div class="flex gap-3">
+               <input type="text" id="livePriceInput" placeholder="https://api.yourbroker.com/price" class="flex-1 px-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono">
+               <button onclick="saveSetting('live_price_api', document.getElementById('livePriceInput').value)" class="bg-indigo-600 text-white px-4 py-2 rounded-md font-medium text-sm hover:bg-indigo-700">Update</button>
+             </div>
+           </div>
+        </div>
+      </div>
+
+      <!-- Panel: Logs -->
+      <div id="panel-logs" class="hidden">
+        <div class="flex justify-between items-end mb-6">
+           <div>
+              <h2 class="text-xl font-bold mb-1">Signal Logs</h2>
+              <p class="text-sm text-slate-500">Recent webhook ingestions, AI parses, and threaded smart replies.</p>
+           </div>
+           <button onclick="fetchLogs()" class="p-2 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors text-slate-600">
+             <i data-feather="refresh-cw" class="w-4 h-4"></i>
+           </button>
+        </div>
+        <div id="logsContainer" class="space-y-4">
+          <div class="p-8 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-200">Loading logs...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    feather.replace();
+    let WORKER_URL = localStorage.getItem('ENGINE_API_URL') || '';
+    
+    function switchTab(tabId) {
+      document.querySelectorAll('[id^="panel-"]').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('[id^="btn-"]').forEach(el => {
+        el.classList.remove('bg-indigo-50', 'text-indigo-700');
+        el.classList.add('text-slate-600');
+      });
+      
+      document.getElementById('panel-' + tabId).classList.remove('hidden');
+      document.getElementById('btn-' + tabId).classList.add('bg-indigo-50', 'text-indigo-700');
+      document.getElementById('btn-' + tabId).classList.remove('text-slate-600');
+
+      if (WORKER_URL) {
+        if (tabId === 'routes') fetchRoutes();
+        if (tabId === 'template') fetchTemplate();
+        if (tabId === 'logs') fetchLogs();
+        if (tabId === 'ai' || tabId === 'integrations') fetchSettings();
+      }
+    }
+
+    document.getElementById('workerUrlInput').value = WORKER_URL;
+    
+    function saveWorkerUrl() {
+      const url = document.getElementById('workerUrlInput').value.replace(/\/$/, "");
+      localStorage.setItem('ENGINE_API_URL', url);
+      WORKER_URL = url;
+      alert('Engine Connection updated successfully.');
+      switchTab('routes');
+    }
+
+    if (!WORKER_URL) switchTab('connection');
+    else switchTab('routes');
+
+    async function apiRequest(endpoint, options = {}) {
+      if (!WORKER_URL) return null;
+      try {
+        const res = await fetch(`${WORKER_URL}${endpoint}`, options);
+        return await res.json();
+      } catch (e) {
+        console.error("API Error", e);
+        return null;
+      }
+    }
+
+    // --- Settings / Features API ---
+    async function fetchSettings() {
+      const settings = await apiRequest('/api/admin/settings');
+      if (settings && Array.isArray(settings)) {
+        settings.forEach(s => {
+          if (s.key === 'ai_prompt' && document.getElementById('aiPromptInput')) document.getElementById('aiPromptInput').value = s.value;
+          if (s.key === 'bot_token' && document.getElementById('botTokenInput')) document.getElementById('botTokenInput').value = s.value;
+          if (s.key === 'mt5_webhook' && document.getElementById('mt5WebhookInput')) document.getElementById('mt5WebhookInput').value = s.value;
+          if (s.key === 'deriv_webhook' && document.getElementById('derivWebhookInput')) document.getElementById('derivWebhookInput').value = s.value;
+          if (s.key === 'live_price_api' && document.getElementById('livePriceInput')) document.getElementById('livePriceInput').value = s.value;
+        });
+      }
+    }
+
+    async function saveSetting(key, value) {
+      const res = await apiRequest('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ key, value }])
+      });
+      if(res && res.success) alert('Configuration saved!');
+      else alert('Failed to save.');
+    }
+
+    // --- Routes API ---
+    async function fetchRoutes() {
+      const routes = await apiRequest('/api/admin/routes');
+      const tbody = document.getElementById('routesTableBody');
+      if (!routes || routes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="px-4 py-8 text-center text-slate-500">No routes configured yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = routes.map(r => `
+        <tr class="hover:bg-slate-50/50 transition-colors">
+          <td class="px-4 py-3 font-medium font-mono text-xs">${r.source_chat_id}</td>
+          <td class="px-4 py-3 font-medium font-mono text-xs">${r.destination_chat_id}</td>
+          <td class="px-4 py-3 font-mono text-xs text-slate-500">${r.bot_token ? 'Custom Bot: ' + r.bot_token.substring(0,8) + '...' : 'Global Bot'}</td>
+          <td class="px-4 py-3 text-right">
+            <button onclick="deleteRoute('${r.id}')" class="text-rose-500 hover:text-rose-700 font-medium text-xs">Remove</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function addRoute(e) {
+      e.preventDefault();
+      const source = document.getElementById('inputSource').value;
+      const dest = document.getElementById('inputDest').value;
+      const botToken = document.getElementById('inputBotToken').value.trim();
+      
+      const payload = { source_chat_id: source, destination_chat_id: dest, active: true };
+      if (botToken) payload.bot_token = botToken;
+
+      await apiRequest('/api/admin/routes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      document.getElementById('inputSource').value = '';
+      document.getElementById('inputDest').value = '';
+      document.getElementById('inputBotToken').value = '';
+      fetchRoutes();
+    }
+
+    async function deleteRoute(id) {
+      if(confirm('Remove this route?')) {
+        await apiRequest(`/api/admin/routes/${id}`, { method: 'DELETE' });
+        fetchRoutes();
+      }
+    }
+
+    // --- Templates API ---
+    async function fetchTemplate() {
+      const templates = await apiRequest('/api/admin/templates');
+      if (templates && templates.length > 0) {
+        document.getElementById('templateId').value = templates[0].id;
+        document.getElementById('templateFormat').value = templates[0].format;
+      }
+    }
+
+    async function saveTemplate() {
+      const id = document.getElementById('templateId').value;
+      const format = document.getElementById('templateFormat').value;
+      await apiRequest('/api/admin/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id || undefined, format })
+      });
+      alert('Format saved successfully!');
+    }
+
+    // --- Logs API ---
+    async function fetchLogs() {
+      const logs = await apiRequest('/api/admin/signals');
+      const container = document.getElementById('logsContainer');
+      if (!logs || logs.length === 0) {
+        container.innerHTML = '<div class="p-8 text-center text-slate-500 bg-slate-50 rounded-lg border border-slate-200">No signals processed yet.</div>';
+        return;
+      }
+      container.innerHTML = logs.map(log => `
+        <div class="border border-slate-200 rounded-lg overflow-hidden mb-4">
+          <div class="bg-slate-50 px-4 py-2 border-b border-slate-200 flex justify-between text-xs">
+            <span class="font-semibold text-slate-700">Source: ${log.source_chat_id}</span>
+            <span class="text-slate-500">${new Date(log.created_at).toLocaleString()}</span>
+          </div>
+          <div class="flex divide-x divide-slate-200 max-md:flex-col">
+            <div class="flex-1 p-4">
+              <div class="text-[10px] font-bold tracking-wider text-slate-400 uppercase mb-2">Original Raw Payload</div>
+              <div class="font-mono text-xs whitespace-pre-wrap text-slate-600 bg-slate-100 p-2 rounded">${log.original_text || ''}</div>
+            </div>
+            <div class="flex-1 p-4 bg-indigo-50/30">
+              <div class="text-[10px] font-bold tracking-wider text-indigo-500 uppercase mb-2">Engine Data Extraction</div>
+              <pre class="font-mono text-[11px] text-indigo-900 bg-white p-2 rounded border border-indigo-100 overflow-auto">${JSON.stringify(log.parsed_json, null, 2)}</pre>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+  </script>
+</body>
+</html>
