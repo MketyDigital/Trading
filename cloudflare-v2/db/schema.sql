@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS public.workspaces (
     owner_email TEXT NOT NULL,
     custom_domain TEXT,
     tier TEXT DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'enterprise')),
+    tg_bot_token TEXT,
+    tg_admin_chat_id BIGINT,
+    tg_vip_chat_id BIGINT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

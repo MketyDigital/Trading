@@ -10,7 +10,7 @@
  */
 
 export class VIPMembershipManager {
-    constructor(supabaseClient, botToken, adminChannelId, vipChatId) {
+    constructor(supabaseClient, botToken, adminChannelId, vipChatId, workspaceId) { this.workspaceId = workspaceId;
         this.supabase = supabaseClient;
         this.botToken = botToken;
         this.adminChannelId = adminChannelId;
@@ -101,7 +101,7 @@ export class VIPMembershipManager {
         const { data: member, error } = await this.supabase
             .from("vip_members")
             .select("*")
-            .eq("telegram_id", chatId)
+            .eq("workspace_id", this.workspaceId).eq("telegram_id", chatId)
             .maybeSingle();
 
         if (error || !member) {
@@ -143,7 +143,7 @@ export class VIPMembershipManager {
         const { data: member, error } = await this.supabase
             .from("vip_members")
             .select("*")
-            .eq("telegram_id", chatId)
+            .eq("workspace_id", this.workspaceId).eq("telegram_id", chatId)
             .maybeSingle();
 
         if (member && member.trial_used) {
@@ -177,7 +177,7 @@ export class VIPMembershipManager {
 
         // Step 3: Upsert record in Supabase database
         const payload = {
-            telegram_id: chatId,
+            workspace_id: this.workspaceId, telegram_id: chatId,
             username,
             first_name: firstName,
             status: 'trial',
@@ -190,7 +190,7 @@ export class VIPMembershipManager {
 
         const { error: upsertError } = await this.supabase
             .from("vip_members")
-            .upsert(payload, { onConflict: 'telegram_id' });
+            .upsert(payload, { onConflict: 'workspace_id, telegram_id' });
 
         if (upsertError) {
             await this.telegramPost("sendMessage", {
@@ -245,7 +245,7 @@ export class VIPMembershipManager {
         const { data, error } = await this.supabase
             .from("bank_deposits")
             .insert({
-                telegram_id: chatId,
+                workspace_id: this.workspaceId, telegram_id: chatId,
                 username,
                 amount,
                 plan_requested: planRequested,
@@ -338,7 +338,7 @@ export class VIPMembershipManager {
                 await this.supabase
                     .from("bank_deposits")
                     .update({ status: 'approved', reviewed_at: new Date().toISOString() })
-                    .eq("id", recordId);
+                    .eq("workspace_id", this.workspaceId).eq("id", recordId);
 
                 // Create Single-Use VIP Invite Link
                 const inviteRes = await this.telegramPost("createChatInviteLink", {
@@ -352,13 +352,13 @@ export class VIPMembershipManager {
                 await this.supabase
                     .from("vip_members")
                     .upsert({
-                        telegram_id: userId,
+                        workspace_id: this.workspaceId, telegram_id: userId,
                         status: 'active',
                         subscription_tier: months === 1 ? 'monthly' : 'quarterly',
                         expires_at: expiresAt.toISOString(),
                         invite_link: inviteLink,
                         updated_at: new Date().toISOString()
-                    }, { onConflict: 'telegram_id' });
+                    }, { onConflict: 'workspace_id, telegram_id' });
 
                 // Direct Message VIP link to User
                 await this.telegramPost("sendMessage", {
@@ -380,7 +380,7 @@ export class VIPMembershipManager {
                 await this.supabase
                     .from("bank_deposits")
                     .update({ status: 'rejected', reviewed_at: new Date().toISOString() })
-                    .eq("id", recordId);
+                    .eq("workspace_id", this.workspaceId).eq("id", recordId);
 
                 // Notify User of Rejection
                 await this.telegramPost("sendMessage", {

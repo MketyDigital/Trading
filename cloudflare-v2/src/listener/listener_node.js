@@ -78,12 +78,19 @@ export class MTProtoListenerNode {
      * Initializes and starts the persistent `@mtcute/web` Telegram client
      */
     async startListener() {
-        const apiId = await this.state.storage.get("api_id");
-        const apiHash = await this.state.storage.get("api_hash");
-        const sessionString = await this.state.storage.get("session_string");
+        let apiId = await this.state.storage.get("api_id");
+        let apiHash = await this.state.storage.get("api_hash");
+        let sessionString = await this.state.storage.get("session_string");
+
+        // Admin Override: Fallback to Environment Variables if DB storage is empty
+        if (!apiId && this.env.ADMIN_MTPROTO_API_ID) {
+            apiId = parseInt(this.env.ADMIN_MTPROTO_API_ID, 10);
+            apiHash = this.env.ADMIN_MTPROTO_API_HASH;
+            sessionString = this.env.ADMIN_MTPROTO_SESSION_STRING;
+        }
 
         if (!apiId || !apiHash) {
-            console.error("MTProto credentials missing in DO storage.");
+            console.error("MTProto credentials missing in DO storage and Env fallback.");
             return;
         }
 

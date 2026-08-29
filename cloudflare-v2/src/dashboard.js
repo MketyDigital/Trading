@@ -37,6 +37,25 @@ export function renderDashboard(env) {
     <script type="text/babel">
         const { useState, useEffect } = React;
         
+        class ErrorBoundary extends React.Component {
+            constructor(props) { super(props); this.state = { hasError: false, error: null, info: null }; }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            componentDidCatch(error, info) { console.error("React Error:", error, info); this.setState({ info }); }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="p-8 m-8 bg-red-50 border border-red-200 rounded-xl font-mono text-sm text-red-800">
+                            <h2 className="text-lg font-bold mb-2">Dashboard Error</h2>
+                            <p className="mb-4">The dashboard encountered a rendering error. Please check the console for details.</p>
+                            <pre className="bg-white p-4 rounded overflow-auto text-xs">{this.state.error?.toString()}</pre>
+                            <pre className="bg-white p-4 rounded overflow-auto text-xs mt-2">{this.state.info?.componentStack}</pre>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
         // Safely instantiate Supabase only if environment variables are provided
         const hasEnv = !!window.ENV.SUPABASE_URL && window.ENV.SUPABASE_URL !== 'undefined' && window.ENV.SUPABASE_URL.trim() !== '';
         const supabase = hasEnv 
@@ -73,15 +92,23 @@ export function renderDashboard(env) {
         const Icon = ({ name, size = 20, className = '' }) => {
             const iconRef = React.useRef();
             useEffect(() => {
-                if (iconRef.current && lucide.icons[name]) {
-                    const icon = lucide.icons[name];
-                    iconRef.current.innerHTML = '';
-                    iconRef.current.appendChild(
-                        lucide.createIcons({ icons: { [name]: icon }, attrs: { width: size, height: size, class: className } }).elements[0]
-                    );
+                try {
+                    if (iconRef.current && window.lucide && window.lucide.icons[name]) {
+                        const iconData = window.lucide.icons[name];
+                        if (window.lucide.createElement) {
+                            const svgNode = window.lucide.createElement(iconData);
+                            svgNode.setAttribute('width', size);
+                            svgNode.setAttribute('height', size);
+                            svgNode.setAttribute('class', className);
+                            iconRef.current.innerHTML = '';
+                            iconRef.current.appendChild(svgNode);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Icon render error:", e);
                 }
             }, [name, size, className]);
-            return <span ref={iconRef} className={className} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} />;
+            return <span ref={iconRef} className={className} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size }} />;
         };
 
         const StatCard = ({ title, value, icon, trend }) => (
@@ -265,7 +292,7 @@ export function renderDashboard(env) {
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<Dashboard />);
+        root.render(<ErrorBoundary><Dashboard /></ErrorBoundary>);
     </script>
 </body>
 </html>`;
