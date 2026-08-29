@@ -1,0 +1,18 @@
+{
+  "name": "mkety-copier-engine",
+  "version": "2.5.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "build": "node -e 'console.log(\"Build complete\")'",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@mtcute/web": "^0.19.6",
+    "@supabase/supabase-js": "^2.48.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.127.1"
+  }
+}

@@ -1,0 +1,16 @@
+name = "mkety-copier-engine"
+main = "cloudflare-v2/src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "MTPROTO_LISTENER_NAMESPACE", class_name = "MTProtoListenerNode" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MTProtoListenerNode"]
+
+[triggers]
+crons = ["*/15 * * * *"]
