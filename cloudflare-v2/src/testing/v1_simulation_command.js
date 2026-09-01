@@ -12,6 +12,7 @@ const DEFAULT_SCENARIOS = [
 ];
 const ALLOWED_SCENARIOS = new Set([
   'complete_signal',
+  'arbitrary_tp',
   'duplicate',
   'fast_entry',
   'fast_completion',
@@ -132,6 +133,32 @@ function validateFastCompletion(body, history) {
   return null;
 }
 
+function validateArbitraryTp(body) {
+  const envelopeError = validateSimulationEnvelope(body, 'arbitrary TP');
+  if (envelopeError) return envelopeError;
+
+  const accounts = readyAccounts(body);
+  if (accounts.length === 0) {
+    return 'arbitrary TP simulation must include at least one READY account';
+  }
+
+  for (const account of accounts) {
+    const actions = Array.isArray(account?.actions) ? account.actions : [];
+    if (actions.length !== 5) {
+      return 'arbitrary TP simulation must preserve all five target actions';
+    }
+    if (actions.some((action) => action?.type !== 'OPEN_POSITION' || action?.simulated !== true)) {
+      return 'arbitrary TP simulation must contain five simulated OPEN_POSITION target actions';
+    }
+    const indexes = actions.map((action) => Number(action?.targetIndex));
+    if (!indexes.every((value, index) => value === index + 1)) {
+      return 'arbitrary TP simulation must preserve five ordered target indexes 1 through 5';
+    }
+  }
+
+  return null;
+}
+
 function validateScenarioSemantics(scenario, outcome, history = []) {
   const body = outcome?.result?.response?.body;
 
@@ -166,6 +193,10 @@ function validateScenarioSemantics(scenario, outcome, history = []) {
 
   if (scenario.name === 'fast_completion') {
     return validateFastCompletion(body, history);
+  }
+
+  if (scenario.name === 'arbitrary_tp') {
+    return validateArbitraryTp(body);
   }
 
   if (scenario.name !== 'complete_signal') return null;
