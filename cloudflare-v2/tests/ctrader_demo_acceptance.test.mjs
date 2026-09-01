@@ -4,6 +4,7 @@ import {
   validateCTraderDemoEnvironment,
   probeCTraderDemo,
   buildCTraderDemoMarketAction,
+  runCTraderDemoOrderLifecycle,
 } from '../src/testing/ctrader_demo_acceptance.js';
 
 test('cTrader demo environment validation reports names only and ignores any live-mode request', () => {
@@ -103,4 +104,123 @@ test('demo market action creates bounded protected MARKET action from live quote
     type: 'OPEN_POSITION', side: 'BUY', orderType: 'MARKET', symbol: 'XAUUSD', entry: { kind: 'MARKET' },
     lots: 0.01, stopLoss: 2499.2, takeProfit: 2501.7, idempotencyKey: 'ctrader-demo:run-42:open',
   });
+});
+
+test('demo lifecycle opens protected trade, moves BE to actual fill, partial closes and closes exact remainder', async () => {
+  const executed = [];
+  let closed = false;
+  let runtimeOptions;
+  const symbol = {
+    platform: 'ctrader', platformId: 41, platformSymbol: 'XAU/USD', canonical: 'XAUUSD', aliases: ['GOLD'],
+    digits: 2, tickSize: 0.01, pipSize: 0.1, protocolLotSize: 10000, minVolume: 100, maxVolume: 100000, stepVolume: 100,
+  };
+  const runtime = {
+    environment: 'demo',
+    account: { accountType: 'HEDGED', accessRights: 'FULL_ACCESS', canOpenTrades: true },
+    catalog: [symbol],
+    marketData: {
+      subscribeQuotes: async () => {},
+      handleSpotEvent: () => {},
+      quoteFor: () => ({ bid: 2500.1, ask: 2500.2, timestamp: 1725180000000 }),
+    },
+    session: {
+      waitForEvent: async (predicate) => {
+        const event = { payloadType: 2131, payload: { symbolId: 41, bid: 250010000, ask: 250020000 } };
+        assert.equal(predicate(event), true);
+        return event;
+      },
+    },
+    execute: async (action) => {
+      executed.push(structuredClone(action));
+      if (action.type === 'OPEN_POSITION') {
+        return { brokerPositionId: 456, brokerOrderId: 1001, fillPrice: 2500.25 };
+      }
+      return { brokerPositionId: 456 };
+    },
+    close() { closed = true; },
+  };
+
+  const result = await runCTraderDemoOrderLifecycle({
+    env: {
+      CTRADER_CLIENT_ID: 'id', CTRADER_CLIENT_SECRET: 'secret', CTRADER_ACCESS_TOKEN: 'token', CTRADER_ACCOUNT_ID: '77',
+      CTRADER_DEMO_ORDER_TEST: 'true', CTRADER_DEMO_SYMBOL: 'GOLD', CTRADER_DEMO_TEST_LOTS: '0.02',
+      CTRADER_DEMO_STOP_TICKS: '100', CTRADER_DEMO_TARGET_TICKS: '150',
+    },
+    deliveryStore: { reserve() {}, complete() {}, fail() {} },
+    runtimeFactory: async (options) => { runtimeOptions = options; return runtime; },
+    runId: 'run-42',
+  });
+
+  assert.equal(runtimeOptions.environment, 'demo');
+  assert.equal(runtimeOptions.allowLiveTrading, false);
+  assert.equal(closed, true);
+  assert.deepEqual(executed, [
+    {
+      type: 'OPEN_POSITION', side: 'BUY', orderType: 'MARKET', symbol: 'XAUUSD', entry: { kind: 'MARKET' },
+      lots: 0.02, stopLoss: 2499.2, takeProfit: 2501.7, idempotencyKey: 'ctrader-demo:run-42:open',
+    },
+    {
+      type: 'MODIFY_POSITION', brokerPositionId: 456, symbol: 'XAUUSD', stopLoss: 2500.25,
+      idempotencyKey: 'ctrader-demo:run-42:be',
+    },
+    {
+      type: 'CLOSE_PARTIAL', brokerPositionId: 456, symbol: 'XAUUSD', lots: 0.01,
+      idempotencyKey: 'ctrader-demo:run-42:partial',
+    },
+    {
+      type: 'CLOSE_POSITION', brokerPositionId: 456, symbol: 'XAUUSD', lots: 0.01,
+      idempotencyKey: 'ctrader-demo:run-42:close',
+    },
+  ]);
+  assert.deepEqual(result, {
+    ready: true,
+    environment: 'demo',
+    symbol: 'XAUUSD',
+    brokerPositionId: 456,
+    brokerOrderId: 1001,
+    fillPrice: 2500.25,
+    requestedLots: 0.02,
+    partialClosedLots: 0.01,
+    finalClosedLots: 0.01,
+    steps: ['OPEN_POSITION', 'MOVE_TO_BE', 'CLOSE_PARTIAL', 'CLOSE_POSITION'],
+  });
+  assert.doesNotMatch(JSON.stringify(result), /secret|token/i);
+});
+
+test('demo lifecycle is impossible without explicit order gate and always closes runtime after post-open failure', async () => {
+  await assert.rejects(() => runCTraderDemoOrderLifecycle({
+    env: {
+      CTRADER_CLIENT_ID: 'id', CTRADER_CLIENT_SECRET: 'secret', CTRADER_ACCESS_TOKEN: 'token', CTRADER_ACCOUNT_ID: '77',
+      CTRADER_DEMO_ORDER_TEST: 'false', CTRADER_DEMO_TEST_LOTS: '0.02',
+    },
+    deliveryStore: { reserve() {}, complete() {}, fail() {} },
+    runtimeFactory: async () => { throw new Error('runtime must not be created'); },
+  }), /explicitly enabled/i);
+
+  let closed = false;
+  const runtime = {
+    environment: 'demo',
+    account: { accountType: 'HEDGED', accessRights: 'FULL_ACCESS', canOpenTrades: true },
+    catalog: [{
+      platform: 'ctrader', platformId: 41, platformSymbol: 'XAU/USD', canonical: 'XAUUSD',
+      digits: 2, tickSize: 0.01, protocolLotSize: 10000, minVolume: 100, maxVolume: 100000, stepVolume: 100,
+    }],
+    marketData: { subscribeQuotes: async () => {}, handleSpotEvent: () => {}, quoteFor: () => ({ bid: 2500.1, ask: 2500.2 }) },
+    session: { waitForEvent: async () => ({ payloadType: 2131, payload: { symbolId: 41 } }) },
+    execute: async (action) => {
+      if (action.type === 'OPEN_POSITION') return { brokerPositionId: 456, brokerOrderId: 1001, fillPrice: 2500.25 };
+      throw new Error('management failed');
+    },
+    close() { closed = true; },
+  };
+  await assert.rejects(() => runCTraderDemoOrderLifecycle({
+    env: {
+      CTRADER_CLIENT_ID: 'id', CTRADER_CLIENT_SECRET: 'secret', CTRADER_ACCESS_TOKEN: 'token', CTRADER_ACCOUNT_ID: '77',
+      CTRADER_DEMO_ORDER_TEST: 'true', CTRADER_DEMO_TEST_LOTS: '0.02',
+    },
+    deliveryStore: { reserve() {}, complete() {}, fail() {} },
+    runtimeFactory: async () => runtime,
+    runId: 'failure-run',
+  }), /management failed/i);
+  assert.equal(closed, true);
 });
