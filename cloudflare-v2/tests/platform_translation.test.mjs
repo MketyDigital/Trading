@@ -43,7 +43,8 @@ test('translates the same canonical action to cTrader protocol semantics', () =>
       platformSymbol: 'XAU/USD',
       digits: 2,
       tickSize: 0.01,
-      lotSize: 100,
+      // 100.00 units per lot expressed by cTrader as protocol cents.
+      protocolLotSize: 10000,
       minVolume: 100,
       stepVolume: 100,
     },
