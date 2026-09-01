@@ -48,3 +48,17 @@ test('generates break-even changes only for remaining open legs', () => {
     { type: 'MODIFY_POSITION', brokerPositionId: 'p3', stopLoss: 2526 }
   ]);
 });
+
+test('full close actions preserve each open leg volume for platforms that require explicit close size', () => {
+  const group = {
+    legs: [
+      { legId: '1', brokerPositionId: 'p1', lots: 0.04, status: 'OPEN' },
+      { legId: '2', brokerPositionId: 'p2', lots: 0.03, status: 'OPEN' },
+      { legId: '3', brokerPositionId: 'p3', lots: 0.03, status: 'CLOSED' }
+    ]
+  };
+  assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_ALL' }), [
+    { type: 'CLOSE_POSITION', brokerPositionId: 'p1', lots: 0.04 },
+    { type: 'CLOSE_POSITION', brokerPositionId: 'p2', lots: 0.03 }
+  ]);
+});
