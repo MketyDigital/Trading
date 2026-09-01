@@ -53,7 +53,8 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   const issuer = env.ZITADEL_ISSUER;
   const audience = env.ZITADEL_AUDIENCE;
   const jwksUrl = env.ZITADEL_JWKS_URL;
-  if (!issuer || !audience || !jwksUrl) {
+  const usesProductionVerifier = authenticateFn === authenticateTradingBearer;
+  if (usesProductionVerifier && (!issuer || !audience || !jwksUrl)) {
     return { ok: false, status: 503, reason: 'ZITADEL_NOT_CONFIGURED' };
   }
 
