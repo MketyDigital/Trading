@@ -5,6 +5,10 @@ function finiteNumber(value) {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+function decimalUnit(position) {
+  return Number(`1e-${position}`);
+}
+
 export function fromMT5Symbols(symbols = []) {
   return symbols.map((symbol) => ({
     platform: 'mt5',
@@ -37,11 +41,12 @@ export function fromCTraderSymbols(symbols = []) {
       aliases: [symbol.description].filter(Boolean),
       digits,
       pipPosition,
-      // cTrader quotes are normalized to the symbol's advertised digits. The
-      // smallest quoted price increment is therefore 10^-digits; pip size is
-      // 10^-pipPosition (e.g. EURUSD digits=5, pipPosition=4).
-      tickSize: digits == null ? undefined : 10 ** (-digits),
-      pipSize: pipPosition == null ? undefined : 10 ** (-pipPosition),
+      // cTrader quotes are normalized to the symbol's advertised digits. Use
+      // decimal scientific notation so 5 digits maps to the same canonical
+      // Number representation as a literal 0.00001 instead of a pow rounding
+      // artifact such as 0.000009999999999999999.
+      tickSize: digits == null ? undefined : decimalUnit(digits),
+      pipSize: pipPosition == null ? undefined : decimalUnit(pipPosition),
       // cTrader protocol metadata is already expressed in cents.
       protocolLotSize,
       lotSizeUnits: protocolLotSize == null ? undefined : protocolLotSize / 100,
