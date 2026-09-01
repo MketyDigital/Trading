@@ -67,10 +67,28 @@ function cleanCandidate(value) {
     .trim();
 }
 
-function extractSymbolToken(text, sideInfo, orderType) {
-  const before = cleanCandidate(text.slice(0, sideInfo.index));
-  const beforeTail = before.match(/([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\s*$/)?.[1];
-  if (beforeTail && !/^(ENTRY|SIGNAL|TRADE|NOW)$/i.test(beforeTail)) return beforeTail;
+function concisePrefixSymbol(before) {
+  const cleaned = cleanCandidate(before)
+    .replace(/^\s*(?:SIGNAL|TRADE|ENTRY)\s*[:=-]?\s*/i, '')
+    .trim();
+  if (!cleaned) return null;
+
+  // Symbol-before-side forms should be concise (e.g. "XAUUSD BUY" or
+  // "GOLD BUY"). Longer prose such as "Gold is good here, buy ..." must
+  // fall through to AI rather than treating the final prose word as a symbol.
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length > 2) return null;
+
+  const synthetic = cleaned.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)$/i)?.[1];
+  if (synthetic) return synthetic;
+
+  if (tokens.length === 1 && /^[A-Za-z][A-Za-z0-9_./#&.-]{1,24}$/.test(tokens[0])) return tokens[0];
+  return null;
+}
+
+function extractSymbolToken(text, sideInfo) {
+  const beforeSymbol = concisePrefixSymbol(text.slice(0, sideInfo.index));
+  if (beforeSymbol) return beforeSymbol;
 
   let after = text.slice(sideInfo.end).trim();
   after = after.replace(/^\s*(?:STOP\s+LIMIT|LIMIT|STOP|MARKET)\b/i, '').trim();
@@ -124,7 +142,7 @@ export function buildMachinePlan(event = {}) {
   const sideInfo = sideMatch(text);
   if (!order.side || !sideInfo) return { status: 'NEEDS_INTERPRETATION' };
 
-  const symbolToken = extractSymbolToken(text, sideInfo, order.orderType);
+  const symbolToken = extractSymbolToken(text, sideInfo);
   if (!symbolToken) return { status: 'NEEDS_INTERPRETATION' };
   const symbol = normalizeSymbol(symbolToken);
 
