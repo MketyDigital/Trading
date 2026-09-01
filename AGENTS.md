@@ -10,7 +10,7 @@ This file is the operational source of truth for `MketyDigital/Trading`. Read it
 - `app.mkety.com` / Mkety is the identity, billing, entitlement, provisioning, and revocation control plane.
 - `cloudflare-v2/src/index.js` is the preserved legacy Worker. Do not broad-refactor it while V1 is being proven.
 - `cloudflare-v2/src/v1_entry.js` is the design-branch Cloudflare entrypoint and delegates legacy behavior except explicit V1 routes/shadow behavior.
-- `main` is unchanged by this branch work.
+- `main` is unchanged by this branch work. Do not merge to `main` without explicit user instruction.
 
 ## Product and architecture
 
@@ -152,8 +152,11 @@ TRADE_STATE_NAMESPACE -> TradeStateNode
 - It imports no broker executor and has no broker dispatch dependency.
 - Disabled/blocked/kill-switch accounts emit zero actions.
 - `wait_for_complete_signal` emits no action for incomplete fast entries.
-- matched/ambiguous correlation cannot create duplicate groups.
-- `/api/v1/events` invokes it only when `TRADING_V1_SIMULATION=true`.
+- ambiguous correlation remains action-free and cannot create a duplicate group.
+- `FAST_ENTRY_COMPLETION` now reuses the matched Position Group in simulation instead of returning empty `CORRELATED` output.
+- Fast-entry completion recalculates the completed account plan under current risk/policy rules, promotes the original first leg to TP1, opens only missing TP legs, preserves the original group/first-leg identity, appends the completion source-event ID, clears `incomplete`, and marks every action `simulated: true`.
+- The simulation-specific reconciliation path can model a prior `PLANNED` leg before a broker position ID exists; real execution helpers retain stricter broker-state requirements.
+- `/api/v1/events` invokes orchestration only when `TRADING_V1_SIMULATION=true`.
 - static simulation market/exposure config is staging/shadow context only and never substitutes for broker metadata in demo/live execution.
 
 ### Signed V1 simulation acceptance harness
@@ -166,10 +169,12 @@ Implemented/tested:
 - duplicate reuses the exact prior `external_event_id` so persistent event idempotency is part of the default acceptance path;
 - invalid-signature acceptance succeeds only when the Worker returns the exact expected `401` rejection;
 - stale-timestamp acceptance signs the stale timestamp/body pair correctly and succeeds only when the Worker returns the exact expected `401` rejection;
+- complete-signal acceptance no longer treats any 2xx as success: it requires `simulation.status=SIMULATED`, `executionEnabled=false`, at least one READY simulated account, and all generated account actions to be explicitly marked `simulated: true`;
+- duplicate acceptance requires the response body to prove `duplicate=true`;
 - optional scenario list also supports `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`;
 - command/harness has no broker execution dependency; safe full-pipeline use requires the target Worker to have `TRADING_V1_SIMULATION=true`.
 
-This command has **not** yet been run against a configured Worker endpoint in this development session because the required Cloudflare/source credentials are not available here. Its repo-side command, signing, scenario sequencing, sanitization, expected-negative semantics, and CI contracts are verified.
+This command has **not** yet been run against a configured Worker endpoint in this development session because the required Cloudflare/source credentials are not available here. Its repo-side command, signing, scenario sequencing, sanitization, expected-negative semantics, semantic response validation, and CI contracts are verified.
 
 ### cTrader foundation and demo acceptance harness
 
@@ -295,9 +300,13 @@ Relevant verified GREEN checkpoints:
 - `33541021382` on head `f0d593c33b82e6c40fea9c6b940e5dfe987424d3` — final MT5 demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
 - `33541653303` on head `aed999891a2c39b667d5201a27681d2247125041` — signed V1 simulation package command checkpoint;
 - `33541946489` on head `36e2fae26c01ffb9ee0be3af57799f14ba2c572f` — expected-negative V1 security acceptance semantics checkpoint;
-- `33542227070` on head `905cfdff783b7594dc7b2b784cc826171fcbe025` — default V1 acceptance matrix checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
+- `33542227070` on head `905cfdff783b7594dc7b2b784cc826171fcbe025` — default V1 acceptance matrix checkpoint;
+- `33542711209` on head `db5a2b2b7711ea745d13a3624ad5989c457d69f4` — complete-signal/duplicate semantic acceptance checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33545224979` on head `ca69fbaff9a0e9c8baf8bd71523d7e5b4f18ab15` — V1 fast-entry completion reconciliation checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
 
-Test-first RED runs are expected. Always inspect the newest branch/push run before claiming current green state because new commits trigger a later run.
+Test-first RED runs are expected. The RED fast-entry checkpoint was `33543050264` on head `00be60cad33a1a287033a61cc240365c738f1eb7`: 232/233 Node tests passed and the sole failure was the missing `FAST_ENTRY_COMPLETION` orchestration behavior.
+
+Always inspect the newest branch/push run before claiming current green state because new commits trigger a later run.
 
 ## External configuration still required
 
@@ -343,12 +352,12 @@ Do not paste these secret values into Git/chat/logs.
 ## Remaining blockers / priority order
 
 1. Run `npm run accept:v1:simulation` against a configured non-live Worker so real HTTP ingress, HMAC, persistent event idempotency, interpretation, correlation, risk/policy, Position Group and simulation actions are verified together with zero broker dispatch.
-2. Strengthen repo-side V1 semantic acceptance assertions: valid complete signal must prove simulation output/no broker dispatch; duplicate must prove duplicate response semantics; then add kill-switch/zero-action, fast-entry completion, reply/thread management, and arbitrary-TP scenarios.
+2. Extend repo-side V1 acceptance with scenario-specific semantics for kill-switch/zero-action, fast-entry + completion sequencing, reply/thread management, arbitrary TP count, and AI ambiguity/fail-closed behavior.
 3. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
 4. Keep the existing Trading access row disabled until Zitadel authorization is verified.
 5. Generate/store encrypted source credentials and create one active source connection.
 6. Create one restrictive non-live trade account and run the signed `/api/v1/events` simulation matrix.
-7. Verify AI ambiguity, kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
+7. Verify kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
 8. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
 9. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
 10. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
@@ -363,11 +372,12 @@ Because database schema is applied/inert and cTrader, MT5, and signed V1 simulat
 Next repo-side work while external credentials are unavailable:
 
 1. keep CI green;
-2. add semantic response validation to `accept:v1:simulation` so a 2xx alone cannot falsely pass complete-signal or duplicate acceptance;
-3. add kill-switch/zero-action proof, fast-entry completion sequence, reply/thread management, and arbitrary-TP scenario acceptance with zero broker dispatch;
-4. keep cTrader/MT5 demo acceptance paths isolated from live execution;
-5. once endpoint/broker credentials are supplied outside chat, run real V1 non-live Worker acceptance and cTrader/MT5 demo E2E;
-6. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
+2. add a kill-switch acceptance scenario that succeeds only when the target account is blocked with zero simulated actions and no new Position Group;
+3. add an end-to-end fast-entry + completion acceptance sequence that proves one canonical group is reused and only missing TP legs are proposed;
+4. add reply/thread management and arbitrary-TP semantic acceptance;
+5. keep cTrader/MT5 demo acceptance paths isolated from live execution;
+6. once endpoint/broker credentials are supplied outside chat, run real V1 non-live Worker acceptance and cTrader/MT5 demo E2E;
+7. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
 
 ## Mandatory progress update rule
 
