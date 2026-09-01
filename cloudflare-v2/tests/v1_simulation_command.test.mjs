@@ -60,6 +60,45 @@ function killSwitchResult(scenario, overrides = {}) {
   };
 }
 
+function fastSequenceResult(scenario, { completionGroupId = 'group-fast' } = {}) {
+  const completion = scenario.name === 'fast_completion';
+  return {
+    ok: true,
+    result: {
+      scenario: scenario.name,
+      externalEventId: scenario.event.external_event_id,
+      response: {
+        statusCode: 200,
+        body: {
+          ok: true,
+          duplicate: false,
+          simulation: {
+            status: 'SIMULATED',
+            executionEnabled: false,
+            correlation: completion
+              ? { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: completionGroupId }
+              : { status: 'NEW_GROUP' },
+            accounts: [
+              {
+                accountId: 'account-1',
+                status: 'READY',
+                groupId: completion ? completionGroupId : 'group-fast',
+                actions: completion
+                  ? [
+                      { type: 'MODIFY_POSITION', targetIndex: 1, simulated: true },
+                      { type: 'OPEN_POSITION', targetIndex: 2, simulated: true },
+                      { type: 'OPEN_POSITION', targetIndex: 3, simulated: true },
+                    ]
+                  : [{ type: 'OPEN_POSITION', targetIndex: 1, simulated: true }],
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
 test('V1 simulation command defaults to valid signal, exact duplicate, invalid signature and stale timestamp', async () => {
   const calls = [];
   const lines = [];
@@ -175,6 +214,51 @@ test('kill-switch acceptance rejects any simulated execution action', async () =
   assert.equal(result.exitCode, 1);
   assert.equal(result.failedScenario, 'kill_switch');
   assert.match(result.semanticError, /zero actions/i);
+});
+
+test('fast-entry completion acceptance proves one group is reused and only missing TP legs are opened', async () => {
+  const calls = [];
+  const result = await runV1SimulationAcceptanceCommand({
+    env: {
+      TRADING_V1_ENDPOINT: 'https://trade.example.test/api/v1/events',
+      TRADING_V1_SOURCE_ID: 'source-1',
+      TRADING_V1_SOURCE_SECRET: 'secret',
+      TRADING_V1_ACCEPTANCE_RUN_ID: 'run-fast',
+      TRADING_V1_ACCEPTANCE_SCENARIOS: 'fast_entry,fast_completion',
+    },
+    logger: { log() {}, error() {} },
+    scenarioRunner: async ({ scenario }) => {
+      calls.push(scenario);
+      return fastSequenceResult(scenario);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(calls.map((scenario) => scenario.name), ['fast_entry', 'fast_completion']);
+  assert.match(calls[0].event.text, /NOW/i);
+  assert.match(calls[1].event.text, /TP/i);
+  assert.notEqual(calls[0].event.external_event_id, calls[1].event.external_event_id);
+});
+
+test('fast-entry completion acceptance fails if the completed signal does not reuse the original group', async () => {
+  const result = await runV1SimulationAcceptanceCommand({
+    env: {
+      TRADING_V1_ENDPOINT: 'https://trade.example.test/api/v1/events',
+      TRADING_V1_SOURCE_ID: 'source-1',
+      TRADING_V1_SOURCE_SECRET: 'secret',
+      TRADING_V1_ACCEPTANCE_SCENARIOS: 'fast_entry,fast_completion',
+    },
+    logger: { log() {}, error() {} },
+    scenarioRunner: async ({ scenario }) => scenario.name === 'fast_entry'
+      ? fastSequenceResult(scenario)
+      : fastSequenceResult(scenario, { completionGroupId: 'wrong-group' }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.failedScenario, 'fast_completion');
+  assert.match(result.semanticError, /same group|reuse/i);
 });
 
 test('complete signal acceptance fails if HTTP succeeds without real simulation semantics', async () => {
