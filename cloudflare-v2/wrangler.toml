@@ -5,12 +5,17 @@ compatibility_flags = ["nodejs_compat"]
 
 [durable_objects]
 bindings = [
-  { name = "MTPROTO_LISTENER_NAMESPACE", class_name = "MTProtoListenerNode" }
+  { name = "MTPROTO_LISTENER_NAMESPACE", class_name = "MTProtoListenerNode" },
+  { name = "TRADE_STATE_NAMESPACE", class_name = "TradeStateNode" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MTProtoListenerNode"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TradeStateNode"]
 
 [triggers]
 crons = ["*/15 * * * *"]
