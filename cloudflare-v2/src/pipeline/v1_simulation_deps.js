@@ -36,6 +36,7 @@ function createTradeStateClient(env, workspaceId) {
       correlate: (event, interpretation, nowMs) => call('/correlate', 'POST', { event, interpretation, nowMs }),
     },
     stateStore: {
+      getGroup: (groupId) => call(`/groups/${encodeURIComponent(String(groupId))}`, 'GET'),
       putGroup: (group) => call('/groups', 'POST', group),
     },
   };
