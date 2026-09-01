@@ -5,8 +5,8 @@ function decimals(step) {
   return text.includes('.') ? text.split('.')[1].length : 0;
 }
 
-function clamp(value, min, max) {
-  return Math.min(max ?? value, Math.max(min ?? value, value));
+function clampMax(value, max) {
+  return Math.min(max ?? value, value);
 }
 
 function resolveRiskAmount({ equity, balance, riskPercent, riskAmount }) {
@@ -67,7 +67,14 @@ export function calculateRiskPlan({
   // Floor rather than round so normalization never increases intended risk.
   const rawLots = allowedRisk / lossPerLotAtStop;
   const steppedLots = Math.floor(rawLots / step) * step;
-  const totalLots = Number(clamp(steppedLots, min, max).toFixed(decimals(step)));
+
+  // Never raise a risk-sized order to the broker minimum. If the smallest
+  // tradable order would exceed the configured risk, the safe result is no trade.
+  if (steppedLots < min) {
+    throw new RangeError('risk-sized volume is below broker minimum');
+  }
+
+  const totalLots = Number(clampMax(steppedLots, max).toFixed(decimals(step)));
   const actualRisk = totalLots * lossPerLotAtStop;
   const legLots = allocateVolumeAcrossTargets(totalLots, targetCount, step);
 
