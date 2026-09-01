@@ -31,8 +31,10 @@ test('normalizes canonical lots for MT5 volume constraints', () => {
   assert.equal(normalizeVolumeForMT5(120, { min: 0.01, max: 100, step: 0.01 }), 100);
 });
 
-test('converts canonical lots to cTrader 0.01-unit protocol volume using symbol lot size', () => {
-  assert.equal(normalizeVolumeForCTrader(0.01, { lotSize: 100000, minVolume: 100000, stepVolume: 100000 }), 100000);
-  assert.equal(normalizeVolumeForCTrader(0.10, { lotSize: 100000, minVolume: 100000, stepVolume: 100000 }), 1000000);
-  assert.equal(normalizeVolumeForCTrader(1, { lotSize: 1, minVolume: 100, stepVolume: 100 }), 100);
+test('converts canonical lots to cTrader protocol cents using raw ProtoOASymbol lotSize', () => {
+  // ProtoOASymbol.lotSize is already in cents: 10,000,000 = 100,000.00 base units per lot.
+  assert.equal(normalizeVolumeForCTrader(0.01, { protocolLotSize: 10000000, minVolume: 100000, stepVolume: 100000 }), 100000);
+  assert.equal(normalizeVolumeForCTrader(0.10, { protocolLotSize: 10000000, minVolume: 100000, stepVolume: 100000 }), 1000000);
+  // One-unit contract: 1 lot = 1.00 unit = 100 protocol cents.
+  assert.equal(normalizeVolumeForCTrader(1, { protocolLotSize: 100, minVolume: 100, stepVolume: 100 }), 100);
 });
