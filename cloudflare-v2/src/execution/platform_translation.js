@@ -15,6 +15,7 @@ function entryValue(action) {
 function cTraderVolumeOptions(symbol = {}) {
   return {
     protocolLotSize: symbol.protocolLotSize,
+    lotSize: symbol.lotSize,
     minVolume: symbol.minVolume,
     maxVolume: symbol.maxVolume,
     stepVolume: symbol.stepVolume,
@@ -45,6 +46,7 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
   if (!symbol?.platformId) throw new TypeError('resolved cTrader symbolId required');
   const priceOptions = { digits: symbol.digits, tickSize: symbol.tickSize };
   const entryPrice = entryValue(action);
+  const isMarket = action.orderType === 'MARKET';
 
   return buildNewOrderMessage({
     clientMsgId,
@@ -54,8 +56,13 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
     orderType: action.orderType,
     protocolVolume: normalizeVolumeForCTrader(action.lots, cTraderVolumeOptions(symbol)),
     ...(entryPrice != null ? { entryPrice: normalizePrice(entryPrice, priceOptions) } : {}),
-    ...(action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
-    ...(action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
+    // cTrader does not accept absolute stopLoss/takeProfit on MARKET new-order
+    // requests. The executor applies them via 2110 after position creation.
+    ...(!isMarket && action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
+    ...(!isMarket && action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
+    ...(action.idempotencyKey ? { clientOrderId: action.idempotencyKey } : {}),
+    ...(action.label ? { label: action.label } : {}),
+    ...(action.comment ? { comment: action.comment } : {}),
   });
 }
 
