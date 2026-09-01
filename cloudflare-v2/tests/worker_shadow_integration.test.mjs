@@ -86,6 +86,19 @@ test('shadow interpretation failure never interrupts legacy delivery or executio
   assert.match(body.trace.v1_shadow.error, /shadow failed/i);
 });
 
+test('versioned universal event endpoint bypasses legacy Worker and uses V1 ingress handler', async () => {
+  let legacyCalls = 0;
+  let v1Calls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+    eventsHandler: async () => { v1Calls += 1; return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }); },
+  });
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/events', { method: 'POST', body: '{}' }), {});
+  assert.equal(response.status, 200);
+  assert.equal(v1Calls, 1);
+  assert.equal(legacyCalls, 0);
+});
+
 test('scheduled handler remains delegated to legacy Worker', async () => {
   let called = false;
   const entry = createTradingV1Entrypoint({
