@@ -42,6 +42,51 @@ function plannedStateGroup(plan, { event, eventId, account, nowMs }) {
   };
 }
 
+function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs }) {
+  const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
+    event,
+    eventId,
+    account,
+    nowMs,
+  });
+  desired.id = existing.id;
+  desired.createdAt = existing.createdAt ?? nowMs;
+  desired.sourceEventIds = [...new Set([
+    ...(existing.sourceEventIds || []).map(String),
+    ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
+  ])];
+  desired.incomplete = false;
+
+  const existingFirst = existing.legs?.[0];
+  const desiredFirst = desired.legs?.[0];
+  if (!existingFirst || !desiredFirst) throw new Error('existing fast-entry leg is unavailable');
+
+  desired.legs[0] = {
+    ...existingFirst,
+    ...desiredFirst,
+    legId: existingFirst.legId,
+    brokerPositionId: existingFirst.brokerPositionId,
+    brokerOrderId: existingFirst.brokerOrderId,
+    status: existingFirst.status,
+  };
+
+  const actions = [{
+    type: 'MODIFY_POSITION',
+    legId: existingFirst.legId,
+    brokerPositionId: existingFirst.brokerPositionId,
+    symbol: desired.symbol,
+    stopLoss: desiredFirst.stopLoss,
+    takeProfit: desiredFirst.takeProfit,
+    targetIndex: 1,
+    idempotencyKey: `${existing.id}:leg:1:complete`,
+  }, ...plan.actions.slice(1).map((action) => ({
+    ...action,
+    idempotencyKey: `${existing.id}:leg:${action.targetIndex}`,
+  }))];
+
+  return { group: desired, actions };
+}
+
 export async function orchestrateTradingEventSimulation({
   event = {},
   interpretation = {},
@@ -69,13 +114,24 @@ export async function orchestrateTradingEventSimulation({
   }
 
   const correlation = await stateCoordinator.correlate(event, interpretation, nowMs);
-  if (correlation?.status !== 'NEW_GROUP') {
-    return {
-      ...base,
-      status: correlation?.status === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : 'CORRELATED',
-      correlation,
-      accounts: [],
-    };
+  if (correlation?.status === 'NEEDS_REVIEW') {
+    return { ...base, status: 'NEEDS_REVIEW', correlation, accounts: [] };
+  }
+
+  const isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
+  if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion) {
+    return { ...base, status: 'CORRELATED', correlation, accounts: [] };
+  }
+
+  let matchedGroup = null;
+  if (isFastCompletion) {
+    if (!stateStore?.getGroup) {
+      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_STORE_UNAVAILABLE' };
+    }
+    matchedGroup = await stateStore.getGroup(correlation.groupId);
+    if (!matchedGroup) {
+      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_NOT_FOUND' };
+    }
   }
 
   const accounts = await accountProvider(event.workspace_hint, event, interpretation);
@@ -83,6 +139,8 @@ export async function orchestrateTradingEventSimulation({
 
   for (const rawAccount of Array.isArray(accounts) ? accounts : []) {
     const account = normalizeAccount(rawAccount);
+
+    if (isFastCompletion && String(account.id) !== String(matchedGroup.tradeAccountId)) continue;
 
     if (account.execution_enabled !== true && account.executionEnabled !== true) {
       results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
@@ -115,7 +173,7 @@ export async function orchestrateTradingEventSimulation({
     }
 
     let plan;
-    const groupId = `${eventId || event.external_event_id || 'event'}:${account.id}`;
+    const groupId = isFastCompletion ? matchedGroup.id : `${eventId || event.external_event_id || 'event'}:${account.id}`;
     try {
       plan = buildExecutionPlan(interpretation.intent, {
         account,
@@ -136,6 +194,32 @@ export async function orchestrateTradingEventSimulation({
         policy: plan.policy,
         risk: plan.risk,
         actions: [],
+      });
+      continue;
+    }
+
+    if (isFastCompletion) {
+      let reconciliation;
+      try {
+        reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: interpretation.intent }, {
+          event,
+          eventId,
+          account,
+          nowMs: Number(nowMs),
+        });
+      } catch (error) {
+        results.push({ accountId: account.id, status: 'BLOCKED', reason: 'FAST_ENTRY_RECONCILIATION_FAILED', error: error.message, actions: [] });
+        continue;
+      }
+
+      await stateStore.putGroup(reconciliation.group);
+      results.push({
+        accountId: account.id,
+        status: 'READY',
+        groupId: reconciliation.group.id,
+        policy: plan.policy,
+        risk: plan.risk,
+        actions: simulationActions(reconciliation.actions),
       });
       continue;
     }
