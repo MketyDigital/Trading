@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 
 test('feature flag off delegates process_signal to legacy Worker unchanged', async () => {
@@ -92,4 +93,9 @@ test('scheduled handler remains delegated to legacy Worker', async () => {
   });
   await entry.scheduled({}, {}, {});
   assert.equal(called, true);
+});
+
+test('Cloudflare entrypoint switches through the V1 wrapper while legacy Worker remains intact', async () => {
+  const wrangler = await fs.readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(wrangler, /main\s*=\s*["']src\/v1_entry\.js["']/);
 });
