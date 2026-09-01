@@ -15,6 +15,55 @@ export function buildAccountAuthMessage(ctidTraderAccountId, accessToken, client
   return { clientMsgId, payloadType: 2102, payload: { ctidTraderAccountId, accessToken } };
 }
 
+export function buildSymbolsListMessage({ clientMsgId, accountId, includeArchivedSymbols = false }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  return {
+    clientMsgId,
+    payloadType: 2114,
+    payload: { ctidTraderAccountId: Number(accountId), includeArchivedSymbols: Boolean(includeArchivedSymbols) },
+  };
+}
+
+export function buildSymbolByIdMessage({ clientMsgId, accountId, symbolIds }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  const ids = Array.isArray(symbolIds) ? symbolIds.map(Number).filter(Number.isInteger) : [];
+  if (!ids.length) throw new TypeError('symbolIds are required');
+  return {
+    clientMsgId,
+    payloadType: 2116,
+    payload: { ctidTraderAccountId: Number(accountId), symbolId: ids },
+  };
+}
+
+export function buildSubscribeSpotsMessage({ clientMsgId, accountId, symbolIds, subscribeToSpotTimestamp = true }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  const ids = Array.isArray(symbolIds) ? symbolIds.map(Number).filter(Number.isInteger) : [];
+  if (!ids.length) throw new TypeError('symbolIds are required');
+  return {
+    clientMsgId,
+    payloadType: 2127,
+    payload: {
+      ctidTraderAccountId: Number(accountId),
+      symbolId: ids,
+      subscribeToSpotTimestamp: Boolean(subscribeToSpotTimestamp),
+    },
+  };
+}
+
+export function decodeSpotEvent(message, { digits } = {}) {
+  if (Number(message?.payloadType) !== 2131) throw new TypeError('ProtoOASpotEvent payload required');
+  const payload = message.payload || {};
+  const places = Number.isInteger(Number(digits)) ? Number(digits) : 5;
+  const decode = (value) => value == null ? null : Number((Number(value) / 100000).toFixed(places));
+  return {
+    accountId: Number(payload.ctidTraderAccountId),
+    symbolId: Number(payload.symbolId),
+    ...(payload.bid != null ? { bid: decode(payload.bid) } : {}),
+    ...(payload.ask != null ? { ask: decode(payload.ask) } : {}),
+    ...(payload.timestamp != null ? { timestamp: Number(payload.timestamp) } : {}),
+  };
+}
+
 export function buildNewOrderMessage({ clientMsgId, accountId, symbolId, side, orderType, protocolVolume, entryPrice, stopPrice, stopLoss, takeProfit, timeInForce }) {
   if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
   if (!Number.isInteger(Number(symbolId))) throw new TypeError('symbolId is required');
