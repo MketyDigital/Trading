@@ -70,11 +70,13 @@ export async function executeMT5Action(action, {
     if (!response.ok || data?.ok === false) {
       throw new Error(data?.error || `MT5 bridge HTTP ${response.status}`);
     }
+    const fillPrice = Number(data.fill_price ?? data.fillPrice ?? data.price);
     const result = {
       duplicate: false,
       brokerPositionId: data.position_id != null ? String(data.position_id) : data.ticket != null ? String(data.ticket) : null,
       brokerOrderId: data.order_id != null ? String(data.order_id) : null,
       brokerDealId: data.deal_id != null ? String(data.deal_id) : null,
+      fillPrice: Number.isFinite(fillPrice) ? fillPrice : null,
       response: data,
     };
     await deliveryStore.complete(action.idempotencyKey, result);
