@@ -108,6 +108,8 @@ Implemented/tested:
 - reply targeting;
 - thread targeting;
 - recent incomplete fast-entry completion by source + symbol + side + time window;
+- multiple per-account fast Position Groups from the same originating source event are treated as one safe completion cluster;
+- genuinely distinct competing fast source events remain ambiguous and fail closed;
 - ambiguous unthreaded management fails closed;
 - persistent `TradeStateNode` Durable Object state;
 - source-event IDs append idempotently;
@@ -130,7 +132,9 @@ Verified behavior:
 - disabled/blocked/kill-switch accounts emit zero actions;
 - `wait_for_complete_signal` remains action-free for incomplete fast entries;
 - ambiguous correlation remains action-free;
-- `FAST_ENTRY_COMPLETION` reuses the matched Position Group, recalculates the completed plan under current policy/risk, promotes the existing first leg to TP1, creates only missing TP legs, preserves original group/leg identity, appends the completion source event, clears `incomplete`, and marks actions `simulated:true`;
+- `FAST_ENTRY_COMPLETION` reuses matched Position Groups, recalculates completed plans under current policy/risk, promotes each existing first leg to TP1, creates only missing TP legs, preserves original group/leg identity, appends the completion source event, clears `incomplete`, and marks actions `simulated:true`;
+- multi-account completion reconciles every account that already executed the same fast source signal while accounts that used `wait_for_complete_signal` create their normal completed-signal group;
+- duplicate matched groups for one account fail closed rather than choosing arbitrarily;
 - simulation can reconcile a prior `PLANNED` fast leg before broker IDs exist; real broker helpers remain stricter;
 - deterministic `MANAGEMENT` interpretations now enter correlation instead of returning early;
 - matched BE/partial/full-close management uses existing durable group state, requires the exact bound account, evaluates `actionKind=REDUCE_RISK`, does not require market metadata/new risk sizing, and emits only simulated actions;
@@ -160,9 +164,10 @@ Verified semantic contracts:
 - invalid signature must return exact `401`;
 - stale timestamp must return exact `401` while the stale body/timestamp pair remains correctly signed;
 - optional `kill_switch` sends a normal signal and passes only if server-side policy returns BLOCKED + `KILL_SWITCH`, zero actions, and no READY account; the event cannot toggle safety policy;
-- optional `fast_entry,fast_completion` is now sequence-aware: the first event must establish one READY group, the completion must prove `FAST_ENTRY_COMPLETION`, reuse the exact same `groupId`, modify TP1, open only TP2/TP3, preserve target ordering, and keep all actions simulated.
+- optional `fast_entry,fast_completion` is sequence-aware: the first event must establish one READY group, the completion must prove `FAST_ENTRY_COMPLETION`, reuse the exact same `groupId`, modify TP1, open only TP2/TP3, preserve target ordering, and keep all actions simulated;
+- optional `arbitrary_tp` sends an explicit five-target signal and passes only if every READY account returns exactly five ordered `OPEN_POSITION` actions with target indexes 1 through 5 and `simulated:true`.
 
-Other optional scenario templates currently include `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`. Scenario-specific semantic validation for management/arbitrary TP/AI ambiguity is still pending.
+Other optional scenario templates currently include `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`. Scenario-specific semantic validation for management and AI ambiguity is still pending.
 
 This command has **not** been run against a configured external Worker in this development session because Cloudflare/source credentials are not available here.
 
@@ -263,7 +268,9 @@ Important recent GREEN checkpoints:
 - `33545664690` — authenticated matched-group Trade State read dependency;
 - `33545946677` — kill-switch acceptance semantics;
 - `33546437577` on head `8a964247e176905a70390371cfd7df3169cd1953` — reply-management orchestration, all three CI gates success;
-- `33546971743` on head `7c2adaa34ae91abea3c990b4ac38fa6e116716af` — sequence-aware fast-entry completion acceptance, all three CI gates success.
+- `33546971743` on head `7c2adaa34ae91abea3c990b4ac38fa6e116716af` — sequence-aware fast-entry completion acceptance, all three CI gates success;
+- `33547635047` on head `1045de62a2ada1eb3e9629eb192ad9d371ec9953` — enterprise multi-account fast-completion clustering/orchestration, all three CI gates success;
+- `33552901711` on head `bea4c022d99759f64b8ee969a8653f0cad3c9dbf` — five-target arbitrary-TP signed acceptance semantics, all three CI gates success.
 
 Recent intentional RED checkpoints:
 
@@ -271,7 +278,9 @@ Recent intentional RED checkpoints:
 - `33545506600` — sole missing `stateStore.getGroup` dependency;
 - `33545804689` — only two missing kill-switch acceptance contracts;
 - `33546205291` — only two missing management orchestration contracts;
-- `33546768317` on head `92a1ab00e2edc38ee08c5f0a25988eef212807c3` — 238/240 passed; only the two new fast-sequence acceptance tests failed.
+- `33546768317` on head `92a1ab00e2edc38ee08c5f0a25988eef212807c3` — 238/240 passed; only the two new fast-sequence acceptance tests failed;
+- `33547449605` on head `cf6be5cf8335a17240506ee2ea0496d742928f12` — 241/243 passed; only same-source multi-account fast clustering and mixed-policy completion failed;
+- `33552719259` on head `ab0cc7ff53ab79ad37d1b5ed2009021ffc584bd4` — 243/245 passed; only the two new arbitrary-TP acceptance contracts failed.
 
 Always inspect the newest branch/push run before claiming the current head is green.
 
@@ -309,20 +318,18 @@ Do not paste secret values into Git/chat/logs.
 
 ## Remaining blockers / priority order
 
-1. **Fix enterprise multi-account fast-completion correlation.** Current event-level correlation can treat multiple per-account fast groups from the same source signal as ambiguous, and a matched fast group can cause accounts that used `wait_for_complete_signal` to be skipped instead of opening from the completed signal. Correlation/orchestration must distinguish one source-signal cluster across multiple accounts from genuinely multiple competing fast signals.
+1. Add scenario-specific signed acceptance for AI ambiguity/fail-closed behavior.
 2. Add scenario-specific signed acceptance for management/reply/thread behavior where durable open-position state can be safely established.
-3. Add arbitrary-TP semantic acceptance.
-4. Add AI ambiguity/fail-closed semantic acceptance.
-5. Add pending-order cancellation state/orchestration separately from open-position management.
-6. Run `npm run accept:v1:simulation` against a configured non-live Worker.
-7. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
-8. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
-9. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
-10. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
-11. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
-12. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
-13. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-14. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+3. Add pending-order cancellation state/orchestration separately from open-position management.
+4. Run `npm run accept:v1:simulation` against a configured non-live Worker.
+5. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
+6. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
+7. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
+8. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
+9. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
+10. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
+11. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
+12. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
 
 ## Exact next safe starting point
 
@@ -331,12 +338,12 @@ Do not redesign the DB or add more broker abstraction first.
 Next repo-side work:
 
 1. keep CI green;
-2. write RED tests for multi-account fast-completion correlation using multiple Position Groups from one originating fast source event;
-3. require one safe matched source-signal cluster to reconcile each account that already entered fast while allowing accounts that waited for completion to create their normal full-signal group;
-4. keep genuinely distinct/competing fast source events ambiguous and action-free;
+2. write RED tests for the optional `ambiguous` signed acceptance scenario;
+3. require ambiguity/AI failure to remain non-executable: no READY account and no simulated broker action unless bounded AI returns a deterministic-valid canonical intent;
+4. ensure acceptance can distinguish safe `NEEDS_REVIEW` / non-actionable results from accidental HTTP-only success;
 5. verify the full Node + MT5 + Wrangler suite;
-6. update this file with the exact RED/GREEN evidence;
-7. continue acceptance semantics only after that enterprise account fanout behavior is correct.
+6. update this file with exact RED/GREEN evidence;
+7. continue management/reply/thread acceptance only after ambiguity semantics are explicit.
 
 ## Mandatory progress update rule
 
