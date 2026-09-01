@@ -8,7 +8,8 @@
     "test": "node --test tests/*.test.mjs",
     "test:ci": "node --test tests/*.test.mjs",
     "accept:ctrader:demo": "node scripts/ctrader_demo_acceptance.mjs",
-    "accept:mt5:demo": "node scripts/mt5_demo_acceptance.mjs"
+    "accept:mt5:demo": "node scripts/mt5_demo_acceptance.mjs",
+    "accept:v1:simulation": "node scripts/v1_simulation_acceptance.mjs"
   },
   "dependencies": {
     "@mtcute/web": "^0.31.0",
