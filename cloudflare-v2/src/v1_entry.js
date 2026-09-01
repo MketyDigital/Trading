@@ -1,5 +1,6 @@
 import legacyWorker from './index.js';
 import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
+import { handleV1EventsRequest } from './http/v1_events.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 
@@ -71,10 +72,19 @@ async function attachShadowDiagnostics(response, shadowPromise) {
 export function createTradingV1Entrypoint({
   legacy = legacyWorker,
   shadowBuilder = buildCanonicalShadow,
+  eventsHandler = handleV1EventsRequest,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
+
+      // New universal ingestion contract is intentionally outside the legacy
+      // Telegram-specific Worker. Sources such as DO/MTProto, Telethon VMs,
+      // TradingView relays, MT5 bridges and custom systems use the same route.
+      if (url.pathname === '/api/v1/events') {
+        return eventsHandler(request, env, { ctx });
+      }
+
       const shadowEnabled = isEnabled(env?.TRADING_V1_SHADOW);
       const isLegacySignalWebhook = request.method === 'POST' && url.pathname === '/api/webhook/process_signal';
 
@@ -90,8 +100,8 @@ export function createTradingV1Entrypoint({
         const event = canonicalEventFromLegacyPayload(payload);
         return shadowBuilder(event, {
           // Deterministic-only by default so enabling shadow cannot double AI
-          // traffic or delay paid signal delivery. AI shadow can be enabled
-          // later after provider loading moves into a shared V1 service.
+          // traffic or delay paid signal delivery. Tenant AI is used on the
+          // authenticated /api/v1/events path after workspace resolution.
           aiRouter: null,
           aiTimeoutMs: Number(env?.TRADING_V1_SHADOW_AI_TIMEOUT_MS || 600),
         });
