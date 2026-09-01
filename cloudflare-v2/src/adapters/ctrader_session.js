@@ -13,6 +13,7 @@ export class CTraderJsonSession {
     heartbeatCanceller = (id) => clearInterval(id),
     heartbeatMs = 10000,
     requestTimeoutMs = 10000,
+    maxBufferedEvents = 100,
   } = {}) {
     if (!endpoint || !clientId || !clientSecret) throw new TypeError('cTrader endpoint, clientId and clientSecret are required');
     this.endpoint = endpoint;
@@ -23,8 +24,11 @@ export class CTraderJsonSession {
     this.heartbeatCanceller = heartbeatCanceller;
     this.heartbeatMs = heartbeatMs;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.maxBufferedEvents = Math.max(1, Number(maxBufferedEvents) || 100);
     this.socket = null;
     this.pending = new Map();
+    this.eventBuffer = [];
+    this.eventWaiters = new Set();
     this.sequence = 0;
     this.heartbeatHandle = null;
     this.isApplicationAuthenticated = false;
@@ -107,6 +111,52 @@ export class CTraderJsonSession {
     });
   }
 
+  waitForEvent(predicate, { timeoutMs = this.requestTimeoutMs } = {}) {
+    if (typeof predicate !== 'function') throw new TypeError('event predicate is required');
+
+    const existingIndex = this.eventBuffer.findIndex((message) => {
+      try { return Boolean(predicate(message)); } catch { return false; }
+    });
+    if (existingIndex >= 0) {
+      const [message] = this.eventBuffer.splice(existingIndex, 1);
+      return Promise.resolve(message);
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = { predicate, resolve: null, reject: null, timeout: null };
+      waiter.resolve = (message) => {
+        clearTimeout(waiter.timeout);
+        this.eventWaiters.delete(waiter);
+        resolve(message);
+      };
+      waiter.reject = (error) => {
+        clearTimeout(waiter.timeout);
+        this.eventWaiters.delete(waiter);
+        reject(error);
+      };
+      waiter.timeout = setTimeout(() => {
+        waiter.reject(new Error('cTrader event wait timed out'));
+      }, timeoutMs);
+      this.eventWaiters.add(waiter);
+    });
+  }
+
+  dispatchEvent(message) {
+    for (const waiter of [...this.eventWaiters]) {
+      let matched = false;
+      try { matched = Boolean(waiter.predicate(message)); } catch { matched = false; }
+      if (matched) {
+        waiter.resolve(message);
+        return;
+      }
+    }
+
+    this.eventBuffer.push(message);
+    if (this.eventBuffer.length > this.maxBufferedEvents) {
+      this.eventBuffer.splice(0, this.eventBuffer.length - this.maxBufferedEvents);
+    }
+  }
+
   attachSocketListeners(socket) {
     socket.addEventListener('message', (event) => this.handleMessage(event));
     socket.addEventListener('close', () => this.handleConnectionClosed());
@@ -138,6 +188,11 @@ export class CTraderJsonSession {
     } catch {
       return;
     }
+
+    // Preserve every broker/server event independently of request correlation.
+    // cTrader fills can arrive without clientMsgId, and may race the accepted
+    // response, so execution consumers need a bounded event stream as well.
+    this.dispatchEvent(message);
 
     const clientMsgId = message?.clientMsgId;
     if (!clientMsgId || !this.pending.has(clientMsgId)) return;
@@ -177,6 +232,10 @@ export class CTraderJsonSession {
       this.pending.delete(clientMsgId);
       pending.reject(new Error(reason));
     }
+    for (const waiter of [...this.eventWaiters]) {
+      waiter.reject(new Error(reason));
+    }
+    this.eventBuffer.length = 0;
   }
 
   close() {
