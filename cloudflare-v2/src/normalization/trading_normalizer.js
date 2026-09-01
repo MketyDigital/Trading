@@ -140,7 +140,9 @@ export function resolveSymbolAgainstCatalog(value, catalog = []) {
 
 export function normalizeOrderIntent(value) {
   const text = String(value ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
-  const side = text.includes('SELL') ? 'SELL' : text.includes('BUY') ? 'BUY' : null;
+  const hasSell = /\b(?:SELL|SHORT)\b/.test(text);
+  const hasBuy = /\b(?:BUY|LONG)\b/.test(text);
+  const side = hasSell && !hasBuy ? 'SELL' : hasBuy && !hasSell ? 'BUY' : null;
   let orderType = 'MARKET';
   if (text.includes('STOP LIMIT')) orderType = 'STOP_LIMIT';
   else if (text.includes('LIMIT')) orderType = 'LIMIT';
