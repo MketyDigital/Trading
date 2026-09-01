@@ -105,7 +105,40 @@ test('resolves execution requests from ProtoOAExecutionEvent and rejects broker 
   );
 });
 
-test('fails requests when socket closes instead of leaving trading commands unresolved', async () => {
+test('waitForEvent consumes an already-buffered fill so fast server events cannot be missed', async () => {
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's',
+    socketFactory: () => new FakeSocket(), heartbeatScheduler: () => 1, heartbeatCanceller: () => {},
+  });
+  session.handleMessage({ data: JSON.stringify({
+    payloadType: 2126,
+    payload: { executionType: 3, order: { orderId: 1001 }, position: { positionId: 456 } },
+  }) });
+  const event = await session.waitForEvent(
+    (message) => message.payloadType === 2126 && message.payload?.order?.orderId === 1001 && message.payload?.executionType === 3,
+    { timeoutMs: 50 }
+  );
+  assert.equal(event.payload.position.positionId, 456);
+});
+
+test('waitForEvent resolves future server fill events that do not carry clientMsgId', async () => {
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's',
+    socketFactory: () => new FakeSocket(), heartbeatScheduler: () => 1, heartbeatCanceller: () => {},
+  });
+  const waiting = session.waitForEvent(
+    (message) => message.payloadType === 2126 && message.payload?.deal?.orderId === 1002,
+    { timeoutMs: 100 }
+  );
+  queueMicrotask(() => session.handleMessage({ data: JSON.stringify({
+    payloadType: 2126,
+    payload: { executionType: 3, deal: { orderId: 1002, positionId: 457 }, position: { positionId: 457 } },
+  }) }));
+  const event = await waiting;
+  assert.equal(event.payload.position.positionId, 457);
+});
+
+test('fails requests and event waiters when socket closes instead of leaving trading commands unresolved', async () => {
   const socket = new FakeSocket();
   socket.onSend = (message, ws) => {
     if (message.payloadType === 2100) queueMicrotask(() => ws.message({ clientMsgId: message.clientMsgId, payloadType: 2101, payload: {} }));
@@ -116,6 +149,8 @@ test('fails requests when socket closes instead of leaving trading commands unre
   });
   const opening = session.open(); socket.open(); await opening;
   const pending = session.request({ clientMsgId: 'close-me', payloadType: 2111, payload: {} }, { successPayloadTypes: [2126] });
+  const waiter = session.waitForEvent(() => false, { timeoutMs: 1000 });
   socket.close();
   await assert.rejects(pending, /connection closed/i);
+  await assert.rejects(waiter, /connection closed/i);
 });
