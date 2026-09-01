@@ -64,7 +64,22 @@ export function decodeSpotEvent(message, { digits } = {}) {
   };
 }
 
-export function buildNewOrderMessage({ clientMsgId, accountId, symbolId, side, orderType, protocolVolume, entryPrice, stopPrice, stopLoss, takeProfit, timeInForce }) {
+export function buildNewOrderMessage({
+  clientMsgId,
+  accountId,
+  symbolId,
+  side,
+  orderType,
+  protocolVolume,
+  entryPrice,
+  stopPrice,
+  stopLoss,
+  takeProfit,
+  timeInForce,
+  clientOrderId,
+  label,
+  comment,
+}) {
   if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
   if (!Number.isInteger(Number(symbolId))) throw new TypeError('symbolId is required');
   if (!ORDER_TYPES[orderType]) throw new TypeError('unsupported cTrader order type');
@@ -81,6 +96,9 @@ export function buildNewOrderMessage({ clientMsgId, accountId, symbolId, side, o
   if (stopLoss != null) payload.stopLoss = Number(stopLoss);
   if (takeProfit != null) payload.takeProfit = Number(takeProfit);
   if (timeInForce != null) payload.timeInForce = timeInForce;
+  if (clientOrderId) payload.clientOrderId = String(clientOrderId).slice(0, 50);
+  if (label) payload.label = String(label).slice(0, 100);
+  if (comment) payload.comment = String(comment).slice(0, 512);
   return { clientMsgId, payloadType: 2106, payload };
 }
 
