@@ -34,3 +34,38 @@ export function buildNewOrderMessage({ clientMsgId, accountId, symbolId, side, o
   if (timeInForce != null) payload.timeInForce = timeInForce;
   return { clientMsgId, payloadType: 2106, payload };
 }
+
+export function buildCancelOrderMessage({ clientMsgId, accountId, orderId }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  if (!Number.isInteger(Number(orderId))) throw new TypeError('orderId is required');
+  return {
+    clientMsgId,
+    payloadType: 2108,
+    payload: { ctidTraderAccountId: Number(accountId), orderId: Number(orderId) },
+  };
+}
+
+export function buildAmendPositionSLTPMessage({ clientMsgId, accountId, positionId, stopLoss, takeProfit }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  if (!Number.isInteger(Number(positionId))) throw new TypeError('positionId is required');
+  const payload = { ctidTraderAccountId: Number(accountId), positionId: Number(positionId) };
+  if (stopLoss != null) payload.stopLoss = Number(stopLoss);
+  if (takeProfit != null) payload.takeProfit = Number(takeProfit);
+  if (payload.stopLoss == null && payload.takeProfit == null) throw new TypeError('stopLoss or takeProfit required');
+  return { clientMsgId, payloadType: 2110, payload };
+}
+
+export function buildClosePositionMessage({ clientMsgId, accountId, positionId, protocolVolume }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  if (!Number.isInteger(Number(positionId))) throw new TypeError('positionId is required');
+  if (!(Number(protocolVolume) > 0)) throw new TypeError('positive protocolVolume required');
+  return {
+    clientMsgId,
+    payloadType: 2111,
+    payload: {
+      ctidTraderAccountId: Number(accountId),
+      positionId: Number(positionId),
+      volume: Math.trunc(Number(protocolVolume)),
+    },
+  };
+}
