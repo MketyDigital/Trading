@@ -12,6 +12,7 @@ export async function ingestTradingEvent({
   sourceStore,
   eventStore,
   aiRouter,
+  aiRouterFactory,
   interpretationTimeoutMs = 1200,
 } = {}) {
   if (!sourceStore?.getActiveSource || !eventStore?.reserve) {
@@ -83,8 +84,15 @@ export async function ingestTradingEvent({
     return { ok: false, status: 503, reason: 'EVENT_RESERVATION_FAILED' };
   }
 
+  // Tenant AI configuration is loaded only after HMAC authentication and
+  // trusted workspace resolution. A client payload cannot select another
+  // workspace's provider credentials.
+  const resolvedAiRouter = aiRouterFactory
+    ? await aiRouterFactory({ source, event })
+    : aiRouter;
+
   const interpretation = await interpretTradingEvent(event, {
-    aiRouter,
+    aiRouter: resolvedAiRouter,
     timeoutMs: interpretationTimeoutMs,
   });
 
