@@ -1,4 +1,6 @@
 import { ingestTradingEvent } from '../pipeline/ingest.js';
+import { orchestrateTradingEventSimulation } from '../pipeline/v1_orchestrator.js';
+import { createV1SimulationDependencies } from '../pipeline/v1_simulation_deps.js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
 
@@ -7,6 +9,19 @@ function json(body, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   });
+}
+
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function blockedSimulation(error) {
+  return {
+    status: 'BLOCKED',
+    executionEnabled: false,
+    actions: [],
+    error: error instanceof Error ? error.message : String(error),
+  };
 }
 
 async function defaultSupabaseFactory(env) {
@@ -22,6 +37,8 @@ export async function handleV1EventsRequest(request, env = {}, {
   storesFactory = createSupabaseIngestStores,
   workspaceAiFactory = createWorkspaceAIRouter,
   ingestFn = ingestTradingEvent,
+  simulationDepsFactory = createV1SimulationDependencies,
+  orchestrateFn = orchestrateTradingEventSimulation,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -59,7 +76,30 @@ export async function handleV1EventsRequest(request, env = {}, {
       }),
     });
 
-    return json(result, result?.ok ? 200 : Number(result?.status || 500));
+    if (!result?.ok || result?.duplicate || !enabled(env.TRADING_V1_SIMULATION)) {
+      return json(result, result?.ok ? 200 : Number(result?.status || 500));
+    }
+
+    let simulation;
+    try {
+      const dependencies = await simulationDepsFactory({
+        env,
+        supabase,
+        event: result.event,
+        interpretation: result.interpretation,
+        eventId: result.eventId,
+      });
+      simulation = await orchestrateFn({
+        event: result.event,
+        interpretation: result.interpretation,
+        eventId: result.eventId,
+      }, dependencies);
+    } catch (error) {
+      console.warn('V1 simulation planning blocked:', error?.message || error);
+      simulation = blockedSimulation(error);
+    }
+
+    return json({ ...result, simulation }, 200);
   } catch (error) {
     console.error('V1 event ingress failed:', error);
     return json({ ok: false, reason: 'V1_INGRESS_INTERNAL_ERROR' }, 500);
