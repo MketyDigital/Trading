@@ -4,7 +4,12 @@ import {
   validateAcceptanceEnvironment,
 } from './v1_acceptance_harness.js';
 
-const DEFAULT_SCENARIOS = ['complete_signal', 'duplicate'];
+const DEFAULT_SCENARIOS = [
+  'complete_signal',
+  'duplicate',
+  'invalid_signature',
+  'stale_timestamp',
+];
 const ALLOWED_SCENARIOS = new Set([
   'complete_signal',
   'duplicate',
@@ -14,6 +19,8 @@ const ALLOWED_SCENARIOS = new Set([
   'move_be',
   'close_half',
   'cancel_pending',
+  'invalid_signature',
+  'stale_timestamp',
 ]);
 const SENSITIVE_KEY = /(secret|token|password|credential|authorization|api[_-]?key|signature)/i;
 
