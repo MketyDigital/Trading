@@ -66,6 +66,41 @@ function buildScenarioSequence(names, runId) {
   return scenarios;
 }
 
+function validateScenarioSemantics(scenario, outcome) {
+  const body = outcome?.result?.response?.body;
+
+  if (scenario.name === 'duplicate') {
+    if (body?.ok !== true || body?.duplicate !== true) {
+      return 'duplicate response must confirm ok=true and duplicate=true';
+    }
+    return null;
+  }
+
+  if (scenario.name !== 'complete_signal') return null;
+
+  if (body?.ok !== true || body?.duplicate === true) {
+    return 'complete signal response must confirm a new successful event';
+  }
+
+  const simulation = body?.simulation;
+  if (!simulation || simulation.status !== 'SIMULATED' || simulation.executionEnabled !== false) {
+    return 'complete signal response must include simulation.status=SIMULATED with executionEnabled=false';
+  }
+
+  const accounts = Array.isArray(simulation.accounts) ? simulation.accounts : [];
+  const readyAccounts = accounts.filter((account) => account?.status === 'READY');
+  if (readyAccounts.length === 0) {
+    return 'complete signal simulation must include at least one READY account';
+  }
+
+  const actions = readyAccounts.flatMap((account) => Array.isArray(account?.actions) ? account.actions : []);
+  if (actions.length === 0 || actions.some((action) => action?.simulated !== true)) {
+    return 'complete signal simulation must include simulated=true execution actions';
+  }
+
+  return null;
+}
+
 export async function runV1SimulationAcceptanceCommand({
   env = {},
   logger = console,
@@ -95,6 +130,18 @@ export async function runV1SimulationAcceptanceCommand({
           ok: false,
           exitCode: 1,
           failedScenario: scenario.name,
+          results,
+        };
+      }
+
+      const semanticError = validateScenarioSemantics(scenario, outcome);
+      if (semanticError) {
+        logger?.error?.(`V1 acceptance semantic failure for ${scenario.name}: ${semanticError}`);
+        return {
+          ok: false,
+          exitCode: 1,
+          failedScenario: scenario.name,
+          semanticError,
           results,
         };
       }
