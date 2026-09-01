@@ -39,7 +39,7 @@ export async function verifyZitadelJwt(token, {
   jwksUrl,
   fetchFn = fetch,
   nowSec = Math.floor(Date.now() / 1000),
-  clockSkewSec = 30,
+  clockSkewSec = 0,
 } = {}) {
   const parts = String(token ?? '').split('.');
   if (parts.length !== 3) return { ok: false, reason: 'MALFORMED_TOKEN' };
@@ -59,7 +59,7 @@ export async function verifyZitadelJwt(token, {
 
   const now = Number(nowSec);
   const skew = Math.max(0, Number(clockSkewSec) || 0);
-  if (!Number.isFinite(Number(claims.exp)) || Number(claims.exp) < now - skew) return { ok: false, reason: 'TOKEN_EXPIRED' };
+  if (!Number.isFinite(Number(claims.exp)) || Number(claims.exp) <= now - skew) return { ok: false, reason: 'TOKEN_EXPIRED' };
   if (claims.nbf != null && Number(claims.nbf) > now + skew) return { ok: false, reason: 'TOKEN_NOT_YET_VALID' };
 
   let keySet = jwks;
@@ -161,11 +161,12 @@ export async function authenticateTradingBearer(request, {
   workspace,
   projectId,
   nowSec,
+  clockSkewSec,
 } = {}) {
   const header = request?.headers?.get?.('Authorization') || '';
   if (!header.startsWith('Bearer ')) return { ok: false, reason: 'MISSING_BEARER_TOKEN' };
   const verification = await verifyZitadelJwt(header.slice(7).trim(), {
-    issuer, audience, jwks, jwksUrl, fetchFn, nowSec,
+    issuer, audience, jwks, jwksUrl, fetchFn, nowSec, clockSkewSec,
   });
   if (!verification.ok) return verification;
   return authorizeTradingClaims(verification.claims, { requiredRole, workspace, projectId });
