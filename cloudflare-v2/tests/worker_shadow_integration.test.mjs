@@ -99,6 +99,31 @@ test('versioned universal event endpoint bypasses legacy Worker and uses V1 ingr
   assert.equal(legacyCalls, 0);
 });
 
+test('workspace-scoped V1 admin endpoint bypasses legacy Worker', async () => {
+  let legacyCalls = 0;
+  let adminCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+    adminHandler: async () => { adminCalls += 1; return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }); },
+  });
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/admin/workspace'), {});
+  assert.equal(response.status, 200);
+  assert.equal(adminCalls, 1);
+  assert.equal(legacyCalls, 0);
+});
+
+test('unsafe legacy admin API surface fails closed instead of reaching unscoped proxy', async () => {
+  let legacyCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+  });
+  for (const path of ['/api/admin/data/workspaces', '/api/admin/data/proxy', '/api/admin/bot/authorize', '/api/admin/bank/decision', '/api/admin/listener/start']) {
+    const response = await entry.fetch(new Request(`https://trade.test${path}`, { method: path.includes('/data/workspaces') ? 'GET' : 'POST' }), {});
+    assert.equal(response.status, 410);
+  }
+  assert.equal(legacyCalls, 0);
+});
+
 test('scheduled handler remains delegated to legacy Worker', async () => {
   let called = false;
   const entry = createTradingV1Entrypoint({
