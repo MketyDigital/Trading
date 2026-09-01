@@ -28,6 +28,34 @@ test('parses pending orders', () => {
   assert.equal(plan.intent.entry.value, 1.16);
 });
 
+test('accepts symbol-before-side and long/short signal variants', () => {
+  const symbolFirst = buildMachinePlan({ text: 'XAUUSD BUY @ 2526 SL:2518 TP1:2530 TP2:2535' });
+  assert.equal(symbolFirst.status, 'READY');
+  assert.equal(symbolFirst.intent.side, 'BUY');
+  assert.equal(symbolFirst.intent.symbol.canonical, 'XAUUSD');
+  assert.equal(symbolFirst.intent.entry.value, 2526);
+
+  const longSignal = buildMachinePlan({ text: 'LONG GOLD NOW' });
+  assert.equal(longSignal.status, 'READY');
+  assert.equal(longSignal.intent.side, 'BUY');
+  assert.equal(longSignal.intent.symbol.canonical, 'XAUUSD');
+  assert.equal(longSignal.intent.fastEntry, true);
+
+  const shortSignal = buildMachinePlan({ text: 'SHORT EUR/USD 1.0830 SL 1.0860 TP 1.0780' });
+  assert.equal(shortSignal.status, 'READY');
+  assert.equal(shortSignal.intent.side, 'SELL');
+  assert.equal(shortSignal.intent.symbol.canonical, 'EURUSD');
+});
+
+test('accepts NOW between side and symbol and punctuation-heavy channel formatting', () => {
+  const plan = buildMachinePlan({ text: '🔥 BUY NOW GOLD 🔥\nEntry: 2526\nS/L: 2518\nT/P 1: 2530\nT/P 2: 2535' });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.side, 'BUY');
+  assert.equal(plan.intent.symbol.canonical, 'XAUUSD');
+  assert.equal(plan.intent.stopLoss, 2518);
+  assert.deepEqual(plan.intent.takeProfits, [2530, 2535]);
+});
+
 test('classifies management instructions without inventing a new trade', () => {
   assert.deepEqual(buildMachinePlan({ text: 'MOVE SL TO BE' }), { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } });
   assert.deepEqual(buildMachinePlan({ text: 'CLOSE HALF' }), { status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 } });
