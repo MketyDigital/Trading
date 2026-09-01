@@ -112,15 +112,28 @@ CREATE INDEX IF NOT EXISTS idx_source_connections_workspace_active
     ON public.source_connections(workspace_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_trading_events_workspace_received
     ON public.trading_events(workspace_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trading_events_source_connection
+    ON public.trading_events(source_connection_id);
 CREATE INDEX IF NOT EXISTS idx_position_groups_workspace_status
     ON public.position_groups(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_position_groups_correlation
     ON public.position_groups(workspace_id, correlation_key)
     WHERE correlation_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_position_groups_trade_account
+    ON public.position_groups(trade_account_id)
+    WHERE trade_account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_position_groups_source_event
+    ON public.position_groups(source_event_id)
+    WHERE source_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_position_legs_group_status
     ON public.position_legs(position_group_id, status);
+CREATE INDEX IF NOT EXISTS idx_position_legs_workspace
+    ON public.position_legs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_destination_deliveries_status
     ON public.destination_deliveries(workspace_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_destination_deliveries_trading_event
+    ON public.destination_deliveries(trading_event_id)
+    WHERE trading_event_id IS NOT NULL;
 
 -- These tables live in Supabase's exposed public schema but are service-role-only
 -- Trading internals. RLS is defense in depth; no anon/authenticated policies are
