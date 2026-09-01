@@ -25,6 +25,54 @@ function simulationActions(actions = []) {
   return actions.map((action) => ({ ...action, simulated: true }));
 }
 
+function roundLotsToStep(value, step = 0.01) {
+  const numeric = Number(value);
+  const volumeStep = Number(step);
+  if (!(numeric >= 0) || !(volumeStep > 0)) return undefined;
+  const text = String(volumeStep);
+  const precision = text.includes('.') ? text.split('.')[1].length : 0;
+  return Number((Math.round(numeric / volumeStep) * volumeStep).toFixed(precision));
+}
+
+function buildPlannedSimulationManagementActions(group, management) {
+  const plannedLegs = Array.isArray(group?.legs)
+    ? group.legs.filter((leg) => leg?.status === 'PLANNED' && leg?.legId)
+    : [];
+  if (plannedLegs.length === 0) return [];
+
+  if (management?.type === 'MOVE_SL_TO_BE') {
+    if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
+    return plannedLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      stopLoss: Number(group.entryPrice),
+    }));
+  }
+
+  if (management?.type === 'CLOSE_PARTIAL') {
+    const fraction = Number(management.fraction);
+    if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
+    return plannedLegs.map((leg) => ({
+      type: 'CLOSE_PARTIAL',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      fraction,
+      lots: leg.lots == null ? undefined : roundLotsToStep(Number(leg.lots) * fraction, management.volumeStep || 0.01),
+    }));
+  }
+
+  return [];
+}
+
+function buildSimulationManagementActions(group, management) {
+  const brokerBound = buildManagementActions(group, management);
+  if (brokerBound.length > 0) return brokerBound;
+  return buildPlannedSimulationManagementActions(group, management);
+}
+
 function plannedStateGroup(plan, { event, eventId, account, nowMs }) {
   return {
     ...plan.group,
@@ -150,7 +198,7 @@ async function orchestrateMatchedManagement({
 
   let actions;
   try {
-    actions = buildManagementActions(matchedGroup, interpretation.management);
+    actions = buildSimulationManagementActions(matchedGroup, interpretation.management);
   } catch (error) {
     return {
       ...base,
