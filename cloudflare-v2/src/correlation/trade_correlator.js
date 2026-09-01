@@ -8,6 +8,29 @@ function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
   });
 }
 
+function fastOriginId(group) {
+  const first = Array.isArray(group?.sourceEventIds) ? group.sourceEventIds[0] : null;
+  return first == null || String(first) === '' ? null : String(first);
+}
+
+function correlateFastCompletion(matches) {
+  if (matches.length === 1) {
+    return { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: matches[0].id };
+  }
+  if (matches.length < 2) return null;
+
+  const origins = matches.map(fastOriginId);
+  if (origins.some((origin) => !origin) || new Set(origins).size !== 1) {
+    return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' };
+  }
+
+  return {
+    status: 'MATCHED',
+    reason: 'FAST_ENTRY_COMPLETION',
+    groupIds: matches.map((group) => group.id),
+  };
+}
+
 export function correlateTradingEvent({
   event = {},
   interpretation = {},
@@ -47,12 +70,8 @@ export function correlateTradingEvent({
     );
 
     if (!interpretation.intent.fastEntry && interpretation.intent.incomplete === false) {
-      if (fastCompletionMatches.length === 1) {
-        return { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: fastCompletionMatches[0].id };
-      }
-      if (fastCompletionMatches.length > 1) {
-        return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' };
-      }
+      const fastCompletion = correlateFastCompletion(fastCompletionMatches);
+      if (fastCompletion) return fastCompletion;
     }
 
     return { status: 'NEW_GROUP' };
