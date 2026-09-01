@@ -7,6 +7,7 @@ const REQUIRED_ENV = [
 ];
 
 const SENSITIVE_KEY = /(secret|token|password|credential|authorization|api[_-]?key|signature)/i;
+const STALE_TIMESTAMP_OFFSET_MS = -10 * 60 * 1000;
 
 function nonEmpty(value) {
   return typeof value === 'string' ? value.trim().length > 0 : value != null;
@@ -102,10 +103,12 @@ export function buildAcceptanceScenario(name, {
     move_be: 'MOVE SL TO BE',
     close_half: 'CLOSE HALF',
     cancel_pending: 'CANCEL PENDING',
+    invalid_signature: 'BUY XAUUSD 2500 SL 2490 TP 2510',
+    stale_timestamp: 'BUY XAUUSD 2500 SL 2490 TP 2510',
   };
   if (!Object.hasOwn(templates, scenario)) throw new RangeError(`unsupported acceptance scenario: ${scenario}`);
 
-  return {
+  const result = {
     name: scenario,
     event: scenarioEvent({
       externalEventId,
@@ -114,6 +117,18 @@ export function buildAcceptanceScenario(name, {
     }),
     expectsDuplicate: false,
   };
+
+  if (scenario === 'invalid_signature') {
+    result.expectedStatus = 401;
+    result.requestMutation = 'invalid_signature';
+  }
+  if (scenario === 'stale_timestamp') {
+    result.expectedStatus = 401;
+    result.requestMutation = 'stale_timestamp';
+    result.timestampOffsetMs = STALE_TIMESTAMP_OFFSET_MS;
+  }
+
+  return result;
 }
 
 export function sanitizeAcceptanceResult({
@@ -122,6 +137,7 @@ export function sanitizeAcceptanceResult({
   requestHeaders = {},
   responseStatus,
   responseBody,
+  expectedStatus = null,
 } = {}) {
   const headers = requestHeaders instanceof Headers
     ? Object.fromEntries(requestHeaders.entries())
@@ -134,6 +150,8 @@ export function sanitizeAcceptanceResult({
   return {
     scenario: scenario ?? null,
     externalEventId: externalEventId ?? null,
+    expectedStatus: expectedStatus == null ? null : Number(expectedStatus),
+    expectedRejection: expectedStatus != null && Number(expectedStatus) >= 400,
     request: {
       sourceId: header('X-Mkety-Source-Id'),
       timestamp: header('X-Mkety-Timestamp'),
@@ -158,14 +176,23 @@ export async function runAcceptanceScenario({
   }
   if (!scenario?.event) throw new TypeError('scenario event required');
 
+  const requestTimestamp = Number(timestamp) + Number(scenario.timestampOffsetMs || 0);
   const built = await buildSignedV1Request({
     endpoint: env.TRADING_V1_ENDPOINT,
     sourceId: env.TRADING_V1_SOURCE_ID,
     secret: env.TRADING_V1_SOURCE_SECRET,
     event: scenario.event,
-    timestamp,
+    timestamp: requestTimestamp,
   });
-  const response = await fetchFn(built.request);
+
+  let request = built.request;
+  if (scenario.requestMutation === 'invalid_signature') {
+    const headers = new Headers(request.headers);
+    headers.set('X-Mkety-Signature', 'invalid-signature');
+    request = new Request(request, { headers });
+  }
+
+  const response = await fetchFn(request);
   let responseBody;
   const responseText = await response.text();
   try {
@@ -174,14 +201,18 @@ export async function runAcceptanceScenario({
     responseBody = { nonJsonResponse: true, length: responseText.length };
   }
 
+  const expectedStatus = scenario.expectedStatus == null ? null : Number(scenario.expectedStatus);
+  const statusMatched = expectedStatus == null ? response.ok : response.status === expectedStatus;
+
   return {
-    ok: response.ok,
+    ok: statusMatched,
     result: sanitizeAcceptanceResult({
       scenario: scenario.name,
       externalEventId: scenario.event.external_event_id,
-      requestHeaders: built.request.headers,
+      requestHeaders: request.headers,
       responseStatus: response.status,
       responseBody,
+      expectedStatus,
     }),
   };
 }
