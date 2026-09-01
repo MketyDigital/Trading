@@ -99,6 +99,30 @@ function fastSequenceResult(scenario, { completionGroupId = 'group-fast' } = {})
   };
 }
 
+function ambiguousNeedsReviewResult(scenario) {
+  return {
+    ok: true,
+    result: {
+      scenario: scenario.name,
+      externalEventId: scenario.event.external_event_id,
+      response: {
+        statusCode: 200,
+        body: {
+          ok: true,
+          duplicate: false,
+          interpretation: { status: 'NEEDS_REVIEW', source: 'ai', reason: 'ambiguous' },
+          simulation: {
+            status: 'NEEDS_REVIEW',
+            executionEnabled: false,
+            actions: [],
+            accounts: [],
+          },
+        },
+      },
+    },
+  };
+}
+
 test('V1 simulation command defaults to valid signal, exact duplicate, invalid signature and stale timestamp', async () => {
   const calls = [];
   const lines = [];
@@ -155,6 +179,7 @@ test('V1 simulation command accepts explicit non-broker scenario matrix includin
     scenarioRunner: async ({ scenario }) => {
       names.push(scenario.name);
       if (scenario.name === 'complete_signal') return simulatedCompleteResult(scenario);
+      if (scenario.name === 'ambiguous') return ambiguousNeedsReviewResult(scenario);
       return { ok: true, result: { scenario: scenario.name, externalEventId: scenario.event.external_event_id, response: { statusCode: scenario.expectedStatus || 200, body: {} } } };
     },
   });
