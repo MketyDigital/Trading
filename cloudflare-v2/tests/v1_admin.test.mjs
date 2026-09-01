@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { authorizeV1AdminRequest, handleV1AdminRequest } from '../src/http/v1_admin.js';
 
+const zitadelEnv = {
+  ZITADEL_ISSUER: 'https://login.example',
+  ZITADEL_AUDIENCE: 'trading-api',
+  ZITADEL_JWKS_URL: 'https://login.example/oauth/v2/keys',
+  ZITADEL_PROJECT_ID: 'project-1',
+};
+
 function workspaceQuery(workspace) {
   return {
     from(table) {
@@ -38,12 +45,7 @@ test('admin authorization binds JWT role to exact workspace Zitadel organization
   const request = new Request('https://trade.test/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
   });
-  const result = await authorizeV1AdminRequest(request, {
-    ZITADEL_ISSUER: 'https://login.example',
-    ZITADEL_AUDIENCE: 'trading-api',
-    ZITADEL_JWKS_URL: 'https://login.example/oauth/v2/keys',
-    ZITADEL_PROJECT_ID: 'project-1',
-  }, {
+  const result = await authorizeV1AdminRequest(request, zitadelEnv, {
     supabase: workspaceQuery({ id: 'ws-1', zitadel_org_id: 'org-1', trading_access_enabled: true, trading_required_role: 'trading_admin' }),
     authenticateFn: async (_request, options) => { authOptions = options; return { ok: true, subject: 'u1', workspaceId: 'ws-1' }; },
   });
@@ -62,7 +64,7 @@ test('GET workspace returns only authenticated workspace and strips secrets', as
   };
   const response = await handleV1AdminRequest(new Request('https://trade.test/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
-  }), {}, {
+  }), zitadelEnv, {
     supabaseFactory: async () => workspaceQuery(workspace),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1' }),
   });
@@ -76,7 +78,7 @@ test('GET workspace returns only authenticated workspace and strips secrets', as
 test('generic legacy admin proxy paths are not exposed through V1 admin handler', async () => {
   const response = await handleV1AdminRequest(new Request('https://trade.test/api/v1/admin/proxy', {
     method: 'POST', headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' }, body: '{}',
-  }), {}, {
+  }), zitadelEnv, {
     supabaseFactory: async () => workspaceQuery({ id: 'ws-1', zitadel_org_id: 'org-1', trading_access_enabled: true, trading_required_role: 'trading_admin' }),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1' }),
   });
