@@ -56,6 +56,7 @@ export function reconcileFastEntry(existingGroup, completedIntent, { totalLots, 
   const actions = [{
     type: 'MODIFY_POSITION',
     brokerPositionId: firstOpen.brokerPositionId,
+    symbol: completedIntent.symbol?.canonical,
     stopLoss: completedIntent.stopLoss ?? null,
     takeProfit: desired.legs[0]?.takeProfit ?? null,
     targetIndex: 1,
@@ -83,19 +84,30 @@ export function buildManagementActions(group, management) {
   const openLegs = group.legs.filter((leg) => leg.status === 'OPEN' && leg.brokerPositionId);
   if (management?.type === 'MOVE_SL_TO_BE') {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
-    return openLegs.map((leg) => ({ type: 'MODIFY_POSITION', brokerPositionId: leg.brokerPositionId, stopLoss: Number(group.entryPrice) }));
+    return openLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      stopLoss: Number(group.entryPrice),
+    }));
   }
   if (management?.type === 'CLOSE_PARTIAL') {
     const fraction = Number(management.fraction);
     return openLegs.map((leg) => ({
       type: 'CLOSE_PARTIAL',
       brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
       fraction,
       lots: leg.lots ? roundToStep(leg.lots * fraction, management.volumeStep || 0.01) : undefined,
     }));
   }
   if (management?.type === 'CLOSE' || management?.type === 'CLOSE_ALL') {
-    return openLegs.map((leg) => ({ type: 'CLOSE_POSITION', brokerPositionId: leg.brokerPositionId, lots: leg.lots }));
+    return openLegs.map((leg) => ({
+      type: 'CLOSE_POSITION',
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      lots: leg.lots,
+    }));
   }
   return [];
 }
