@@ -18,6 +18,8 @@ test('maps cTrader account symbol metadata without double-converting protocol ce
   assert.equal(symbol.protocolLotSize, 10000000);
   assert.equal(symbol.lotSizeUnits, 100000);
   assert.equal(symbol.minVolume, 100000);
+  assert.equal(symbol.tickSize, 0.00001);
+  assert.equal(symbol.pipSize, 0.0001);
 });
 
 test('maps current Deriv active-symbol metadata into canonical catalog shape', () => {
