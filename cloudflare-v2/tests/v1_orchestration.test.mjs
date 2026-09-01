@@ -31,6 +31,24 @@ function enabledAccount(overrides = {}) {
   };
 }
 
+function openGroup() {
+  return {
+    id: 'open-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-origin'],
+    symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET', entryPrice: 2500,
+    entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490, status: 'OPEN', incomplete: false,
+    legs: [
+      { legId: 'leg-1', targetIndex: 1, lots: 0.03, stopLoss: 2490, takeProfit: 2510, status: 'OPEN', brokerPositionId: 'position-1' },
+      { legId: 'leg-2', targetIndex: 2, lots: 0.03, stopLoss: 2490, takeProfit: 2520, status: 'OPEN', brokerPositionId: 'position-2' },
+    ],
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+}
+
 test('correlates, applies account safety, builds Position Group and returns simulation actions without broker dispatch', async () => {
   const persisted = [];
   let brokerCalled = false;
@@ -172,4 +190,64 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
   assert.equal(persisted.legs[0].legId, 'fast-leg-1');
   assert.equal(persisted.legs[0].takeProfit, 2510);
   assert.deepEqual(persisted.legs.map((leg) => leg.lots), [0.03, 0.03, 0.03]);
+});
+
+test('reply-targeted break-even management emits simulated risk-reducing actions even under drawdown lock', async () => {
+  const existing = openGroup();
+  let persisted;
+  const management = { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } };
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      ...event,
+      workspace_hint: 'workspace-1',
+      external_event_id: 'evt-be',
+      thread: { reply_to_event_id: 'evt-origin' },
+    },
+    interpretation: management,
+    eventId: 'db-event-be',
+    nowMs: 3000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'open-group' }) },
+    stateStore: {
+      getGroup: async () => structuredClone(existing),
+      putGroup: async (group) => { persisted = structuredClone(group); return group; },
+    },
+    accountProvider: async () => [enabledAccount({
+      safety_policy: { enabled: true, killSwitch: false, maxDailyLossPercent: 5, maxOpenRiskPercent: 1 },
+    })],
+    instrumentProvider: async () => { throw new Error('management must not require market metadata'); },
+    exposureProvider: async () => ({ currentDailyPnlPercent: -10, currentOpenRiskPercent: 10 }),
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.executionEnabled, false);
+  assert.equal(result.correlation.reason, 'REPLY_TARGET');
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.type), ['MODIFY_POSITION', 'MODIFY_POSITION']);
+  assert.equal(result.accounts[0].actions.every((action) => action.stopLoss === 2500 && action.simulated === true), true);
+  assert.deepEqual(persisted.sourceEventIds, ['evt-origin', 'evt-be']);
+});
+
+test('global kill switch blocks reply-targeted management and emits zero actions', async () => {
+  const existing = openGroup();
+  let persisted = false;
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-close', thread: { reply_to_event_id: 'evt-origin' } },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 } },
+    eventId: 'db-event-close',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'open-group' }) },
+    stateStore: {
+      getGroup: async () => structuredClone(existing),
+      putGroup: async () => { persisted = true; },
+    },
+    accountProvider: async () => [enabledAccount({ safety_policy: { enabled: true, killSwitch: true } })],
+    instrumentProvider: async () => instrument,
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].status, 'BLOCKED');
+  assert.equal(result.accounts[0].policy.reasons.includes('KILL_SWITCH'), true);
+  assert.deepEqual(result.accounts[0].actions, []);
+  assert.equal(persisted, false);
 });
