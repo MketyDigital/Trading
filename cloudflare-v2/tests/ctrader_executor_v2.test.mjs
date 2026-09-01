@@ -9,22 +9,46 @@ const symbol = {
 
 function deliveryStore({ duplicate = false } = {}) {
   const completed = [];
+  const failed = [];
   return {
     completed,
+    failed,
     reserve: async (key) => duplicate ? { ok: false, duplicate: true, result: { brokerPositionId: 999 } } : { ok: true, id: `delivery:${key}` },
     complete: async (key, result) => completed.push({ key, result }),
-    fail: async () => {},
+    fail: async (key, result) => failed.push({ key, result }),
   };
 }
 
-test('cTrader market open waits for position id then applies absolute SL/TP by amend request', async () => {
+test('cTrader market open waits for ORDER_FILLED before applying absolute SL/TP', async () => {
   const sent = [];
+  let waiterPredicate;
   const session = {
     request: async (message) => {
       sent.push(message);
-      if (message.payloadType === 2106) return { payloadType: 2126, payload: { position: { positionId: 456 }, order: { orderId: 1001 } } };
-      if (message.payloadType === 2110) return { payloadType: 2126, payload: { position: { positionId: 456, stopLoss: 2518, takeProfit: 2535 } } };
+      if (message.payloadType === 2106) {
+        return {
+          payloadType: 2126,
+          payload: { executionType: 2, order: { orderId: 1001, clientOrderId: 'evt1-acct1-leg1' } },
+        };
+      }
+      if (message.payloadType === 2110) {
+        return { payloadType: 2126, payload: { executionType: 3, position: { positionId: 456, stopLoss: 2518, takeProfit: 2535 } } };
+      }
       throw new Error('unexpected request');
+    },
+    waitForEvent: async (predicate) => {
+      waiterPredicate = predicate;
+      const fill = {
+        payloadType: 2126,
+        payload: {
+          executionType: 3,
+          order: { orderId: 1001, clientOrderId: 'evt1-acct1-leg1' },
+          deal: { orderId: 1001, positionId: 456 },
+          position: { positionId: 456 },
+        },
+      };
+      assert.equal(predicate(fill), true);
+      return fill;
     },
   };
   const store = deliveryStore();
@@ -33,6 +57,7 @@ test('cTrader market open waits for position id then applies absolute SL/TP by a
     lots: 0.03, stopLoss: 2518, takeProfit: 2535, idempotencyKey: 'evt1-acct1-leg1',
   }, { session, accountId: 77, catalog: [symbol], deliveryStore: store });
 
+  assert.equal(typeof waiterPredicate, 'function');
   assert.equal(sent[0].payloadType, 2106);
   assert.equal(sent[0].payload.stopLoss, undefined);
   assert.equal(sent[0].payload.clientOrderId, 'evt1-acct1-leg1');
@@ -41,6 +66,29 @@ test('cTrader market open waits for position id then applies absolute SL/TP by a
   assert.equal(result.brokerPositionId, 456);
   assert.equal(result.brokerOrderId, 1001);
   assert.equal(store.completed.length, 1);
+  assert.equal(store.failed.length, 0);
+});
+
+test('cTrader market order does not report success or amend protection when fill never arrives', async () => {
+  const sent = [];
+  const store = deliveryStore();
+  await assert.rejects(() => executeCTraderAction({
+    type: 'OPEN_POSITION', side: 'BUY', orderType: 'MARKET', symbol: 'XAUUSD', entry: { kind: 'MARKET' },
+    lots: 0.03, stopLoss: 2518, takeProfit: 2535, idempotencyKey: 'no-fill',
+  }, {
+    session: {
+      request: async (message) => {
+        sent.push(message);
+        return { payloadType: 2126, payload: { executionType: 2, order: { orderId: 1002, clientOrderId: 'no-fill' } } };
+      },
+      waitForEvent: async () => { throw new Error('cTrader event wait timed out'); },
+    },
+    accountId: 77, catalog: [symbol], deliveryStore: store,
+  }), /event wait timed out/i);
+
+  assert.equal(sent.length, 1);
+  assert.equal(store.completed.length, 0);
+  assert.equal(store.failed.length, 1);
 });
 
 test('cTrader pending order sends protection with initial order and does not amend a non-position', async () => {
@@ -48,7 +96,7 @@ test('cTrader pending order sends protection with initial order and does not ame
   const session = {
     request: async (message) => {
       sent.push(message);
-      return { payloadType: 2126, payload: { order: { orderId: 2002 } } };
+      return { payloadType: 2126, payload: { executionType: 2, order: { orderId: 2002 } } };
     },
   };
   const result = await executeCTraderAction({
@@ -79,7 +127,7 @@ test('executes canonical cTrader partial close through same idempotent service',
   const result = await executeCTraderAction({
     type: 'CLOSE_PARTIAL', brokerPositionId: 456, lots: 0.03, symbol: 'XAUUSD', idempotencyKey: 'close-tp1',
   }, {
-    session: { request: async (message) => { sent = message; return { payloadType: 2126, payload: { position: { positionId: 456 } } }; } },
+    session: { request: async (message) => { sent = message; return { payloadType: 2126, payload: { executionType: 3, position: { positionId: 456 } } }; } },
     accountId: 77, catalog: [symbol], deliveryStore: deliveryStore(),
   });
   assert.equal(sent.payloadType, 2111);
