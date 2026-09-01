@@ -19,7 +19,7 @@ function deliveryStore({ duplicate = false } = {}) {
   };
 }
 
-test('cTrader market open waits for ORDER_FILLED before applying absolute SL/TP', async () => {
+test('cTrader market open waits for ORDER_FILLED before applying absolute SL/TP and exposes actual fill price', async () => {
   const sent = [];
   let waiterPredicate;
   const session = {
@@ -42,9 +42,9 @@ test('cTrader market open waits for ORDER_FILLED before applying absolute SL/TP'
         payloadType: 2126,
         payload: {
           executionType: 3,
-          order: { orderId: 1001, clientOrderId: 'evt1-acct1-leg1' },
-          deal: { orderId: 1001, positionId: 456 },
-          position: { positionId: 456 },
+          order: { orderId: 1001, clientOrderId: 'evt1-acct1-leg1', executionPrice: 2526.25 },
+          deal: { orderId: 1001, positionId: 456, executionPrice: 2526.25 },
+          position: { positionId: 456, price: 2526.25 },
         },
       };
       assert.equal(predicate(fill), true);
@@ -65,6 +65,7 @@ test('cTrader market open waits for ORDER_FILLED before applying absolute SL/TP'
   assert.equal(sent[1].payload.positionId, 456);
   assert.equal(result.brokerPositionId, 456);
   assert.equal(result.brokerOrderId, 1001);
+  assert.equal(result.fillPrice, 2526.25);
   assert.equal(store.completed.length, 1);
   assert.equal(store.failed.length, 0);
 });
