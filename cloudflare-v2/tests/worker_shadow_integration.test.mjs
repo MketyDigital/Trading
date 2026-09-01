@@ -124,6 +124,47 @@ test('unsafe legacy admin API surface fails closed instead of reaching unscoped 
   assert.equal(legacyCalls, 0);
 });
 
+test('V1 health bypasses legacy Worker and exposes readiness names/booleans without secret values', async () => {
+  let legacyCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+  });
+  const env = {
+    SUPABASE_URL: 'https://staging-secret-project.supabase.co',
+    SUPABASE_SERVICE_ROLE: 'service-secret-value',
+    TRADING_MASTER_KEY: 'master-secret-value',
+    ZITADEL_ISSUER: 'https://auth.example.com',
+    ZITADEL_AUDIENCE: 'trading-api',
+    ZITADEL_JWKS_URL: 'https://auth.example.com/oauth/v2/keys',
+    TRADING_V1_SIMULATION: 'true',
+  };
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/health'), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(legacyCalls, 0);
+  assert.equal(body.service, 'mkety-trading-v1');
+  assert.equal(body.ready, true);
+  assert.equal(body.simulationReady, false);
+  assert.equal(body.features.simulationEnabled, true);
+  assert.equal(body.simulationMissing.includes('TRADE_STATE_INTERNAL_TOKEN'), true);
+
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes('service-secret-value'), false);
+  assert.equal(serialized.includes('master-secret-value'), false);
+  assert.equal(serialized.includes('staging-secret-project'), false);
+});
+
+test('V1 health is GET-only and never delegates invalid methods to legacy Worker', async () => {
+  let legacyCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+  });
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/health', { method: 'POST' }), {});
+  assert.equal(response.status, 405);
+  assert.equal(legacyCalls, 0);
+});
+
 test('scheduled handler remains delegated to legacy Worker', async () => {
   let called = false;
   const entry = createTradingV1Entrypoint({
