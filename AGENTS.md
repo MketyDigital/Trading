@@ -165,9 +165,10 @@ Verified semantic contracts:
 - stale timestamp must return exact `401` while the stale body/timestamp pair remains correctly signed;
 - optional `kill_switch` sends a normal signal and passes only if server-side policy returns BLOCKED + `KILL_SWITCH`, zero actions, and no READY account; the event cannot toggle safety policy;
 - optional `fast_entry,fast_completion` is sequence-aware: the first event must establish one READY group, the completion must prove `FAST_ENTRY_COMPLETION`, reuse the exact same `groupId`, modify TP1, open only TP2/TP3, preserve target ordering, and keep all actions simulated;
-- optional `arbitrary_tp` sends an explicit five-target signal and passes only if every READY account returns exactly five ordered `OPEN_POSITION` actions with target indexes 1 through 5 and `simulated:true`.
+- optional `arbitrary_tp` sends an explicit five-target signal and passes only if every READY account returns exactly five ordered `OPEN_POSITION` actions with target indexes 1 through 5 and `simulated:true`;
+- optional `ambiguous` passes only when interpretation remains `NEEDS_REVIEW`, simulation remains `NEEDS_REVIEW` with `executionEnabled=false`, no READY account exists, and neither top-level nor account-level simulated actions are emitted. HTTP 200 alone cannot satisfy ambiguity acceptance.
 
-Other optional scenario templates currently include `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`. Scenario-specific semantic validation for management and AI ambiguity is still pending.
+Other optional scenario templates currently include `fast_entry`, `pending_order`, `move_be`, `close_half`, and `cancel_pending`. Scenario-specific semantic validation for management/reply/thread and pending cancellation is still pending.
 
 This command has **not** been run against a configured external Worker in this development session because Cloudflare/source credentials are not available here.
 
@@ -270,7 +271,8 @@ Important recent GREEN checkpoints:
 - `33546437577` on head `8a964247e176905a70390371cfd7df3169cd1953` — reply-management orchestration, all three CI gates success;
 - `33546971743` on head `7c2adaa34ae91abea3c990b4ac38fa6e116716af` — sequence-aware fast-entry completion acceptance, all three CI gates success;
 - `33547635047` on head `1045de62a2ada1eb3e9629eb192ad9d371ec9953` — enterprise multi-account fast-completion clustering/orchestration, all three CI gates success;
-- `33552901711` on head `bea4c022d99759f64b8ee969a8653f0cad3c9dbf` — five-target arbitrary-TP signed acceptance semantics, all three CI gates success.
+- `33552901711` on head `bea4c022d99759f64b8ee969a8653f0cad3c9dbf` — five-target arbitrary-TP signed acceptance semantics, all three CI gates success;
+- `33553462413` on head `5dae1e8185e2933fed20d7d9140e115bbba3d104` — AI ambiguity fail-closed signed acceptance, all three CI gates success.
 
 Recent intentional RED checkpoints:
 
@@ -280,7 +282,12 @@ Recent intentional RED checkpoints:
 - `33546205291` — only two missing management orchestration contracts;
 - `33546768317` on head `92a1ab00e2edc38ee08c5f0a25988eef212807c3` — 238/240 passed; only the two new fast-sequence acceptance tests failed;
 - `33547449605` on head `cf6be5cf8335a17240506ee2ea0496d742928f12` — 241/243 passed; only same-source multi-account fast clustering and mixed-policy completion failed;
-- `33552719259` on head `ab0cc7ff53ab79ad37d1b5ed2009021ffc584bd4` — 243/245 passed; only the two new arbitrary-TP acceptance contracts failed.
+- `33552719259` on head `ab0cc7ff53ab79ad37d1b5ed2009021ffc584bd4` — 243/245 passed; only the two new arbitrary-TP acceptance contracts failed;
+- `33553143660` on head `38ea90838cd4f301adbe1af9b72ff1c1bdfb20b2` — 246/247 passed; only unsafe ambiguity execution was incorrectly accepted.
+
+Verification correction:
+
+- `33553320645` on head `8f1d75fc2efb1687dba84306b83827a1ce7192a7` had the new ambiguity tests green but exposed one stale broad-matrix fixture that mocked `ambiguous` as a generic success. The production validator remained strict; fixture correction at `5dae1e81...` produced the full green run above.
 
 Always inspect the newest branch/push run before claiming the current head is green.
 
@@ -318,18 +325,17 @@ Do not paste secret values into Git/chat/logs.
 
 ## Remaining blockers / priority order
 
-1. Add scenario-specific signed acceptance for AI ambiguity/fail-closed behavior.
-2. Add scenario-specific signed acceptance for management/reply/thread behavior where durable open-position state can be safely established.
-3. Add pending-order cancellation state/orchestration separately from open-position management.
-4. Run `npm run accept:v1:simulation` against a configured non-live Worker.
-5. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
-6. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
-7. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
-8. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
-9. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
-10. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
-11. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-12. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+1. Add scenario-specific signed acceptance for management/reply/thread behavior where durable open-position state can be safely established.
+2. Add pending-order cancellation state/orchestration separately from open-position management.
+3. Run `npm run accept:v1:simulation` against a configured non-live Worker.
+4. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
+5. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
+6. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
+7. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
+8. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
+9. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
+10. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
+11. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
 
 ## Exact next safe starting point
 
@@ -338,12 +344,13 @@ Do not redesign the DB or add more broker abstraction first.
 Next repo-side work:
 
 1. keep CI green;
-2. write RED tests for the optional `ambiguous` signed acceptance scenario;
-3. require ambiguity/AI failure to remain non-executable: no READY account and no simulated broker action unless bounded AI returns a deterministic-valid canonical intent;
-4. ensure acceptance can distinguish safe `NEEDS_REVIEW` / non-actionable results from accidental HTTP-only success;
-5. verify the full Node + MT5 + Wrangler suite;
-6. update this file with exact RED/GREEN evidence;
-7. continue management/reply/thread acceptance only after ambiguity semantics are explicit.
+2. write RED tests for signed management sequencing that can establish simulation state safely without broker dispatch;
+3. prefer sequence-local state establishment (for example complete signal -> reply-targeted BE/partial close) over hidden external seeding;
+4. require reply/thread correlation to reuse the established Position Group, emit only simulated risk-reducing actions, and remain blocked by execution disablement/kill switch;
+5. keep pending-order cancellation separate until its state model is explicit;
+6. verify the full Node + MT5 + Wrangler suite;
+7. update this file with exact RED/GREEN evidence;
+8. then proceed to pending-order cancellation or external non-live Worker acceptance.
 
 ## Mandatory progress update rule
 
