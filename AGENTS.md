@@ -184,7 +184,7 @@ Critical rules:
 
 No real cTrader demo credentials have been configured through this work yet, and no actual cTrader demo order has been placed by this development session.
 
-### MT5 foundation
+### MT5 foundation and demo acceptance harness
 
 Implemented/tested:
 
@@ -193,10 +193,19 @@ Implemented/tested:
 - HMAC verification/replay rejection;
 - Python/EA bridge architecture;
 - canonical symbol/lot/price translation;
-- persistent destination idempotency;
-- pure Python bridge tests in CI.
+- persistent destination idempotency using `destination_deliveries` scoped by Trading workspace and MT5 demo account;
+- pure Python bridge tests in CI;
+- bridge execution results expose broker-confirmed `fill_price`, normalized by the Worker as `fillPrice` so BE never guesses from a pre-order quote;
+- demo probe verifies bridge health, exact configured demo account and exact expected demo server before symbol/tick discovery;
+- demo probe loads the terminal's actual symbol catalog, resolves broker aliases/prefixes/suffixes dynamically, and fetches the real tick;
+- lifecycle is impossible without `MT5_DEMO_ORDER_TEST=true` and still requires the exact expected demo account/server match;
+- lifecycle validates broker min/step volume, opens a protected market trade, moves SL to BE at the actual broker-confirmed fill, partial-closes, and closes the exact remainder;
+- CLI defaults to probe-only and supports only `probe` / `lifecycle` modes; there is no live mode;
+- command output/error handling is sanitized and receives bridge/Supabase credentials only through runtime environment;
+- executable command: `npm run accept:mt5:demo`;
+- default acceptance mode is `probe`; lifecycle requires `MT5_DEMO_ACCEPTANCE_MODE=lifecycle` **and** `MT5_DEMO_ORDER_TEST=true`.
 
-Real demo terminal/bridge connectivity and an executable demo acceptance command are still required.
+No real MT5 demo terminal/bridge credentials have been configured through this work yet, and no actual MT5 demo order has been placed by this development session.
 
 ## Shared Supabase deployment decision — IMPORTANT
 
@@ -262,7 +271,13 @@ Relevant verified GREEN checkpoints:
 - `33488433697` on head `01f3e3683eb92290ce80544bee963483187dc6a5` — final migration/index schema checkpoint;
 - `33524593733` — persistent cTrader demo command dependencies;
 - `33524857606` — sanitized executable cTrader demo command runner;
-- `33525149642` on head `b9a0df968d526f4e952bc097d1faf1aaca508a73` — final cTrader demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
+- `33525149642` on head `b9a0df968d526f4e952bc097d1faf1aaca508a73` — final cTrader demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33526029652` — MT5 demo probe checkpoint;
+- `33526411500` — MT5 protected-order / BE / partial-close / exact-remainder lifecycle checkpoint;
+- `33526589705` — MT5 probe/lifecycle CLI dispatcher checkpoint;
+- `33526882851` — persistent MT5 demo command dependency checkpoint;
+- `33540733617` — sanitized MT5 demo command runner checkpoint;
+- `33541021382` on head `f0d593c33b82e6c40fea9c6b940e5dfe987424d3` — final MT5 demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
 
 Test-first RED runs are expected. Always inspect the newest branch/push run before claiming current green state because new commits trigger a later run.
 
@@ -292,18 +307,30 @@ Required for cTrader demo acceptance command:
 - optional `CTRADER_DEMO_SYMBOL`; defaults to `XAUUSD`
 - lifecycle additionally requires `CTRADER_DEMO_ACCEPTANCE_MODE=lifecycle` and `CTRADER_DEMO_ORDER_TEST=true`.
 
+Required for MT5 demo acceptance command:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `TRADING_WORKSPACE_ID`
+- `MT5_BRIDGE_URL`
+- `MT5_BRIDGE_SECRET`
+- `MT5_ACCOUNT_ID`
+- `MT5_EXPECTED_DEMO_SERVER`
+- optional MT5 demo symbol/lot inputs supported by the acceptance harness;
+- lifecycle additionally requires `MT5_DEMO_ACCEPTANCE_MODE=lifecycle` and `MT5_DEMO_ORDER_TEST=true`.
+
 Do not paste these secret values into Git/chat/logs.
 
 ## Remaining blockers / priority order
 
-1. Build the equivalent MT5 demo acceptance command/harness so MT5 and cTrader have symmetrical demo validation paths.
+1. Build/run the signed V1 simulation acceptance command against a configured non-live Worker so the real HTTP ingress, HMAC, persistent event idempotency, interpretation, correlation, risk/policy, Position Group and simulation actions are verified together with zero broker dispatch.
 2. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
 3. Keep the existing Trading access row disabled until Zitadel authorization is verified.
 4. Generate/store encrypted source credentials and create one active source connection.
 5. Create one restrictive non-live trade account and run the signed `/api/v1/events` static simulation matrix.
 6. Verify duplicate, replay, invalid signature, AI ambiguity, kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
 7. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
-8. Configure MT5 demo terminal + authenticated Python/EA bridge and run the same canonical scenario matrix.
+8. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
 9. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
 10. Add/verify per-customer destination formatting profiles with bounded AI and deterministic fallback.
 11. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
@@ -311,13 +338,13 @@ Do not paste these secret values into Git/chat/logs.
 
 ## Exact next safe starting point
 
-Because database schema is applied and inert, and cTrader has a verified executable demo acceptance command, do **not** perform more database redesign or more cTrader protocol abstraction first.
+Because database schema is applied/inert and both cTrader and MT5 now have verified executable demo acceptance commands, do **not** redesign database schema or add more broker protocol abstraction first.
 
-Next repo-side work while external secrets are unavailable:
+Next repo-side work while external broker secrets are unavailable:
 
 1. keep CI green;
-2. build the equivalent MT5 demo acceptance runner/package command with environment-only bridge credentials and an explicit demo-order gate;
-3. keep signed V1 simulation harness ready for external Worker/Zitadel configuration;
+2. build the signed V1 simulation acceptance command around the existing `/api/v1/events` contract, with environment-only endpoint/source credentials and sanitized output;
+3. verify a scenario matrix including normal signal, duplicate/replay, invalid signature, kill switch, fast-entry completion, reply/thread management and arbitrary TP count with zero broker dispatch;
 4. keep cTrader/MT5 demo acceptance paths isolated from live execution;
 5. once credentials are supplied outside chat, run real cTrader and MT5 demo E2E;
 6. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
