@@ -80,3 +80,28 @@ test('rejects invalid signature unknown source and missing external id before pe
   assert.equal(malformed.ok, false);
   assert.equal(malformed.status, 400);
 });
+
+test('loads AI only after authenticated source establishes trusted workspace', async () => {
+  const state = stores();
+  const input = await signedInput({
+    external_event_id: 'msg-ai',
+    text: 'Gold is good here, buy around 2526 and protect under 2518, aim 2530 then 2535',
+  });
+  let factoryContext;
+  const result = await ingestTradingEvent(input, {
+    ...state,
+    aiRouterFactory: async (context) => {
+      factoryContext = context;
+      return {
+        processSignal: async () => ({ success: true, provider: 'tenant-fast-ai', model: 'fast', text: JSON.stringify({
+          event_type: 'NEW_SIGNAL', side: 'BUY', symbol: 'GOLD', order_type: 'MARKET',
+          entry: 2526, stop_loss: 2518, take_profits: [2530, 2535],
+        }) }),
+      };
+    },
+  });
+  assert.equal(factoryContext.source.workspace_id, 'ws-1');
+  assert.equal(factoryContext.event.workspace_hint, 'ws-1');
+  assert.equal(result.interpretation.status, 'READY');
+  assert.equal(result.interpretation.source, 'ai');
+});
