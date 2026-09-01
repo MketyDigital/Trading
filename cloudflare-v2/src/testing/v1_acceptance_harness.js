@@ -103,6 +103,7 @@ export function buildAcceptanceScenario(name, {
     pending_order: 'BUY LIMIT EURUSD 1.1600 SL 1.1570 TP 1.1650',
     ambiguous: 'Gold looks good here, I may buy around this zone with protection below',
     move_be: 'MOVE SL TO BE',
+    thread_move_be: 'MOVE SL TO BE',
     close_half: 'CLOSE HALF',
     cancel_pending: 'CANCEL PENDING',
     kill_switch: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
