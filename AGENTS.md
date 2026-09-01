@@ -253,6 +253,21 @@ No real cTrader credentials have been configured or tested by this branch work y
 
 Real demo bridge connectivity is still required.
 
+### 11. Staging readiness and non-secret health
+
+Staging-preparation code is now implemented without changing any staging or production account.
+
+- `src/config/staging_readiness.js` validates required configuration **names only** and never returns values.
+- Core readiness checks Supabase service access, `TRADING_MASTER_KEY`, and Zitadel issuer/audience/JWKS configuration.
+- Simulation readiness additionally checks the Trade State token/binding and explicit staging simulation instrument/price context.
+- `GET /api/v1/health` is wrapper-owned, bypasses the legacy Worker, initializes no database/AI/DO/broker client, and returns readiness booleans plus missing configuration names only.
+- `/api/v1/health` is GET-only and sends `Cache-Control: no-store`.
+- If core configuration is complete but simulation is enabled without its dependencies, health reports a degraded/non-simulation-ready state rather than pretending the Worker can safely simulate.
+- Manual staging procedure and acceptance criteria are documented in `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`.
+- Implementation plan is retained at `docs/superpowers/plans/2026-09-01-staging-readiness.md`.
+
+No database migration, Worker secret, Zitadel setting, or production configuration was changed by this readiness batch.
+
 ## Database migrations
 
 Numbered migrations now exist:
@@ -260,7 +275,7 @@ Numbered migrations now exist:
 - `0001_enterprise_trading_foundation.sql`: workspace Zitadel binding, source registry, trading events, Position Groups/legs, destination-delivery audit/idempotency.
 - `0002_trade_correlation_and_account_policy.sql`: Position Group correlation fields plus account execution/safety/fast-entry/entry-zone policies.
 
-**No staging or production Supabase migration has been applied automatically.** Staging application is the next account/environment step.
+**No staging or production Supabase migration has been applied automatically.** Apply staging migrations manually using `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md` only after confirming the selected Supabase/Worker environment is non-production.
 
 ## Cloudflare / environment configuration
 
@@ -299,7 +314,9 @@ Verified checkpoints:
 - run **33484281245** — cTrader accepted-vs-filled lifecycle correction: success.
 - run **33484683645** — V1 admin Zitadel/workspace gate: success.
 - run **33484934076** — simulation-only orchestrator core: success.
-- run **33485269429** on head `1b8fb5ef3e63283b6f1b83649b11a47315136dfb` — `/api/v1/events` simulation handoff: **success**; Node/core, pure MT5 bridge, Wrangler dry-run all passed.
+- run **33485269429** on head `1b8fb5ef3e63283b6f1b83649b11a47315136dfb` — `/api/v1/events` simulation handoff: success; Node/core, pure MT5 bridge, Wrangler dry-run all passed.
+- run **33485665784** on head `7a3e89b16b7ea861a1bd662fb778a3cc9b7eb466` — non-secret staging readiness validator: success; all three CI stages passed.
+- run **33485882224** on head `645258f665439d5dff7e2c9a7bb5ecca50bef66b` — `/api/v1/health` readiness endpoint: **success**; Node/core, pure MT5 bridge, Wrangler dry-run all passed.
 
 Test-first RED workflow runs are expected and must not be cited as current failures after the matching implementation head is green.
 
@@ -323,9 +340,9 @@ Verified against current provider documentation during this work:
 
 The branch is **not** approved for production live copying yet.
 
-1. **Staging Supabase:** deliberately apply migrations `0001` then `0002`; create a staging workspace, Zitadel org binding, encrypted source connection, and non-live trade-account configuration.
-2. **Staging Cloudflare configuration:** set Worker secrets/config including master key, Trade State token, Zitadel values, Supabase service credentials; enable V1 simulation only after staging DB records exist.
-3. **Staging V1 acceptance:** send signed universal events through `/api/v1/events`, verify persistent idempotency, deterministic/AI interpretation, Trade State correlation, account safety, Position Groups, and simulation actions with no broker dispatch.
+1. **Staging Supabase:** deliberately apply migrations `0001` then `0002` using the checked-in staging runbook; create a staging workspace, Zitadel org binding, encrypted source connection, and non-live trade-account configuration.
+2. **Staging Cloudflare configuration:** set Worker secrets/config including master key, Trade State token, Zitadel values, Supabase service credentials; use `/api/v1/health` to confirm core/simulation readiness before enabling V1 simulation.
+3. **Staging V1 acceptance:** run the signed acceptance matrix from `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`, verifying persistent idempotency, deterministic/AI interpretation, Trade State correlation, account safety, Position Groups, and simulation actions with no broker dispatch.
 4. **cTrader real demo E2E:** configure encrypted app/account credentials and an authorized demo account; verify live demo catalog/quotes -> canonical plan -> idempotent market/pending/protection/close/partial-close/cancel/BE/multi-leg behavior.
 5. **MT5 demo E2E:** configure a reachable authenticated demo bridge; verify `order_check`, placement, SL/TP, multi-leg, BE/partial close, pending/cancel, replay/idempotency.
 6. **MTProto listener V1 migration/recovery:** sign universal V1 events while preserving the existing legacy path and verify Cloudflare idle/restart/reconnect behavior.
@@ -347,13 +364,16 @@ Do outside source control and do not paste secrets into chat/logs:
 
 ## Exact next safe starting point
 
-1. Prepare a staging deployment/config runbook and migration verification checks; do not mutate production.
-2. Apply `0001` and `0002` to staging Supabase only when staging credentials/access are available.
-3. Configure staging Worker secrets and create one staging workspace/source/account with execution still non-live.
-4. Enable `TRADING_V1_SIMULATION=true` in staging and run signed V1 end-to-end acceptance scenarios.
-5. Then configure cTrader demo credentials and replace staging static simulation metadata with actual demo catalog/quotes for cTrader acceptance.
-6. Configure MT5 demo bridge and run the same canonical scenario matrix.
-7. Preserve the legacy Telegram path and keep real-money execution disabled until those demo gates pass.
+The repository-side staging-readiness work is complete. The next step requires external staging account/environment setup and must not target production.
+
+1. Follow `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md` preflight and confirm the selected Supabase/Cloudflare/Zitadel targets are staging.
+2. Configure the required staging Worker secrets/bindings and use `GET /api/v1/health` to confirm core readiness without exposing values.
+3. Apply `0001` then `0002` to **staging Supabase only**, run the documented verification SQL, then create one staging workspace/source/account.
+4. Configure explicit staging simulation instrument/price context, confirm `simulationReady=true`, then enable `TRADING_V1_SIMULATION=true` in staging.
+5. Run the full signed V1 acceptance matrix and record non-secret event/group/status evidence.
+6. Only after that passes, configure cTrader demo credentials and replace static staging simulation market context with real demo catalog/quotes for cTrader acceptance.
+7. Configure MT5 demo bridge and run the same canonical scenario matrix.
+8. Preserve the legacy Telegram path and keep real-money execution disabled until all demo gates pass.
 
 ## Mandatory progress update rule
 
