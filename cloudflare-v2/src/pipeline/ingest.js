@@ -1,0 +1,102 @@
+import { verifySignedSourcePayload } from '../security/source_auth.js';
+import { normalizeTradingEvent } from '../events/trading_event.js';
+import { interpretTradingEvent } from '../ai/trading_interpreter.js';
+
+export async function ingestTradingEvent({
+  rawBody,
+  sourceId,
+  timestamp,
+  signature,
+  nowMs = Date.now(),
+} = {}, {
+  sourceStore,
+  eventStore,
+  aiRouter,
+  interpretationTimeoutMs = 1200,
+} = {}) {
+  if (!sourceStore?.getActiveSource || !eventStore?.reserve) {
+    throw new TypeError('sourceStore and eventStore are required');
+  }
+
+  const source = await sourceStore.getActiveSource(String(sourceId ?? ''));
+  if (!source?.id || !source?.secret) {
+    return { ok: false, status: 401, reason: 'UNKNOWN_OR_INACTIVE_SOURCE' };
+  }
+
+  const auth = await verifySignedSourcePayload({
+    rawBody,
+    sourceId,
+    timestamp,
+    signature,
+    secret: source.secret,
+    nowMs,
+  });
+  if (!auth.ok) return { ok: false, status: 401, reason: auth.reason };
+
+  let input;
+  try {
+    input = JSON.parse(String(rawBody ?? ''));
+  } catch {
+    return { ok: false, status: 400, reason: 'INVALID_JSON' };
+  }
+
+  // Source identity and workspace authority come from the authenticated source
+  // registry, never from client-controlled payload fields.
+  const normalizedInput = {
+    ...input,
+    workspace_hint: source.workspace_id,
+    source: {
+      type: source.source_type,
+      instance_id: source.source_instance_id,
+      external_id: input?.source?.external_id ?? input?.source_external_id ?? null,
+    },
+  };
+  const normalized = normalizeTradingEvent(normalizedInput, { requireIdentity: true });
+  if (!normalized.ok) {
+    return { ok: false, status: 400, reason: 'INVALID_TRADING_EVENT', errors: normalized.errors };
+  }
+
+  const event = normalized.event;
+  const reservation = await eventStore.reserve({
+    workspace_id: source.workspace_id,
+    source_connection_id: source.id,
+    external_event_id: event.external_event_id,
+    event_version: event.version,
+    source_type: event.source.type,
+    source_external_id: event.source.external_id,
+    occurred_at: event.occurred_at,
+    raw_text: event.text,
+    structured_payload: event.structured_payload,
+    thread: event.thread,
+    metadata: event.metadata,
+  });
+
+  if (reservation?.duplicate) {
+    return {
+      ok: true,
+      duplicate: true,
+      eventId: reservation.eventId ?? null,
+      event,
+    };
+  }
+  if (!reservation?.ok) {
+    return { ok: false, status: 503, reason: 'EVENT_RESERVATION_FAILED' };
+  }
+
+  const interpretation = await interpretTradingEvent(event, {
+    aiRouter,
+    timeoutMs: interpretationTimeoutMs,
+  });
+
+  if (eventStore.updateInterpretation) {
+    await eventStore.updateInterpretation(reservation.eventId, interpretation);
+  }
+
+  return {
+    ok: true,
+    duplicate: false,
+    eventId: reservation.eventId,
+    event,
+    interpretation,
+  };
+}
