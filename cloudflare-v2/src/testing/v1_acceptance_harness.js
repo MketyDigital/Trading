@@ -103,6 +103,7 @@ export function buildAcceptanceScenario(name, {
     move_be: 'MOVE SL TO BE',
     close_half: 'CLOSE HALF',
     cancel_pending: 'CANCEL PENDING',
+    kill_switch: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
     invalid_signature: 'BUY XAUUSD 2500 SL 2490 TP 2510',
     stale_timestamp: 'BUY XAUUSD 2500 SL 2490 TP 2510',
   };
