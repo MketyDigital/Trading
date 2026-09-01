@@ -12,6 +12,15 @@ function entryValue(action) {
   return undefined;
 }
 
+function cTraderVolumeOptions(symbol = {}) {
+  return {
+    protocolLotSize: symbol.protocolLotSize,
+    minVolume: symbol.minVolume,
+    maxVolume: symbol.maxVolume,
+    stepVolume: symbol.stepVolume,
+  };
+}
+
 export function buildMT5OrderCommand(action, symbol) {
   if (!symbol?.platformSymbol) throw new TypeError('resolved MT5 symbol required');
   const priceOptions = { digits: symbol.digits, tickSize: symbol.tickSize };
@@ -43,12 +52,7 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
     symbolId: symbol.platformId,
     side: action.side,
     orderType: action.orderType,
-    protocolVolume: normalizeVolumeForCTrader(action.lots, {
-      lotSize: symbol.lotSize,
-      minVolume: symbol.minVolume,
-      maxVolume: symbol.maxVolume,
-      stepVolume: symbol.stepVolume,
-    }),
+    protocolVolume: normalizeVolumeForCTrader(action.lots, cTraderVolumeOptions(symbol)),
     ...(entryPrice != null ? { entryPrice: normalizePrice(entryPrice, priceOptions) } : {}),
     ...(action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
     ...(action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
@@ -112,12 +116,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
       clientMsgId,
       accountId,
       positionId: action.brokerPositionId,
-      protocolVolume: normalizeVolumeForCTrader(lots, {
-        lotSize: symbol.lotSize,
-        minVolume: symbol.minVolume,
-        maxVolume: symbol.maxVolume,
-        stepVolume: symbol.stepVolume,
-      }),
+      protocolVolume: normalizeVolumeForCTrader(lots, cTraderVolumeOptions(symbol)),
     });
   }
 
