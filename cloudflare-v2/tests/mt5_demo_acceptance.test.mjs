@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   validateMT5DemoEnvironment,
   probeMT5Demo,
+  buildMT5DemoMarketAction,
+  runMT5DemoOrderLifecycle,
 } from '../src/testing/mt5_demo_acceptance.js';
 
 test('MT5 demo environment reports missing names only and requires expected demo server', () => {
@@ -79,4 +81,78 @@ test('MT5 demo probe fails closed on account or server mismatch before symbol/ti
   }), /demo server mismatch/i);
 
   assert.deepEqual(calls, ['/health', '/v1/account']);
+});
+
+test('MT5 demo market action requires explicit order gate and refuses lots below broker minimum', () => {
+  const symbol = {
+    canonical: 'XAUUSD', platformSymbol: 'XAUUSD.a', digits: 2, tickSize: 0.01,
+    minLots: 0.01, maxLots: 100, stepLots: 0.01,
+  };
+
+  assert.throws(() => buildMT5DemoMarketAction({
+    env: { MT5_DEMO_ORDER_TEST: 'false', MT5_DEMO_TEST_LOTS: '0.01' },
+    symbol, quote: { bid: 2525.9, ask: 2526.1 }, side: 'BUY', runId: 'run-1',
+  }), /explicitly enabled/i);
+
+  assert.throws(() => buildMT5DemoMarketAction({
+    env: { MT5_DEMO_ORDER_TEST: 'true', MT5_DEMO_TEST_LOTS: '0.001' },
+    symbol, quote: { bid: 2525.9, ask: 2526.1 }, side: 'BUY', runId: 'run-1',
+  }), /below broker minimum/i);
+});
+
+test('MT5 demo lifecycle opens protected trade, moves BE to actual fill, partial closes and closes exact remainder', async () => {
+  const actions = [];
+  const probe = {
+    ready: true,
+    environment: 'demo',
+    account: { login: '1001', server: 'Broker-Demo-01', tradeAllowed: true },
+    symbol: { canonical: 'XAUUSD', platformSymbol: 'XAUUSD.a', digits: 2, tickSize: 0.01, minLots: 0.01, maxLots: 100, stepLots: 0.01 },
+    quote: { bid: 2525.9, ask: 2526.1 },
+  };
+
+  const result = await runMT5DemoOrderLifecycle({
+    env: {
+      MT5_BRIDGE_URL: 'https://bridge.example', MT5_BRIDGE_SECRET: 'secret', MT5_ACCOUNT_ID: '1001',
+      MT5_DEMO_SERVER: 'Broker-Demo-01', MT5_DEMO_ORDER_TEST: 'true', MT5_DEMO_TEST_LOTS: '0.02',
+      MT5_DEMO_STOP_TICKS: '100', MT5_DEMO_TARGET_TICKS: '150', TRADING_WORKSPACE_ID: 'workspace-1',
+    },
+    deliveryStore: {},
+    probeFn: async () => probe,
+    executor: async (action) => {
+      actions.push(action);
+      if (action.type === 'OPEN_POSITION') return { brokerPositionId: '9001', fillPrice: 2526.15 };
+      return { brokerPositionId: '9001' };
+    },
+    runId: 'life-1',
+  });
+
+  assert.equal(result.environment, 'demo');
+  assert.equal(result.positionId, '9001');
+  assert.equal(result.fillPrice, 2526.15);
+  assert.equal(result.partialClosedLots, 0.01);
+  assert.equal(result.finalClosedLots, 0.01);
+  assert.deepEqual(actions.map((action) => action.type), ['OPEN_POSITION', 'MODIFY_POSITION', 'CLOSE_PARTIAL', 'CLOSE_POSITION']);
+  assert.equal(actions[1].stopLoss, 2526.15);
+  assert.equal(actions[2].lots, 0.01);
+  assert.equal(actions[3].lots, 0.01);
+  assert.match(actions[0].idempotencyKey, /life-1:open$/);
+});
+
+test('MT5 demo lifecycle is impossible without explicit order gate', async () => {
+  let executorCalls = 0;
+  await assert.rejects(() => runMT5DemoOrderLifecycle({
+    env: {
+      MT5_BRIDGE_URL: 'https://bridge.example', MT5_BRIDGE_SECRET: 'secret', MT5_ACCOUNT_ID: '1001',
+      MT5_DEMO_SERVER: 'Broker-Demo-01', MT5_DEMO_ORDER_TEST: 'false', MT5_DEMO_TEST_LOTS: '0.02',
+      TRADING_WORKSPACE_ID: 'workspace-1',
+    },
+    deliveryStore: {},
+    probeFn: async () => ({
+      ready: true, environment: 'demo', account: { login: '1001', server: 'Broker-Demo-01' },
+      symbol: { canonical: 'XAUUSD', platformSymbol: 'XAUUSD.a', digits: 2, tickSize: 0.01, minLots: 0.01, maxLots: 100, stepLots: 0.01 },
+      quote: { bid: 2525.9, ask: 2526.1 },
+    }),
+    executor: async () => { executorCalls += 1; },
+  }), /explicitly enabled/i);
+  assert.equal(executorCalls, 0);
 });
