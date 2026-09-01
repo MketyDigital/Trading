@@ -251,11 +251,76 @@ The intended product relationship is:
 
 Do not start modifying the MkSaaS repo until this Trading project has a stable, documented interface for identity/entitlement/workspace provisioning.
 
+## Enterprise Trading Event Core decision — 2026-09-01
+
+### Branch / state
+
+- Design branch: `design/enterprise-trading-event-core` from current `main`.
+- Runtime/product code changes: none yet.
+- Design spec: `docs/superpowers/specs/2026-09-01-enterprise-trading-event-core-design.md`.
+- Implementation is blocked on user review/approval of the written spec before an implementation plan is created.
+
+### Product direction now decided
+
+Mkety Trading is an enterprise/custom multi-tenant trading automation product, not a Telegram-only copier. The system must accept versioned authenticated trading-event payloads from interchangeable sources such as Telegram MTProto Durable Objects, Telethon/Python VM listeners, TradingView webhooks, MT5/bridges, REST/webhooks and future custom adapters. It must also dispatch to interchangeable destinations including Telegram, generic authenticated webhooks, MT5, cTrader, Deriv product-specific adapters, other Workers/services and enterprise custom integrations.
+
+The authoritative internal model becomes `Trading Event -> correlation/state -> canonical intent/management event -> deterministic validation -> risk/policy -> execution commands`. Telegram HTML is presentation output and never the machine-execution source of truth.
+
+### Latency requirement now explicit
+
+Telegram/manual-trader signal delivery is a first-class latency-critical destination path. Human-facing Telegram formatting/forwarding and machine execution planning run in parallel after the minimum safe normalization/classification step. Neither waits unnecessarily for the other.
+
+Deterministic formatting should dispatch immediately when possible. AI may format/rewrite when configured, but provider failure/latency must fall back to a deterministic formatter so paid subscribers are not unnecessarily delayed.
+
+### Trade-state behavior now explicit
+
+- Fast signals are configurable per workspace/route/account: `execute_immediately`, `wait_for_complete_signal`, or `forward_only`.
+- A fast position may later be reconciled into Leg 1/TP1 of a complete multi-TP Position Group; only missing legs are created.
+- Replies, threads, message edits, corrections, pending orders, cancel, close, partial close, BE, SL/TP updates and TP/SL-hit management events must target evolving trade state rather than being treated as unrelated new trades.
+- Multi-TP trades are represented as Position Groups with independently managed legs.
+- Risk is calculated for the total allowed trade first, then volume is split deterministically across TP legs while respecting platform volume constraints.
+
+### Cloudflare/provider verification evidence
+
+Official Cloudflare documentation checked 2026-09-01 confirms:
+
+- Durable Objects can use outbound WebSockets, but WebSocket hibernation only applies when the DO acts as the WebSocket server; outbound WebSockets do not hibernate.
+- Active outbound connections can defer eviction only for a bounded period, so the Telegram MTProto listener requires explicit persisted recovery/reconnect behavior and cannot be described as an immortal always-on socket.
+- Cloudflare Queues provide at-least-once delivery, so any queued trading-related work requires persistent idempotency.
+
+TradingView documentation confirms webhook alerts POST to configured endpoints and JSON alert bodies are sent as `application/json`, making TradingView suitable as a source adapter behind the same universal ingress contract.
+
+### Audit findings carried forward
+
+- Current `index.js` centers the pipeline around AI-formatted HTML and subsequently extracts execution parameters; this must be inverted so canonical structured events/intents are authoritative.
+- Current source/route schema is Telegram-centric and destination types are closed enums; generic source/destination adapter contracts are required.
+- `ai_providers` schema/code currently disagree on `api_key` vs `api_key_encrypted` and `priority_rank` vs router `priority` semantics.
+- Workers AI adapter currently references `env` without receiving it.
+- Current cTrader implementation is not a verified current Open API connection lifecycle.
+- Current Deriv adapter represents a short-duration CALL/PUT proposal/buy flow and must not be treated as a generic CFD copier.
+- Current admin Bearer check does not cryptographically validate Zitadel JWTs.
+- Current listener-to-router call is not cryptographically authenticated.
+- Current database is bootstrap schema only; production migrations are required.
+
+### Migrations / config changes
+
+- None in this design batch.
+
+### Remaining blockers
+
+- Written design approval.
+- Implementation plan.
+- Test/CI foundation before material runtime changes.
+- Authentication/workspace isolation and persistent idempotency before enterprise exposure.
+- Broker-specific adapter verification before live order execution.
+
+### Account-side setup still required
+
+None for the design batch. Do not request or store live broker credentials yet.
+
 ## Exact next starting point
 
-MKLMS can be production-tested independently while Trading work begins.
-
-For Trading, the next session should begin by reading this file, then perform a fresh code/config audit against current Cloudflare/Telegram/Deriv/cTrader/Supabase documentation. The first implementation spec should be **Trading Phase 1 — production foundation**, covering CI/tests, admin authentication/workspace isolation, migrations, secret handling, and configuration validation.
+After the user approves `docs/superpowers/specs/2026-09-01-enterprise-trading-event-core-design.md`, create the implementation plan for the first independently testable milestone: production foundation + universal event contracts + latency-safe Telegram fast-path + simulation-only machine path. Do not enable live broker execution in that milestone.
 
 Every meaningful implementation/testing batch must update this file with:
 
