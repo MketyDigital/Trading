@@ -159,6 +159,33 @@ function validateArbitraryTp(body) {
   return null;
 }
 
+function validateAmbiguous(body) {
+  if (body?.ok !== true || body?.duplicate === true) {
+    return 'ambiguous response must confirm a new successful event';
+  }
+  if (body?.interpretation?.status !== 'NEEDS_REVIEW') {
+    return 'ambiguous interpretation must remain NEEDS_REVIEW rather than becoming executable';
+  }
+
+  const simulation = body?.simulation;
+  if (!simulation || simulation.status !== 'NEEDS_REVIEW' || simulation.executionEnabled !== false) {
+    return 'ambiguous simulation must remain NEEDS_REVIEW with executionEnabled=false';
+  }
+  if (Array.isArray(simulation.actions) && simulation.actions.length > 0) {
+    return 'ambiguous simulation must emit zero top-level actions';
+  }
+
+  const accounts = Array.isArray(simulation.accounts) ? simulation.accounts : [];
+  if (accounts.some((account) => account?.status === 'READY')) {
+    return 'ambiguous simulation must not include a READY account';
+  }
+  if (accounts.some((account) => Array.isArray(account?.actions) && account.actions.length > 0)) {
+    return 'ambiguous simulation accounts must emit zero actions';
+  }
+
+  return null;
+}
+
 function validateScenarioSemantics(scenario, outcome, history = []) {
   const body = outcome?.result?.response?.body;
 
@@ -197,6 +224,10 @@ function validateScenarioSemantics(scenario, outcome, history = []) {
 
   if (scenario.name === 'arbitrary_tp') {
     return validateArbitraryTp(body);
+  }
+
+  if (scenario.name === 'ambiguous') {
+    return validateAmbiguous(body);
   }
 
   if (scenario.name !== 'complete_signal') return null;
