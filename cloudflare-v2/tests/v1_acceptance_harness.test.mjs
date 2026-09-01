@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildSignedV1Request,
   buildAcceptanceScenario,
+  runAcceptanceScenario,
   sanitizeAcceptanceResult,
   validateAcceptanceEnvironment,
 } from '../src/testing/v1_acceptance_harness.js';
@@ -45,6 +46,89 @@ test('scenario helper can deliberately reuse external id for duplicate/replay ac
 
   const second = buildAcceptanceScenario('complete_signal', { runId: 'run-43' });
   assert.notEqual(second.event.external_event_id, original.event.external_event_id);
+});
+
+test('negative security scenarios declare expected rejection without embedding credentials', () => {
+  const invalid = buildAcceptanceScenario('invalid_signature', { runId: 'run-security' });
+  assert.equal(invalid.expectedStatus, 401);
+  assert.equal(invalid.requestMutation, 'invalid_signature');
+  assert.doesNotMatch(JSON.stringify(invalid), /secret|credential/i);
+
+  const stale = buildAcceptanceScenario('stale_timestamp', { runId: 'run-security' });
+  assert.equal(stale.expectedStatus, 401);
+  assert.equal(stale.requestMutation, 'stale_timestamp');
+  assert.equal(typeof stale.timestampOffsetMs, 'number');
+  assert.ok(stale.timestampOffsetMs < 0);
+});
+
+test('expected rejection counts as acceptance success only when exact status matches', async () => {
+  const env = {
+    TRADING_V1_ENDPOINT: 'https://trade.test/api/v1/events',
+    TRADING_V1_SOURCE_ID: 'source-1',
+    TRADING_V1_SOURCE_SECRET: 'source-secret',
+  };
+  const invalid = buildAcceptanceScenario('invalid_signature', { runId: 'run-security' });
+  let observedSignature;
+
+  const accepted = await runAcceptanceScenario({
+    env,
+    scenario: invalid,
+    timestamp: 1725180000000,
+    fetchFn: async (request) => {
+      observedSignature = request.headers.get('X-Mkety-Signature');
+      return new Response(JSON.stringify({ error: 'INVALID_SOURCE_SIGNATURE' }), { status: 401 });
+    },
+  });
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.result.response.statusCode, 401);
+  assert.equal(accepted.result.expectedStatus, 401);
+  assert.equal(accepted.result.expectedRejection, true);
+  assert.match(observedSignature, /invalid/i);
+
+  const wrongStatus = await runAcceptanceScenario({
+    env,
+    scenario: invalid,
+    timestamp: 1725180000000,
+    fetchFn: async () => new Response(JSON.stringify({ error: 'SERVER_ERROR' }), { status: 500 }),
+  });
+  assert.equal(wrongStatus.ok, false);
+  assert.equal(wrongStatus.result.response.statusCode, 500);
+});
+
+test('stale timestamp mutation signs the stale timestamp rather than corrupting body/signature pair', async () => {
+  const env = {
+    TRADING_V1_ENDPOINT: 'https://trade.test/api/v1/events',
+    TRADING_V1_SOURCE_ID: 'source-1',
+    TRADING_V1_SOURCE_SECRET: 'source-secret',
+  };
+  const scenario = buildAcceptanceScenario('stale_timestamp', { runId: 'run-security' });
+  let observedTimestamp;
+  let observedSignature;
+  let observedBody;
+
+  const outcome = await runAcceptanceScenario({
+    env,
+    scenario,
+    timestamp: 1725180000000,
+    fetchFn: async (request) => {
+      observedTimestamp = request.headers.get('X-Mkety-Timestamp');
+      observedSignature = request.headers.get('X-Mkety-Signature');
+      observedBody = await request.clone().text();
+      return new Response(JSON.stringify({ error: 'STALE_SOURCE_TIMESTAMP' }), { status: 401 });
+    },
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(Number(observedTimestamp), 1725180000000 + scenario.timestampOffsetMs);
+  const verification = await verifySignedSourcePayload({
+    rawBody: observedBody,
+    sourceId: env.TRADING_V1_SOURCE_ID,
+    timestamp: observedTimestamp,
+    signature: observedSignature,
+    secret: env.TRADING_V1_SOURCE_SECRET,
+    nowMs: Number(observedTimestamp),
+  });
+  assert.equal(verification.ok, true);
 });
 
 test('environment validation reports secret names only and never values', () => {
