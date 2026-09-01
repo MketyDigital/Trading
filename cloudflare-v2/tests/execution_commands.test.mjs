@@ -40,13 +40,13 @@ test('translates canonical BE modification into MT5 bridge command', () => {
   });
 });
 
-test('translates canonical cTrader partial close using symbol-specific volume economics', () => {
+test('translates canonical cTrader partial close using raw protocol-cent symbol economics', () => {
   const message = buildCTraderManagementCommand({
     type: 'CLOSE_PARTIAL', brokerPositionId: 456, lots: 0.05,
   }, {
     accountId: 123,
     clientMsgId: 'm4',
-    symbol: { lotSize: 100000, minVolume: 100000, maxVolume: 1000000000, stepVolume: 100000 },
+    symbol: { protocolLotSize: 10000000, minVolume: 100000, maxVolume: 1000000000, stepVolume: 100000 },
   });
   assert.equal(message.payloadType, 2111);
   assert.equal(message.payload.positionId, 456);
