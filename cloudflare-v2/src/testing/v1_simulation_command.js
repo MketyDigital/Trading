@@ -14,6 +14,7 @@ const ALLOWED_SCENARIOS = new Set([
   'complete_signal',
   'duplicate',
   'fast_entry',
+  'fast_completion',
   'pending_order',
   'ambiguous',
   'move_be',
@@ -59,6 +60,10 @@ function buildScenarioSequence(names, runId) {
       continue;
     }
 
+    if (name === 'fast_completion' && scenarios.at(-1)?.name !== 'fast_entry') {
+      throw new RangeError('fast_completion scenario requires an immediately preceding fast_entry scenario');
+    }
+
     const scenario = buildAcceptanceScenario(name, { runId });
     scenarios.push(scenario);
     lastOriginal = scenario;
@@ -78,7 +83,56 @@ function validateSimulationEnvelope(body, label) {
   return null;
 }
 
-function validateScenarioSemantics(scenario, outcome) {
+function readyAccounts(body) {
+  const accounts = Array.isArray(body?.simulation?.accounts) ? body.simulation.accounts : [];
+  return accounts.filter((account) => account?.status === 'READY');
+}
+
+function validateFastCompletion(body, history) {
+  const envelopeError = validateSimulationEnvelope(body, 'fast completion');
+  if (envelopeError) return envelopeError;
+
+  const prior = [...history].reverse().find((entry) => entry.scenario.name === 'fast_entry');
+  if (!prior) return 'fast completion requires a prior fast-entry result';
+  const priorBody = prior.outcome?.result?.response?.body;
+  const priorEnvelopeError = validateSimulationEnvelope(priorBody, 'fast entry');
+  if (priorEnvelopeError) return priorEnvelopeError;
+
+  const priorReady = readyAccounts(priorBody);
+  if (priorReady.length !== 1 || !priorReady[0]?.groupId) {
+    return 'fast entry must establish exactly one READY group before completion';
+  }
+  const originalGroupId = String(priorReady[0].groupId);
+
+  const correlation = body.simulation.correlation;
+  if (correlation?.status !== 'MATCHED' || correlation?.reason !== 'FAST_ENTRY_COMPLETION') {
+    return 'fast completion must prove FAST_ENTRY_COMPLETION correlation';
+  }
+  if (String(correlation.groupId || '') !== originalGroupId) {
+    return 'fast completion must reuse the same group created by fast entry';
+  }
+
+  const completedReady = readyAccounts(body);
+  if (completedReady.length !== 1 || String(completedReady[0]?.groupId || '') !== originalGroupId) {
+    return 'fast completion READY account must reuse the same group created by fast entry';
+  }
+
+  const actions = Array.isArray(completedReady[0].actions) ? completedReady[0].actions : [];
+  const actionTypes = actions.map((action) => action?.type);
+  if (actionTypes.length !== 3 || actionTypes[0] !== 'MODIFY_POSITION' || actionTypes[1] !== 'OPEN_POSITION' || actionTypes[2] !== 'OPEN_POSITION') {
+    return 'fast completion must modify TP1 and open only the two missing TP legs';
+  }
+  if (actions.some((action) => action?.simulated !== true)) {
+    return 'fast completion actions must all be simulated=true';
+  }
+  if (Number(actions[0]?.targetIndex) !== 1 || Number(actions[1]?.targetIndex) !== 2 || Number(actions[2]?.targetIndex) !== 3) {
+    return 'fast completion actions must preserve TP1/TP2/TP3 target ordering';
+  }
+
+  return null;
+}
+
+function validateScenarioSemantics(scenario, outcome, history = []) {
   const body = outcome?.result?.response?.body;
 
   if (scenario.name === 'duplicate') {
@@ -110,18 +164,21 @@ function validateScenarioSemantics(scenario, outcome) {
     return null;
   }
 
+  if (scenario.name === 'fast_completion') {
+    return validateFastCompletion(body, history);
+  }
+
   if (scenario.name !== 'complete_signal') return null;
 
   const envelopeError = validateSimulationEnvelope(body, 'complete signal');
   if (envelopeError) return envelopeError;
 
-  const accounts = Array.isArray(body.simulation.accounts) ? body.simulation.accounts : [];
-  const readyAccounts = accounts.filter((account) => account?.status === 'READY');
-  if (readyAccounts.length === 0) {
+  const accounts = readyAccounts(body);
+  if (accounts.length === 0) {
     return 'complete signal simulation must include at least one READY account';
   }
 
-  const actions = readyAccounts.flatMap((account) => Array.isArray(account?.actions) ? account.actions : []);
+  const actions = accounts.flatMap((account) => Array.isArray(account?.actions) ? account.actions : []);
   if (actions.length === 0 || actions.some((action) => action?.simulated !== true)) {
     return 'complete signal simulation must include simulated=true execution actions';
   }
@@ -146,6 +203,7 @@ export async function runV1SimulationAcceptanceCommand({
     const names = parseScenarioNames(env.TRADING_V1_ACCEPTANCE_SCENARIOS);
     const scenarios = buildScenarioSequence(names, runId);
     const results = [];
+    const history = [];
 
     for (const scenario of scenarios) {
       const outcome = await scenarioRunner({ env, scenario });
@@ -162,7 +220,7 @@ export async function runV1SimulationAcceptanceCommand({
         };
       }
 
-      const semanticError = validateScenarioSemantics(scenario, outcome);
+      const semanticError = validateScenarioSemantics(scenario, outcome, history);
       if (semanticError) {
         logger?.error?.(`V1 acceptance semantic failure for ${scenario.name}: ${semanticError}`);
         return {
@@ -173,6 +231,8 @@ export async function runV1SimulationAcceptanceCommand({
           results,
         };
       }
+
+      history.push({ scenario, outcome });
     }
 
     return { ok: true, exitCode: 0, runId, results };
