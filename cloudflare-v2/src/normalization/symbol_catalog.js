@@ -27,14 +27,21 @@ export function fromMT5Symbols(symbols = []) {
 export function fromCTraderSymbols(symbols = []) {
   return symbols.map((symbol) => {
     const protocolLotSize = finiteNumber(symbol.lotSize);
+    const digits = Number.isInteger(symbol.digits) ? symbol.digits : undefined;
+    const pipPosition = Number.isInteger(symbol.pipPosition) ? symbol.pipPosition : undefined;
     return {
       platform: 'ctrader',
       platformId: finiteNumber(symbol.symbolId),
       platformSymbol: symbol.symbolName,
       canonical: normalizeSymbol(symbol.symbolName).canonical,
       aliases: [symbol.description].filter(Boolean),
-      digits: Number.isInteger(symbol.digits) ? symbol.digits : undefined,
-      pipPosition: Number.isInteger(symbol.pipPosition) ? symbol.pipPosition : undefined,
+      digits,
+      pipPosition,
+      // cTrader quotes are normalized to the symbol's advertised digits. The
+      // smallest quoted price increment is therefore 10^-digits; pip size is
+      // 10^-pipPosition (e.g. EURUSD digits=5, pipPosition=4).
+      tickSize: digits == null ? undefined : 10 ** (-digits),
+      pipSize: pipPosition == null ? undefined : 10 ** (-pipPosition),
       // cTrader protocol metadata is already expressed in cents.
       protocolLotSize,
       lotSizeUnits: protocolLotSize == null ? undefined : protocolLotSize / 100,
