@@ -3,6 +3,7 @@ import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
+export { TradeStateNode } from './state/trade_state_node.js';
 
 function isEnabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
