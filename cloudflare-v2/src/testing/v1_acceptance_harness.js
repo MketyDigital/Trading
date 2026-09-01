@@ -97,6 +97,7 @@ export function buildAcceptanceScenario(name, {
   const externalEventId = `${runId}:${scenario}`;
   const templates = {
     complete_signal: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
+    arbitrary_tp: 'BUY XAUUSD 2500 SL 2490 TP1 2510 TP2 2520 TP3 2530 TP4 2540 TP5 2550',
     fast_entry: 'BUY GOLD NOW',
     fast_completion: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
     pending_order: 'BUY LIMIT EURUSD 1.1600 SL 1.1570 TP 1.1650',
