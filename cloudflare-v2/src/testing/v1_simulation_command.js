@@ -78,6 +78,10 @@ function buildScenarioSequence(names, runId) {
       throw new RangeError('thread_move_be scenario requires an immediately preceding complete_signal scenario');
     }
 
+    if (name === 'cancel_pending' && scenarios.at(-1)?.name !== 'pending_order') {
+      throw new RangeError('cancel_pending scenario requires an immediately preceding pending_order scenario');
+    }
+
     const scenario = buildAcceptanceScenario(name, { runId });
     if (isReplyManagementScenario(name)) {
       scenario.event.thread.reply_to_event_id = scenarios.at(-1).event.external_event_id;
@@ -86,6 +90,9 @@ function buildScenarioSequence(names, runId) {
       const threadId = `${runId}:thread-management`;
       scenarios.at(-1).event.thread.thread_id = threadId;
       scenario.event.thread.thread_id = threadId;
+    }
+    if (name === 'cancel_pending') {
+      scenario.event.thread.reply_to_event_id = scenarios.at(-1).event.external_event_id;
     }
     scenarios.push(scenario);
     lastOriginal = scenario;
@@ -121,6 +128,25 @@ function priorCompleteGroup(history, label) {
   const accounts = readyAccounts(priorBody);
   if (accounts.length !== 1 || !accounts[0]?.groupId) {
     return { error: `${label} requires exactly one READY group from the prior complete signal` };
+  }
+  return { groupId: String(accounts[0].groupId) };
+}
+
+function priorPendingGroup(history) {
+  const prior = history.at(-1);
+  if (!prior || prior.scenario.name !== 'pending_order') {
+    return { error: 'pending cancellation requires the immediately preceding pending order' };
+  }
+  const body = prior.outcome?.result?.response?.body;
+  const envelopeError = validateSimulationEnvelope(body, 'prior pending order');
+  if (envelopeError) return { error: envelopeError };
+  const accounts = readyAccounts(body);
+  if (accounts.length !== 1 || !accounts[0]?.groupId) {
+    return { error: 'pending cancellation requires exactly one READY group from the prior pending order' };
+  }
+  const actions = Array.isArray(accounts[0].actions) ? accounts[0].actions : [];
+  if (actions.length === 0 || actions.some((action) => action?.type !== 'OPEN_POSITION' || String(action?.orderType || '').toUpperCase() === 'MARKET')) {
+    return { error: 'prior pending order must contain one or more non-market OPEN_POSITION actions' };
   }
   return { groupId: String(accounts[0].groupId) };
 }
@@ -286,6 +312,36 @@ function validateThreadManagement(scenario, body, history) {
   return validateManagementActions(body, prior.groupId, scenario.name, 'thread management');
 }
 
+function validatePendingCancellation(body, history) {
+  const envelopeError = validateSimulationEnvelope(body, 'pending cancellation');
+  if (envelopeError) return envelopeError;
+  if (body?.interpretation?.status !== 'MANAGEMENT' || body?.interpretation?.management?.type !== 'CANCEL_PENDING') {
+    return 'pending cancellation interpretation must remain MANAGEMENT/CANCEL_PENDING';
+  }
+
+  const prior = priorPendingGroup(history);
+  if (prior.error) return prior.error;
+
+  const correlation = body?.simulation?.correlation;
+  if (correlation?.status !== 'MATCHED' || correlation?.reason !== 'REPLY_TARGET') {
+    return 'pending cancellation must prove REPLY_TARGET correlation';
+  }
+  if (String(correlation.groupId || '') !== prior.groupId) {
+    return 'pending cancellation must target the same group established by the prior pending order';
+  }
+
+  const accounts = readyAccounts(body);
+  if (accounts.length !== 1 || String(accounts[0]?.groupId || '') !== prior.groupId) {
+    return 'pending cancellation READY account must reuse the same pending group';
+  }
+  const actions = Array.isArray(accounts[0].actions) ? accounts[0].actions : [];
+  if (actions.length === 0 || actions.some((action) => action?.type !== 'CANCEL_PENDING' || action?.simulated !== true)) {
+    return 'pending cancellation actions must all be simulated CANCEL_PENDING actions';
+  }
+
+  return null;
+}
+
 function validateScenarioSemantics(scenario, outcome, history = []) {
   const body = outcome?.result?.response?.body;
 
@@ -336,6 +392,10 @@ function validateScenarioSemantics(scenario, outcome, history = []) {
 
   if (scenario.name === 'thread_move_be') {
     return validateThreadManagement(scenario, body, history);
+  }
+
+  if (scenario.name === 'cancel_pending') {
+    return validatePendingCancellation(body, history);
   }
 
   if (scenario.name !== 'complete_signal') return null;
