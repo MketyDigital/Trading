@@ -12,7 +12,7 @@ const zitadelEnv = {
 function workspaceQuery(workspace) {
   return {
     from(table) {
-      assert.equal(table, 'workspaces');
+      assert.equal(table, 'trading_workspace_access');
       const chain = {
         select() { return chain; }, eq() { return chain; }, maybeSingle: async () => ({ data: workspace, error: null }),
         update() { return chain; },
@@ -40,7 +40,7 @@ test('admin authorization fails closed without workspace selector or disabled en
   assert.equal(disabled.reason, 'TRADING_ACCESS_DISABLED');
 });
 
-test('admin authorization binds JWT role to exact workspace Zitadel organization', async () => {
+test('admin authorization binds JWT role to exact Trading workspace Zitadel organization', async () => {
   let authOptions;
   const request = new Request('https://trade.test/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
@@ -57,9 +57,9 @@ test('admin authorization binds JWT role to exact workspace Zitadel organization
   assert.equal(authOptions.audience, 'trading-api');
 });
 
-test('GET workspace returns only authenticated workspace and strips secrets', async () => {
+test('GET workspace returns only authenticated Trading access record and strips secrets', async () => {
   const workspace = {
-    id: 'ws-1', name: 'Enterprise One', owner_email: 'owner@example.com', zitadel_org_id: 'org-1',
+    id: 'ws-1', display_name: 'Enterprise One', owner_email: 'owner@example.com', zitadel_org_id: 'org-1',
     trading_access_enabled: true, trading_required_role: 'trading_admin', tg_bot_token: 'secret-token',
   };
   const response = await handleV1AdminRequest(new Request('https://trade.test/api/v1/admin/workspace', {
