@@ -61,6 +61,7 @@ function cleanSymbol(value) {
     .trim()
     .toUpperCase()
     .replace(/\s+INDEX$/i, '')
+    .replace(/[()]/g, '')
     .replace(/[\s\/_-]+/g, '')
     .replace(/\.(?:M|PRO|RAW|ECN|A|B|C)$/i, '')
     .replace(/(?:PRO|RAW|ECN)$/i, '');
