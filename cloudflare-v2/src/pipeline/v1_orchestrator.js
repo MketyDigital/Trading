@@ -199,6 +199,40 @@ async function orchestrateMatchedManagement({
   };
 }
 
+function matchedFastGroupIds(correlation = {}) {
+  if (Array.isArray(correlation.groupIds) && correlation.groupIds.length) {
+    return [...new Set(correlation.groupIds.map(String).filter(Boolean))];
+  }
+  return correlation.groupId != null && String(correlation.groupId) !== ''
+    ? [String(correlation.groupId)]
+    : [];
+}
+
+async function loadMatchedFastGroups(correlation, stateStore) {
+  if (!stateStore?.getGroup) {
+    return { ok: false, reason: 'MATCHED_GROUP_STORE_UNAVAILABLE', groups: [] };
+  }
+  const groupIds = matchedFastGroupIds(correlation);
+  if (groupIds.length === 0) {
+    return { ok: false, reason: 'MATCHED_GROUP_NOT_FOUND', groups: [] };
+  }
+
+  const groups = [];
+  const accountIds = new Set();
+  for (const groupId of groupIds) {
+    const group = await stateStore.getGroup(groupId);
+    if (!group) return { ok: false, reason: 'MATCHED_GROUP_NOT_FOUND', groups: [] };
+    const accountId = String(group.tradeAccountId ?? '');
+    if (!accountId || accountIds.has(accountId)) {
+      return { ok: false, reason: 'AMBIGUOUS_MATCHED_ACCOUNT_GROUPS', groups: [] };
+    }
+    accountIds.add(accountId);
+    groups.push(group);
+  }
+
+  return { ok: true, groups };
+}
+
 export async function orchestrateTradingEventSimulation({
   event = {},
   interpretation = {},
@@ -251,15 +285,13 @@ export async function orchestrateTradingEventSimulation({
     return { ...base, status: 'CORRELATED', correlation, accounts: [] };
   }
 
-  let matchedGroup = null;
+  let matchedByAccount = new Map();
   if (isFastCompletion) {
-    if (!stateStore?.getGroup) {
-      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_STORE_UNAVAILABLE' };
+    const loaded = await loadMatchedFastGroups(correlation, stateStore);
+    if (!loaded.ok) {
+      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
     }
-    matchedGroup = await stateStore.getGroup(correlation.groupId);
-    if (!matchedGroup) {
-      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_NOT_FOUND' };
-    }
+    matchedByAccount = new Map(loaded.groups.map((group) => [String(group.tradeAccountId), group]));
   }
 
   const accounts = await accountProvider(event.workspace_hint, event, interpretation);
@@ -267,8 +299,7 @@ export async function orchestrateTradingEventSimulation({
 
   for (const rawAccount of Array.isArray(accounts) ? accounts : []) {
     const account = normalizeAccount(rawAccount);
-
-    if (isFastCompletion && String(account.id) !== String(matchedGroup.tradeAccountId)) continue;
+    const matchedGroup = isFastCompletion ? matchedByAccount.get(String(account.id)) || null : null;
 
     if (account.execution_enabled !== true && account.executionEnabled !== true) {
       results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
@@ -301,7 +332,7 @@ export async function orchestrateTradingEventSimulation({
     }
 
     let plan;
-    const groupId = isFastCompletion ? matchedGroup.id : `${eventId || event.external_event_id || 'event'}:${account.id}`;
+    const groupId = matchedGroup?.id || `${eventId || event.external_event_id || 'event'}:${account.id}`;
     try {
       plan = buildExecutionPlan(interpretation.intent, {
         account,
@@ -326,7 +357,7 @@ export async function orchestrateTradingEventSimulation({
       continue;
     }
 
-    if (isFastCompletion) {
+    if (matchedGroup) {
       let reconciliation;
       try {
         reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: interpretation.intent }, {
