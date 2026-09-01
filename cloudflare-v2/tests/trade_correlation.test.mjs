@@ -8,6 +8,7 @@ function group(overrides = {}) {
   return {
     id: 'g1',
     workspaceId: 'ws1',
+    tradeAccountId: 'acct-1',
     sourceInstanceId: 'listener-1',
     sourceEventIds: ['100'],
     threadId: null,
@@ -28,6 +29,38 @@ test('matches a full signal to the recent incomplete fast-entry group and reques
     activeGroups: [group()], nowMs: now,
   });
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g1' });
+});
+
+test('clusters per-account fast groups from the same source event as one completion target set', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '101', thread: {} },
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false } },
+    activeGroups: [
+      group({ id: 'g-account-a', tradeAccountId: 'acct-a', sourceEventIds: ['fast-source-1'] }),
+      group({ id: 'g-account-b', tradeAccountId: 'acct-b', sourceEventIds: ['fast-source-1'] }),
+    ],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, {
+    status: 'MATCHED',
+    reason: 'FAST_ENTRY_COMPLETION',
+    groupIds: ['g-account-a', 'g-account-b'],
+  });
+});
+
+test('keeps genuinely distinct fast source events ambiguous even when symbol and side match', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '101', thread: {} },
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false } },
+    activeGroups: [
+      group({ id: 'g-fast-1', tradeAccountId: 'acct-a', sourceEventIds: ['fast-source-1'] }),
+      group({ id: 'g-fast-2', tradeAccountId: 'acct-b', sourceEventIds: ['fast-source-2'] }),
+    ],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' });
 });
 
 test('reply metadata targets the exact originating position group for management', () => {
