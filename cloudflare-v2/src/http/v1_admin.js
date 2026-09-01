@@ -18,15 +18,11 @@ async function defaultSupabaseFactory(env) {
 function publicWorkspace(workspace = {}) {
   return {
     id: workspace.id,
-    name: workspace.name,
-    owner_email: workspace.owner_email,
-    custom_domain: workspace.custom_domain ?? null,
-    tier: workspace.tier,
+    name: workspace.display_name ?? null,
+    owner_email: workspace.owner_email ?? null,
     zitadel_org_id: workspace.zitadel_org_id,
     trading_access_enabled: Boolean(workspace.trading_access_enabled),
     trading_required_role: workspace.trading_required_role || 'trading_access',
-    tg_admin_chat_id: workspace.tg_admin_chat_id ?? null,
-    tg_vip_chat_id: workspace.tg_vip_chat_id ?? null,
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
   };
@@ -41,7 +37,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   if (!supabase?.from) return { ok: false, status: 503, reason: 'ADMIN_DATABASE_UNAVAILABLE' };
 
   const { data: workspace, error } = await supabase
-    .from('workspaces')
+    .from('trading_workspace_access')
     .select('*')
     .eq('id', String(workspaceId))
     .maybeSingle();
