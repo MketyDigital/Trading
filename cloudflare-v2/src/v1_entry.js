@@ -2,6 +2,7 @@ import legacyWorker from './index.js';
 import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
+import { validateStagingReadiness } from './config/staging_readiness.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
@@ -58,6 +59,39 @@ function retiredLegacyAdminResponse() {
   });
 }
 
+function healthResponse(request, env = {}) {
+  if (request.method !== 'GET') {
+    return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', Allow: 'GET' },
+    });
+  }
+
+  const core = validateStagingReadiness(env);
+  const simulation = validateStagingReadiness(env, { requireSimulation: true });
+  const status = !core.ready
+    ? 'not_ready'
+    : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
+
+  return new Response(JSON.stringify({
+    ok: true,
+    service: 'mkety-trading-v1',
+    status,
+    ready: core.ready,
+    simulationReady: simulation.ready,
+    missing: core.missing,
+    simulationMissing: simulation.missing,
+    optionalMissing: core.optionalMissing,
+    features: core.features,
+  }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
 async function attachShadowDiagnostics(response, shadowPromise) {
   const shadow = await shadowPromise;
   const contentType = response.headers.get('Content-Type') || '';
@@ -94,6 +128,9 @@ export function createTradingV1Entrypoint({
 
       // Versioned enterprise APIs live outside the legacy Telegram-oriented
       // Worker so new contracts can be secured and tenant-scoped independently.
+      if (url.pathname === '/api/v1/health') {
+        return healthResponse(request, env);
+      }
       if (url.pathname === '/api/v1/events') {
         return eventsHandler(request, env, { ctx });
       }
