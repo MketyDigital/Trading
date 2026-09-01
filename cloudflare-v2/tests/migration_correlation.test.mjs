@@ -23,3 +23,7 @@ test('migration adds explicit account execution gate and safety policy configura
 test('migration indexes active source correlation scans', () => {
   assert.match(sql, /position_groups.*source_instance_id.*status/is);
 });
+
+test('migration indexes workspace lookup on reused Trading account table', () => {
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_trade_accounts_workspace\s+ON public\.trade_accounts\(workspace_id\)/i);
+});
