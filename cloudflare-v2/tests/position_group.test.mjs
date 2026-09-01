@@ -31,11 +31,12 @@ test('promotes a fast first position to TP1 and creates only missing TP legs', (
   assert.deepEqual(result.actions.filter((a) => a.type === 'OPEN_POSITION').map((a) => a.takeProfit), [2535, 2545]);
   assert.equal(result.actions[0].takeProfit, 2530);
   assert.equal(result.actions[0].stopLoss, 2518);
+  assert.equal(result.actions[0].symbol, 'XAUUSD');
 });
 
-test('generates break-even changes only for remaining open legs', () => {
+test('generates break-even changes only for remaining open legs and retains symbol context', () => {
   const group = {
-    entryPrice: 2526,
+    symbol: 'XAUUSD', entryPrice: 2526,
     legs: [
       { legId: '1', brokerPositionId: 'p1', status: 'CLOSED' },
       { legId: '2', brokerPositionId: 'p2', status: 'OPEN' },
@@ -44,13 +45,14 @@ test('generates break-even changes only for remaining open legs', () => {
   };
   const actions = buildManagementActions(group, { type: 'MOVE_SL_TO_BE' });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p2', stopLoss: 2526 },
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p3', stopLoss: 2526 }
+    { type: 'MODIFY_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 2526 },
+    { type: 'MODIFY_POSITION', brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 2526 }
   ]);
 });
 
-test('full close actions preserve each open leg volume for platforms that require explicit close size', () => {
+test('full close actions preserve each open leg volume and symbol context', () => {
   const group = {
+    symbol: 'XAUUSD',
     legs: [
       { legId: '1', brokerPositionId: 'p1', lots: 0.04, status: 'OPEN' },
       { legId: '2', brokerPositionId: 'p2', lots: 0.03, status: 'OPEN' },
@@ -58,7 +60,7 @@ test('full close actions preserve each open leg volume for platforms that requir
     ]
   };
   assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_ALL' }), [
-    { type: 'CLOSE_POSITION', brokerPositionId: 'p1', lots: 0.04 },
-    { type: 'CLOSE_POSITION', brokerPositionId: 'p2', lots: 0.03 }
+    { type: 'CLOSE_POSITION', brokerPositionId: 'p1', symbol: 'XAUUSD', lots: 0.04 },
+    { type: 'CLOSE_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', lots: 0.03 }
   ]);
 });
