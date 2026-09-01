@@ -1,5 +1,16 @@
 import { normalizeOrderIntent, normalizeSymbol } from '../normalization/trading_normalizer.js';
 
+function normalizeSignalText(value) {
+  return String(value ?? '')
+    .replace(/S\s*\/\s*L/gi, 'SL')
+    .replace(/T\s*\/\s*P/gi, 'TP')
+    .replace(/TAKE\s+PROFIT/gi, 'TP')
+    .replace(/STOP\s+LOSS/gi, 'SL')
+    .replace(/\r/g, ' ')
+    .replace(/[\t ]+/g, ' ')
+    .trim();
+}
+
 function numbers(text) {
   return [...text.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0]));
 }
@@ -38,43 +49,90 @@ function extractExplicitTps(text) {
   return numbers(generic[1]);
 }
 
+function sideMatch(text) {
+  const match = text.match(/\b(BUY|SELL|LONG|SHORT)\b/i);
+  if (!match) return null;
+  return {
+    raw: match[1],
+    side: /BUY|LONG/i.test(match[1]) ? 'BUY' : 'SELL',
+    index: match.index,
+    end: match.index + match[0].length,
+  };
+}
+
+function cleanCandidate(value) {
+  return String(value ?? '')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/[^A-Za-z0-9_./#&() -]+$/g, '')
+    .trim();
+}
+
+function extractSymbolToken(text, sideInfo, orderType) {
+  const before = cleanCandidate(text.slice(0, sideInfo.index));
+  const beforeTail = before.match(/([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\s*$/)?.[1];
+  if (beforeTail && !/^(ENTRY|SIGNAL|TRADE|NOW)$/i.test(beforeTail)) return beforeTail;
+
+  let after = text.slice(sideInfo.end).trim();
+  after = after.replace(/^\s*(?:STOP\s+LIMIT|LIMIT|STOP|MARKET)\b/i, '').trim();
+  after = after.replace(/^\s*NOW\b/i, '').trim();
+  after = after.replace(/^\s*[@:=-]+\s*/, '');
+
+  const synthetic = after.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
+  if (synthetic) return synthetic;
+
+  const first = after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1];
+  return first || null;
+}
+
+function extractEntry(text, symbolToken) {
+  const explicit = text.match(/\bENTRY(?:\s+PRICE)?\s*[:=@-]?\s*(-?\d+(?:\.\d+)?)(?:\s*[-–—]\s*(-?\d+(?:\.\d+)?))?/i);
+  if (explicit) {
+    const a = Number(explicit[1]);
+    if (explicit[2] != null) {
+      const b = Number(explicit[2]);
+      return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) };
+    }
+    return { kind: 'PRICE', value: a };
+  }
+
+  let head = text.split(/\b(?:SL|TP)\b/i)[0];
+  if (symbolToken) head = head.replace(new RegExp(symbolToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
+  head = head
+    .replace(/\b(?:BUY|SELL|LONG|SHORT|STOP\s+LIMIT|LIMIT|STOP|MARKET|NOW|ENTRY)\b/gi, ' ')
+    .replace(/[^0-9.\-–—]+/g, ' ')
+    .trim();
+
+  const range = head.match(/(-?\d+(?:\.\d+)?)\s*[-–—]\s*(-?\d+(?:\.\d+)?)/);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) };
+  }
+
+  const price = head.match(/-?\d+(?:\.\d+)?/);
+  return price ? { kind: 'PRICE', value: Number(price[0]) } : null;
+}
+
 export function buildMachinePlan(event = {}) {
-  const text = String(event.text ?? '').trim();
+  const text = normalizeSignalText(event.text);
   if (!text) return { status: 'NO_ACTION' };
 
   const management = managementPlan(text);
   if (management) return management;
 
-  const upper = text.toUpperCase();
-  const order = normalizeOrderIntent(upper);
-  if (!order.side) return { status: 'NEEDS_INTERPRETATION' };
+  const order = normalizeOrderIntent(text);
+  const sideInfo = sideMatch(text);
+  if (!order.side || !sideInfo) return { status: 'NEEDS_INTERPRETATION' };
 
-  const sideIndex = upper.indexOf(order.side);
-  const afterSide = text.slice(sideIndex + order.side.length).trim();
-  const typeWords = order.orderType === 'STOP_LIMIT' ? 'STOP LIMIT' : order.orderType === 'MARKET' ? '' : order.orderType;
-  const afterType = typeWords ? afterSide.replace(new RegExp(`^${typeWords}\\b`, 'i'), '').trim() : afterSide;
-  const symbolToken = afterType.match(/^([A-Za-z0-9_./ -]+?)(?=\s+-?\d|\s+NOW\b|\s+SL\b|\s+TP\b|$)/i)?.[1]?.trim();
+  const symbolToken = extractSymbolToken(text, sideInfo, order.orderType);
   if (!symbolToken) return { status: 'NEEDS_INTERPRETATION' };
-
   const symbol = normalizeSymbol(symbolToken);
-  const fastEntry = /\bNOW\b/i.test(text) && !/\bSL\b|\bTP\b/i.test(text);
 
-  let entry = null;
-  const rangeMatch = afterType.match(/\b(-?\d+(?:\.\d+)?)\s*[-–—]\s*(-?\d+(?:\.\d+)?)/);
-  if (rangeMatch) {
-    const a = Number(rangeMatch[1]);
-    const b = Number(rangeMatch[2]);
-    entry = { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) };
-  } else {
-    const symbolEnd = afterType.toUpperCase().indexOf(symbolToken.toUpperCase()) + symbolToken.length;
-    const remainder = afterType.slice(symbolEnd);
-    const entryMatch = remainder.match(/\b(-?\d+(?:\.\d+)?)/);
-    if (entryMatch && !/^\s*(?:SL|TP)\b/i.test(remainder)) entry = { kind: 'PRICE', value: Number(entryMatch[1]) };
-  }
-
-  const slMatch = text.match(/\bSL\s*[:@-]?\s*(-?\d+(?:\.\d+)?)/i);
-  const stopLoss = slMatch ? Number(slMatch[1]) : null;
+  const stopLossMatch = text.match(/\bSL\s*[:@=-]?\s*(-?\d+(?:\.\d+)?)/i);
+  const stopLoss = stopLossMatch ? Number(stopLossMatch[1]) : null;
   const takeProfits = extractExplicitTps(text);
+  const entry = extractEntry(text, symbolToken);
+  const fastEntry = /\bNOW\b/i.test(text) && !stopLoss && takeProfits.length === 0 && !entry;
 
   if (!fastEntry && !entry && order.orderType !== 'MARKET') return { status: 'NEEDS_INTERPRETATION' };
   if (!fastEntry && !entry && !stopLoss && takeProfits.length === 0) return { status: 'NEEDS_INTERPRETATION' };
@@ -82,7 +140,7 @@ export function buildMachinePlan(event = {}) {
   return {
     status: 'READY',
     intent: {
-      side: order.side,
+      side: sideInfo.side,
       orderType: order.orderType,
       symbol,
       entry: entry || { kind: 'MARKET' },
