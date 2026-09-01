@@ -136,12 +136,15 @@ Verified behavior:
 - multi-account completion reconciles every account that already executed the same fast source signal while accounts that used `wait_for_complete_signal` create their normal completed-signal group;
 - duplicate matched groups for one account fail closed rather than choosing arbitrarily;
 - simulation can reconcile a prior `PLANNED` fast leg before broker IDs exist; real broker helpers remain stricter;
-- deterministic `MANAGEMENT` interpretations now enter correlation instead of returning early;
+- deterministic `MANAGEMENT` interpretations enter correlation instead of returning early;
 - matched BE/partial/full-close management uses existing durable group state, requires the exact bound account, evaluates `actionKind=REDUCE_RISK`, does not require market metadata/new risk sizing, and emits only simulated actions;
 - simulation-only management can operate on `PLANNED` canonical legs by `legId` for BE and partial-close acceptance without inventing `brokerPositionId`; the real `buildManagementActions()` helper remains broker-ID strict;
+- simulation-only `CANCEL_PENDING` can operate on `PLANNED` canonical legs only when the Position Group has a non-market order type; it emits canonical `CANCEL_PENDING` by `legId` without inventing `brokerOrderId`;
+- a `PLANNED` market Position Group cannot be cancelled as pending and fails closed with no persistence/action;
+- real broker pending cancellation remains strict about actual broker order identity through broker-specific execution paths;
 - drawdown/open-risk locks do not prevent protective/risk-reducing management, but execution disablement and kill switch still block it;
 - successful simulated management appends its source event to the same durable group for audit without pretending broker state changed;
-- unsupported management fails closed. `CANCEL_PENDING` is still a separate pending-order-state task.
+- unsupported management fails closed.
 
 ### Signed V1 simulation acceptance command
 
@@ -170,9 +173,8 @@ Verified semantic contracts:
 - optional `ambiguous` passes only when interpretation remains `NEEDS_REVIEW`, simulation remains `NEEDS_REVIEW` with `executionEnabled=false`, no READY account exists, and neither top-level nor account-level simulated actions are emitted. HTTP 200 alone cannot satisfy ambiguity acceptance;
 - optional `complete_signal,move_be` automatically creates exact reply metadata to the prior source event and passes only with `REPLY_TARGET`, same-group reuse, MANAGEMENT interpretation, and simulated `MODIFY_POSITION` actions;
 - optional `complete_signal,close_half` uses the same reply sequence contract and passes only with same-group simulated `CLOSE_PARTIAL` actions at fraction `0.5`;
-- optional `complete_signal,thread_move_be` assigns one deterministic thread ID to both events, deliberately leaves reply targeting absent, and passes only with `THREAD_TARGET`, same-group reuse, and simulated `MODIFY_POSITION` actions.
-
-Other optional scenario templates currently include `fast_entry`, `pending_order`, and `cancel_pending`. Pending cancellation still lacks scenario-specific state/orchestration acceptance.
+- optional `complete_signal,thread_move_be` assigns one deterministic thread ID to both events, deliberately leaves reply targeting absent, and passes only with `THREAD_TARGET`, same-group reuse, and simulated `MODIFY_POSITION` actions;
+- optional `pending_order,cancel_pending` automatically replies to the pending source event and passes only if the prior group was created by non-market `OPEN_POSITION` actions, cancellation interpretation remains MANAGEMENT/CANCEL_PENDING, correlation is `REPLY_TARGET`, the exact same group is reused, and every emitted action is simulated `CANCEL_PENDING`.
 
 This command has **not** been run against a configured external Worker in this development session because Cloudflare/source credentials are not available here.
 
@@ -278,7 +280,8 @@ Important recent GREEN checkpoints:
 - `33552901711` on head `bea4c022d99759f64b8ee969a8653f0cad3c9dbf` — five-target arbitrary-TP signed acceptance semantics, all three CI gates success;
 - `33553462413` on head `5dae1e8185e2933fed20d7d9140e115bbba3d104` — AI ambiguity fail-closed signed acceptance, all three CI gates success;
 - `33553998455` on head `062a47aa77fa056bdf1296b05bc1802a638a8488` — signed reply-targeted BE/half-close management plus PLANNED-leg simulation, all three CI gates success;
-- `33554323996` on head `841062cf189adefbaa30db5dd5bea3bb34cab372` — signed thread-targeted BE management acceptance, all three CI gates success.
+- `33554323996` on head `841062cf189adefbaa30db5dd5bea3bb34cab372` — signed thread-targeted BE management acceptance, all three CI gates success;
+- `33554901358` on head `d3edefe91f9ecae49ebf4f84d5d6b04f0d5cd7c5` — signed pending-order cancellation acceptance plus simulation-only canonical pending cancellation, all three CI gates success.
 
 Recent intentional RED checkpoints:
 
@@ -291,7 +294,8 @@ Recent intentional RED checkpoints:
 - `33552719259` on head `ab0cc7ff53ab79ad37d1b5ed2009021ffc584bd4` — 243/245 passed; only the two new arbitrary-TP acceptance contracts failed;
 - `33553143660` on head `38ea90838cd4f301adbe1af9b72ff1c1bdfb20b2` — 246/247 passed; only unsafe ambiguity execution was incorrectly accepted;
 - `33553718185` on head `0f0d5fa68e21ea84037941128c708436d88dec17` — 247/251 passed; exactly the four new reply-management/PLANNED-leg contracts failed;
-- `33554127331` on head `98cc3a704e7993ea98931a905a7050481d00431a` — 251/253 passed; only the two new thread-management acceptance contracts failed.
+- `33554127331` on head `98cc3a704e7993ea98931a905a7050481d00431a` — 251/253 passed; only the two new thread-management acceptance contracts failed;
+- `33554598952` on head `d0b8083eb0484105de0a9a20b32aebbb8cbb91a0` — 254/257 passed; only three pending-cancel gaps failed: canonical PLANNED cancellation and the two signed sequence/semantic contracts. The PLANNED market-group fail-closed test already passed.
 
 Verification correction:
 
@@ -333,31 +337,30 @@ Do not paste secret values into Git/chat/logs.
 
 ## Remaining blockers / priority order
 
-1. Add pending-order cancellation state/orchestration separately from open-position management.
-2. Run `npm run accept:v1:simulation` against a configured non-live Worker.
-3. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
-4. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
-5. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
-6. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
-7. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
-8. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
-9. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-10. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+1. Run `npm run accept:v1:simulation` against a configured non-live Worker.
+2. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
+3. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
+4. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
+5. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
+6. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
+7. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
+8. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
+9. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
 
 ## Exact next safe starting point
 
-Do not redesign the DB or add more broker abstraction first.
+Core repo-side signed simulation semantics are now covered for security rejection, complete signals, arbitrary TP counts, fast completion, ambiguity fail-closed behavior, kill switch, reply/thread management, and pending cancellation.
 
-Next repo-side work:
+Next work:
 
-1. keep CI green;
-2. define pending-order Position Group state explicitly under TDD;
-3. write RED tests for a sequence such as `pending_order,cancel_pending` without broker dispatch;
-4. require cancellation correlation to target the exact pending group and emit only simulated `CANCEL_PENDING` actions keyed by canonical leg/order identity;
-5. keep real broker cancellation strict about actual broker order IDs while allowing simulation-only canonical pending-leg acceptance if needed;
-6. verify the full Node + MT5 + Wrangler suite;
-7. update this file with exact RED/GREEN evidence;
-8. then proceed to external non-live Worker acceptance/configuration.
+1. verify this docs-only head remains green;
+2. inspect current external readiness without exposing secret values;
+3. if a configured non-live Worker becomes available, run `GET /api/v1/health` first and only proceed when readiness names/booleans are safe;
+4. create/activate only restrictive non-live source/account records needed for simulation acceptance, keeping Trading access disabled until Zitadel authorization is verified;
+5. run the signed default matrix, then optional `kill_switch`, `arbitrary_tp`, `ambiguous`, `fast_entry,fast_completion`, reply/thread management, and `pending_order,cancel_pending` scenarios;
+6. verify DB event/group audit and zero broker dispatch;
+7. then configure cTrader demo probe/lifecycle and MT5 demo probe/lifecycle;
+8. if external Worker configuration remains unavailable, continue with MTProto signed-listener migration/recovery work rather than weakening safety gates.
 
 ## Mandatory progress update rule
 
