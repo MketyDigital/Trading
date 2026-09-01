@@ -52,3 +52,20 @@ test('fails closed when no reliable loss model is available', () => {
     instrument: { stepLots: 0.01 },
   }), /loss model/i);
 });
+
+test('fails closed when safe risk-sized volume is below broker minimum instead of rounding risk upward', () => {
+  assert.throws(() => calculateRiskPlan({
+    balance: 1000,
+    riskAmount: 1,
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 1,
+    instrument: {
+      tickSize: 1,
+      tickValuePerLot: 10,
+      minLots: 0.1,
+      maxLots: 10,
+      stepLots: 0.1,
+    },
+  }), /below broker minimum/i);
+});
