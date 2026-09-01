@@ -102,6 +102,7 @@ export function buildNettedTargetAction(group, targetIndex) {
   return {
     type: 'CLOSE_PARTIAL',
     brokerPositionId,
+    symbol: group.symbol,
     targetIndex: target.targetIndex,
     lots: target.lots,
   };
