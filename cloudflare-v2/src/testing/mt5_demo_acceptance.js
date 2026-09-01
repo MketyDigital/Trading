@@ -1,5 +1,6 @@
+import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
-import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
+import { normalizePrice, resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 
 const REQUIRED_ENV = [
   'MT5_BRIDGE_URL',
@@ -13,6 +14,20 @@ function endpoint(base, path) {
   url.pathname = `${url.pathname.replace(/\/$/, '')}${path}`;
   url.search = '';
   return url;
+}
+
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function positiveNumber(value, name) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) throw new TypeError(`${name} must be positive`);
+  return numeric;
+}
+
+function approximatelyInteger(value, epsilon = 1e-8) {
+  return Math.abs(value - Math.round(value)) <= epsilon;
 }
 
 async function getJson(fetchFn, url, label) {
@@ -95,5 +110,136 @@ export async function probeMT5Demo({ env = {}, fetchFn = fetch } = {}) {
       ask: Number.isFinite(Number(tick.ask)) ? Number(tick.ask) : null,
       timestamp: tick.time_msc ?? tick.time ?? null,
     },
+  };
+}
+
+export function buildMT5DemoMarketAction({
+  env = {},
+  symbol,
+  quote,
+  side = 'BUY',
+  runId = `run-${Date.now()}`,
+} = {}) {
+  if (!enabled(env.MT5_DEMO_ORDER_TEST)) {
+    throw new Error('MT5 demo order test must be explicitly enabled');
+  }
+  if (!symbol?.canonical || !Number.isFinite(Number(symbol.tickSize))) {
+    throw new TypeError('resolved MT5 symbol metadata required');
+  }
+
+  const normalizedSide = String(side).trim().toUpperCase();
+  if (!['BUY', 'SELL'].includes(normalizedSide)) throw new TypeError('side must be BUY or SELL');
+
+  const lots = positiveNumber(env.MT5_DEMO_TEST_LOTS, 'MT5_DEMO_TEST_LOTS');
+  const minLots = positiveNumber(symbol.minLots ?? 0.01, 'minLots');
+  const maxLots = positiveNumber(symbol.maxLots ?? Number.MAX_SAFE_INTEGER, 'maxLots');
+  const stepLots = positiveNumber(symbol.stepLots ?? minLots, 'stepLots');
+  if (lots < minLots - 1e-8) throw new RangeError('requested demo lots are below broker minimum');
+  if (lots > maxLots + 1e-8) throw new RangeError('requested demo lots exceed broker maximum');
+  if (!approximatelyInteger(lots / stepLots)) throw new RangeError('requested demo lots do not match broker volume step');
+
+  const reference = Number(normalizedSide === 'BUY' ? quote?.ask : quote?.bid);
+  if (!Number.isFinite(reference)) throw new TypeError(`live ${normalizedSide === 'BUY' ? 'ask' : 'bid'} quote required`);
+  const tickSize = positiveNumber(symbol.tickSize, 'tickSize');
+  const stopTicks = positiveNumber(env.MT5_DEMO_STOP_TICKS || 100, 'MT5_DEMO_STOP_TICKS');
+  const targetTicks = positiveNumber(env.MT5_DEMO_TARGET_TICKS || 150, 'MT5_DEMO_TARGET_TICKS');
+
+  const stopLoss = normalizePrice(
+    normalizedSide === 'BUY' ? reference - stopTicks * tickSize : reference + stopTicks * tickSize,
+    symbol,
+  );
+  const takeProfit = normalizePrice(
+    normalizedSide === 'BUY' ? reference + targetTicks * tickSize : reference - targetTicks * tickSize,
+    symbol,
+  );
+
+  return {
+    type: 'OPEN_POSITION',
+    side: normalizedSide,
+    orderType: 'MARKET',
+    symbol: symbol.canonical,
+    entry: { kind: 'MARKET' },
+    lots,
+    stopLoss,
+    takeProfit,
+    idempotencyKey: `mt5-demo:${runId}:open`,
+  };
+}
+
+export async function runMT5DemoOrderLifecycle({
+  env = {},
+  deliveryStore,
+  fetchFn = fetch,
+  probeFn = probeMT5Demo,
+  executor = executeMT5Action,
+  runId = `run-${Date.now()}`,
+} = {}) {
+  if (!enabled(env.MT5_DEMO_ORDER_TEST)) {
+    throw new Error('MT5 demo order test must be explicitly enabled');
+  }
+
+  const probe = await probeFn({ env, fetchFn });
+  if (!probe?.ready || probe?.environment !== 'demo') throw new Error('MT5 demo probe is not ready');
+  if (String(probe?.account?.login) !== String(env.MT5_ACCOUNT_ID)) throw new Error('MT5 demo account mismatch');
+  if (String(probe?.account?.server) !== String(env.MT5_DEMO_SERVER)) throw new Error('MT5 demo server mismatch');
+
+  const openAction = buildMT5DemoMarketAction({ env, symbol: probe.symbol, quote: probe.quote, side: env.MT5_DEMO_SIDE || 'BUY', runId });
+  const executorOptions = {
+    workspaceId: env.TRADING_WORKSPACE_ID,
+    accountId: env.MT5_ACCOUNT_ID,
+    bridgeUrl: endpoint(env.MT5_BRIDGE_URL, '/v1/command').toString(),
+    bridgeSecret: env.MT5_BRIDGE_SECRET,
+    catalog: [probe.symbol],
+    deliveryStore,
+    fetchFn,
+  };
+
+  const opened = await executor(openAction, executorOptions);
+  const positionId = opened?.brokerPositionId;
+  const fillPrice = Number(opened?.fillPrice);
+  if (!positionId) throw new Error('MT5 demo open did not return a position id');
+  if (!Number.isFinite(fillPrice)) throw new Error('MT5 demo open did not return actual fill price');
+
+  await executor({
+    type: 'MODIFY_POSITION',
+    brokerPositionId: String(positionId),
+    symbol: probe.symbol.canonical,
+    stopLoss: fillPrice,
+    idempotencyKey: `mt5-demo:${runId}:be`,
+  }, executorOptions);
+
+  const lots = openAction.lots;
+  const step = positiveNumber(probe.symbol.stepLots ?? probe.symbol.minLots ?? 0.01, 'stepLots');
+  const minLots = positiveNumber(probe.symbol.minLots ?? step, 'minLots');
+  const partialLots = lots >= (2 * step) - 1e-8 && step >= minLots - 1e-8 ? step : 0;
+  const finalLots = Number((lots - partialLots).toFixed(8));
+
+  if (partialLots > 0) {
+    await executor({
+      type: 'CLOSE_PARTIAL',
+      brokerPositionId: String(positionId),
+      symbol: probe.symbol.canonical,
+      lots: partialLots,
+      idempotencyKey: `mt5-demo:${runId}:partial`,
+    }, executorOptions);
+  }
+
+  if (finalLots > 0) {
+    await executor({
+      type: 'CLOSE_POSITION',
+      brokerPositionId: String(positionId),
+      symbol: probe.symbol.canonical,
+      lots: finalLots,
+      idempotencyKey: `mt5-demo:${runId}:close`,
+    }, executorOptions);
+  }
+
+  return {
+    environment: 'demo',
+    positionId: String(positionId),
+    fillPrice,
+    partialClosedLots: partialLots,
+    finalClosedLots: finalLots,
+    symbol: probe.symbol.canonical,
   };
 }
