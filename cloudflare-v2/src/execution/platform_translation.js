@@ -1,5 +1,10 @@
 import { normalizePrice, normalizeVolumeForMT5, normalizeVolumeForCTrader } from '../normalization/trading_normalizer.js';
-import { buildNewOrderMessage } from '../adapters/ctrader_protocol.js';
+import {
+  buildNewOrderMessage,
+  buildAmendPositionSLTPMessage,
+  buildClosePositionMessage,
+  buildCancelOrderMessage,
+} from '../adapters/ctrader_protocol.js';
 
 function entryValue(action) {
   if (action?.entry?.kind === 'PRICE') return action.entry.value;
@@ -48,4 +53,81 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
     ...(action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
     ...(action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
   });
+}
+
+export function buildMT5ManagementCommand(action, symbol = {}) {
+  const priceOptions = { digits: symbol.digits, tickSize: symbol.tickSize };
+
+  if (action.type === 'MODIFY_POSITION') {
+    if (action.brokerPositionId == null) throw new TypeError('brokerPositionId required');
+    return {
+      action: 'MODIFY_POSITION',
+      positionId: String(action.brokerPositionId),
+      ...(action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
+      ...(action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
+    };
+  }
+
+  if (action.type === 'CLOSE_POSITION') {
+    if (action.brokerPositionId == null) throw new TypeError('brokerPositionId required');
+    return { action: 'CLOSE_POSITION', positionId: String(action.brokerPositionId) };
+  }
+
+  if (action.type === 'CLOSE_PARTIAL') {
+    if (action.brokerPositionId == null) throw new TypeError('brokerPositionId required');
+    return {
+      action: 'CLOSE_PARTIAL',
+      positionId: String(action.brokerPositionId),
+      volume: normalizeVolumeForMT5(action.lots, {
+        min: symbol.minLots,
+        max: symbol.maxLots,
+        step: symbol.stepLots,
+      }),
+    };
+  }
+
+  if (action.type === 'CANCEL_PENDING') {
+    if (action.brokerOrderId == null) throw new TypeError('brokerOrderId required');
+    return { action: 'CANCEL_PENDING', orderId: String(action.brokerOrderId) };
+  }
+
+  throw new TypeError(`unsupported MT5 management action: ${action.type}`);
+}
+
+export function buildCTraderManagementCommand(action, { accountId, clientMsgId, symbol = {} }) {
+  if (action.type === 'MODIFY_POSITION') {
+    return buildAmendPositionSLTPMessage({
+      clientMsgId,
+      accountId,
+      positionId: action.brokerPositionId,
+      stopLoss: action.stopLoss,
+      takeProfit: action.takeProfit,
+    });
+  }
+
+  if (action.type === 'CLOSE_POSITION' || action.type === 'CLOSE_PARTIAL') {
+    const lots = action.lots;
+    if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
+    return buildClosePositionMessage({
+      clientMsgId,
+      accountId,
+      positionId: action.brokerPositionId,
+      protocolVolume: normalizeVolumeForCTrader(lots, {
+        lotSize: symbol.lotSize,
+        minVolume: symbol.minVolume,
+        maxVolume: symbol.maxVolume,
+        stepVolume: symbol.stepVolume,
+      }),
+    });
+  }
+
+  if (action.type === 'CANCEL_PENDING') {
+    return buildCancelOrderMessage({
+      clientMsgId,
+      accountId,
+      orderId: action.brokerOrderId,
+    });
+  }
+
+  throw new TypeError(`unsupported cTrader management action: ${action.type}`);
 }
