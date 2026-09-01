@@ -10,12 +10,14 @@ test('maps MT5 symbol metadata into canonical catalog shape', () => {
   assert.equal(symbol.minLots, 0.01);
 });
 
-test('maps cTrader account symbol metadata into canonical catalog shape', () => {
-  const [symbol] = fromCTraderSymbols([{ symbolId: 41, symbolName: 'EUR/USD', digits: 5, pipPosition: 4, lotSize: 100000, minVolume: 100000, maxVolume: 100000000, stepVolume: 100000 }]);
+test('maps cTrader account symbol metadata without double-converting protocol cents', () => {
+  const [symbol] = fromCTraderSymbols([{ symbolId: 41, symbolName: 'EUR/USD', digits: 5, pipPosition: 4, lotSize: 10000000, minVolume: 100000, maxVolume: 100000000, stepVolume: 100000 }]);
   assert.equal(symbol.platformSymbol, 'EUR/USD');
   assert.equal(symbol.canonical, 'EURUSD');
   assert.equal(symbol.platformId, 41);
-  assert.equal(symbol.lotSize, 100000);
+  assert.equal(symbol.protocolLotSize, 10000000);
+  assert.equal(symbol.lotSizeUnits, 100000);
+  assert.equal(symbol.minVolume, 100000);
 });
 
 test('maps current Deriv active-symbol metadata into canonical catalog shape', () => {
