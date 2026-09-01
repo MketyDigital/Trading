@@ -163,6 +163,7 @@ class MT5Engine:
             'position_id': order or None,
             'order_id': order or None,
             'deal_id': deal or None,
+            'fill_price': getattr(result, 'price', None),
             'retcode': getattr(result, 'retcode', None),
             'comment': getattr(result, 'comment', None),
         }
