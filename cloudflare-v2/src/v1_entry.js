@@ -1,6 +1,7 @@
 import legacyWorker from './index.js';
 import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
+import { handleV1AdminRequest } from './http/v1_admin.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
@@ -46,6 +47,17 @@ function shadowError(error) {
   };
 }
 
+function retiredLegacyAdminResponse() {
+  return new Response(JSON.stringify({
+    ok: false,
+    reason: 'LEGACY_ADMIN_API_RETIRED',
+    replacement: '/api/v1/admin/*',
+  }), {
+    status: 410,
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  });
+}
+
 async function attachShadowDiagnostics(response, shadowPromise) {
   const shadow = await shadowPromise;
   const contentType = response.headers.get('Content-Type') || '';
@@ -74,16 +86,26 @@ export function createTradingV1Entrypoint({
   legacy = legacyWorker,
   shadowBuilder = buildCanonicalShadow,
   eventsHandler = handleV1EventsRequest,
+  adminHandler = handleV1AdminRequest,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
 
-      // New universal ingestion contract is intentionally outside the legacy
-      // Telegram-specific Worker. Sources such as DO/MTProto, Telethon VMs,
-      // TradingView relays, MT5 bridges and custom systems use the same route.
+      // Versioned enterprise APIs live outside the legacy Telegram-oriented
+      // Worker so new contracts can be secured and tenant-scoped independently.
       if (url.pathname === '/api/v1/events') {
         return eventsHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/admin/')) {
+        return adminHandler(request, env, { ctx });
+      }
+
+      // The old admin implementation includes unscoped workspace listing and a
+      // generic DB proxy. Cryptographic login alone cannot make that tenant-safe,
+      // therefore every legacy admin API is retired instead of delegated.
+      if (url.pathname.startsWith('/api/admin/')) {
+        return retiredLegacyAdminResponse();
       }
 
       const shadowEnabled = isEnabled(env?.TRADING_V1_SHADOW);
