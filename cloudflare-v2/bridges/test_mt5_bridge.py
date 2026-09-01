@@ -44,7 +44,7 @@ class FakeMT5:
 
     def order_send(self, request):
         self.sent.append(dict(request))
-        return SimpleNamespace(retcode=self.TRADE_RETCODE_DONE, comment='Done', order=9001, deal=9002, _asdict=lambda: {'retcode': self.TRADE_RETCODE_DONE, 'order': 9001, 'deal': 9002, 'comment': 'Done'})
+        return SimpleNamespace(retcode=self.TRADE_RETCODE_DONE, comment='Done', order=9001, deal=9002, price=2526.15, _asdict=lambda: {'retcode': self.TRADE_RETCODE_DONE, 'order': 9001, 'deal': 9002, 'price': 2526.15, 'comment': 'Done'})
 
     def positions_get(self, ticket=None, symbol=None):
         if ticket is not None:
@@ -64,6 +64,7 @@ class MT5BridgeTests(unittest.TestCase):
         self.assertEqual(mt5.checked[0]['price'], 2526.1)
         self.assertEqual(mt5.sent[0]['sl'], 2518)
         self.assertEqual(mt5.sent[0]['tp'], 2535)
+        self.assertEqual(result['fill_price'], 2526.15)
 
     def test_partial_close_uses_opposite_side_and_requested_volume(self):
         mt5 = FakeMT5()
