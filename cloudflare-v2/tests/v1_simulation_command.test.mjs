@@ -30,6 +30,36 @@ function simulatedCompleteResult(scenario) {
   };
 }
 
+function killSwitchResult(scenario, overrides = {}) {
+  return {
+    ok: true,
+    result: {
+      scenario: scenario.name,
+      externalEventId: scenario.event.external_event_id,
+      response: {
+        statusCode: 200,
+        body: {
+          ok: true,
+          duplicate: false,
+          simulation: {
+            status: 'SIMULATED',
+            executionEnabled: false,
+            accounts: [
+              {
+                accountId: 'account-kill',
+                status: 'BLOCKED',
+                policy: { allowed: false, reasons: ['KILL_SWITCH'] },
+                actions: [],
+                ...overrides,
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
 test('V1 simulation command defaults to valid signal, exact duplicate, invalid signature and stale timestamp', async () => {
   const calls = [];
   const lines = [];
@@ -100,6 +130,51 @@ test('V1 simulation command accepts explicit non-broker scenario matrix includin
     'stale_timestamp',
   ]);
   assert.equal(names.includes('lifecycle'), false);
+});
+
+test('kill-switch acceptance succeeds only for server-side blocked account with zero actions', async () => {
+  const calls = [];
+  const result = await runV1SimulationAcceptanceCommand({
+    env: {
+      TRADING_V1_ENDPOINT: 'https://trade.example.test/api/v1/events',
+      TRADING_V1_SOURCE_ID: 'source-1',
+      TRADING_V1_SOURCE_SECRET: 'secret',
+      TRADING_V1_ACCEPTANCE_RUN_ID: 'run-kill',
+      TRADING_V1_ACCEPTANCE_SCENARIOS: 'kill_switch',
+    },
+    logger: { log() {}, error() {} },
+    scenarioRunner: async ({ scenario }) => {
+      calls.push(scenario);
+      return killSwitchResult(scenario);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'kill_switch');
+  assert.match(calls[0].event.text, /XAUUSD/);
+  assert.equal(calls[0].event.metadata.acceptance_scenario, 'kill_switch');
+});
+
+test('kill-switch acceptance rejects any simulated execution action', async () => {
+  const result = await runV1SimulationAcceptanceCommand({
+    env: {
+      TRADING_V1_ENDPOINT: 'https://trade.example.test/api/v1/events',
+      TRADING_V1_SOURCE_ID: 'source-1',
+      TRADING_V1_SOURCE_SECRET: 'secret',
+      TRADING_V1_ACCEPTANCE_SCENARIOS: 'kill_switch',
+    },
+    logger: { log() {}, error() {} },
+    scenarioRunner: async ({ scenario }) => killSwitchResult(scenario, {
+      actions: [{ type: 'OPEN_POSITION', simulated: true }],
+    }),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.failedScenario, 'kill_switch');
+  assert.match(result.semanticError, /zero actions/i);
 });
 
 test('complete signal acceptance fails if HTTP succeeds without real simulation semantics', async () => {
