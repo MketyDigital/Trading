@@ -14,6 +14,13 @@ function extractBrokerIds(message) {
   };
 }
 
+function extractFillPrice(message) {
+  const payload = message?.payload || {};
+  const candidate = payload.deal?.executionPrice ?? payload.position?.price ?? payload.order?.executionPrice;
+  const numeric = Number(candidate);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 async function reserveAction(deliveryStore, action) {
   if (!action.idempotencyKey) throw new TypeError('idempotencyKey required for cTrader execution');
   const reservation = await deliveryStore.reserve(action.idempotencyKey, {
@@ -114,6 +121,7 @@ export async function executeCTraderAction(action, {
       const ids = extractBrokerIds(executionResponse);
       const acceptedIds = extractBrokerIds(response);
       if (!ids.brokerOrderId && acceptedIds.brokerOrderId) ids.brokerOrderId = acceptedIds.brokerOrderId;
+      const fillPrice = extractFillPrice(executionResponse);
 
       // cTrader MARKET orders do not accept absolute SL/TP in ProtoOANewOrderReq.
       // Never report a protected market trade as successful until a fill has
@@ -133,7 +141,7 @@ export async function executeCTraderAction(action, {
         await session.request(amend, { successPayloadTypes: [2126] });
       }
 
-      const result = { duplicate: false, ...ids, response: executionResponse };
+      const result = { duplicate: false, ...ids, fillPrice, response: executionResponse };
       await deliveryStore.complete(action.idempotencyKey, result);
       return result;
     }
