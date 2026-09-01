@@ -156,6 +156,21 @@ TRADE_STATE_NAMESPACE -> TradeStateNode
 - `/api/v1/events` invokes it only when `TRADING_V1_SIMULATION=true`.
 - static simulation market/exposure config is staging/shadow context only and never substitutes for broker metadata in demo/live execution.
 
+### Signed V1 simulation acceptance harness
+
+Implemented/tested:
+
+- executable command: `npm run accept:v1:simulation`;
+- environment-only endpoint/source configuration with sanitized output; source secrets/signatures are never printed;
+- default scenario matrix is `complete_signal`, exact `duplicate`, `invalid_signature`, and correctly signed `stale_timestamp`;
+- duplicate reuses the exact prior `external_event_id` so persistent event idempotency is part of the default acceptance path;
+- invalid-signature acceptance succeeds only when the Worker returns the exact expected `401` rejection;
+- stale-timestamp acceptance signs the stale timestamp/body pair correctly and succeeds only when the Worker returns the exact expected `401` rejection;
+- optional scenario list also supports `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`;
+- command/harness has no broker execution dependency; safe full-pipeline use requires the target Worker to have `TRADING_V1_SIMULATION=true`.
+
+This command has **not** yet been run against a configured Worker endpoint in this development session because the required Cloudflare/source credentials are not available here. Its repo-side command, signing, scenario sequencing, sanitization, expected-negative semantics, and CI contracts are verified.
+
 ### cTrader foundation and demo acceptance harness
 
 Implemented/tested:
@@ -277,7 +292,10 @@ Relevant verified GREEN checkpoints:
 - `33526589705` — MT5 probe/lifecycle CLI dispatcher checkpoint;
 - `33526882851` — persistent MT5 demo command dependency checkpoint;
 - `33540733617` — sanitized MT5 demo command runner checkpoint;
-- `33541021382` on head `f0d593c33b82e6c40fea9c6b940e5dfe987424d3` — final MT5 demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
+- `33541021382` on head `f0d593c33b82e6c40fea9c6b940e5dfe987424d3` — final MT5 demo package-command checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33541653303` on head `aed999891a2c39b667d5201a27681d2247125041` — signed V1 simulation package command checkpoint;
+- `33541946489` on head `36e2fae26c01ffb9ee0be3af57799f14ba2c572f` — expected-negative V1 security acceptance semantics checkpoint;
+- `33542227070` on head `905cfdff783b7594dc7b2b784cc826171fcbe025` — default V1 acceptance matrix checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
 
 Test-first RED runs are expected. Always inspect the newest branch/push run before claiming current green state because new commits trigger a later run.
 
@@ -285,7 +303,7 @@ Test-first RED runs are expected. Always inspect the newest branch/push run befo
 
 No Cloudflare or Zitadel account connector is available in this session, so those settings have not been changed.
 
-Required before signed V1 acceptance:
+Required before running signed V1 acceptance against an actual Worker:
 
 - Worker `SUPABASE_URL` / service-role secret;
 - Worker `TRADING_MASTER_KEY` (32-byte base64url secret);
@@ -293,7 +311,8 @@ Required before signed V1 acceptance:
 - Zitadel issuer/audience/JWKS/project/role/org mapping;
 - encrypted source HMAC secret stored only as ciphertext;
 - explicit simulation instrument/price context;
-- one restrictive non-live Trading account record.
+- one restrictive non-live Trading account record;
+- acceptance-side `TRADING_V1_ENDPOINT`, `TRADING_V1_SOURCE_ID`, `TRADING_V1_SOURCE_SECRET` supplied only through the runtime environment.
 
 Required for cTrader demo acceptance command:
 
@@ -323,30 +342,31 @@ Do not paste these secret values into Git/chat/logs.
 
 ## Remaining blockers / priority order
 
-1. Build/run the signed V1 simulation acceptance command against a configured non-live Worker so the real HTTP ingress, HMAC, persistent event idempotency, interpretation, correlation, risk/policy, Position Group and simulation actions are verified together with zero broker dispatch.
-2. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
-3. Keep the existing Trading access row disabled until Zitadel authorization is verified.
-4. Generate/store encrypted source credentials and create one active source connection.
-5. Create one restrictive non-live trade account and run the signed `/api/v1/events` static simulation matrix.
-6. Verify duplicate, replay, invalid signature, AI ambiguity, kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
-7. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
-8. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
-9. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
-10. Add/verify per-customer destination formatting profiles with bounded AI and deterministic fallback.
-11. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-12. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+1. Run `npm run accept:v1:simulation` against a configured non-live Worker so real HTTP ingress, HMAC, persistent event idempotency, interpretation, correlation, risk/policy, Position Group and simulation actions are verified together with zero broker dispatch.
+2. Strengthen repo-side V1 semantic acceptance assertions: valid complete signal must prove simulation output/no broker dispatch; duplicate must prove duplicate response semantics; then add kill-switch/zero-action, fast-entry completion, reply/thread management, and arbitrary-TP scenarios.
+3. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
+4. Keep the existing Trading access row disabled until Zitadel authorization is verified.
+5. Generate/store encrypted source credentials and create one active source connection.
+6. Create one restrictive non-live trade account and run the signed `/api/v1/events` simulation matrix.
+7. Verify AI ambiguity, kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
+8. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
+9. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
+10. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
+11. Add/verify per-customer destination formatting profiles with bounded AI and deterministic fallback.
+12. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
+13. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
 
 ## Exact next safe starting point
 
-Because database schema is applied/inert and both cTrader and MT5 now have verified executable demo acceptance commands, do **not** redesign database schema or add more broker protocol abstraction first.
+Because database schema is applied/inert and cTrader, MT5, and signed V1 simulation now have verified executable acceptance commands, do **not** redesign database schema or add more broker protocol abstraction first.
 
-Next repo-side work while external broker secrets are unavailable:
+Next repo-side work while external credentials are unavailable:
 
 1. keep CI green;
-2. build the signed V1 simulation acceptance command around the existing `/api/v1/events` contract, with environment-only endpoint/source credentials and sanitized output;
-3. verify a scenario matrix including normal signal, duplicate/replay, invalid signature, kill switch, fast-entry completion, reply/thread management and arbitrary TP count with zero broker dispatch;
+2. add semantic response validation to `accept:v1:simulation` so a 2xx alone cannot falsely pass complete-signal or duplicate acceptance;
+3. add kill-switch/zero-action proof, fast-entry completion sequence, reply/thread management, and arbitrary-TP scenario acceptance with zero broker dispatch;
 4. keep cTrader/MT5 demo acceptance paths isolated from live execution;
-5. once credentials are supplied outside chat, run real cTrader and MT5 demo E2E;
+5. once endpoint/broker credentials are supplied outside chat, run real V1 non-live Worker acceptance and cTrader/MT5 demo E2E;
 6. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
 
 ## Mandatory progress update rule
