@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      - 'design/**'
-      - 'feat/**'
   pull_request:
     paths:
       - 'cloudflare-v2/**'
