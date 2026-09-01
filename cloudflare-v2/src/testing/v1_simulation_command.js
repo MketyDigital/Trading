@@ -19,6 +19,7 @@ const ALLOWED_SCENARIOS = new Set([
   'pending_order',
   'ambiguous',
   'move_be',
+  'thread_move_be',
   'close_half',
   'cancel_pending',
   'kill_switch',
@@ -73,9 +74,18 @@ function buildScenarioSequence(names, runId) {
       throw new RangeError(`${name} scenario requires an immediately preceding complete_signal scenario`);
     }
 
+    if (name === 'thread_move_be' && scenarios.at(-1)?.name !== 'complete_signal') {
+      throw new RangeError('thread_move_be scenario requires an immediately preceding complete_signal scenario');
+    }
+
     const scenario = buildAcceptanceScenario(name, { runId });
     if (isReplyManagementScenario(name)) {
       scenario.event.thread.reply_to_event_id = scenarios.at(-1).event.external_event_id;
+    }
+    if (name === 'thread_move_be') {
+      const threadId = `${runId}:thread-management`;
+      scenarios.at(-1).event.thread.thread_id = threadId;
+      scenario.event.thread.thread_id = threadId;
     }
     scenarios.push(scenario);
     lastOriginal = scenario;
@@ -98,6 +108,21 @@ function validateSimulationEnvelope(body, label) {
 function readyAccounts(body) {
   const accounts = Array.isArray(body?.simulation?.accounts) ? body.simulation.accounts : [];
   return accounts.filter((account) => account?.status === 'READY');
+}
+
+function priorCompleteGroup(history, label) {
+  const prior = history.at(-1);
+  if (!prior || prior.scenario.name !== 'complete_signal') {
+    return { error: `${label} requires the immediately preceding complete signal` };
+  }
+  const priorBody = prior.outcome?.result?.response?.body;
+  const envelopeError = validateSimulationEnvelope(priorBody, 'prior complete signal');
+  if (envelopeError) return { error: envelopeError };
+  const accounts = readyAccounts(priorBody);
+  if (accounts.length !== 1 || !accounts[0]?.groupId) {
+    return { error: `${label} requires exactly one READY group from the prior complete signal` };
+  }
+  return { groupId: String(accounts[0].groupId) };
 }
 
 function validateFastCompletion(body, history) {
@@ -197,54 +222,68 @@ function validateAmbiguous(body) {
   return null;
 }
 
+function validateManagementActions(body, groupId, scenarioName, label) {
+  const accounts = readyAccounts(body);
+  if (accounts.length !== 1 || String(accounts[0]?.groupId || '') !== groupId) {
+    return `${label} READY account must reuse the same group established by the prior complete signal`;
+  }
+  const actions = Array.isArray(accounts[0].actions) ? accounts[0].actions : [];
+  if (actions.length === 0 || actions.some((action) => action?.simulated !== true)) {
+    return `${label} must emit one or more simulated risk-reducing actions`;
+  }
+  if (scenarioName === 'move_be' || scenarioName === 'thread_move_be') {
+    if (actions.some((action) => action?.type !== 'MODIFY_POSITION')) {
+      return `${scenarioName} management actions must all be MODIFY_POSITION`;
+    }
+  } else if (scenarioName === 'close_half') {
+    if (actions.some((action) => action?.type !== 'CLOSE_PARTIAL' || Number(action?.fraction) !== 0.5)) {
+      return 'close_half management actions must all be CLOSE_PARTIAL with fraction 0.5';
+    }
+  }
+  return null;
+}
+
 function validateReplyManagement(scenario, body, history) {
-  const envelopeError = validateSimulationEnvelope(body, scenario.name === 'move_be' ? 'break-even management' : 'partial-close management');
+  const label = scenario.name === 'move_be' ? 'break-even reply management' : 'partial-close reply management';
+  const envelopeError = validateSimulationEnvelope(body, label);
   if (envelopeError) return envelopeError;
   if (body?.interpretation?.status !== 'MANAGEMENT') {
     return 'reply management interpretation must remain MANAGEMENT';
   }
 
-  const prior = history.at(-1);
-  if (!prior || prior.scenario.name !== 'complete_signal') {
-    return 'reply management requires the immediately preceding complete signal';
-  }
-  const priorBody = prior.outcome?.result?.response?.body;
-  const priorEnvelopeError = validateSimulationEnvelope(priorBody, 'prior complete signal');
-  if (priorEnvelopeError) return priorEnvelopeError;
-  const priorReady = readyAccounts(priorBody);
-  if (priorReady.length !== 1 || !priorReady[0]?.groupId) {
-    return 'reply management requires exactly one READY group from the prior complete signal';
-  }
-  const groupId = String(priorReady[0].groupId);
+  const prior = priorCompleteGroup(history, 'reply management');
+  if (prior.error) return prior.error;
 
   const correlation = body?.simulation?.correlation;
   if (correlation?.status !== 'MATCHED' || correlation?.reason !== 'REPLY_TARGET') {
     return 'reply management must prove REPLY_TARGET correlation';
   }
-  if (String(correlation.groupId || '') !== groupId) {
+  if (String(correlation.groupId || '') !== prior.groupId) {
     return 'reply management must target the same group established by the prior complete signal';
   }
 
-  const accounts = readyAccounts(body);
-  if (accounts.length !== 1 || String(accounts[0]?.groupId || '') !== groupId) {
-    return 'reply management READY account must reuse the same group established by the prior complete signal';
-  }
-  const actions = Array.isArray(accounts[0].actions) ? accounts[0].actions : [];
-  if (actions.length === 0 || actions.some((action) => action?.simulated !== true)) {
-    return 'reply management must emit one or more simulated risk-reducing actions';
+  return validateManagementActions(body, prior.groupId, scenario.name, 'reply management');
+}
+
+function validateThreadManagement(scenario, body, history) {
+  const envelopeError = validateSimulationEnvelope(body, 'thread break-even management');
+  if (envelopeError) return envelopeError;
+  if (body?.interpretation?.status !== 'MANAGEMENT') {
+    return 'thread management interpretation must remain MANAGEMENT';
   }
 
-  if (scenario.name === 'move_be') {
-    if (actions.some((action) => action?.type !== 'MODIFY_POSITION')) {
-      return 'move_be management actions must all be MODIFY_POSITION';
-    }
-  } else if (scenario.name === 'close_half') {
-    if (actions.some((action) => action?.type !== 'CLOSE_PARTIAL' || Number(action?.fraction) !== 0.5)) {
-      return 'close_half management actions must all be CLOSE_PARTIAL with fraction 0.5';
-    }
+  const prior = priorCompleteGroup(history, 'thread management');
+  if (prior.error) return prior.error;
+
+  const correlation = body?.simulation?.correlation;
+  if (correlation?.status !== 'MATCHED' || correlation?.reason !== 'THREAD_TARGET') {
+    return 'thread management must prove THREAD_TARGET correlation';
+  }
+  if (String(correlation.groupId || '') !== prior.groupId) {
+    return 'thread management must target the same group established by the prior complete signal';
   }
 
-  return null;
+  return validateManagementActions(body, prior.groupId, scenario.name, 'thread management');
 }
 
 function validateScenarioSemantics(scenario, outcome, history = []) {
@@ -293,6 +332,10 @@ function validateScenarioSemantics(scenario, outcome, history = []) {
 
   if (isReplyManagementScenario(scenario.name)) {
     return validateReplyManagement(scenario, body, history);
+  }
+
+  if (scenario.name === 'thread_move_be') {
+    return validateThreadManagement(scenario, body, history);
   }
 
   if (scenario.name !== 'complete_signal') return null;
