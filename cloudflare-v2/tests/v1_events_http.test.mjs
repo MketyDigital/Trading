@@ -43,6 +43,87 @@ test('passes exact raw body and signed source headers into persistent ingest pip
   assert.equal(typeof captured.dependencies.aiRouterFactory, 'function');
   const body = await response.json();
   assert.equal(body.eventId, 'evt-1');
+  assert.equal(body.simulation, undefined);
+});
+
+test('simulation flag orchestrates only a successful non-duplicate interpreted event', async () => {
+  let orchestrationInput;
+  let depsBuilt = 0;
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{"external_event_id":"evt-10","text":"BUY XAUUSD 2500"}', headers: {
+      'X-Mkety-Source-Id': 'src-1', 'X-Mkety-Timestamp': '1', 'X-Mkety-Signature': 'sig',
+    },
+  });
+  const event = { workspace_hint: 'ws-1', external_event_id: 'evt-10', source: { instance_id: 'src-1' }, thread: {} };
+  const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
+  const response = await handleV1EventsRequest(request, {
+    TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true',
+  }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({ ok: true, duplicate: false, eventId: 'db-event-10', event, interpretation }),
+    simulationDepsFactory: async () => { depsBuilt += 1; return { safe: true }; },
+    orchestrateFn: async (input, deps) => {
+      orchestrationInput = { input, deps };
+      return { status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [] };
+    },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(depsBuilt, 1);
+  assert.equal(orchestrationInput.input.eventId, 'db-event-10');
+  assert.equal(orchestrationInput.input.event, event);
+  assert.equal(orchestrationInput.input.interpretation, interpretation);
+  assert.deepEqual(orchestrationInput.deps, { safe: true });
+  assert.equal(body.simulation.status, 'SIMULATED');
+  assert.equal(body.simulation.executionEnabled, false);
+  assert.deepEqual(body.simulation.actions, []);
+});
+
+test('duplicate or rejected ingress never enters orchestration', async () => {
+  for (const ingestResult of [
+    { ok: true, duplicate: true, eventId: 'existing' },
+    { ok: false, status: 401, reason: 'INVALID_SIGNATURE' },
+  ]) {
+    let called = false;
+    const request = new Request('https://trade.test/api/v1/events', {
+      method: 'POST', body: '{}', headers: {
+        'X-Mkety-Source-Id': 'src-1', 'X-Mkety-Timestamp': '1', 'X-Mkety-Signature': 'sig',
+      },
+    });
+    const response = await handleV1EventsRequest(request, {
+      TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true',
+    }, {
+      supabaseFactory: async () => ({}), storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+      ingestFn: async () => ingestResult,
+      simulationDepsFactory: async () => { called = true; return {}; },
+      orchestrateFn: async () => { called = true; return {}; },
+    });
+    assert.equal(called, false);
+    assert.equal(response.status, ingestResult.ok ? 200 : 401);
+  }
+});
+
+test('simulation planning failure is fail-closed diagnostics and cannot turn ingress into live execution', async () => {
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{}', headers: {
+      'X-Mkety-Source-Id': 'src-1', 'X-Mkety-Timestamp': '1', 'X-Mkety-Signature': 'sig',
+    },
+  });
+  const response = await handleV1EventsRequest(request, {
+    TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true',
+  }, {
+    supabaseFactory: async () => ({}), storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({ ok: true, duplicate: false, eventId: 'e1', event: {}, interpretation: { status: 'READY' } }),
+    simulationDepsFactory: async () => { throw new Error('simulation context unavailable'); },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.simulation.status, 'BLOCKED');
+  assert.equal(body.simulation.executionEnabled, false);
+  assert.deepEqual(body.simulation.actions, []);
+  assert.match(body.simulation.error, /simulation context unavailable/i);
 });
 
 test('preserves ingest authorization and validation status codes', async () => {
