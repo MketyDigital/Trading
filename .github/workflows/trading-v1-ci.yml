@@ -1,0 +1,38 @@
+name: Trading V1 CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'design/**'
+      - 'feat/**'
+  pull_request:
+    paths:
+      - 'cloudflare-v2/**'
+      - '.github/workflows/trading-v1-ci.yml'
+      - 'AGENTS.md'
+      - 'docs/superpowers/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: npm run test:ci
+
+      - name: Wrangler dry run
+        run: npx wrangler deploy --dry-run
