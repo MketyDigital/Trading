@@ -175,12 +175,20 @@ export function normalizeVolumeForMT5(lots, { min = 0.01, max = Number.POSITIVE_
   return Number(clamp(stepped, min, max).toFixed(decimalPlaces(step)));
 }
 
-export function normalizeVolumeForCTrader(lots, { lotSize, minVolume = 1, maxVolume = Number.POSITIVE_INFINITY, stepVolume = 1 } = {}) {
+/**
+ * cTrader Open API expresses ProtoOASymbol.lotSize and order volume in cents.
+ * Example: protocolLotSize 10,000,000 means one lot = 100,000.00 base units.
+ * Therefore canonical lots multiply directly by protocolLotSize; do not add
+ * another x100 conversion here.
+ */
+export function normalizeVolumeForCTrader(lots, { protocolLotSize, lotSize, minVolume = 1, maxVolume = Number.POSITIVE_INFINITY, stepVolume = 1 } = {}) {
   const numericLots = Number(lots);
-  const unitsPerLot = Number(lotSize);
+  // lotSize fallback is retained temporarily for already-normalized callers,
+  // but new catalog code should always provide protocolLotSize explicitly.
+  const lotSizeCents = Number(protocolLotSize ?? lotSize);
   if (!Number.isFinite(numericLots) || numericLots <= 0) throw new TypeError('lots must be positive');
-  if (!Number.isFinite(unitsPerLot) || unitsPerLot <= 0) throw new TypeError('lotSize is required');
-  const protocolVolume = numericLots * unitsPerLot * 100;
+  if (!Number.isFinite(lotSizeCents) || lotSizeCents <= 0) throw new TypeError('protocolLotSize is required');
+  const protocolVolume = numericLots * lotSizeCents;
   const stepped = Math.round(protocolVolume / stepVolume) * stepVolume;
   return Math.trunc(clamp(stepped, minVolume, maxVolume));
 }
