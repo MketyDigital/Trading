@@ -137,7 +137,8 @@ Implemented/tested:
 - persistent `TradeStateNode` Durable Object state;
 - source-event IDs append idempotently;
 - broker position/order IDs bind to canonical legs;
-- closed groups excluded from active correlation but retained for audit.
+- closed groups excluded from active correlation but retained for audit;
+- V1 simulation dependencies expose authenticated `GET /groups/:id` access through the internal Trade State client so matched fast-entry/management flows can load the exact durable Position Group.
 
 Cloudflare binding:
 
@@ -147,15 +148,21 @@ TRADE_STATE_NAMESPACE -> TradeStateNode
 
 ### Simulation-only orchestration
 
-`src/pipeline/v1_orchestrator.js` composes interpretation -> correlation -> policy -> risk -> Position Group -> simulated actions.
+`src/pipeline/v1_orchestrator.js` composes interpretation -> correlation -> policy -> risk/management -> Position Group -> simulated actions.
 
 - It imports no broker executor and has no broker dispatch dependency.
 - Disabled/blocked/kill-switch accounts emit zero actions.
 - `wait_for_complete_signal` emits no action for incomplete fast entries.
 - ambiguous correlation remains action-free and cannot create a duplicate group.
-- `FAST_ENTRY_COMPLETION` now reuses the matched Position Group in simulation instead of returning empty `CORRELATED` output.
+- `FAST_ENTRY_COMPLETION` reuses the matched Position Group in simulation instead of returning empty `CORRELATED` output.
 - Fast-entry completion recalculates the completed account plan under current risk/policy rules, promotes the original first leg to TP1, opens only missing TP legs, preserves the original group/first-leg identity, appends the completion source-event ID, clears `incomplete`, and marks every action `simulated: true`.
 - The simulation-specific reconciliation path can model a prior `PLANNED` leg before a broker position ID exists; real execution helpers retain stricter broker-state requirements.
+- deterministic `MANAGEMENT` interpretations now enter correlation instead of returning early.
+- Reply/thread/only-active-group management requires a `MATCHED` durable group and the exact account bound to that group; ambiguous/no-target management stays action-free.
+- Risk-reducing management such as BE/partial/full close is evaluated with `actionKind=REDUCE_RISK`, so drawdown/open-risk locks do not prevent protection/closure, while account disablement and the explicit kill switch still block all actions.
+- Management does not require broker market metadata or new risk sizing; supported actions come from existing canonical Position Group state and are marked `simulated: true`.
+- Successful simulated management appends the management source event to the same durable group for audit without pretending broker state changed.
+- Unsupported management currently fails closed with zero actions. `CANCEL_PENDING` remains a separate pending-order-state integration task; it is not silently treated as a successful open-position management command.
 - `/api/v1/events` invokes orchestration only when `TRADING_V1_SIMULATION=true`.
 - static simulation market/exposure config is staging/shadow context only and never substitutes for broker metadata in demo/live execution.
 
@@ -171,6 +178,7 @@ Implemented/tested:
 - stale-timestamp acceptance signs the stale timestamp/body pair correctly and succeeds only when the Worker returns the exact expected `401` rejection;
 - complete-signal acceptance no longer treats any 2xx as success: it requires `simulation.status=SIMULATED`, `executionEnabled=false`, at least one READY simulated account, and all generated account actions to be explicitly marked `simulated: true`;
 - duplicate acceptance requires the response body to prove `duplicate=true`;
+- optional `kill_switch` sends a normal signal and can pass only when server-side account policy returns a BLOCKED account with `KILL_SWITCH`, zero actions and no READY account; the event payload cannot toggle the kill switch;
 - optional scenario list also supports `fast_entry`, `pending_order`, `ambiguous`, `move_be`, `close_half`, and `cancel_pending`;
 - command/harness has no broker execution dependency; safe full-pipeline use requires the target Worker to have `TRADING_V1_SIMULATION=true`.
 
@@ -302,9 +310,17 @@ Relevant verified GREEN checkpoints:
 - `33541946489` on head `36e2fae26c01ffb9ee0be3af57799f14ba2c572f` — expected-negative V1 security acceptance semantics checkpoint;
 - `33542227070` on head `905cfdff783b7594dc7b2b784cc826171fcbe025` — default V1 acceptance matrix checkpoint;
 - `33542711209` on head `db5a2b2b7711ea745d13a3624ad5989c457d69f4` — complete-signal/duplicate semantic acceptance checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
-- `33545224979` on head `ca69fbaff9a0e9c8baf8bd71523d7e5b4f18ab15` — V1 fast-entry completion reconciliation checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
+- `33545224979` on head `ca69fbaff9a0e9c8baf8bd71523d7e5b4f18ab15` — V1 fast-entry completion reconciliation checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33545664690` on head `b6be92dd768462f777be7c8e05e3212b3c851356` — authenticated matched-group Trade State read dependency checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33545946677` on head `dd3a71897da647d99e3c7af8f0977f915ff56a08` — server-configured kill-switch acceptance semantic checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**;
+- `33546437577` on head `8a964247e176905a70390371cfd7df3169cd1953` — matched V1 reply-management orchestration checkpoint: **Node Worker/core tests, pure MT5 bridge tests, and Wrangler dry-run all success**.
 
-Test-first RED runs are expected. The RED fast-entry checkpoint was `33543050264` on head `00be60cad33a1a287033a61cc240365c738f1eb7`: 232/233 Node tests passed and the sole failure was the missing `FAST_ENTRY_COMPLETION` orchestration behavior.
+Test-first RED runs are expected. Recent exact RED checkpoints:
+
+- `33543050264` on head `00be60cad33a1a287033a61cc240365c738f1eb7` — 232/233 Node tests passed; sole failure was missing `FAST_ENTRY_COMPLETION` orchestration.
+- `33545506600` on head `b5135d1fa6c10091b6f6880bac3c36abd4e952a7` — 233/234 passed; sole failure was missing `stateStore.getGroup` in actual simulation dependencies.
+- `33545804689` on head `63d7fcb8e12dbeefa9d83fbedebe8ce1d10e865c` — 234/236 passed; only the two new kill-switch acceptance contracts failed because the scenario did not exist yet.
+- `33546205291` on head `1f74dcf0bade0d3fc455c0c28cb19e3efdce70fd` — 236/238 passed; only the two new management tests failed because the orchestrator returned early at `status=MANAGEMENT`.
 
 Always inspect the newest branch/push run before claiming current green state because new commits trigger a later run.
 
@@ -352,18 +368,19 @@ Do not paste these secret values into Git/chat/logs.
 ## Remaining blockers / priority order
 
 1. Run `npm run accept:v1:simulation` against a configured non-live Worker so real HTTP ingress, HMAC, persistent event idempotency, interpretation, correlation, risk/policy, Position Group and simulation actions are verified together with zero broker dispatch.
-2. Extend repo-side V1 acceptance with scenario-specific semantics for kill-switch/zero-action, fast-entry + completion sequencing, reply/thread management, arbitrary TP count, and AI ambiguity/fail-closed behavior.
-3. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
-4. Keep the existing Trading access row disabled until Zitadel authorization is verified.
-5. Generate/store encrypted source credentials and create one active source connection.
-6. Create one restrictive non-live trade account and run the signed `/api/v1/events` simulation matrix.
-7. Verify kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
-8. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
-9. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
-10. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
-11. Add/verify per-customer destination formatting profiles with bounded AI and deterministic fallback.
-12. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-13. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+2. Extend repo-side V1 acceptance with scenario-specific semantics for reply/thread management, fast-entry + completion sequencing, arbitrary TP count, and AI ambiguity/fail-closed behavior. Kill-switch semantics are now implemented.
+3. Add the pending-order management path for `CANCEL_PENDING`; current open-position management deliberately fails closed for unsupported pending cancellation.
+4. Configure Cloudflare Worker server-side secrets/bindings and Zitadel organization/role mapping.
+5. Keep the existing Trading access row disabled until Zitadel authorization is verified.
+6. Generate/store encrypted source credentials and create one active source connection.
+7. Create one restrictive non-live trade account and run the signed `/api/v1/events` simulation matrix.
+8. Verify kill switch, fast-entry completion, reply/thread management, arbitrary TP count, risk and correlation against the real shared Supabase tables with zero broker dispatch.
+9. Configure cTrader Open API app credentials + authorized **demo** account and run `npm run accept:ctrader:demo` first in probe mode, then the explicitly gated lifecycle mode.
+10. Configure MT5 demo terminal + authenticated Python/EA bridge and run `npm run accept:mt5:demo` first in probe mode, then the explicitly gated lifecycle mode.
+11. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery behavior.
+12. Add/verify per-customer destination formatting profiles with bounded AI and deterministic fallback.
+13. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
+14. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
 
 ## Exact next safe starting point
 
@@ -372,12 +389,13 @@ Because database schema is applied/inert and cTrader, MT5, and signed V1 simulat
 Next repo-side work while external credentials are unavailable:
 
 1. keep CI green;
-2. add a kill-switch acceptance scenario that succeeds only when the target account is blocked with zero simulated actions and no new Position Group;
+2. add scenario-specific signed acceptance for reply/thread management now that the core management path is verified;
 3. add an end-to-end fast-entry + completion acceptance sequence that proves one canonical group is reused and only missing TP legs are proposed;
-4. add reply/thread management and arbitrary-TP semantic acceptance;
-5. keep cTrader/MT5 demo acceptance paths isolated from live execution;
-6. once endpoint/broker credentials are supplied outside chat, run real V1 non-live Worker acceptance and cTrader/MT5 demo E2E;
-7. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
+4. add arbitrary-TP and AI ambiguity/fail-closed semantic acceptance;
+5. add pending-order cancellation state/orchestration separately from open-position management;
+6. keep cTrader/MT5 demo acceptance paths isolated from live execution;
+7. once endpoint/broker credentials are supplied outside chat, run real V1 non-live Worker acceptance and cTrader/MT5 demo E2E;
+8. then return to listener migration, per-customer output profiles, and Deriv product-specific execution.
 
 ## Mandatory progress update rule
 
