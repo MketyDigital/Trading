@@ -19,6 +19,7 @@ const ALLOWED_SCENARIOS = new Set([
   'move_be',
   'close_half',
   'cancel_pending',
+  'kill_switch',
   'invalid_signature',
   'stale_timestamp',
 ]);
@@ -66,6 +67,17 @@ function buildScenarioSequence(names, runId) {
   return scenarios;
 }
 
+function validateSimulationEnvelope(body, label) {
+  if (body?.ok !== true || body?.duplicate === true) {
+    return `${label} response must confirm a new successful event`;
+  }
+  const simulation = body?.simulation;
+  if (!simulation || simulation.status !== 'SIMULATED' || simulation.executionEnabled !== false) {
+    return `${label} response must include simulation.status=SIMULATED with executionEnabled=false`;
+  }
+  return null;
+}
+
 function validateScenarioSemantics(scenario, outcome) {
   const body = outcome?.result?.response?.body;
 
@@ -76,18 +88,34 @@ function validateScenarioSemantics(scenario, outcome) {
     return null;
   }
 
+  if (scenario.name === 'kill_switch') {
+    const envelopeError = validateSimulationEnvelope(body, 'kill-switch');
+    if (envelopeError) return envelopeError;
+
+    const accounts = Array.isArray(body.simulation.accounts) ? body.simulation.accounts : [];
+    const blocked = accounts.filter((account) =>
+      account?.status === 'BLOCKED' &&
+      Array.isArray(account?.policy?.reasons) &&
+      account.policy.reasons.includes('KILL_SWITCH')
+    );
+    if (blocked.length === 0) {
+      return 'kill-switch simulation must include a BLOCKED account with KILL_SWITCH policy reason';
+    }
+    if (blocked.some((account) => Array.isArray(account?.actions) && account.actions.length > 0)) {
+      return 'kill-switch blocked account must emit zero actions';
+    }
+    if (accounts.some((account) => account?.status === 'READY')) {
+      return 'kill-switch simulation must not include a READY account';
+    }
+    return null;
+  }
+
   if (scenario.name !== 'complete_signal') return null;
 
-  if (body?.ok !== true || body?.duplicate === true) {
-    return 'complete signal response must confirm a new successful event';
-  }
+  const envelopeError = validateSimulationEnvelope(body, 'complete signal');
+  if (envelopeError) return envelopeError;
 
-  const simulation = body?.simulation;
-  if (!simulation || simulation.status !== 'SIMULATED' || simulation.executionEnabled !== false) {
-    return 'complete signal response must include simulation.status=SIMULATED with executionEnabled=false';
-  }
-
-  const accounts = Array.isArray(simulation.accounts) ? simulation.accounts : [];
+  const accounts = Array.isArray(body.simulation.accounts) ? body.simulation.accounts : [];
   const readyAccounts = accounts.filter((account) => account?.status === 'READY');
   if (readyAccounts.length === 0) {
     return 'complete signal simulation must include at least one READY account';
