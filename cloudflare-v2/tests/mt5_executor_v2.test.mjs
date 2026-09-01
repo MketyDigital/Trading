@@ -28,7 +28,7 @@ test('translates, signs and dispatches canonical MT5 open action', async () => {
     catalog: [symbol], deliveryStore: deliveryStore(), nowMs: 1700000000000,
     fetchFn: async (url, options) => {
       request = { url, options };
-      return { ok: true, json: async () => ({ ok: true, ticket: 900, position_id: 900, order_id: 901 }) };
+      return { ok: true, json: async () => ({ ok: true, ticket: 900, position_id: 900, order_id: 901, fill_price: 2526.15 }) };
     },
   });
   assert.equal(request.url, 'https://bridge.test/v1/command');
@@ -39,6 +39,7 @@ test('translates, signs and dispatches canonical MT5 open action', async () => {
   assert.equal(await verifyMT5BridgeSignature(request.options.body, 'secret', request.options.headers['X-Mkety-Signature']), true);
   assert.equal(result.brokerPositionId, '900');
   assert.equal(result.brokerOrderId, '901');
+  assert.equal(result.fillPrice, 2526.15);
 });
 
 test('sends canonical management action using resolved MT5 symbol constraints', async () => {
