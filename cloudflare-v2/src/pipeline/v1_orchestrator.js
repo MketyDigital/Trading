@@ -1,4 +1,6 @@
 import { buildExecutionPlan } from '../execution/execution_plan.js';
+import { evaluateAccountPolicy } from '../execution/account_policy.js';
+import { buildManagementActions } from '../execution/position_group.js';
 
 function normalizeAccount(account = {}) {
   const sizingMode = account.sizingMode || (() => {
@@ -87,6 +89,116 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
   return { group: desired, actions };
 }
 
+function managementAuditGroup(group, event, nowMs) {
+  return {
+    ...group,
+    sourceEventIds: [...new Set([
+      ...(group.sourceEventIds || []).map(String),
+      ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
+    ])],
+    updatedAt: Number(nowMs),
+  };
+}
+
+async function orchestrateMatchedManagement({
+  event,
+  interpretation,
+  nowMs,
+  correlation,
+  stateStore,
+  accountProvider,
+}) {
+  const base = { executionEnabled: false, actions: [] };
+  if (!stateStore?.getGroup) {
+    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_STORE_UNAVAILABLE' };
+  }
+
+  const matchedGroup = await stateStore.getGroup(correlation.groupId);
+  if (!matchedGroup) {
+    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_NOT_FOUND' };
+  }
+
+  const accounts = await accountProvider(event.workspace_hint, event, interpretation);
+  const rawAccount = (Array.isArray(accounts) ? accounts : [])
+    .find((account) => String(account?.id) === String(matchedGroup.tradeAccountId));
+  if (!rawAccount) {
+    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_ACCOUNT_NOT_FOUND' };
+  }
+
+  const account = normalizeAccount(rawAccount);
+  if (account.execution_enabled !== true && account.executionEnabled !== true) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] }],
+    };
+  }
+
+  const policy = evaluateAccountPolicy(account.safetyPolicy, {
+    symbol: matchedGroup.symbol,
+    actionKind: 'REDUCE_RISK',
+  });
+  if (!policy.allowed) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{ accountId: account.id, status: 'BLOCKED', policy, actions: [] }],
+    };
+  }
+
+  let actions;
+  try {
+    actions = buildManagementActions(matchedGroup, interpretation.management);
+  } catch (error) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{
+        accountId: account.id,
+        status: 'BLOCKED',
+        reason: 'MANAGEMENT_ACTION_INVALID',
+        error: error.message,
+        policy,
+        actions: [],
+      }],
+    };
+  }
+
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{
+        accountId: account.id,
+        status: 'BLOCKED',
+        reason: 'MANAGEMENT_ACTION_UNAVAILABLE',
+        policy,
+        actions: [],
+      }],
+    };
+  }
+
+  const auditedGroup = managementAuditGroup(matchedGroup, event, nowMs);
+  await stateStore.putGroup(auditedGroup);
+
+  return {
+    ...base,
+    status: 'SIMULATED',
+    correlation,
+    accounts: [{
+      accountId: account.id,
+      status: 'READY',
+      groupId: matchedGroup.id,
+      policy,
+      actions: simulationActions(actions),
+    }],
+  };
+}
+
 export async function orchestrateTradingEventSimulation({
   event = {},
   interpretation = {},
@@ -108,14 +220,30 @@ export async function orchestrateTradingEventSimulation({
   // This service is intentionally simulation-only. It accepts no broker executor
   // dependency and never dispatches a destination or broker command.
   const base = { executionEnabled: false, actions: [] };
+  const isSignal = interpretation.status === 'READY' && interpretation.intent;
+  const isManagement = interpretation.status === 'MANAGEMENT' && interpretation.management;
 
-  if (interpretation.status !== 'READY' || !interpretation.intent) {
+  if (!isSignal && !isManagement) {
     return { ...base, status: interpretation.status || 'NO_ACTION', correlation: null, accounts: [] };
   }
 
   const correlation = await stateCoordinator.correlate(event, interpretation, nowMs);
   if (correlation?.status === 'NEEDS_REVIEW') {
     return { ...base, status: 'NEEDS_REVIEW', correlation, accounts: [] };
+  }
+
+  if (isManagement) {
+    if (correlation?.status !== 'MATCHED') {
+      return { ...base, status: 'CORRELATED', correlation, accounts: [] };
+    }
+    return orchestrateMatchedManagement({
+      event,
+      interpretation,
+      nowMs,
+      correlation,
+      stateStore,
+      accountProvider,
+    });
   }
 
   const isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
