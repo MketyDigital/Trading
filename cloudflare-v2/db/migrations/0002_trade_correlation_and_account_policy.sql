@@ -20,4 +20,7 @@ ALTER TABLE public.trade_accounts
     ADD COLUMN IF NOT EXISTS entry_zone_policy TEXT NOT NULL DEFAULT 'nearest_boundary'
         CHECK (entry_zone_policy IN ('nearest_boundary', 'market_if_inside', 'midpoint', 'lower', 'upper', 'market_only'));
 
+CREATE INDEX IF NOT EXISTS idx_trade_accounts_workspace
+    ON public.trade_accounts(workspace_id);
+
 COMMIT;
