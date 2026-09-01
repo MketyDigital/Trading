@@ -91,20 +91,85 @@ test('fast signal honors wait_for_complete_signal policy and remains action-free
   assert.deepEqual(result.accounts[0].actions, []);
 });
 
-test('ambiguous or matched correlation never creates a second group in simulation', async () => {
-  for (const correlation of [
-    { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' },
-    { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'existing-group' },
-  ]) {
-    let persisted = false;
-    const result = await orchestrateTradingEventSimulation({ event, interpretation, eventId: 'db-event-4' }, {
-      stateCoordinator: { correlate: async () => correlation },
-      stateStore: { putGroup: async () => { persisted = true; } },
-      accountProvider: async () => [enabledAccount()],
-      instrumentProvider: async () => instrument,
-    });
-    assert.equal(result.executionEnabled, false);
-    assert.deepEqual(result.actions, []);
-    assert.equal(persisted, false);
-  }
+test('ambiguous correlation remains action-free and cannot create another group', async () => {
+  let persisted = false;
+  const result = await orchestrateTradingEventSimulation({ event, interpretation, eventId: 'db-event-4' }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' }) },
+    stateStore: { putGroup: async () => { persisted = true; } },
+    accountProvider: async () => [enabledAccount()],
+    instrumentProvider: async () => instrument,
+  });
+
+  assert.equal(result.status, 'NEEDS_REVIEW');
+  assert.equal(result.executionEnabled, false);
+  assert.deepEqual(result.actions, []);
+  assert.equal(persisted, false);
+});
+
+test('fast-entry completion reuses existing group, promotes first leg to TP1 and opens only missing targets', async () => {
+  const existing = {
+    id: 'existing-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-fast'],
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    orderType: 'MARKET',
+    entryPrice: 2500,
+    entry: { kind: 'MARKET' },
+    stopLoss: null,
+    status: 'PLANNED',
+    incomplete: true,
+    positionMode: 'HEDGED',
+    legs: [
+      { legId: 'fast-leg-1', targetIndex: 1, lots: 0.03, stopLoss: null, takeProfit: null, status: 'PLANNED' },
+    ],
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+  let persisted;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-complete' },
+    interpretation,
+    eventId: 'db-event-complete',
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'existing-group' }) },
+    stateStore: {
+      getGroup: async (groupId) => groupId === 'existing-group' ? structuredClone(existing) : null,
+      putGroup: async (group) => { persisted = structuredClone(group); return group; },
+    },
+    accountProvider: async () => [enabledAccount({ fixedLots: 0.09 })],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({ currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.executionEnabled, false);
+  assert.equal(result.correlation.reason, 'FAST_ENTRY_COMPLETION');
+  assert.equal(result.accounts.length, 1);
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].groupId, 'existing-group');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.type), [
+    'MODIFY_POSITION',
+    'OPEN_POSITION',
+    'OPEN_POSITION',
+  ]);
+  assert.equal(result.accounts[0].actions[0].legId, 'fast-leg-1');
+  assert.equal(result.accounts[0].actions[0].targetIndex, 1);
+  assert.equal(result.accounts[0].actions[0].takeProfit, 2510);
+  assert.equal(result.accounts[0].actions[0].simulated, true);
+  assert.deepEqual(result.accounts[0].actions.slice(1).map((action) => action.targetIndex), [2, 3]);
+  assert.equal(result.accounts[0].actions.every((action) => action.simulated === true), true);
+
+  assert.equal(persisted.id, 'existing-group');
+  assert.equal(persisted.incomplete, false);
+  assert.deepEqual(persisted.sourceEventIds, ['evt-fast', 'evt-complete']);
+  assert.equal(persisted.legs.length, 3);
+  assert.equal(persisted.legs[0].legId, 'fast-leg-1');
+  assert.equal(persisted.legs[0].takeProfit, 2510);
+  assert.deepEqual(persisted.legs.map((leg) => leg.lots), [0.03, 0.03, 0.03]);
 });
