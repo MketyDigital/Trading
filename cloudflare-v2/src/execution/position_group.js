@@ -95,7 +95,7 @@ export function buildManagementActions(group, management) {
     }));
   }
   if (management?.type === 'CLOSE' || management?.type === 'CLOSE_ALL') {
-    return openLegs.map((leg) => ({ type: 'CLOSE_POSITION', brokerPositionId: leg.brokerPositionId }));
+    return openLegs.map((leg) => ({ type: 'CLOSE_POSITION', brokerPositionId: leg.brokerPositionId, lots: leg.lots }));
   }
   return [];
 }
