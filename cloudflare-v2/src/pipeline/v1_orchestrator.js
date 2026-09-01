@@ -64,6 +64,18 @@ function buildPlannedSimulationManagementActions(group, management) {
     }));
   }
 
+  if (management?.type === 'CANCEL_PENDING') {
+    const orderType = String(group?.orderType || '').toUpperCase();
+    if (!orderType || orderType === 'MARKET') return [];
+    return plannedLegs.map((leg) => ({
+      type: 'CANCEL_PENDING',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      orderType,
+    }));
+  }
+
   return [];
 }
 
