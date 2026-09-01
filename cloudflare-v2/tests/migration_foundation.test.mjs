@@ -6,6 +6,7 @@ const sql = await readFile(new URL('../db/migrations/0001_enterprise_trading_fou
 
 test('migration keeps shared Mkety workspaces untouched and creates Trading-owned access binding', () => {
   assert.doesNotMatch(sql, /ALTER TABLE public\.workspaces/i);
+  assert.doesNotMatch(sql, /REFERENCES public\.workspaces/i);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.trading_workspace_access/i);
   assert.match(sql, /zitadel_org_id/i);
   assert.match(sql, /trading_access_enabled/i);
@@ -31,4 +32,22 @@ test('migration creates idempotent destination delivery audit records', () => {
   assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.destination_deliveries/i);
   assert.match(sql, /idempotency_key/i);
   assert.match(sql, /UNIQUE\s*\(workspace_id,\s*idempotency_key\)/i);
+});
+
+test('all Trading-owned public tables enable RLS without relying on shared Mkety policies', () => {
+  for (const table of ['trading_workspace_access', 'source_connections', 'trading_events', 'position_groups', 'position_legs', 'destination_deliveries']) {
+    assert.match(sql, new RegExp(`ALTER TABLE public\\.${table} ENABLE ROW LEVEL SECURITY`, 'i'));
+  }
+});
+
+test('migration covers foreign-key lookup indexes reported by Supabase advisor', () => {
+  for (const index of [
+    'idx_trading_events_source_connection',
+    'idx_position_groups_trade_account',
+    'idx_position_groups_source_event',
+    'idx_position_legs_workspace',
+    'idx_destination_deliveries_trading_event',
+  ]) {
+    assert.match(sql, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}`, 'i'));
+  }
 });
