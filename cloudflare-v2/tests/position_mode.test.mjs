@@ -49,13 +49,13 @@ test('binds one netted broker position id to every virtual leg for management co
   assert.ok(bound.legs.every((leg) => leg.brokerPositionId === 'position-900'));
 });
 
-test('netted TP1 produces partial close for TP1 allocation while final target is left to broker TP', () => {
+test('netted TP1 produces symbol-aware partial close while final target is left to broker TP', () => {
   const materialized = bindNettedBrokerPosition(materializePositionGroupForAccount(group, { positionMode: 'NETTED' }).group, 'p1');
   assert.deepEqual(buildNettedTargetAction(materialized, 1), {
-    type: 'CLOSE_PARTIAL', brokerPositionId: 'p1', targetIndex: 1, lots: 0.04,
+    type: 'CLOSE_PARTIAL', brokerPositionId: 'p1', symbol: 'XAUUSD', targetIndex: 1, lots: 0.04,
   });
   assert.deepEqual(buildNettedTargetAction(materialized, 2), {
-    type: 'CLOSE_PARTIAL', brokerPositionId: 'p1', targetIndex: 2, lots: 0.03,
+    type: 'CLOSE_PARTIAL', brokerPositionId: 'p1', symbol: 'XAUUSD', targetIndex: 2, lots: 0.03,
   });
   assert.equal(buildNettedTargetAction(materialized, 3), null);
 });
