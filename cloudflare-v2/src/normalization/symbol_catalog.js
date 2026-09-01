@@ -25,21 +25,29 @@ export function fromMT5Symbols(symbols = []) {
 }
 
 export function fromCTraderSymbols(symbols = []) {
-  return symbols.map((symbol) => ({
-    platform: 'ctrader',
-    platformId: finiteNumber(symbol.symbolId),
-    platformSymbol: symbol.symbolName,
-    canonical: normalizeSymbol(symbol.symbolName).canonical,
-    aliases: [symbol.description].filter(Boolean),
-    digits: Number.isInteger(symbol.digits) ? symbol.digits : undefined,
-    pipPosition: Number.isInteger(symbol.pipPosition) ? symbol.pipPosition : undefined,
-    lotSize: finiteNumber(symbol.lotSize),
-    minVolume: finiteNumber(symbol.minVolume),
-    maxVolume: finiteNumber(symbol.maxVolume),
-    stepVolume: finiteNumber(symbol.stepVolume),
-    enabled: symbol.enabled,
-    raw: symbol,
-  }));
+  return symbols.map((symbol) => {
+    const protocolLotSize = finiteNumber(symbol.lotSize);
+    return {
+      platform: 'ctrader',
+      platformId: finiteNumber(symbol.symbolId),
+      platformSymbol: symbol.symbolName,
+      canonical: normalizeSymbol(symbol.symbolName).canonical,
+      aliases: [symbol.description].filter(Boolean),
+      digits: Number.isInteger(symbol.digits) ? symbol.digits : undefined,
+      pipPosition: Number.isInteger(symbol.pipPosition) ? symbol.pipPosition : undefined,
+      // cTrader protocol metadata is already expressed in cents.
+      protocolLotSize,
+      lotSizeUnits: protocolLotSize == null ? undefined : protocolLotSize / 100,
+      minVolume: finiteNumber(symbol.minVolume),
+      maxVolume: finiteNumber(symbol.maxVolume),
+      stepVolume: finiteNumber(symbol.stepVolume),
+      maxExposure: finiteNumber(symbol.maxExposure),
+      tradingMode: symbol.tradingMode,
+      enableShortSelling: symbol.enableShortSelling,
+      enabled: symbol.enabled,
+      raw: symbol,
+    };
+  });
 }
 
 export function fromDerivActiveSymbols(symbols = []) {
