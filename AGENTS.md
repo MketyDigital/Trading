@@ -263,6 +263,60 @@ TDD/verification evidence:
 - Queue binding RED `33602954804`: 295/297; only missing Wrangler Queue producer/consumer blocks.
 - GREEN `33603127779` @ `837190d63f780f7c72f477ed5a1accb84d20071c`: Worker/core, pure MT5 bridge, pure MTProto listener, and Wrangler dry-run all success.
 
+### Task 6 — MTProto downstream retry isolation: GREEN
+
+Files:
+
+- `cloudflare-v2/containers/mtproto-listener/listener.py`
+- `cloudflare-v2/containers/mtproto-listener/health.py`
+- `cloudflare-v2/containers/mtproto-listener/test_listener.py`
+
+Behavior:
+
+- downstream handoff retries the exact same compact event with bounded delays;
+- Telegram receive callbacks remain decoupled from downstream network latency;
+- retry exhaustion degrades only that listener/event and never terminates the delivery worker;
+- a later successful event automatically recovers listener health;
+- delivery failure/success counters and timestamps are exposed only through the sanitized health contract;
+- no Telegram/API/session/transport secret is exposed in health.
+
+TDD/verification evidence:
+
+- RED at the pre-fix branch head: Worker/core 302/302 and MT5 bridge green; MTProto tests failed exactly because the new retry contract supplied `retry_delays`/`sleep` before production supported them.
+- GREEN `33612304712` @ `760395613316974a04973553d133c21b9413952a`: all four CI gates success.
+
+### Task 7 — stateful Cloudflare Container supervisor: GREEN
+
+Files:
+
+- `cloudflare-v2/src/sources/mtproto/container_runtime.js`
+- `cloudflare-v2/containers/mtproto-listener/Dockerfile`
+- `cloudflare-v2/containers/mtproto-listener/requirements.txt`
+- `cloudflare-v2/containers/mtproto-listener/app.py`
+- `cloudflare-v2/src/v1_entry.js`
+- `cloudflare-v2/wrangler.toml`
+- `cloudflare-v2/tests/mtproto_container_runtime_contract.test.mjs`
+
+Behavior:
+
+- real Cloudflare Container class `MtprotoContainerRuntime` is bound through `MTPROTO_CONTAINER_NAMESPACE`;
+- additive Durable Object migration `v3` creates the Container-backed class;
+- provider `getByName(...)` continues to give deterministic one-runtime-per-workspace/account-scope identity;
+- Durable Object storage persists only tenant/runtime identity and secret-free lifecycle/health state;
+- runtime identity mismatch fails closed rather than allowing another workspace/source/account scope to reuse a runtime;
+- Telegram API hash/session and trusted handoff token are passed only through the per-container start environment and are not persisted in DO state or returned from status;
+- the Python image runs only the isolated Telethon listener and exposes a secret-free local `/health` endpoint on port 8080;
+- Container local disk is never treated as authoritative durable state; Telegram catch-up plus the persistent event/Queue pipeline remains the recovery authority;
+- initial rollout uses `lite` instances with `max_instances = 100` as a conservative staged SaaS cap;
+- runtime uses Cloudflare's official low-level `this.ctx.container` Durable Object API rather than the helper package.
+
+TDD/debug evidence:
+
+- RED `33612630711` @ `29bad1c5a675197cff807b22f3f0678ec3755fea`: Container binding/runtime/image contract intentionally absent.
+- Intermediate `33612963137`: source contract tests passed, but Node integration exposed an `@cloudflare/containers@0.3.7` native-ESM resolution failure (`ERR_MODULE_NOT_FOUND`) when `v1_entry.js` imported the helper package.
+- The helper dependency was removed; the supervisor was moved to the documented low-level `ctx.container` API without weakening the Container/tenant contract.
+- GREEN `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`: Worker/core, MT5 bridge, MTProto listener, and Wrangler Container/Durable Object dry-run all success.
+
 ## Shared Supabase boundary
 
 There is no Supabase development branch. Existing free-tier Mkety Supabase is used with strict Trading-owned isolation.
@@ -308,6 +362,8 @@ Recent exact GREEN checkpoints:
 - `33602689542` @ `e53ae3489adf2395d5b72ea089a1eb30742463ef`
 - `33602885866` @ `1e8dd3d40e00094bd8f9e0b04fbf8f5207f420c8`
 - `33603127779` @ `837190d63f780f7c72f477ed5a1accb84d20071c`
+- `33612304712` @ `760395613316974a04973553d133c21b9413952a`
+- `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -319,26 +375,31 @@ Real signed V1 Worker acceptance later requires server-side Supabase/Trading mas
 
 Cloudflare Container MTProto E2E later requires:
 
-- Container binding/runtime configuration;
-- Telegram API ID/hash/session bootstrap through runtime secrets only;
-- Queue/internal trusted delivery boundary;
+- account-side Container deployment/rollout and recognition of the checked-in `v3` Container Durable Object migration;
+- server-side bootstrap resolution from encrypted Trading-owned source configuration rather than caller/browser-supplied credentials;
+- Telegram API ID/hash/session material stored/encrypted server-side only and injected into the isolated runtime at start;
+- source-specific configured chat list;
+- trusted internal Worker handoff URL/token;
 - non-live source provider record;
 - Telegram test account/channel for reconnect/catch-up/soak testing.
+
+The Container binding/runtime is now checked in and Wrangler-validated, but no real Cloudflare Container deployment has been performed in this session.
 
 cTrader and MT5 real demo acceptance still require their existing demo-only credentials/gates.
 
 ## Current development priority
 
-1. Wire Cloudflare Container/Telethon listener to the trusted `SOURCE_EVENT_QUEUE` producer boundary without source HMAC secrets in the listener runtime.
-2. Add external MTProto direct signed-V1 source runtime.
-3. Complete day-1 TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
-4. Harden pure DO+mtcute alternate provider using the same Telegram native identity/health contract.
-5. Add Zitadel-authorized source admin/default/status APIs.
-6. Add non-live multi-source acceptance, long-running MTProto reconnect/soak harness, runbook and CI expansion.
-7. External staging: review/apply Trading-owned migrations `0003` + `0004`, configure non-live Worker/Container/source secrets, then signed V1 + MTProto soak acceptance.
-8. cTrader/MT5 real demo probes/lifecycles only behind existing explicit gates.
-9. Tiny controlled live only after all static/source-provider/broker-demo acceptance is green.
+1. Build a server-side MTProto Container bootstrap resolver from Trading-owned encrypted source configuration so callers/browser payloads can never supply or cross-wire Telegram session credentials.
+2. Add supervisor recovery/monitoring: unexpected Container exit must reacquire that exact source's encrypted bootstrap server-side and restart the same tenant runtime; prove catch-up/replay safety under TDD.
+3. Add external MTProto direct signed-V1 source runtime.
+4. Complete day-1 TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
+5. Harden pure DO+mtcute alternate provider using the same Telegram native identity/health contract.
+6. Add Zitadel-authorized source admin/default/status APIs.
+7. Add non-live multi-source acceptance, long-running MTProto reconnect/soak harness, runbook and CI expansion.
+8. External staging: review/apply Trading-owned migrations `0003` + `0004` plus any new MTProto credential migration, configure non-live Worker/Container/source secrets, then signed V1 + MTProto soak acceptance.
+9. cTrader/MT5 real demo probes/lifecycles only behind existing explicit gates.
+10. Tiny controlled live only after all static/source-provider/broker-demo acceptance is green.
 
 ## Exact next safe starting point
 
-Define an intentional RED for the trusted first-party Container handoff: a compact listener-native Telegram event must cross a Worker-controlled boundary, be enqueued through `SOURCE_EVENT_QUEUE`, preserve `(accountScope, chatId, messageId, reply/thread/edit)` identity, never require/return the source HMAC secret, and fail/retry safely when the Queue binding is unavailable. Then implement the minimal internal handoff controller and verify all four CI gates before advancing to external MTProto and the remaining day-one source adapters.
+Implement the server-side MTProto bootstrap resolver under TDD: load only the exact enabled `cloudflare_container_mtproto` source under trusted workspace/source identity, decrypt Telegram provider credentials server-side with `TRADING_MASTER_KEY`, resolve the configured Telegram chat list, inject the internal Worker handoff URL/token from Worker environment, and call the existing Container provider. No browser/caller-supplied bootstrap is authoritative; no decrypted credential may persist in Durable Object status, logs, Queue payloads, or client responses. Then add restart/recovery tests proving the same runtime identity is reused and a source can never receive another tenant's bootstrap.
