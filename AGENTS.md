@@ -26,9 +26,9 @@ Mkety Trading is an enterprise/custom multi-tenant trading automation platform, 
 Authoritative flow:
 
 ```text
-Source Adapter
+Source Provider / Adapter
   -> authenticated/versioned Trading Event
-  -> persistent event idempotency
+  -> persistent canonical event idempotency
   -> deterministic normalization / bounded AI ambiguity resolution
   -> correlation + Trade State
   -> canonical intent / management event
@@ -40,13 +40,69 @@ Source Adapter
   -> destination / broker adapter
 ```
 
-Supported/target source classes include Telegram MTProto/DO, Telethon/Python VM listeners, TradingView, MT5 bridges, REST/custom webhooks, and future adapters. Canonical events may fan out to Telegram/manual outputs, MT5, cTrader, product-specific Deriv adapters, webhooks, Workers/services, and enterprise custom destinations.
+### Multi-source / multi-destination rule
 
-### Core design rules
+Sources are first-class pluggable providers just like destinations. A workspace may enable multiple source connections simultaneously across Telegram MTProto, MT5, cTrader, TradingView, REST/custom APIs, and future source families.
+
+- Default source is a **preference**, not exclusivity.
+- At most one default source is allowed per `(workspace_id, source_family)`.
+- Other enabled sources in the same family remain active.
+- Unconfigured providers are inert and must never block configured providers.
+- Provider runtime identity must not become canonical trade/event identity.
+- Redundant providers may deliver the same native event; persistent canonical idempotency must collapse the duplicate before AI/orchestration/trading.
+
+Current provider families/types are defined in `cloudflare-v2/src/sources/provider_registry.js`:
+
+- Telegram: `cloudflare_container_mtproto`, `cloudflare_do_mtproto`, `external_mtproto`
+- TradingView: `tradingview_webhook`
+- MT5: `mt5_source_bridge`
+- cTrader: `ctrader_source`
+- custom: `custom_signed_api`
+
+Design/spec:
+`docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
+
+Implementation plan:
+`docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
+
+### MTProto runtime direction
+
+Preferred first-party Telegram runtime: **Cloudflare Container + Telethon**, one Telegram session listening to many configured chats/channels.
+
+Supported alternatives remain first-class:
+
+- pure Cloudflare Durable Object + mtcute;
+- external Telethon/mtcute listener;
+- future compatible signed MTProto providers.
+
+Hard reliability requirements:
+
+- continuous normal connectivity;
+- automatic reconnect/restart;
+- persistent Telegram session/update state;
+- recovery/catch-up after infrastructure interruption;
+- listener receive loop decoupled from downstream processing;
+- queue/retry-safe delivery where first-party runtime supports it;
+- native Telegram identity survives provider changes;
+- replays/duplicates never create duplicate trades.
+
+Canonical Telegram identity currently targets:
+
+```text
+telegram:<accountScope>:<chatId>:<messageId>
+```
+
+Container availability must not make DO/external providers mandatory or unavailable. If a provider is not configured, the others continue normally.
+
+### MT5 in Cloudflare Container — feasibility note only
+
+Cloudflare Containers are Linux/amd64 and MetaTrader 5 can run on Linux via Wine, so an MT5 terminal in a Cloudflare Container is technically feasible. Do **not** target the 256 MiB `lite` tier for MT5+Wine reliability. Any MT5-container experiment is a separate future gated task; it is **not** part of the current MTProto implementation batch and must not weaken existing MT5 demo safety gates.
+
+## Core design rules
 
 - Static symbol aliases are hints only. Connected-account broker metadata is authoritative for symbol names/IDs, suffixes/prefixes, precision, tick economics, lot/volume units, order semantics, and account mode.
 - Straightforward signals use deterministic processing and may bypass AI.
-- Ambiguous language may use bounded AI, but AI structure must pass the same deterministic validation.
+- Ambiguous language may use bounded AI, but AI structure must pass deterministic validation.
 - AI failure/latency must not block clear deterministic processing.
 - Customer formatting is presentation only; rendered Telegram text/HTML is never execution authority.
 - Fast-entry policy may be `execute_immediately`, `wait_for_complete_signal`, or `forward_only`.
@@ -61,17 +117,18 @@ Supported/target source classes include Telegram MTProto/DO, Telethon/Python VM 
 4. Formatting/forwarding stays separate from trade authorization/execution.
 5. Every account needs explicit execution enablement, symbol policy, max lots/risk, daily-loss/exposure controls, and kill switch before broker dispatch.
 6. Fail closed on ambiguity, missing price, unsupported instrument, missing broker metadata, provider outage, missing credentials, unreliable risk economics, or ambiguous correlation.
-7. Source/broker/provider secrets must never be returned to browsers, logged, or committed.
+7. Source/broker/provider secrets must never be returned to browsers, logged, committed, or pasted into chat.
 8. Risk-reducing management may bypass drawdown/open-risk locks, but the global kill switch still blocks all actions.
-9. Do not replace the legacy Telegram route until V1 comparison and demo acceptance are satisfactory.
+9. Do not replace the legacy Telegram route until V1 comparison and non-live/demo acceptance are satisfactory.
+10. TDD is mandatory: observe an exact RED before production feature/bugfix code, then require full GREEN before claiming completion.
 
-## Verified V1 implementation state — 2026-09-01
+## Verified V1 implementation state
 
 ### Worker / ingress / auth
 
 - Legacy `POST /api/webhook/process_signal` remains authoritative by default.
 - `TRADING_V1_SHADOW=true` adds side-effect-free canonical diagnostics only.
-- `POST /api/v1/events` is the universal signed V1 ingress.
+- `POST /api/v1/events` is universal signed V1 ingress.
 - `GET /api/v1/health` reports non-secret readiness only.
 - `/api/v1/admin/*` uses V1 Zitadel/workspace authorization.
 - legacy `/api/admin/*` returns `410 LEGACY_ADMIN_API_RETIRED`.
@@ -108,14 +165,14 @@ Implemented/tested:
 - reply targeting;
 - thread targeting;
 - recent incomplete fast-entry completion by source + symbol + side + time window;
-- multiple per-account fast Position Groups from the same originating source event are treated as one safe completion cluster;
+- multiple per-account fast Position Groups from the same originating source event form one safe completion cluster;
 - genuinely distinct competing fast source events remain ambiguous and fail closed;
 - ambiguous unthreaded management fails closed;
 - persistent `TradeStateNode` Durable Object state;
 - source-event IDs append idempotently;
 - broker position/order IDs bind to canonical legs;
 - closed groups remain auditable but are excluded from active correlation;
-- actual V1 simulation dependencies expose authenticated `GET /groups/:id` through the internal Trade State client.
+- V1 simulation dependencies expose authenticated matched-group reads through the internal Trade State client.
 
 Cloudflare binding:
 
@@ -127,26 +184,21 @@ TRADE_STATE_NAMESPACE -> TradeStateNode
 
 `src/pipeline/v1_orchestrator.js` has no broker executor dependency and never dispatches a live/demo broker action.
 
-Verified behavior:
+Verified behavior includes:
 
 - disabled/blocked/kill-switch accounts emit zero actions;
 - `wait_for_complete_signal` remains action-free for incomplete fast entries;
 - ambiguous correlation remains action-free;
-- `FAST_ENTRY_COMPLETION` reuses matched Position Groups, recalculates completed plans under current policy/risk, promotes each existing first leg to TP1, creates only missing TP legs, preserves original group/leg identity, appends the completion source event, clears `incomplete`, and marks actions `simulated:true`;
-- multi-account completion reconciles every account that already executed the same fast source signal while accounts that used `wait_for_complete_signal` create their normal completed-signal group;
-- duplicate matched groups for one account fail closed rather than choosing arbitrarily;
-- simulation can reconcile a prior `PLANNED` fast leg before broker IDs exist; real broker helpers remain stricter;
-- deterministic `MANAGEMENT` interpretations enter correlation instead of returning early;
-- matched BE/partial/full-close management uses existing durable group state, requires the exact bound account, evaluates `actionKind=REDUCE_RISK`, does not require market metadata/new risk sizing, and emits only simulated actions;
-- simulation-only management can operate on `PLANNED` canonical legs by `legId` for BE and partial-close acceptance without inventing `brokerPositionId`; the real `buildManagementActions()` helper remains broker-ID strict;
-- simulation-only `CANCEL_PENDING` can operate on `PLANNED` canonical legs only when the Position Group has a non-market order type; it emits canonical `CANCEL_PENDING` by `legId` without inventing `brokerOrderId`;
-- a `PLANNED` market Position Group cannot be cancelled as pending and fails closed with no persistence/action;
-- real broker pending cancellation remains strict about actual broker order identity through broker-specific execution paths;
-- drawdown/open-risk locks do not prevent protective/risk-reducing management, but execution disablement and kill switch still block it;
-- successful simulated management appends its source event to the same durable group for audit without pretending broker state changed;
+- `FAST_ENTRY_COMPLETION` reuses existing Position Groups, promotes first leg to TP1, and opens only missing targets;
+- multi-account completion reconciles every account sharing the same originating fast source event while wait-policy accounts open normally on completion;
+- simulation may reconcile prior `PLANNED` legs without inventing broker IDs; real broker helpers remain strict;
+- matched BE/partial/full-close management uses durable group state and `REDUCE_RISK` policy;
+- simulation-only pending cancellation works for `PLANNED` non-market legs without fabricating `brokerOrderId`;
+- market-position groups cannot be cancelled as pending;
+- drawdown/open-risk locks do not prevent protective management, but execution disablement/kill switch still block it;
 - unsupported management fails closed.
 
-### Signed V1 simulation acceptance command
+### Signed V1 simulation acceptance
 
 Executable:
 
@@ -154,27 +206,7 @@ Executable:
 npm run accept:v1:simulation
 ```
 
-Default matrix:
-
-- `complete_signal`
-- exact `duplicate`
-- `invalid_signature`
-- correctly signed `stale_timestamp`
-
-Verified semantic contracts:
-
-- complete signal requires `simulation.status=SIMULATED`, `executionEnabled=false`, at least one READY account, and `simulated:true` actions;
-- duplicate must prove `ok=true` and `duplicate=true`;
-- invalid signature must return exact `401`;
-- stale timestamp must return exact `401` while the stale body/timestamp pair remains correctly signed;
-- optional `kill_switch` sends a normal signal and passes only if server-side policy returns BLOCKED + `KILL_SWITCH`, zero actions, and no READY account; the event cannot toggle safety policy;
-- optional `fast_entry,fast_completion` is sequence-aware: the first event must establish one READY group, the completion must prove `FAST_ENTRY_COMPLETION`, reuse the exact same `groupId`, modify TP1, open only TP2/TP3, preserve target ordering, and keep all actions simulated;
-- optional `arbitrary_tp` sends an explicit five-target signal and passes only if every READY account returns exactly five ordered `OPEN_POSITION` actions with target indexes 1 through 5 and `simulated:true`;
-- optional `ambiguous` passes only when interpretation remains `NEEDS_REVIEW`, simulation remains `NEEDS_REVIEW` with `executionEnabled=false`, no READY account exists, and neither top-level nor account-level simulated actions are emitted. HTTP 200 alone cannot satisfy ambiguity acceptance;
-- optional `complete_signal,move_be` automatically creates exact reply metadata to the prior source event and passes only with `REPLY_TARGET`, same-group reuse, MANAGEMENT interpretation, and simulated `MODIFY_POSITION` actions;
-- optional `complete_signal,close_half` uses the same reply sequence contract and passes only with same-group simulated `CLOSE_PARTIAL` actions at fraction `0.5`;
-- optional `complete_signal,thread_move_be` assigns one deterministic thread ID to both events, deliberately leaves reply targeting absent, and passes only with `THREAD_TARGET`, same-group reuse, and simulated `MODIFY_POSITION` actions;
-- optional `pending_order,cancel_pending` automatically replies to the pending source event and passes only if the prior group was created by non-market `OPEN_POSITION` actions, cancellation interpretation remains MANAGEMENT/CANCEL_PENDING, correlation is `REPLY_TARGET`, the exact same group is reused, and every emitted action is simulated `CANCEL_PENDING`.
+Verified scenario semantics include complete signal, exact duplicate, invalid signature, stale signed timestamp, kill switch, fast-entry completion, arbitrary TP count, AI ambiguity fail-closed, reply-targeted BE/half-close, thread-targeted BE, and pending-order cancellation.
 
 This command has **not** been run against a configured external Worker in this development session because Cloudflare/source credentials are not available here.
 
@@ -186,20 +218,7 @@ Executable:
 npm run accept:ctrader:demo
 ```
 
-Verified repo-side behavior:
-
-- official JSON WebSocket endpoint;
-- app then account auth;
-- heartbeat, request correlation, timeouts/errors/socket close;
-- account rights/mode, account symbol metadata, quotes;
-- market/pending/amend/close/partial-close/cancel pending;
-- persistent destination idempotency;
-- demo-only runtime by default; live requires explicit runtime opt-in outside the acceptance harness;
-- probe resolves real account catalog + quote;
-- lifecycle waits for actual fill (`ORDER_ACCEPTED` is not fill), then protects, moves SL to actual-fill BE, partial-closes and closes exact remainder;
-- lifecycle always closes runtime in `finally`;
-- persistent acceptance uses `destination_deliveries` scoped to workspace/demo account;
-- lifecycle requires both `CTRADER_DEMO_ACCEPTANCE_MODE=lifecycle` and `CTRADER_DEMO_ORDER_TEST=true`.
+Repo-side support includes official JSON WebSocket auth/session lifecycle, heartbeat/correlation, account rights/mode, dynamic symbols/quotes, market/pending/amend/close/partial/cancel, persistent destination idempotency, actual-fill-aware protection/BE, and explicit demo lifecycle gates.
 
 No real cTrader demo credentials/order were used in this development session.
 
@@ -211,25 +230,66 @@ Executable:
 npm run accept:mt5:demo
 ```
 
-Verified repo-side behavior:
-
-- signed/versioned `mkety.mt5.v1` bridge envelope;
-- workspace/account/command/expiry scope and replay rejection;
-- Python/EA bridge architecture and pure Python CI tests;
-- dynamic terminal symbol catalog + tick;
-- exact expected demo account/server validation;
-- persistent destination idempotency;
-- protected market lifecycle, broker-confirmed fill price, BE, partial close, exact remainder close;
-- probe/lifecycle only; no live mode in the command;
-- lifecycle requires `MT5_DEMO_ACCEPTANCE_MODE=lifecycle` and `MT5_DEMO_ORDER_TEST=true`.
+Repo-side support includes signed/versioned bridge envelopes, replay/expiry protection, dynamic terminal symbol/tick discovery, exact expected demo account/server validation, persistent destination idempotency, protected market lifecycle, actual fill, BE, partial close, and exact remainder close behind explicit demo lifecycle gates.
 
 No real MT5 demo terminal/bridge/order was used in this development session.
+
+## Multi-source provider foundation — 2026-09-02
+
+### Task 1 — provider registry and canonical native identity: GREEN
+
+Files:
+
+- `cloudflare-v2/src/sources/provider_registry.js`
+- `cloudflare-v2/src/sources/canonical_event_id.js`
+- `cloudflare-v2/tests/source_provider_registry.test.mjs`
+- `cloudflare-v2/tests/canonical_source_event_id.test.mjs`
+
+Behavior:
+
+- heterogeneous provider registry is data-driven;
+- unknown providers fail closed;
+- provider/source-family mismatches fail closed;
+- provider default status is preference only;
+- Telegram Container and DO providers converge on the same provider-independent native event ID;
+- MT5/cTrader/TradingView identities remain family/scoped.
+
+TDD evidence:
+
+- RED `33598485434`: **257/259 passed**; only the two intentionally missing new modules failed.
+- GREEN `33598572539` on exact head `7d62761a072499f6f93910398b3be455b68a2913`: Worker/core, MT5 bridge, Wrangler dry-run all success.
+
+### Task 2 — source connection store/default semantics: GREEN
+
+Files:
+
+- `cloudflare-v2/db/migrations/0003_multi_source_provider_registry.sql`
+- `cloudflare-v2/src/sources/source_connection_store.js`
+- `cloudflare-v2/tests/source_connection_store.test.mjs`
+
+Behavior:
+
+- extends existing `source_connections`; does not rename/drop legacy ingress columns;
+- adds `source_family`, `provider_type`, family-scoped `is_default`, `priority`, external identity/config, and common health fields;
+- partial unique index allows only one enabled default per workspace/source-family;
+- `trading_set_default_source(...)` validates target then atomically switches the family preference;
+- disabling a source also clears only that source's default flag;
+- multiple providers/families remain simultaneously enabled;
+- default status does not globally reorder unrelated families.
+
+Migration status: **checked in but not yet applied to the shared Supabase project in this batch.** `0001` and `0002` remain the only migrations previously confirmed applied.
+
+TDD/debug evidence:
+
+- RED `33598660566`: **267/268 passed**; sole failure was intentionally missing `source_connection_store.js`.
+- First implementation run `33598814319`: **272/273 passed**; exact single failure exposed an incorrect global-default sort. Root cause: `isDefault` is family-scoped and must not globally reorder unrelated source families.
+- GREEN `33598900292` on exact head `215c136a0ed697aac8f00c241afbbb6fa7bb2b16`: **273/273 Node/core tests**, MT5 bridge, and Wrangler dry-run all success.
 
 ## Shared Supabase boundary — IMPORTANT
 
 There is **no Supabase development branch**. The existing free-tier Mkety Supabase project is used with strict Trading isolation.
 
-Trading-owned public schema:
+Trading-owned public schema includes:
 
 - `trading_workspace_access`
 - `source_connections`
@@ -244,64 +304,32 @@ Rules/state:
 - Do not alter/drop/rewrite unrelated Mkety tables.
 - V1 Trading authorization must not depend on shared `public.workspaces`.
 - `trading_workspace_access` is the Trading entitlement authority; intentionally no FK to shared `workspaces`.
-- Checked-in migrations `0001` and `0002` were already applied under this isolation rule.
-- Shared `public.workspaces` retained its exact pre-change schema.
-- All new V1 workspace FKs point to `trading_workspace_access`.
-- RLS is enabled on all six new Trading-owned public tables; no anon/authenticated policies are intentional for service-role-only internals.
-- Advisor-reported V1 FK indexes were added; `trade_accounts.workspace_id` is indexed.
-- One `trading_workspace_access` row exists disabled with no Zitadel org binding.
-- At the verified DB checkpoint, source/event/position/delivery/trade-account staging rows were empty.
-- Do not re-run migrations from scratch and do not create a paid/dev Supabase branch.
+- Checked-in migrations `0001` and `0002` were previously applied under this isolation rule.
+- Migration `0003_multi_source_provider_registry.sql` is checked in but **not yet claimed applied**.
+- Shared `public.workspaces` must remain untouched.
+- RLS remains required on Trading-owned public tables.
+- One previously verified `trading_workspace_access` row exists disabled with no Zitadel org binding; keep it disabled until authorization is verified.
+- Do not create a paid/dev Supabase branch.
 
 Runbook: `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`.
 
-## Verification evidence
+## CI / verification rule
 
-CI gates on this branch:
+Every meaningful code head must pass all current gates before it is called green:
 
 1. Node Worker/trading-core tests;
 2. pure MT5 bridge tests;
-3. Wrangler dry-run.
+3. Wrangler dry-run;
+4. MTProto Python/container tests once those are added to CI.
 
-Important recent GREEN checkpoints:
+Always inspect the exact newest branch/push run before claiming current head green.
 
-- `33525149642` — final cTrader demo package command;
-- `33541021382` — final MT5 demo package command;
-- `33541653303` — signed V1 simulation package command;
-- `33541946489` — expected-negative V1 security semantics;
-- `33542227070` — default V1 acceptance matrix;
-- `33542711209` — complete/duplicate response semantics;
-- `33545224979` — fast-entry orchestration reconciliation;
-- `33545664690` — authenticated matched-group Trade State read dependency;
-- `33545946677` — kill-switch acceptance semantics;
-- `33546437577` on head `8a964247e176905a70390371cfd7df3169cd1953` — reply-management orchestration, all three CI gates success;
-- `33546971743` on head `7c2adaa34ae91abea3c990b4ac38fa6e116716af` — sequence-aware fast-entry completion acceptance, all three CI gates success;
-- `33547635047` on head `1045de62a2ada1eb3e9629eb192ad9d371ec9953` — enterprise multi-account fast-completion clustering/orchestration, all three CI gates success;
-- `33552901711` on head `bea4c022d99759f64b8ee969a8653f0cad3c9dbf` — five-target arbitrary-TP signed acceptance semantics, all three CI gates success;
-- `33553462413` on head `5dae1e8185e2933fed20d7d9140e115bbba3d104` — AI ambiguity fail-closed signed acceptance, all three CI gates success;
-- `33553998455` on head `062a47aa77fa056bdf1296b05bc1802a638a8488` — signed reply-targeted BE/half-close management plus PLANNED-leg simulation, all three CI gates success;
-- `33554323996` on head `841062cf189adefbaa30db5dd5bea3bb34cab372` — signed thread-targeted BE management acceptance, all three CI gates success;
-- `33554901358` on head `d3edefe91f9ecae49ebf4f84d5d6b04f0d5cd7c5` — signed pending-order cancellation acceptance plus simulation-only canonical pending cancellation, all three CI gates success.
+Key recent green checkpoints:
 
-Recent intentional RED checkpoints:
-
-- `33543050264` — sole missing fast-completion orchestration behavior;
-- `33545506600` — sole missing `stateStore.getGroup` dependency;
-- `33545804689` — only two missing kill-switch acceptance contracts;
-- `33546205291` — only two missing management orchestration contracts;
-- `33546768317` on head `92a1ab00e2edc38ee08c5f0a25988eef212807c3` — 238/240 passed; only the two new fast-sequence acceptance tests failed;
-- `33547449605` on head `cf6be5cf8335a17240506ee2ea0496d742928f12` — 241/243 passed; only same-source multi-account fast clustering and mixed-policy completion failed;
-- `33552719259` on head `ab0cc7ff53ab79ad37d1b5ed2009021ffc584bd4` — 243/245 passed; only the two new arbitrary-TP acceptance contracts failed;
-- `33553143660` on head `38ea90838cd4f301adbe1af9b72ff1c1bdfb20b2` — 246/247 passed; only unsafe ambiguity execution was incorrectly accepted;
-- `33553718185` on head `0f0d5fa68e21ea84037941128c708436d88dec17` — 247/251 passed; exactly the four new reply-management/PLANNED-leg contracts failed;
-- `33554127331` on head `98cc3a704e7993ea98931a905a7050481d00431a` — 251/253 passed; only the two new thread-management acceptance contracts failed;
-- `33554598952` on head `d0b8083eb0484105de0a9a20b32aebbb8cbb91a0` — 254/257 passed; only three pending-cancel gaps failed: canonical PLANNED cancellation and the two signed sequence/semantic contracts. The PLANNED market-group fail-closed test already passed.
-
-Verification correction:
-
-- `33553320645` on head `8f1d75fc2efb1687dba84306b83827a1ce7192a7` had the new ambiguity tests green but exposed one stale broad-matrix fixture that mocked `ambiguous` as a generic success. The production validator remained strict; fixture correction at `5dae1e81...` produced the full green run above.
-
-Always inspect the newest branch/push run before claiming the current head is green.
+- `33554901358` @ `d3edefe91f9ecae49ebf4f84d5d6b04f0d5cd7c5` — signed pending cancellation acceptance;
+- `33555072129` @ `ceb17534e7d416d76ac3f2361b4705b7646860bd` — docs checkpoint, all existing gates green;
+- `33598572539` @ `7d62761a072499f6f93910398b3be455b68a2913` — multi-source provider registry/canonical identity green;
+- `33598900292` @ `215c136a0ed697aac8f00c241afbbb6fa7bb2b16` — multi-source source-store/default semantics green.
 
 ## External configuration still required
 
@@ -316,52 +344,47 @@ Before real signed V1 Worker acceptance:
 - encrypted active source HMAC secret;
 - explicit simulation instrument/price context;
 - restrictive non-live Trading account record;
-- acceptance-side `TRADING_V1_ENDPOINT`, `TRADING_V1_SOURCE_ID`, `TRADING_V1_SOURCE_SECRET` supplied via runtime environment only.
+- acceptance-side `TRADING_V1_ENDPOINT`, `TRADING_V1_SOURCE_ID`, `TRADING_V1_SOURCE_SECRET` supplied through runtime environment only.
+
+Before Cloudflare Container MTProto E2E:
+
+- Cloudflare Container binding/configuration;
+- encrypted Telegram API ID/hash/session bootstrap values through runtime secrets only;
+- queue or internal signed-ingress binding;
+- non-live source connection/provider record;
+- Telegram test account/channel suitable for soak/reconnect tests;
+- no secret values in Git/chat/logs.
 
 Before cTrader demo E2E:
 
 - Supabase service credentials/workspace ID;
 - cTrader client ID/secret/access token/demo account ID;
-- optional demo symbol;
-- lifecycle explicit order-test gates.
+- explicit lifecycle order-test gates.
 
 Before MT5 demo E2E:
 
 - Supabase service credentials/workspace ID;
 - authenticated MT5 bridge URL/secret;
 - exact demo account ID and expected demo server;
-- optional demo symbol/lot values;
-- lifecycle explicit order-test gates.
+- explicit lifecycle order-test gates.
 
-Do not paste secret values into Git/chat/logs.
+## Current development priority
 
-## Remaining blockers / priority order
-
-1. Run `npm run accept:v1:simulation` against a configured non-live Worker.
-2. Configure Cloudflare Worker secrets/bindings and Zitadel role/org mapping; keep Trading access disabled until authorization is verified.
-3. Create encrypted active source + restrictive non-live account and run the real shared-Supabase simulation matrix.
-4. Configure cTrader demo credentials and run probe then explicitly gated lifecycle.
-5. Configure MT5 demo bridge and run probe then explicitly gated lifecycle.
-6. Migrate MTProto listener to signed V1 events while preserving legacy fallback/recovery.
-7. Add per-customer destination formatting profiles with bounded AI + deterministic fallback.
-8. Decide Deriv Options vs CFD/account API scope before replacing the legacy CALL/PUT executor.
-9. Only after static simulation + cTrader demo + MT5 demo are green may deliberately tiny controlled live tests be considered.
+1. Task 3: make V1 event reservation/provider authentication support provider-independent native event identity and cross-provider deduplication without weakening authentication.
+2. Task 4: Cloudflare Container MTProto provider contract + Telethon listener skeleton, health, persistence contract and Docker image under TDD.
+3. Task 5: reliable Queue/signed-V1 handoff and recovery/checkpoint semantics.
+4. Task 6: harden pure DO+mtcute as an alternative provider using the same canonical Telegram identity and health contract.
+5. Task 7: heterogeneous external MTProto/MT5/cTrader/TradingView/custom source registration/coexistence.
+6. Task 8: Zitadel-authorized admin source management/default selection API.
+7. Task 9: non-live acceptance + long-running reconnect/soak harness and runbook updates.
+8. External staging: apply reviewed Trading-owned migration `0003`, configure non-live Worker/Container/source secrets, run signed V1 and MTProto soak acceptance.
+9. cTrader and MT5 real demo probes/lifecycles only behind existing explicit gates.
+10. Tiny controlled live tests only after static + source-provider + cTrader demo + MT5 demo acceptance is green.
 
 ## Exact next safe starting point
 
-Core repo-side signed simulation semantics are now covered for security rejection, complete signals, arbitrary TP counts, fast completion, ambiguity fail-closed behavior, kill switch, reply/thread management, and pending cancellation.
-
-Next work:
-
-1. verify this docs-only head remains green;
-2. inspect current external readiness without exposing secret values;
-3. if a configured non-live Worker becomes available, run `GET /api/v1/health` first and only proceed when readiness names/booleans are safe;
-4. create/activate only restrictive non-live source/account records needed for simulation acceptance, keeping Trading access disabled until Zitadel authorization is verified;
-5. run the signed default matrix, then optional `kill_switch`, `arbitrary_tp`, `ambiguous`, `fast_entry,fast_completion`, reply/thread management, and `pending_order,cancel_pending` scenarios;
-6. verify DB event/group audit and zero broker dispatch;
-7. then configure cTrader demo probe/lifecycle and MT5 demo probe/lifecycle;
-8. if external Worker configuration remains unavailable, continue with MTProto signed-listener migration/recovery work rather than weakening safety gates.
+Write an intentional RED acceptance test proving that two separately authenticated Telegram source providers for the same workspace/session scope and same native `(chatId,messageId)` resolve to one canonical persisted event: first delivery processes, second returns `duplicate:true` and never enters AI/orchestration. Also prove a different message remains distinct and an unauthenticated source cannot exploit canonical deduplication. Then implement the smallest persistence/ingress change required.
 
 ## Mandatory progress update rule
 
-After every meaningful implementation/testing batch, update this file with branch/PR state, what changed, verification evidence, DB/config changes, remaining blockers, account-side setup still required, and the exact next safe starting point.
+After every meaningful implementation/testing batch, update this file with branch/PR state, what changed, exact RED/GREEN evidence, DB/config changes, remaining blockers, account-side setup still required, and the exact next safe starting point.
