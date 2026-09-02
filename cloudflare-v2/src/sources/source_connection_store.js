@@ -12,6 +12,7 @@ const SOURCE_SELECT = [
   'is_default',
   'priority',
   'external_identity',
+  'public_source_handle',
   'config',
   'health_status',
   'last_heartbeat_at',
@@ -31,6 +32,7 @@ function normalize(row) {
     sourceInstanceId: row.source_instance_id ?? null,
     displayName: row.display_name ?? null,
     externalIdentity: row.external_identity ?? null,
+    publicSourceHandle: row.public_source_handle ?? null,
     config: row.config || {},
     health: {
       status: row.health_status || (core.enabled ? 'STARTING' : 'DISABLED'),
@@ -76,6 +78,23 @@ export function createSourceConnectionStore(supabase) {
         .maybeSingle();
 
       if (error) throw new Error(error.message || 'failed to load source connection');
+      return normalize(data);
+    },
+
+    async getActiveTradingViewSourceByPublicHandle(handle) {
+      const normalizedHandle = String(handle ?? '').trim();
+      if (!normalizedHandle) return null;
+
+      const { data, error } = await supabase
+        .from('source_connections')
+        .select(SOURCE_SELECT)
+        .eq('public_source_handle', normalizedHandle)
+        .eq('is_active', true)
+        .eq('provider_type', 'tradingview_webhook')
+        .eq('source_family', 'tradingview')
+        .maybeSingle();
+
+      if (error) throw new Error(error.message || 'failed to load TradingView source connection');
       return normalize(data);
     },
 
