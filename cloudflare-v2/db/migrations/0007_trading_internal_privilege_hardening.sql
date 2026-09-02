@@ -35,6 +35,13 @@ REVOKE ALL PRIVILEGES ON TABLE public.destination_deliveries FROM authenticated;
 GRANT ALL PRIVILEGES ON TABLE public.destination_deliveries TO service_role;
 ALTER TABLE public.destination_deliveries ENABLE ROW LEVEL SECURITY;
 
+-- trade_accounts is an existing Trading-specific table reused by V1. It holds
+-- execution/account policy and must have the same service-internal boundary.
+REVOKE ALL PRIVILEGES ON TABLE public.trade_accounts FROM anon;
+REVOKE ALL PRIVILEGES ON TABLE public.trade_accounts FROM authenticated;
+GRANT ALL PRIVILEGES ON TABLE public.trade_accounts TO service_role;
+ALTER TABLE public.trade_accounts ENABLE ROW LEVEL SECURITY;
+
 -- Migration 0003 creates this public SECURITY INVOKER RPC for the server-side
 -- source admin layer. Postgres grants function EXECUTE to PUBLIC by default,
 -- so make the service-only boundary explicit as well.
