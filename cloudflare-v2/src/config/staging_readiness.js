@@ -21,7 +21,10 @@ const OPTIONAL_KEYS = [
   'TRADING_V1_SIMULATION_EXPOSURES',
 ];
 
-export function validateStagingReadiness(env = {}, { requireSimulation = false } = {}) {
+export function validateStagingReadiness(
+  env = {},
+  { requireSimulation = false, requireMtprotoContainer = false } = {},
+) {
   const missing = [];
 
   if (!present(env.SUPABASE_URL)) missing.push('SUPABASE_URL');
@@ -38,12 +41,20 @@ export function validateStagingReadiness(env = {}, { requireSimulation = false }
     if (!present(env.TRADING_V1_SIMULATION_PRICES)) missing.push('TRADING_V1_SIMULATION_PRICES');
   }
 
+  if (requireMtprotoContainer) {
+    if (!present(env.MTPROTO_CONTAINER_NAMESPACE)) missing.push('MTPROTO_CONTAINER_NAMESPACE');
+    if (!present(env.MTPROTO_INTERNAL_SOURCE_URL)) missing.push('MTPROTO_INTERNAL_SOURCE_URL');
+    if (!present(env.INTERNAL_SOURCE_TRANSPORT_TOKEN)) missing.push('INTERNAL_SOURCE_TRANSPORT_TOKEN');
+    if (!present(env.SOURCE_EVENT_QUEUE)) missing.push('SOURCE_EVENT_QUEUE');
+  }
+
   return {
     ready: missing.length === 0,
     missing,
     optionalMissing: OPTIONAL_KEYS.filter((key) => !present(env[key])),
     features: {
       simulationRequested: Boolean(requireSimulation),
+      mtprotoContainerRequested: Boolean(requireMtprotoContainer),
       simulationEnabled: enabled(env.TRADING_V1_SIMULATION),
       shadowEnabled: enabled(env.TRADING_V1_SHADOW),
     },
