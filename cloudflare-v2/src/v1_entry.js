@@ -8,6 +8,7 @@ import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
+export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js';
 
 function isEnabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
