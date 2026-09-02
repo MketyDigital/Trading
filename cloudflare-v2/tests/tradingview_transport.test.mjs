@@ -19,7 +19,7 @@ function enabledEnv(overrides = {}) {
 test('TradingView transport is fail-closed while direct ingress is disabled', () => {
   assert.deepEqual(
     verifyTradingViewTransport(requestWithTls({
-      certPresented: '1', certVerified: 'SUCCESS', certFingerprintSHA256: FP,
+      certPresented: '1', certVerified: 'FAILED:unable to get local issuer certificate', certFingerprintSHA256: FP,
     }), enabledEnv({ TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false' })),
     { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' },
   );
@@ -27,29 +27,35 @@ test('TradingView transport is fail-closed while direct ingress is disabled', ()
 
 test('TradingView transport requires configured certificate fingerprint allowlist', () => {
   const result = verifyTradingViewTransport(requestWithTls({
-    certPresented: '1', certVerified: 'SUCCESS', certFingerprintSHA256: FP,
+    certPresented: '1', certVerified: 'FAILED:unable to get local issuer certificate', certFingerprintSHA256: FP,
   }), enabledEnv({ TRADINGVIEW_TLS_CLIENT_CERT_SHA256: '' }));
   assert.deepEqual(result, { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' });
 });
 
-test('TradingView transport requires Cloudflare verified presented client certificate metadata', () => {
+test('TradingView transport requires a client certificate actually presented to Cloudflare', () => {
   const missing = verifyTradingViewTransport({}, enabledEnv());
   const notPresented = verifyTradingViewTransport(requestWithTls({
-    certPresented: '0', certVerified: 'SUCCESS', certFingerprintSHA256: FP,
-  }), enabledEnv());
-  const failed = verifyTradingViewTransport(requestWithTls({
-    certPresented: '1', certVerified: 'FAILED:self signed certificate', certFingerprintSHA256: FP,
+    certPresented: '0', certVerified: 'NONE', certFingerprintSHA256: FP,
   }), enabledEnv());
 
-  for (const result of [missing, notPresented, failed]) {
+  for (const result of [missing, notPresented]) {
     assert.deepEqual(result, { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' });
   }
 });
 
-test('TradingView transport rejects a verified certificate with unconfigured fingerprint', () => {
+test('TradingView transport accepts a pinned presented certificate even when Cloudflare cannot verify its non-Cloudflare CA', () => {
   const result = verifyTradingViewTransport(requestWithTls({
     certPresented: '1',
-    certVerified: 'SUCCESS',
+    certVerified: 'FAILED:unable to get local issuer certificate',
+    certFingerprintSHA256: FP,
+  }), enabledEnv());
+  assert.deepEqual(result, { ok: true });
+});
+
+test('TradingView transport rejects a presented certificate with unconfigured fingerprint', () => {
+  const result = verifyTradingViewTransport(requestWithTls({
+    certPresented: '1',
+    certVerified: 'FAILED:unable to get local issuer certificate',
     certFingerprintSHA256: '11'.repeat(32),
   }), enabledEnv());
   assert.deepEqual(result, { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' });
@@ -58,17 +64,30 @@ test('TradingView transport rejects a verified certificate with unconfigured fin
 test('TradingView transport accepts exact SHA-256 fingerprint with case separator normalization and multiple configured values', () => {
   const observed = FP.toLowerCase().replaceAll(':', '');
   const result = verifyTradingViewTransport(requestWithTls({
-    certPresented: '1', certVerified: 'SUCCESS', certFingerprintSHA256: observed,
+    certPresented: '1', certVerified: 'FAILED:unable to get local issuer certificate', certFingerprintSHA256: observed,
   }), enabledEnv({
     TRADINGVIEW_TLS_CLIENT_CERT_SHA256: ` ${'11'.repeat(32)} , ${FP} `,
   }));
   assert.deepEqual(result, { ok: true });
 });
 
+test('TradingView transport ignores spoofed HTTP certificate headers when request.cf has no presented certificate', () => {
+  const request = {
+    headers: new Headers({
+      'cf-client-cert-sha256': FP,
+      'x-cert-verify': 'SUCCESS',
+      'x-cert-subject-dn': 'CN=webhook-server@tradingview.com',
+    }),
+    cf: { tlsClientAuth: { certPresented: '0', certVerified: 'NONE' } },
+  };
+  const result = verifyTradingViewTransport(request, enabledEnv());
+  assert.deepEqual(result, { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' });
+});
+
 test('TradingView transport result never exposes certificate fingerprints or metadata', () => {
   const request = requestWithTls({
     certPresented: '1',
-    certVerified: 'SUCCESS',
+    certVerified: 'FAILED:unable to get local issuer certificate',
     certFingerprintSHA256: '22'.repeat(32),
     certSubjectDN: 'CN=private-source-name',
     certIssuerDN: 'CN=private-issuer',
