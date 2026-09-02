@@ -11,6 +11,7 @@ const internalTables = [
   'position_groups',
   'position_legs',
   'destination_deliveries',
+  'trade_accounts',
 ];
 
 test('hardening migration revokes client table privileges only from Trading-owned internal tables', () => {
