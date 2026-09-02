@@ -132,6 +132,24 @@ export function createMtprotoDoProvider({
     return status();
   }
 
+  async function authenticate({ phone, code } = {}) {
+    const trustedPhone = required(phone, 'MTPROTO_DO_PHONE_REQUIRED');
+    const trustedCode = required(code, 'MTPROTO_DO_CODE_REQUIRED');
+    if (!client || typeof client.signIn !== 'function') throw new Error('MTPROTO_DO_CLIENT_NOT_RUNNING');
+
+    try {
+      await client.signIn({ phone: trustedPhone, code: trustedCode });
+      if (typeof client.exportSession !== 'function') throw new Error('MTPROTO_DO_SESSION_EXPORT_UNSUPPORTED');
+      const sessionString = required(await client.exportSession(), 'MTPROTO_DO_SESSION_EXPORT_FAILED');
+      await state.storage.put('session_string', sessionString);
+      lastErrorCode = null;
+      return { authenticated: true };
+    } catch (error) {
+      lastErrorCode = 'MTPROTO_DO_AUTH_FAILED';
+      throw error;
+    }
+  }
+
   async function stop() {
     await state.storage.put('is_active', false);
     if (client?.close) await client.close();
@@ -213,5 +231,5 @@ export function createMtprotoDoProvider({
     return { queued: true, externalEventId: event.external_event_id };
   }
 
-  return { start, stop, status, alarm, handleIncomingMessage };
+  return { start, authenticate, stop, status, alarm, handleIncomingMessage };
 }
