@@ -18,44 +18,44 @@ function makeQuery(rows, observed) {
   return query;
 }
 
-test('resolves one exact active TradingView webhook source by non-secret handle', async () => {
+test('resolves one exact active TradingView webhook source by non-secret public handle', async () => {
   const observed = {};
   const rows = [{
     id: 'tv-a', workspace_id: 'ws-a', source_type: 'tradingview', source_instance_id: 'tv-a',
-    source_family: 'tradingview', provider_type: 'tradingview_webhook', webhook_handle: 'tv_public_abc',
+    source_family: 'tradingview', provider_type: 'tradingview_webhook', public_source_handle: 'tv_public_abc',
     external_identity: 'account-a', is_active: true, is_default: true, priority: 10, config: {},
   }];
   const store = createSourceConnectionStore({ from: () => makeQuery(rows, observed) });
 
-  const source = await store.getActiveTradingViewByHandle('tv_public_abc');
+  const source = await store.getActiveTradingViewSourceByPublicHandle('tv_public_abc');
 
   assert.equal(source.id, 'tv-a');
   assert.equal(source.workspaceId, 'ws-a');
   assert.equal(source.sourceFamily, 'tradingview');
   assert.equal(source.providerType, 'tradingview_webhook');
-  assert.equal(source.webhookHandle, 'tv_public_abc');
+  assert.equal(source.publicSourceHandle, 'tv_public_abc');
   assert.deepEqual(observed.filters, [
-    ['webhook_handle', 'tv_public_abc'],
+    ['public_source_handle', 'tv_public_abc'],
     ['is_active', true],
-    ['source_family', 'tradingview'],
     ['provider_type', 'tradingview_webhook'],
+    ['source_family', 'tradingview'],
   ]);
-  assert.match(observed.select, /webhook_handle/);
+  assert.match(observed.select, /public_source_handle/);
   assert.doesNotMatch(observed.select, /secret_ciphertext|secret|token|password/i);
 });
 
-test('TradingView handle lookup fails closed for missing, inactive, wrong-family and wrong-provider sources', async () => {
+test('TradingView public handle lookup fails closed for missing, inactive, wrong-family and wrong-provider sources', async () => {
   const cases = [
     [],
-    [{ id: 'tv-a', webhook_handle: 'tv_public_abc', is_active: false, source_family: 'tradingview', provider_type: 'tradingview_webhook' }],
-    [{ id: 'tv-a', webhook_handle: 'tv_public_abc', is_active: true, source_family: 'telegram', provider_type: 'tradingview_webhook' }],
-    [{ id: 'tv-a', webhook_handle: 'tv_public_abc', is_active: true, source_family: 'tradingview', provider_type: 'custom_signed_api' }],
+    [{ id: 'tv-a', public_source_handle: 'tv_public_abc', is_active: false, source_family: 'tradingview', provider_type: 'tradingview_webhook' }],
+    [{ id: 'tv-a', public_source_handle: 'tv_public_abc', is_active: true, source_family: 'telegram', provider_type: 'tradingview_webhook' }],
+    [{ id: 'tv-a', public_source_handle: 'tv_public_abc', is_active: true, source_family: 'tradingview', provider_type: 'custom_signed_api' }],
   ];
 
   for (const rows of cases) {
     const store = createSourceConnectionStore({ from: () => makeQuery(rows, {}) });
-    assert.equal(await store.getActiveTradingViewByHandle('tv_public_abc'), null);
+    assert.equal(await store.getActiveTradingViewSourceByPublicHandle('tv_public_abc'), null);
   }
   const store = createSourceConnectionStore({ from: () => makeQuery([], {}) });
-  assert.equal(await store.getActiveTradingViewByHandle(''), null);
+  assert.equal(await store.getActiveTradingViewSourceByPublicHandle(''), null);
 });
