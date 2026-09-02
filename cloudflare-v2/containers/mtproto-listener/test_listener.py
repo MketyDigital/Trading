@@ -1,6 +1,8 @@
 import asyncio
+import json
 import unittest
 
+from http_sink import create_internal_http_sink
 from listener import MtprotoListener
 
 
@@ -49,6 +51,61 @@ class FakeClient:
 
     async def disconnect(self):
         self.connected = False
+
+
+class InternalHttpSinkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_posts_exact_compact_event_with_transport_token_only(self):
+        calls = []
+
+        def transport(*, url, body, headers, timeout):
+            calls.append({'url': url, 'body': body, 'headers': headers, 'timeout': timeout})
+            return 202, b'{"ok":true,"queued":true}'
+
+        sink = create_internal_http_sink(
+            url='https://trade.mkety.com/api/v1/internal/source-event',
+            transport_token='transport-token',
+            transport=transport,
+            timeout=2.5,
+        )
+        payload = {
+            'source_id': 'source-1',
+            'source_external_id': 'telegram-account-42',
+            'external_event_id': 'telegram:-1001:77',
+            'text': 'BUY GOLD NOW',
+            'thread': {'thread_id': None, 'reply_to_event_id': None, 'edited_event_id': None},
+            'metadata': {'native_identity': {'chat_id': '-1001', 'message_id': '77'}},
+        }
+
+        result = await sink(payload)
+
+        self.assertEqual(result, {'ok': True, 'queued': True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['url'], 'https://trade.mkety.com/api/v1/internal/source-event')
+        self.assertEqual(calls[0]['headers']['X-Mkety-Internal-Source-Token'], 'transport-token')
+        self.assertEqual(calls[0]['headers']['Content-Type'], 'application/json; charset=utf-8')
+        self.assertEqual(json.loads(calls[0]['body'].decode('utf-8')), payload)
+        serialized_body = calls[0]['body'].decode('utf-8')
+        self.assertNotIn('transport-token', serialized_body)
+        self.assertNotIn('hmac', serialized_body.lower())
+        self.assertEqual(calls[0]['timeout'], 2.5)
+
+    async def test_non_2xx_or_invalid_config_is_retryable_failure_without_secret_echo(self):
+        def failed_transport(**_kwargs):
+            return 503, b'{"ok":false}'
+
+        sink = create_internal_http_sink(
+            url='https://trade.mkety.com/api/v1/internal/source-event',
+            transport_token='transport-token',
+            transport=failed_transport,
+        )
+        with self.assertRaisesRegex(RuntimeError, '503') as failure:
+            await sink({'source_id': 'source-1'})
+        self.assertNotIn('transport-token', str(failure.exception))
+
+        with self.assertRaises(ValueError):
+            create_internal_http_sink(url='', transport_token='transport-token')
+        with self.assertRaises(ValueError):
+            create_internal_http_sink(url='https://trade.mkety.com/api/v1/internal/source-event', transport_token='')
 
 
 class MtprotoListenerTests(unittest.IsolatedAsyncioTestCase):
