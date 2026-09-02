@@ -13,7 +13,7 @@ Before any environment run:
 - use test Telegram accounts/channels and non-live Trading sources only;
 - never place secret values in Git, chat, command output, health responses, or acceptance summaries;
 - for TradingView, never place reusable source secrets in the webhook URL/query/body and never treat caller workspace/source/destination/execution fields as authority;
-- Cloudflare Free compatibility is the baseline for the TradingView trust boundary. Do not introduce BYOCA, Enterprise mTLS trust, or any other Enterprise-only Cloudflare dependency. Workers Paid may improve capacity but must not be required for the security model.
+- Cloudflare Free compatibility is the baseline for the Trading trust boundary. Do not introduce BYOCA, Enterprise mTLS trust, or any other Enterprise-only Cloudflare dependency. Workers Paid may improve capacity and may host the optional Container MTProto provider, but must not be required for security correctness when a Free-compatible route exists.
 
 Verified Trading-owned Supabase state as of 2026-09-02:
 
@@ -40,7 +40,7 @@ The exact acceptance suite must prove all of the following before environment te
 10. TradingView direct ingress remains source-only: transport verification precedes acceptance, exact server-side public-handle lookup establishes source authority, stable native `event_id` is required, forbidden authority/credential hints are removed, and accepted work is queued into the existing source-event path only.
 11. A TradingView source/queue failure never suppresses another TradingView handle or Telegram/MT5/cTrader/custom source.
 12. Existing signed `/api/v1/events` HMAC behavior remains independent and unchanged by the TradingView route.
-13. All four mandatory CI gates pass at the same exact branch head: Node Worker/trading-core, pure MT5 bridge, both MTProto Python suites, and Wrangler dry-run.
+13. All four mandatory CI gates pass at the same exact branch head: Node Worker/trading-core, pure MT5 bridge, both MTProto Python suites, and Wrangler dry-run. The Wrangler gate must dry-run both `wrangler.toml` and `wrangler.free.toml`.
 
 Key TDD/CI checkpoints:
 
@@ -53,7 +53,43 @@ Key TDD/CI checkpoints:
 - Free-compatible TradingView transport RED: run `33677097755` at `1f5a04130097df8c20d9ba8843909926bcff21ef`; exactly the two new cases that no longer require Cloudflare CA verification failed while production still required `certVerified='SUCCESS'`;
 - Free-compatible TradingView transport GREEN: run `33677199850` at `6531589c3f5106cf5dddc91080feb34698d09716`; all four mandatory gates passed after removing the Enterprise-dependent Cloudflare CA-verification requirement while retaining presented-certificate and exact SHA-256 fingerprint pinning;
 - fail-closed certificate probe RED: run `33683387828` at `09959c829d4a975cc8873b7fc125939da3c0ca86`; 496/498 Node tests passed and only the two new probe-observation cases failed because no probe log existed yet;
-- fail-closed certificate probe GREEN: run `33683493798` at `84bd40e8c714b884f003869693203ea0148e0b85`; Worker/trading-core, MT5 bridge, both MTProto Python suites, and Wrangler dry-run all passed.
+- fail-closed certificate probe GREEN: run `33683493798` at `84bd40e8c714b884f003869693203ea0148e0b85`; Worker/trading-core, MT5 bridge, both MTProto Python suites, and Wrangler dry-run all passed;
+- Free-baseline Wrangler RED: run `33691357344` at `9d0dafbd097364a96ae153d0252c1d5548d2842c`; 498/499 Node tests passed and the sole failure was the intentionally missing `wrangler.free.toml`;
+- Paid+Free deployment GREEN: run `33691531352` at `07753802ed80dace07376c3a738d3ff03edcfaa7`; all four mandatory gates passed, and the Wrangler gate successfully dry-ran both deployment configs.
+
+## MTProto deployment profiles
+
+The three Telegram provider types remain independent: `cloudflare_container_mtproto`, `cloudflare_do_mtproto`, and `external_mtproto`.
+
+### Workers Paid profile
+
+`cloudflare-v2/wrangler.toml` is the Workers Paid deployment config. It retains the optional `MtprotoContainerRuntime` and `MTPROTO_CONTAINER_NAMESPACE` binding. The existence of that binding is **not** permission to start a Container and is not provider selection.
+
+A Container may be resolved/started only after server-side source resolution proves all of the following for the exact trusted source/workspace:
+
+- `source_family='telegram'`;
+- `provider_type='cloudflare_container_mtproto'`;
+- `is_active=true`.
+
+Wrong-provider, disabled, missing, or foreign-workspace sources must fail before the Container namespace is touched. DO/external sources must never start a Container merely because the Paid Worker has the binding.
+
+### Free-compatible profile
+
+`cloudflare-v2/wrangler.free.toml` is a separate deployment target named `mkety-copier-engine-free`. It intentionally contains:
+
+- no `[[containers]]` declaration;
+- no `MTPROTO_CONTAINER_NAMESPACE` binding;
+- no Container Durable Object migration;
+- no one-minute Container recovery cron;
+- the non-Container Durable Object bindings needed by the Worker;
+- isolated `mkety-trading-source-events-free` / DLQ queue names;
+- the ordinary 15-minute scheduler.
+
+The Free profile's queue names are intentionally separate from the Paid profile so an accidental simultaneous deployment cannot distribute one source-event queue across two Workers.
+
+The one-minute cron is absent because it supervises the optional Container recovery path. DO/external provider recovery must remain provider-local and must not require a fake or missing Container binding.
+
+Environment acceptance for either profile must verify that selecting one Telegram provider cannot mutate/start another provider's runtime, credentials, retry state, or health.
 
 ## MTProto soak command
 
@@ -77,6 +113,8 @@ Use at least two independent workspaces or source identities when practical so i
 - Inject a retryable failure into source A transport/downstream path; source B must continue without authorization, health, retry, or queue-state changes.
 - Disable/revoke source A; source B must remain operational.
 - Attempt a caller workspace/source override; trusted server-side source/workspace identity must remain authoritative.
+- On a Paid deployment with the Container binding present, exercise a DO or external source and confirm no Container is started/touched for that source.
+- On the Free deployment profile, confirm the Worker dry-runs/starts without any Container binding and Container-only recovery is absent.
 
 ### TradingView direct-ingress transport gate
 
@@ -161,6 +199,8 @@ Stop the environment acceptance immediately if:
 - a replay produces a second Position Group/orchestration/destination delivery for the same canonical event;
 - a successful destination is rolled back or automatically redispatched because a sibling failed;
 - secret values appear in logs, health, API responses, or summaries;
+- a DO/external MTProto source causes the Paid deployment to start/touch a Container runtime;
+- the Free deployment requires a Container binding, Container migration, or Container recovery cron;
 - TradingView direct ingress accepts traffic without the exact reviewed transport verification;
 - TradingView caller-provided workspace/source/destination/execution fields become authority;
 - a presented but unpinned client certificate is accepted;
@@ -171,6 +211,6 @@ Stop the environment acceptance immediately if:
 
 ## Gate outcome and next boundary
 
-The source-code/CI and TradingView `0010` database-schema portions are complete and verified. The transport code is Free-plan compatible by design: it pins the exact Cloudflare-observed SHA-256 fingerprint of a presented client certificate and does not require Enterprise BYOCA/Cloudflare CA verification. A temporary fail-closed certificate probe now provides a controlled way to observe only presentation/fingerprint metadata while forcing HTTP 403 before source lookup or queueing. Direct TradingView **environment** acceptance is still not complete because this session cannot prove that a real TradingView webhook reaches the Worker with the required `request.cf.tlsClientAuth` presentation/fingerprint metadata on the actual non-Enterprise deployment. Keep direct ingress disabled until that proof exists.
+The source-code/CI and TradingView `0010` database-schema portions are complete and verified. The Cloudflare deployment contract now has two validated profiles: the existing Workers Paid config retains Containers as an explicit per-source MTProto option, while `wrangler.free.toml` is a separate no-Container baseline with isolated queues. CI dry-runs both. The transport code is Free-plan compatible by design: it pins the exact Cloudflare-observed SHA-256 fingerprint of a presented client certificate and does not require Enterprise BYOCA/Cloudflare CA verification. A temporary fail-closed certificate probe provides a controlled way to observe only presentation/fingerprint metadata while forcing HTTP 403 before source lookup or queueing. Direct TradingView **environment** acceptance is still not complete because this session cannot prove that a real TradingView webhook reaches the Worker with the required `request.cf.tlsClientAuth` presentation/fingerprint metadata on the actual non-Enterprise deployment. Keep direct ingress disabled until that proof exists.
 
-The next safe engineering boundary is controlled account-side staging readiness: inspect the actual Cloudflare Worker/Queue bindings by names/status only, configure the dedicated hostname for Free-compatible certificate collection without `cert_verified` enforcement, deploy the probe-capable Worker, keep direct ingress disabled, temporarily enable the certificate probe, observe one real TradingView certificate fingerprint, disable the probe, and only then configure one non-execution TradingView source for acceptance. cTrader/MT5 demo probes/lifecycles stay behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
+The next safe engineering boundary is controlled account-side staging readiness: inspect the actual Cloudflare Worker/Queue bindings by names/status only, confirm the intended deployment profile, configure the dedicated hostname for Free-compatible certificate collection without `cert_verified` enforcement, deploy the probe-capable Worker, keep direct ingress disabled, temporarily enable the certificate probe, observe one real TradingView certificate fingerprint, disable the probe, and only then configure one non-execution TradingView source for acceptance. cTrader/MT5 demo probes/lifecycles stay behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
