@@ -190,6 +190,7 @@ The approved direct TradingView trust boundary is implemented in code and is ind
 - Existing dynamic HMAC source auth remains byte-exact and independent.
 - Multiple TradingView handles/workspaces remain isolated; same native event ID is scoped by canonical source/workspace identity and one source failure cannot suppress a sibling.
 - Production enablement remains **blocked** until the real Cloudflare/TradingView client-certificate metadata and fingerprint behavior are verified non-live. Do not replace this with an IP-only or caller-header fallback.
+- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md` now contains the controlled TradingView environment sequence, spoof-rejection checks, source-isolation checks, duplicate checks, authority-stripping checks, and stop conditions.
 
 TDD/reconciliation evidence:
 - Approved spec head `5c007265c462c7f3aec856e900cf8d51e72df8b3` passed CI (`33660724964`, `33660718778`).
@@ -197,7 +198,9 @@ TDD/reconciliation evidence:
 - Root cause was test-contract duplication, not production failure. Tests were aligned to the existing approved `public_source_handle` / `getActiveTradingViewSourceByPublicHandle()` contract; no production/schema duplication was added.
 - Reconciliation GREEN `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`, all mandatory gates successful.
 - First TradingView handoff-doc GREEN `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`, all mandatory gates successful.
-- Live Supabase `0010` application/verification completed after that code checkpoint; no source rows, credentials, broker settings, or execution state were created by the migration.
+- Post-Supabase handoff GREEN `33668981424` @ `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`, all mandatory gates successful.
+- Expanded non-live TradingView runbook GREEN `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`, all mandatory gates successful.
+- Live Supabase `0010` application/verification completed without creating source rows, credentials, broker settings, destinations, or execution state.
 
 ## CI rule
 
@@ -215,29 +218,30 @@ Recent exact GREEN checkpoints:
 - `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`
 - `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`
 - `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`
+- `33668981424` @ `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`
+- `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify this post-Supabase `AGENTS.md` head in all four CI gates.
+1. Verify this final TradingView `AGENTS.md` synchronization head in all four CI gates.
 2. Keep direct TradingView ingress disabled until real Cloudflare/TradingView TLS client-certificate metadata/fingerprint behavior is proven non-live.
-3. When Cloudflare account-side access is available, inspect names/status only first; do not insert secrets into GitHub/logs/docs.
-4. After transport proof, create one non-execution TradingView source row with a unique public handle only for controlled staging acceptance; do not attach a broker/destination or enable trade execution as part of ingress verification.
-5. Update `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`/runbook with verified account-side TradingView staging evidence.
-6. Add an executable MT5 source-only runtime/runner only if needed for deployment; never import/use `MT5Engine` or command-secret state.
-7. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when an account-side connector/path is available.
-8. Run real non-live Zitadel positive/negative acceptance when environment access exists.
-9. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists.
-10. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
-11. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
-12. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
+3. No Cloudflare or Zitadel account connector/plugin is available in the current session; do not claim account-side verification or invent credentials.
+4. When Cloudflare account-side access becomes available, inspect Worker/Queue/binding names/status first; do not expose secret values.
+5. After transport proof, create one non-execution TradingView source row with a unique public handle only for controlled staging acceptance; do not attach a broker/destination or enable trade execution as part of ingress verification.
+6. Run the TradingView acceptance sequence in `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`, then immediately disable the direct-ingress switch again unless a separate reviewed staging decision says otherwise.
+7. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when account-side access exists; keep `trading_access_enabled=false` until positive/negative acceptance passes.
+8. Add an executable MT5 source-only runtime/runner only if actually needed for deployment; never import/use `MT5Engine` or command-secret state.
+9. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
+10. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
+11. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
 Latest implementation GREEN: `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`.
-Latest documentation GREEN before live `0010`: `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`.
-Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified; current `AGENTS.md` head must be re-verified in CI before moving on.
+Latest verified runbook GREEN: `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`.
+Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. Current `AGENTS.md` synchronization head must be re-verified in CI before moving on.
 
 Next safe source work:
 - keep TradingView direct ingress disabled until real TLS client-certificate verification is proven account-side;
