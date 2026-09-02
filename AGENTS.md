@@ -217,6 +217,52 @@ TDD evidence:
 - Migration RED `33599559597`: 276/280; exactly those three gaps plus intentionally missing `0004`.
 - GREEN `33599671009` @ `1f846fd7eee536cdb5ccd79e1118d3d31e30e39d`: Worker/core, pure MT5 bridge, Wrangler dry-run all success.
 
+### Task 4 — Cloudflare Container/Telethon provider skeleton: GREEN
+
+Implemented under TDD before Queue wiring:
+
+- deterministic one-session/one-container provider identity;
+- enabled/unconfigured lifecycle behavior;
+- idempotent restart and sanitized common health status;
+- Python Telethon listener core with restored session, auto reconnect, handler registration before catch-up, multi-chat filtering, outgoing-message suppression, Telegram native identity, bounded non-blocking handoff queue, and sanitized health;
+- Python MTProto listener tests are now a required CI gate alongside Worker/core, MT5 bridge, and Wrangler dry-run.
+
+First-party listener credentials remain runtime-only and are never exposed in status output.
+
+### Task 5 — Cloudflare Queue → signed V1 reliability path: GREEN
+
+Files:
+
+- `cloudflare-v2/src/sources/source_event_queue.js`
+- `cloudflare-v2/src/sources/source_queue_consumer.js`
+- `cloudflare-v2/src/sources/source_queue_runtime.js`
+- `cloudflare-v2/src/v1_entry.js`
+- `cloudflare-v2/wrangler.toml`
+- corresponding Queue/runtime/entrypoint/config tests.
+
+Behavior:
+
+- first-party listener/runtime hands off compact native events without receiving/decrypting the Trading source HMAC secret;
+- Worker Queue consumer resolves the active source in Supabase and decrypts its source secret server-side only;
+- exact canonical V1 body is signed inside the Worker and dispatched through the existing `/api/v1/events` handler;
+- Queue success or persistent V1 duplicate acknowledgment causes message `ack()`;
+- inactive/unknown source, missing runtime configuration, or downstream V1 failure causes message `retry()`;
+- one Queue batch reuses one Supabase/store context;
+- Worker exposes native Cloudflare `queue()` handler independently from legacy `fetch()` and `scheduled()` routes;
+- Wrangler binds producer `SOURCE_EVENT_QUEUE` to `mkety-trading-source-events`;
+- consumer uses low-latency `max_batch_size=5`, `max_batch_timeout=1`, bounded `max_retries=8`, and DLQ `mkety-trading-source-events-dlq`;
+- no broker/destination behavior changed and real-money execution remains disabled.
+
+TDD/verification evidence:
+
+- RED `33602378306`: 289/290; only missing Queue consumer module.
+- RED `33602515079`: 291/292; only missing Queue runtime module.
+- GREEN `33602689542` @ `e53ae3489adf2395d5b72ea089a1eb30742463ef`: Worker/core, MT5 bridge, MTProto Python listener, Wrangler all success.
+- RED after adding Worker queue contract: 293/295; exactly missing `worker.queue` behavior.
+- GREEN `33602885866` @ `1e8dd3d40e00094bd8f9e0b04fbf8f5207f420c8`: all four CI gates success.
+- Queue binding RED `33602954804`: 295/297; only missing Wrangler Queue producer/consumer blocks.
+- GREEN `33603127779` @ `837190d63f780f7c72f477ed5a1accb84d20071c`: Worker/core, pure MT5 bridge, pure MTProto listener, and Wrangler dry-run all success.
+
 ## Shared Supabase boundary
 
 There is no Supabase development branch. Existing free-tier Mkety Supabase is used with strict Trading-owned isolation.
@@ -250,7 +296,7 @@ Every meaningful head must pass:
 1. Node Worker/trading-core tests;
 2. pure MT5 bridge tests;
 3. Wrangler dry-run;
-4. MTProto Python/container tests once introduced.
+4. MTProto Python/container tests.
 
 Recent exact GREEN checkpoints:
 
@@ -259,6 +305,9 @@ Recent exact GREEN checkpoints:
 - `33598900292` @ `215c136a0ed697aac8f00c241afbbb6fa7bb2b16`
 - `33599074398` @ `0d6c4572bd250dca18bd7bd6b1558fd7d9946313`
 - `33599671009` @ `1f846fd7eee536cdb5ccd79e1118d3d31e30e39d`
+- `33602689542` @ `e53ae3489adf2395d5b72ea089a1eb30742463ef`
+- `33602885866` @ `1e8dd3d40e00094bd8f9e0b04fbf8f5207f420c8`
+- `33603127779` @ `837190d63f780f7c72f477ed5a1accb84d20071c`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -272,7 +321,7 @@ Cloudflare Container MTProto E2E later requires:
 
 - Container binding/runtime configuration;
 - Telegram API ID/hash/session bootstrap through runtime secrets only;
-- Queue or internal signed-V1 delivery binding;
+- Queue/internal trusted delivery boundary;
 - non-live source provider record;
 - Telegram test account/channel for reconnect/catch-up/soak testing.
 
@@ -280,16 +329,16 @@ cTrader and MT5 real demo acceptance still require their existing demo-only cred
 
 ## Current development priority
 
-1. **Task 4:** Cloudflare Container MTProto provider contract + Telethon listener skeleton + health/persistence/Docker under TDD.
-2. Task 5: reliable Queue/signed-V1 handoff and recovery/checkpoint semantics.
-3. Task 6: harden pure DO+mtcute alternate provider using the same Telegram native identity/health contract.
-4. Task 7: external MTProto + MT5 + cTrader + TradingView + custom source coexistence/validation.
-5. Task 8: Zitadel-authorized source admin/default/status APIs.
-6. Task 9: non-live acceptance, long-running MTProto reconnect/soak harness, runbook and CI expansion.
+1. Wire Cloudflare Container/Telethon listener to the trusted `SOURCE_EVENT_QUEUE` producer boundary without source HMAC secrets in the listener runtime.
+2. Add external MTProto direct signed-V1 source runtime.
+3. Complete day-1 TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
+4. Harden pure DO+mtcute alternate provider using the same Telegram native identity/health contract.
+5. Add Zitadel-authorized source admin/default/status APIs.
+6. Add non-live multi-source acceptance, long-running MTProto reconnect/soak harness, runbook and CI expansion.
 7. External staging: review/apply Trading-owned migrations `0003` + `0004`, configure non-live Worker/Container/source secrets, then signed V1 + MTProto soak acceptance.
 8. cTrader/MT5 real demo probes/lifecycles only behind existing explicit gates.
 9. Tiny controlled live only after all static/source-provider/broker-demo acceptance is green.
 
 ## Exact next safe starting point
 
-For Task 4, write intentional RED tests for a Cloudflare Container MTProto provider lifecycle where an unconfigured provider is inert, one enabled Telegram session maps to exactly one container runtime, status/health is sanitized, restart is idempotent, and no credentials are returned. Separately write Python unit tests against a mocked Telethon client proving one session can receive multiple configured chats, outgoing messages are ignored, native `(chat_id,message_id)` identity is preserved, downstream delivery does not block the receive handler, and session/reconnect health state is restart-safe. Only after those exact REDs add Container/Telethon production code.
+Define an intentional RED for the trusted first-party Container handoff: a compact listener-native Telegram event must cross a Worker-controlled boundary, be enqueued through `SOURCE_EVENT_QUEUE`, preserve `(accountScope, chatId, messageId, reply/thread/edit)` identity, never require/return the source HMAC secret, and fail/retry safely when the Queue binding is unavailable. Then implement the minimal internal handoff controller and verify all four CI gates before advancing to external MTProto and the remaining day-one source adapters.
