@@ -1,6 +1,5 @@
-import { Container } from '@cloudflare/containers';
-
 const RUNTIME_STATE_KEY = 'mtproto_runtime_state_v1';
+const HEALTH_PORT = 8080;
 
 function requiredString(value, name) {
   const normalized = String(value ?? '').trim();
@@ -58,10 +57,11 @@ function publicState(state = {}, running = false) {
   };
 }
 
-export class MtprotoContainerRuntime extends Container {
-  defaultPort = 8080;
-  requiredPorts = [8080];
-  sleepAfter = '10m';
+export class MtprotoContainerRuntime {
+  constructor(ctx, env = {}) {
+    this.ctx = ctx;
+    this.env = env;
+  }
 
   async _loadState() {
     return (await this.ctx.storage.get(RUNTIME_STATE_KEY)) || {};
@@ -89,6 +89,29 @@ export class MtprotoContainerRuntime extends Container {
     return identity;
   }
 
+  _startContainer(envVars) {
+    // Low-level Container API gives this stateful DO direct lifecycle control.
+    // Secrets exist only in the start call/environment and are never stored in
+    // Durable Object storage or returned from runtimeStatus().
+    this.ctx.container.start({
+      env: envVars,
+      enableInternet: true,
+    });
+  }
+
+  async _probeHealth() {
+    if (!this.ctx.container.running) return null;
+    try {
+      const port = this.ctx.container.getTcpPort(HEALTH_PORT);
+      const response = await port.fetch('http://container/health', { method: 'GET' });
+      if (!response.ok) return null;
+      const body = await response.json();
+      return body && typeof body === 'object' ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
   async ensureStarted(input = {}) {
     const identity = await this._bindIdentity(input);
     const current = await this._loadState();
@@ -102,7 +125,7 @@ export class MtprotoContainerRuntime extends Container {
         status: 'STARTING',
         connected: false,
       });
-      await this.startAndWaitForPorts({ startOptions: { envVars } });
+      this._startContainer(envVars);
     } else if (current.desiredState !== 'RUNNING') {
       await this._saveState({ ...current, identity, desiredState: 'RUNNING' });
     }
@@ -118,7 +141,9 @@ export class MtprotoContainerRuntime extends Container {
       status: 'STOPPING',
       connected: false,
     });
-    if (this.ctx.container.running) await this.stop();
+    if (this.ctx.container.running) {
+      await this.ctx.container.destroy('MTPROTO_RUNTIME_STOPPED');
+    }
     const stopped = await this._loadState();
     await this._saveState({ ...stopped, status: 'DISABLED', connected: false });
     return this.runtimeStatus();
@@ -137,54 +162,36 @@ export class MtprotoContainerRuntime extends Container {
       connected: false,
       restartCount: Number(current.restartCount || 0) + 1,
     });
-    if (this.ctx.container.running) await this.stop();
-    await this.startAndWaitForPorts({ startOptions: { envVars } });
+    if (this.ctx.container.running) {
+      await this.ctx.container.destroy('MTPROTO_RUNTIME_RESTART');
+    }
+    this._startContainer(envVars);
     return this.runtimeStatus();
   }
 
   async runtimeStatus() {
-    const state = await this._loadState();
-    return publicState(state, this.ctx.container.running);
-  }
-
-  async onStart() {
     const current = await this._loadState();
-    await this._saveState({
-      ...current,
-      status: 'HEALTHY',
-      connected: false,
-      lastHeartbeatAt: new Date().toISOString(),
-    });
-  }
+    const running = Boolean(this.ctx.container.running);
+    const health = running ? await this._probeHealth() : null;
 
-  async onStop() {
-    const current = await this._loadState();
-    const intentional = current.desiredState === 'STOPPED';
-    await this._saveState({
-      ...current,
-      status: intentional ? 'DISABLED' : 'DEGRADED',
-      connected: false,
-      lastHeartbeatAt: new Date().toISOString(),
-    });
-  }
-
-  async onError() {
-    const current = await this._loadState();
-    await this._saveState({
-      ...current,
-      status: 'ERROR',
-      connected: false,
-      lastHeartbeatAt: new Date().toISOString(),
-    });
-  }
-
-  async onActivityExpired() {
-    const current = await this._loadState();
-    if (current.desiredState !== 'RUNNING') {
-      await this.stop();
+    if (health) {
+      const next = {
+        ...current,
+        status: health.status === 'HEALTHY' ? 'HEALTHY' : String(health.status || 'DEGRADED'),
+        connected: Boolean(health.connected),
+        lastHeartbeatAt: new Date().toISOString(),
+        lastEventAt: health.last_event_at ?? current.lastEventAt ?? null,
+      };
+      await this._saveState(next);
+      return publicState(next, running);
     }
-    // Enabled MTProto listeners are intentionally long-lived. The container's
-    // local filesystem is never treated as durable state; identity/lifecycle
-    // state lives in this Durable Object and Telegram catch-up handles replay.
+
+    if (!running && current.desiredState === 'RUNNING') {
+      const next = { ...current, status: 'DEGRADED', connected: false };
+      await this._saveState(next);
+      return publicState(next, false);
+    }
+
+    return publicState(current, running);
   }
 }
