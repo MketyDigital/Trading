@@ -32,8 +32,8 @@ function createHarness({ sources, statuses = {}, restartResults = {}, now = '202
   };
   const store = {
     async listRecoverableSources() { return sources; },
-    async updateRecoveryState(sourceId, patch) {
-      updates.push({ sourceId, patch });
+    async updateRecoveryState(workspaceId, sourceId, patch) {
+      updates.push({ workspaceId, sourceId, patch });
     },
   };
   const supervisor = createMtprotoRecoverySupervisor({
@@ -58,6 +58,7 @@ test('healthy runtime resets only its own durable recovery state and does not re
   assert.equal(result.restarted, 0);
   assert.deepEqual(restarts, []);
   assert.deepEqual(updates, [{
+    workspaceId: 'workspace-a',
     sourceId: 'source-a',
     patch: { recoveryAttemptCount: 0, recoveryNextAttemptAt: null, lastRecoveryErrorCode: null },
   }]);
@@ -76,6 +77,7 @@ test('degraded runtime restarts exact tenant source without caller bootstrap and
   assert.equal(result.restarted, 1);
   assert.deepEqual(restarts, [{ workspaceId: 'workspace-a', sourceId: 'source-a' }]);
   assert.deepEqual(updates, [{
+    workspaceId: 'workspace-a',
     sourceId: 'source-a',
     patch: {
       recoveryAttemptCount: 0,
@@ -111,6 +113,7 @@ test('failed recovery persists bounded backoff and does not block another worksp
     { workspaceId: 'workspace-b', sourceId: 'source-b' },
   ]);
   assert.deepEqual(updates[0], {
+    workspaceId: 'workspace-a',
     sourceId: 'source-a',
     patch: {
       recoveryAttemptCount: 1,
@@ -119,6 +122,7 @@ test('failed recovery persists bounded backoff and does not block another worksp
       lastRecoveryErrorCode: 'MTPROTO_RECOVERY_FAILED',
     },
   });
+  assert.equal(updates[1].workspaceId, 'workspace-b');
   assert.equal(updates[1].sourceId, 'source-b');
   assert.equal(updates[1].patch.recoveryAttemptCount, 0);
 });
