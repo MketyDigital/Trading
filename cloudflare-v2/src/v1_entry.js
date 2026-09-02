@@ -2,6 +2,7 @@ import legacyWorker from './index.js';
 import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
+import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 
@@ -57,6 +58,16 @@ function retiredLegacyAdminResponse() {
   }), {
     status: 410,
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
+  });
+}
+
+function notFoundResponse() {
+  return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), {
+    status: 404,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
   });
 }
 
@@ -122,6 +133,7 @@ export function createTradingV1Entrypoint({
   shadowBuilder = buildCanonicalShadow,
   eventsHandler = handleV1EventsRequest,
   adminHandler = handleV1AdminRequest,
+  internalSourceHandler = handleInternalSourceEventRequest,
   queueRuntime = null,
 } = {}) {
   return {
@@ -135,6 +147,12 @@ export function createTradingV1Entrypoint({
       }
       if (url.pathname === '/api/v1/events') {
         return eventsHandler(request, env, { ctx });
+      }
+      if (url.pathname === '/api/v1/internal/source-event') {
+        return internalSourceHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/internal/')) {
+        return notFoundResponse();
       }
       if (url.pathname.startsWith('/api/v1/admin/')) {
         return adminHandler(request, env, { ctx });
