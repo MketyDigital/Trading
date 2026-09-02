@@ -31,7 +31,7 @@ export function verifyTradingViewTransport(request, env = {}) {
   if (allowlist.size === 0) return FAILURE;
 
   const tls = request?.cf?.tlsClientAuth;
-  if (!tls || tls.certPresented !== '1' || tls.certVerified !== 'SUCCESS') return FAILURE;
+  if (!tls || tls.certPresented !== '1') return FAILURE;
 
   const observed = normalizeFingerprint(tls.certFingerprintSHA256);
   if (!observed || !allowlist.has(observed)) return FAILURE;
