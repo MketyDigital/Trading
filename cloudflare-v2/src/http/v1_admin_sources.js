@@ -1,4 +1,5 @@
 import { normalizeProviderRecord } from '../sources/provider_registry.js';
+import { hasTradingPermission } from '../security/trading_permissions.js';
 
 const SOURCE_SELECT = [
   'id', 'workspace_id', 'source_type', 'source_instance_id', 'display_name', 'is_active',
@@ -92,6 +93,10 @@ async function readJson(request) {
   }
 }
 
+function can(authorization, permission) {
+  return hasTradingPermission(authorization?.membership?.role, permission);
+}
+
 export function createAdminSourceStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
@@ -166,6 +171,9 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
     if (request.method !== 'GET') {
       return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET' });
     }
+    if (!can(authorization, 'sources.read')) {
+      return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    }
     try {
       const sources = await sourceStore.listSources(workspaceId);
       return json({ ok: true, workspaceId, sources: (sources || []).map(publicSource) });
@@ -183,6 +191,9 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
     if (request.method !== 'GET') {
       return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET' });
     }
+    if (!can(authorization, 'sources.read')) {
+      return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    }
     try {
       const source = await sourceStore.getSource(workspaceId, sourceId);
       if (!source) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
@@ -194,6 +205,9 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
 
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+  }
+  if (!can(authorization, 'sources.write')) {
+    return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
 
   if (action === 'default') {
