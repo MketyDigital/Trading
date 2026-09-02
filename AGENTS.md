@@ -125,6 +125,7 @@ No real external Worker acceptance, real broker demo order, or real Cloudflare C
 13. **External MTProto signed-V1 HTTPS sink — GREEN.** `external/mtproto-adapter/v1_sink.py` uses compact deterministic JSON and the existing `v1:<timestamp_ms>:<raw_json_body>` HMAC-SHA256 contract, refreshes timestamp/signature without mutating semantic body bytes, treats accepted and persistent-duplicate responses as terminal success, classifies network/429/5xx as retryable and permanent auth/policy/validation failures as non-retryable, and sanitizes errors so signing material/source secrets cannot leak. The external adapter Python suite is now part of the mandatory CI Python gate. GREEN implementation checkpoint `d20bf83…`.
 14. **Portable external Telethon runtime — GREEN.** `external/mtproto-adapter/adapter.py`, `app.py`, `health.py`, and `requirements.txt` provide a VM/VPS/container-portable Telegram transport. Each adapter instance owns its own client/session, bounded queue, retry/backoff state, sink, filtering and health; optional `ALLOWED_CHAT_IDS` is transport-only and cannot authorize Mkety server policy. Tests prove multiple chats, outgoing suppression, native/thread/edit/media parity, non-blocking receive, bounded queue, same-event retries, permanent rejection continuation, duplicate success, two-adapter isolation, clean cancellation, secret-free health and sanitized fatal CLI output. Full GREEN `33625107407` @ `9fb58507c2797c703c967d77648e6c7e5a1d50a0`.
 15. **External MTProto cross-provider replay + two-workspace isolation acceptance — GREEN with no production change required.** `external_mtproto_replay_acceptance.test.mjs` proves Container-first/external-replay and external-first/Container-replay collapse to one workspace-scoped native event while a genuinely different message remains distinct and invalid external auth cannot reserve/suppress identity. `external_mtproto_tenant_isolation.test.mjs` proves independent credentials/policies, identical Telegram native identity remains distinct across workspaces, caller workspace overrides cannot move events, one source's unauthorized/disabled/failing state does not alter the other workspace, and source policy/config is not read across tenants. Existing authenticated/workspace-scoped idempotency already satisfied this acceptance layer. GREEN `33625278355` @ `c6c2c14fb3c389b23062d83a1a2240875dd97891` across all four gates.
+16. **External MTProto CI contract + operator/staging documentation — GREEN.** `tests/external_mtproto_ci_contract.test.mjs` statically protects both Container and external Python test invocations. No workflow production change was needed because the external suite had already been added during the signed-V1 sink batch. `external/mtproto-adapter/README.md` documents source-specific credential scope, local filtering versus server authorization, replay/idempotency, retry isolation, rotation/revocation, non-live acceptance, and explicit no-live/no-broker enablement. `docs/STAGING_V1_RUNBOOK.md` now contains the external provider trust boundary and non-live staging procedure. Full exact-head verification GREEN `33626149089` @ `e2bc271842a5df1425f3fb879ba0c413bfb180e0`: Node core, MT5 bridge, Container + external MTProto Python suites, and Wrangler dry-run all pass. The external signed-V1 adapter implementation plan is complete at the code/static-documentation level; real VM soak remains a separate external-runtime acceptance gate.
 
 ## Supabase boundary
 
@@ -161,6 +162,7 @@ Recent exact GREEN checkpoints:
 - `33623854041` @ `904690f4c97208b1306a48179aba6bb8b689bd48`
 - `33625107407` @ `9fb58507c2797c703c967d77648e6c7e5a1d50a0`
 - `33625278355` @ `c6c2c14fb3c389b23062d83a1a2240875dd97891`
+- `33626149089` @ `e2bc271842a5df1425f3fb879ba0c413bfb180e0`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -172,15 +174,14 @@ Container MTProto E2E later requires: review/apply migrations `0003`-`0006`; dep
 
 ## Current priority
 
-1. Finish **External MTProto Task 5/6**: explicit CI-contract test, README, staging runbook update, full verification and final handoff checkpoint.
-2. Complete TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
-3. Harden pure DO+mtcute alternate provider.
-4. Add Zitadel-authorized source admin/default/status APIs.
-5. Add non-live multi-source acceptance, reconnect/soak harness, runbook/CI expansion.
-6. External staging configuration and signed V1 + MTProto soak acceptance.
-7. Broker demo probes/lifecycles only behind explicit demo gates.
-8. Tiny controlled live only after all acceptance is green.
+1. Continue the broader multi-source plan at **Task 7: External MTProto + MT5 + cTrader + TradingView + Custom Source Registration** with strict per-provider/per-workspace validation and coexistence isolation.
+2. Harden pure DO+mtcute alternate provider (broader plan Task 6) without making it a platform-wide dependency.
+3. Add Zitadel-authorized source admin/default/status APIs.
+4. Add non-live multi-source acceptance, reconnect/soak harness, runbook/CI expansion.
+5. External staging configuration and signed V1 + MTProto soak acceptance when runtime credentials are available.
+6. Broker demo probes/lifecycles only behind explicit demo gates.
+7. Tiny controlled live only after all acceptance is green.
 
 ## Exact next safe starting point
 
-Continue `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md` at **Task 5: CI Gate and External Adapter Operating Documentation**. The external Python suite is already executed by the workflow from the earlier TDD batch, so first add the static CI-contract test and confirm whether it is already GREEN against the current workflow; if it passes without production/workflow change, record that no CI glue is needed. Then create the external adapter README and update `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md` with configuration names only, trust-boundary/tenant-isolation semantics, non-live test procedure, and no broker/live enablement. After Task 5, run the full verification matrix, inspect exact branch-head CI, update this `AGENTS.md` again, and stop before deployment/merge/live execution.
+Continue `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md` at **Task 7: External MTProto + MT5 + cTrader + TradingView + Custom Source Registration**. First write `tests/multi_source_coexistence.test.mjs` as an intentional RED for provider-specific non-secret configuration validation. One workspace must be able to enable Container MTProto, external MTProto, MT5 source bridge, cTrader source, TradingView webhook, and custom signed API simultaneously; invalid/missing configuration for one provider must not make sibling providers unavailable or mutate their defaults/state. Implement only `src/sources/provider_config_validation.js` or the smallest required glue after observing the RED. Preserve source/destination separation, encrypted-secret boundaries, and per-workspace/per-provider failure isolation. After the meaningful GREEN checkpoint, update this `AGENTS.md` again before moving on.
