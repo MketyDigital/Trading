@@ -75,8 +75,8 @@ Provider types:
 - Workspace roles are owner/admin/operator/viewer; unknown fails closed. No workspace role grants `broker.execute`.
 - Trading authorization must never query/depend on the MKSaaS user database/shared Mkety workspace table.
 - Keep `trading_access_enabled=false` until real non-live Zitadel acceptance passes.
-- Live Supabase Trading migrations through `0009_trading_workspace_memberships` are applied/verified.
-- Migration `0010_tradingview_public_source_handle.sql` exists in code but is **not** considered live-applied until Supabase is separately applied and verified. It adds only a non-secret `public_source_handle` routing identifier plus a partial unique index.
+- Live Supabase Trading migrations through `trading_0010_tradingview_public_source_handle` are applied/verified as of 2026-09-02. Ledger version for `0010` is `20260902184215`.
+- `0010` adds only nullable `source_connections.public_source_handle TEXT` plus unique partial index `idx_source_connections_public_source_handle`; `anon` and `authenticated` still have no `source_connections` table privileges, while `service_role` retains required access.
 
 ## MTProto availability contract
 
@@ -172,13 +172,15 @@ The source path is physically/logically separate from execution-oriented `bridge
 
 No DB migration, destination coupling, broker command modification, execution enablement, or live-money change was introduced by cTrader/MT5/custom source work.
 
-## Lightweight TradingView direct ingress — CODE GREEN 2026-09-02
+## Lightweight TradingView direct ingress — CODE + DB GREEN 2026-09-02
 
 The approved direct TradingView trust boundary is implemented in code and is independent of signed external V1 HMAC clients.
 
 - Spec: `docs/superpowers/specs/2026-09-02-lightweight-tradingview-direct-ingress-design.md`.
 - Route: `POST /api/v1/webhooks/tradingview/:public_source_handle`.
-- Storage migration: `cloudflare-v2/db/migrations/0010_tradingview_public_source_handle.sql`; adds `public_source_handle TEXT` plus a partial unique index. **Code exists; live Supabase application is not yet verified.**
+- Storage migration: `cloudflare-v2/db/migrations/0010_tradingview_public_source_handle.sql`; live Supabase ledger records `trading_0010_tradingview_public_source_handle` version `20260902184215`.
+- Live schema verification: `public_source_handle` is nullable `text`; `idx_source_connections_public_source_handle` is a unique partial btree index where handle is non-null.
+- Privilege verification after migration: `anon`/`authenticated` have no table privileges on `source_connections`; `service_role` retains required table privileges. Security Advisor adds no TradingView-specific warning; existing Trading-owned RLS/no-client-policy INFO notices remain intentional.
 - Source lookup: `getActiveTradingViewSourceByPublicHandle()` resolves only exact active `source_family='tradingview'` + `provider_type='tradingview_webhook'`; it does not decrypt a source secret.
 - Transport gate: direct ingress is inert unless `TRADINGVIEW_DIRECT_INGRESS_ENABLED` is explicitly enabled, a SHA-256 client-certificate fingerprint allowlist is configured, and Cloudflare `request.cf.tlsClientAuth` reports a presented/verified certificate with an exact allowed fingerprint.
 - Ordinary caller headers are never transport authority. There is no reusable secret in the webhook URL or alert body.
@@ -194,6 +196,8 @@ TDD/reconciliation evidence:
 - During plan execution, duplicate tests accidentally assumed alternate names `webhook_handle` / `getActiveTradingViewByHandle`; exact RED `33668236026` @ `7cd66319e312856bceb5255ff0cbb15ecf5930d0` produced 490/493 Node PASS with exactly three duplicate-contract failures. Existing TradingView transport/handler/acceptance/routing tests were already GREEN in that run.
 - Root cause was test-contract duplication, not production failure. Tests were aligned to the existing approved `public_source_handle` / `getActiveTradingViewSourceByPublicHandle()` contract; no production/schema duplication was added.
 - Reconciliation GREEN `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`, all mandatory gates successful.
+- First TradingView handoff-doc GREEN `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`, all mandatory gates successful.
+- Live Supabase `0010` application/verification completed after that code checkpoint; no source rows, credentials, broker settings, or execution state were created by the migration.
 
 ## CI rule
 
@@ -210,16 +214,17 @@ Recent exact GREEN checkpoints:
 - `33656669204` @ `5f85bdd209aae1e3ac7461a16a0fe73bc56514e8`
 - `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`
 - `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`
+- `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify this `AGENTS.md` TradingView progress head in all four CI gates.
-2. Do **not** duplicate the TradingView schema/lookup/transport/handler already present; continue from the existing `public_source_handle` contract.
-3. Apply and verify migration `0010_tradingview_public_source_handle.sql` in the Trading Supabase project before any real direct TradingView webhook test.
-4. Verify real Cloudflare/TradingView TLS client-certificate metadata/fingerprint behavior non-live before enabling `TRADINGVIEW_DIRECT_INGRESS_ENABLED`; remain fail-closed otherwise.
-5. Update `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`/runbook if any account-side TradingView staging steps are added.
+1. Verify this post-Supabase `AGENTS.md` head in all four CI gates.
+2. Keep direct TradingView ingress disabled until real Cloudflare/TradingView TLS client-certificate metadata/fingerprint behavior is proven non-live.
+3. When Cloudflare account-side access is available, inspect names/status only first; do not insert secrets into GitHub/logs/docs.
+4. After transport proof, create one non-execution TradingView source row with a unique public handle only for controlled staging acceptance; do not attach a broker/destination or enable trade execution as part of ingress verification.
+5. Update `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`/runbook with verified account-side TradingView staging evidence.
 6. Add an executable MT5 source-only runtime/runner only if needed for deployment; never import/use `MT5Engine` or command-secret state.
 7. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when an account-side connector/path is available.
 8. Run real non-live Zitadel positive/negative acceptance when environment access exists.
@@ -231,9 +236,11 @@ Always inspect the exact newest branch-head run before calling the branch green.
 ## Exact next safe starting point
 
 Latest implementation GREEN: `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`.
+Latest documentation GREEN before live `0010`: `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`.
+Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified; current `AGENTS.md` head must be re-verified in CI before moving on.
 
 Next safe source work:
-- keep TradingView direct ingress disabled until real TLS client-certificate verification and migration `0010` are verified account-side;
+- keep TradingView direct ingress disabled until real TLS client-certificate verification is proven account-side;
 - keep TradingView source-only: public handle routes, server source record authorizes workspace/source, queue consumer owns signed V1 handoff;
 - never put reusable TradingView secrets in URL/query/body and never treat caller workspace/source/destination/execution fields as authority;
 - keep MT5/cTrader/custom ingress source-only;
