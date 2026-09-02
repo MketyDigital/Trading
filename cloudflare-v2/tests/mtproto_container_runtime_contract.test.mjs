@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const entry = await readFile(new URL('../src/v1_entry.js', import.meta.url), 'utf8');
+const runtime = await readFile(new URL('../src/sources/mtproto/container_runtime.js', import.meta.url), 'utf8');
 
 
 test('Cloudflare MTProto runtime is an explicitly bound stateful Container', () => {
@@ -16,9 +17,12 @@ test('Cloudflare MTProto runtime is an explicitly bound stateful Container', () 
 });
 
 
-test('Worker entry exports the Container Durable Object and installs official runtime dependency', () => {
-  assert.ok(pkg.dependencies?.['@cloudflare/containers']);
+test('Worker entry exports a direct Durable Object Container supervisor without Node-incompatible helper coupling', () => {
+  assert.equal(pkg.dependencies?.['@cloudflare/containers'], undefined);
   assert.match(entry, /export\s*\{\s*MtprotoContainerRuntime\s*\}\s*from\s*['"]\.\/sources\/mtproto\/container_runtime\.js['"]/);
+  assert.match(runtime, /this\.ctx\.container\.start\(/);
+  assert.match(runtime, /this\.ctx\.storage\.(get|put)\(/);
+  assert.doesNotMatch(runtime, /from\s+['"]@cloudflare\/containers['"]/);
 });
 
 
