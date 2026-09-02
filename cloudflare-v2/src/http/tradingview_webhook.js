@@ -5,6 +5,34 @@ import { createSourceEventQueue } from '../sources/source_event_queue.js';
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const FORBIDDEN_KEY = /(workspace|source(?:_connection)?(?:_id)?|destination|broker|execution|secret|token|password|credential|authorization|api[_-]?key|private[_-]?key)/i;
 
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function normalizeFingerprint(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^0-9a-f]/g, '');
+  return /^[0-9a-f]{64}$/.test(normalized) ? normalized : null;
+}
+
+function defaultProbeLogger(entry) {
+  console.info(entry);
+}
+
+function observeCertificateProbe(request, logger) {
+  const tls = request?.cf?.tlsClientAuth;
+  const certPresented = tls?.certPresented === '1';
+  const fingerprint = certPresented ? normalizeFingerprint(tls?.certFingerprintSHA256) : null;
+  logger({
+    event: 'TRADINGVIEW_CERT_PROBE',
+    certPresented,
+    fingerprintAvailable: Boolean(fingerprint),
+    certFingerprintSHA256: fingerprint,
+  });
+}
+
 function response(body, status, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -74,11 +102,17 @@ export async function handleTradingViewWebhookRequest(request, env = {}, {
   sourceStore = null,
   sourceQueue = null,
   supabaseFactory = defaultSupabaseFactory,
+  probeLogger = defaultProbeLogger,
   nowMs = () => Date.now(),
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 } = {}) {
   if (request.method !== 'POST') {
     return response({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+  }
+
+  if (enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED)) {
+    observeCertificateProbe(request, probeLogger);
+    return response({ ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' }, 403);
   }
 
   const transport = verifyTransport(request, env);
