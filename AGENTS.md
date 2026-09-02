@@ -13,6 +13,7 @@ Operational source of truth for `MketyDigital/Trading`. Read before changing the
 - TDD is mandatory: exact RED before production feature/bugfix code; full GREEN before completion claims.
 - Never paste/log/commit broker, database, auth, source, Telegram-session, provider, transport, signing, destination, or AI secrets.
 - Update this file after every meaningful implementation/testing/environment batch.
+- Cloudflare infrastructure/security design must use **Free-plan-compatible primitives as the baseline**. Workers Paid may provide capacity/performance benefits, but no Trading trust boundary may depend on Cloudflare Enterprise-only features such as BYOCA or Enterprise-only mTLS trust.
 
 ## Product / tenancy contract
 
@@ -182,15 +183,16 @@ The approved direct TradingView trust boundary is implemented in code and is ind
 - Live schema verification: `public_source_handle` is nullable `text`; `idx_source_connections_public_source_handle` is a unique partial btree index where handle is non-null.
 - Privilege verification after migration: `anon`/`authenticated` have no table privileges on `source_connections`; `service_role` retains required table privileges. Security Advisor adds no TradingView-specific warning; existing Trading-owned RLS/no-client-policy INFO notices remain intentional.
 - Source lookup: `getActiveTradingViewSourceByPublicHandle()` resolves only exact active `source_family='tradingview'` + `provider_type='tradingview_webhook'`; it does not decrypt a source secret.
-- Transport gate: direct ingress is inert unless `TRADINGVIEW_DIRECT_INGRESS_ENABLED` is explicitly enabled, a SHA-256 client-certificate fingerprint allowlist is configured, and Cloudflare `request.cf.tlsClientAuth` reports a presented/verified certificate with an exact allowed fingerprint.
+- Transport gate: direct ingress is inert unless `TRADINGVIEW_DIRECT_INGRESS_ENABLED` is explicitly enabled, a SHA-256 client-certificate fingerprint allowlist is configured, Cloudflare `request.cf.tlsClientAuth.certPresented === '1'`, and the Cloudflare-observed `certFingerprintSHA256` exactly matches the configured allowlist after normalization. `certVerified='SUCCESS'` is deliberately **not** required because relying on Cloudflare to trust TradingView's external CA through BYOCA would introduce an Enterprise-only dependency.
+- Cloudflare Free compatibility is mandatory for this trust boundary. Do not use BYOCA, Enterprise-only mTLS trust, or another Enterprise-only feature as a prerequisite. Workers Paid can be used for capacity but is not a security dependency.
 - Ordinary caller headers are never transport authority. There is no reusable secret in the webhook URL or alert body.
 - Handler requires stable `event_id`, enforces bounded body size/JSON shape, recursively strips workspace/source/destination/broker/execution/secret/token/password/credential/API-key/private-key authority fields, and queues only a source-native event.
 - Successful direct ingress returns `202 { ok: true, queued: true }`; queue/source failures are request-local and do not claim acceptance.
 - The queue consumer re-resolves the source server-side and uses the existing signed `/api/v1/events` path; direct ingress does not call interpretation, destination fan-out, broker adapters, or execution code directly.
 - Existing dynamic HMAC source auth remains byte-exact and independent.
 - Multiple TradingView handles/workspaces remain isolated; same native event ID is scoped by canonical source/workspace identity and one source failure cannot suppress a sibling.
-- Production enablement remains **blocked** until the real Cloudflare/TradingView client-certificate metadata and fingerprint behavior are verified non-live. Do not replace this with an IP-only or caller-header fallback.
-- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md` now contains the controlled TradingView environment sequence, spoof-rejection checks, source-isolation checks, duplicate checks, authority-stripping checks, and stop conditions.
+- Production enablement remains **blocked** until the real Cloudflare/TradingView client-certificate presentation and fingerprint behavior are verified non-live on the actual non-Enterprise deployment. If the Worker cannot observe a stable fingerprint for the TradingView-presented certificate, keep ingress disabled and redesign rather than weakening to IP-only or caller-header authentication.
+- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md` contains the controlled TradingView environment sequence, Free-plan constraint, spoof-rejection checks, source-isolation checks, duplicate checks, authority-stripping checks, and stop conditions.
 
 TDD/reconciliation evidence:
 - Approved spec head `5c007265c462c7f3aec856e900cf8d51e72df8b3` passed CI (`33660724964`, `33660718778`).
@@ -200,6 +202,8 @@ TDD/reconciliation evidence:
 - First TradingView handoff-doc GREEN `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`, all mandatory gates successful.
 - Post-Supabase handoff GREEN `33668981424` @ `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`, all mandatory gates successful.
 - Expanded non-live TradingView runbook GREEN `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`, all mandatory gates successful.
+- Free-compatible transport RED `33677097755` @ `1f5a04130097df8c20d9ba8843909926bcff21ef`: the new non-Enterprise cases failed exactly because production still required `certVerified='SUCCESS'`.
+- Free-compatible transport GREEN `33677199850` @ `6531589c3f5106cf5dddc91080feb34698d09716`: all four mandatory gates passed after removing only the Cloudflare CA-verification requirement while retaining certificate-presentation and exact SHA-256 fingerprint checks.
 - Live Supabase `0010` application/verification completed without creating source rows, credentials, broker settings, destinations, or execution state.
 
 ## CI rule
@@ -220,31 +224,33 @@ Recent exact GREEN checkpoints:
 - `33668686605` @ `54a6155ede8476abcf4d4debe426abbdc390f00c`
 - `33668981424` @ `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`
 - `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`
+- `33677199850` @ `6531589c3f5106cf5dddc91080feb34698d09716`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify this final TradingView `AGENTS.md` synchronization head in all four CI gates.
-2. Keep direct TradingView ingress disabled until real Cloudflare/TradingView TLS client-certificate metadata/fingerprint behavior is proven non-live.
-3. No Cloudflare or Zitadel account connector/plugin is available in the current session; do not claim account-side verification or invent credentials.
-4. When Cloudflare account-side access becomes available, inspect Worker/Queue/binding names/status first; do not expose secret values.
-5. After transport proof, create one non-execution TradingView source row with a unique public handle only for controlled staging acceptance; do not attach a broker/destination or enable trade execution as part of ingress verification.
-6. Run the TradingView acceptance sequence in `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`, then immediately disable the direct-ingress switch again unless a separate reviewed staging decision says otherwise.
-7. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when account-side access exists; keep `trading_access_enabled=false` until positive/negative acceptance passes.
-8. Add an executable MT5 source-only runtime/runner only if actually needed for deployment; never import/use `MT5Engine` or command-secret state.
-9. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
-10. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
-11. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
+1. Verify the final Free-compatible TradingView handoff synchronization head in all four CI gates.
+2. Keep direct TradingView ingress disabled until real Cloudflare/TradingView TLS client-certificate presentation/fingerprint behavior is proven non-live on the actual non-Enterprise deployment.
+3. No Cloudflare Enterprise-only feature may be introduced. In particular, do not use BYOCA or Enterprise mTLS trust; Free-plan-compatible primitives are the baseline.
+4. No Cloudflare or Zitadel account connector/plugin is available in the current session; do not claim account-side verification or invent credentials.
+5. When Cloudflare account-side access becomes available, inspect Worker/Queue/binding names/status first; do not expose secret values.
+6. After transport proof, create one non-execution TradingView source row with a unique public handle only for controlled staging acceptance; do not attach a broker/destination or enable trade execution as part of ingress verification.
+7. Run the TradingView acceptance sequence in `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`, then immediately disable the direct-ingress switch again unless a separate reviewed staging decision says otherwise.
+8. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when account-side access exists; keep `trading_access_enabled=false` until positive/negative acceptance passes.
+9. Add an executable MT5 source-only runtime/runner only if actually needed for deployment; never import/use `MT5Engine` or command-secret state.
+10. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
+11. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
+12. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Latest implementation GREEN: `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`.
-Latest verified runbook GREEN: `33669172317` @ `deb9b3ee853e5475e454cef1eb75825f00d8be29`.
-Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. Current `AGENTS.md` synchronization head must be re-verified in CI before moving on.
+Latest implementation GREEN: `33677199850` @ `6531589c3f5106cf5dddc91080feb34698d09716`.
+Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. The final documentation synchronization head must be re-verified in CI before moving on.
 
 Next safe source work:
-- keep TradingView direct ingress disabled until real TLS client-certificate verification is proven account-side;
+- keep TradingView direct ingress disabled until real TLS client-certificate presentation/fingerprint behavior is proven account-side on the non-Enterprise deployment;
+- if Free-compatible Cloudflare does not expose the required real TradingView certificate fingerprint to the Worker, redesign the trust boundary rather than introducing Enterprise or weakening to IP-only/caller-header authentication;
 - keep TradingView source-only: public handle routes, server source record authorizes workspace/source, queue consumer owns signed V1 handoff;
 - never put reusable TradingView secrets in URL/query/body and never treat caller workspace/source/destination/execution fields as authority;
 - keep MT5/cTrader/custom ingress source-only;
