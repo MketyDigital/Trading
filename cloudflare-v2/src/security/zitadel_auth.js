@@ -108,7 +108,7 @@ function orgIdsFromRoleValue(value) {
 export function extractZitadelRoleBindings(claims = {}, { projectId } = {}) {
   const general = claims['urn:zitadel:iam:org:project:roles'];
   const projectSpecific = projectId ? claims[`urn:zitadel:iam:org:project:${projectId}:roles`] : null;
-  const source = projectSpecific || general || {};
+  const source = projectId ? (projectSpecific ?? {}) : (general ?? {});
   const result = {};
 
   if (Array.isArray(source)) {
