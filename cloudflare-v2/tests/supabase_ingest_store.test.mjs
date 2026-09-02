@@ -10,15 +10,24 @@ function query(result) {
   return chain;
 }
 
-test('loads only active source connection and decrypts its HMAC secret', async () => {
+test('loads active source connection, non-secret config and decrypts only its HMAC secret', async () => {
   const calls = [];
+  let selectedColumns = '';
+  const sourceResult = { data: {
+    id: 'src-1', workspace_id: 'ws-1', source_type: 'telegram_mtproto', source_instance_id: 'vm-a',
+    source_family: 'telegram', provider_type: 'external_mtproto', external_identity: 'telegram-account-42',
+    config: { chat_acceptance_mode: 'allowlist', allowed_chat_ids: ['-10012345'] },
+    secret_ciphertext: 'v1.fake', is_active: true,
+  }, error: null };
   const supabase = {
     from(table) {
       calls.push(table);
-      return query({ data: {
-        id: 'src-1', workspace_id: 'ws-1', source_type: 'telethon', source_instance_id: 'vm-a',
-        secret_ciphertext: 'v1.fake', is_active: true,
-      }, error: null });
+      const chain = {
+        select(columns) { selectedColumns = columns; return chain; },
+        eq() { return chain; },
+        maybeSingle: async () => sourceResult,
+      };
+      return chain;
     },
   };
   const stores = createSupabaseIngestStores(supabase, {
@@ -28,6 +37,9 @@ test('loads only active source connection and decrypts its HMAC secret', async (
   assert.equal(source.id, 'src-1');
   assert.equal(source.workspace_id, 'ws-1');
   assert.equal(source.secret, 'v1.fake:master:plain');
+  assert.deepEqual(source.config, { chat_acceptance_mode: 'allowlist', allowed_chat_ids: ['-10012345'] });
+  assert.match(selectedColumns, /(?:^|,)config(?:,|$)/);
+  assert.doesNotMatch(selectedColumns, /telegram_session|api_hash|api_id/i);
   assert.deepEqual(calls, ['source_connections']);
 });
 
