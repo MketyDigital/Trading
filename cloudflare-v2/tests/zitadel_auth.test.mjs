@@ -99,3 +99,41 @@ test('authorizes only required role for the workspace bound zitadel organization
     requiredRole: 'trading_access', workspace: { id: 'ws-2', zitadelOrgId: 'org-unpaid' },
   }).reason, 'ROLE_NOT_GRANTED_FOR_WORKSPACE_ORG');
 });
+
+test('configured Zitadel project id never falls back to a generic current-project role claim', () => {
+  const claims = {
+    sub: 'user-1',
+    'urn:zitadel:iam:org:project:roles': {
+      trading_access: { 'org-paid': 'paid.example' },
+    },
+  };
+
+  const bindings = extractZitadelRoleBindings(claims, { projectId: 'trading-project' });
+  assert.deepEqual(bindings, {});
+  assert.equal(authorizeTradingClaims(claims, {
+    projectId: 'trading-project',
+    requiredRole: 'trading_access',
+    workspace: { id: 'ws-1', zitadelOrgId: 'org-paid' },
+  }).reason, 'ROLE_NOT_GRANTED_FOR_WORKSPACE_ORG');
+});
+
+test('configured Zitadel project id authorizes only from its matching project-specific role claim', () => {
+  const claims = {
+    sub: 'user-1',
+    'urn:zitadel:iam:org:project:roles': {
+      trading_access: { 'org-wrong-project': 'wrong.example' },
+    },
+    'urn:zitadel:iam:org:project:trading-project:roles': {
+      trading_access: { 'org-paid': 'paid.example' },
+    },
+  };
+
+  assert.deepEqual(extractZitadelRoleBindings(claims, { projectId: 'trading-project' }), {
+    trading_access: ['org-paid'],
+  });
+  assert.equal(authorizeTradingClaims(claims, {
+    projectId: 'trading-project',
+    requiredRole: 'trading_access',
+    workspace: { id: 'ws-1', zitadelOrgId: 'org-paid' },
+  }).ok, true);
+});
