@@ -154,3 +154,100 @@ test('fails requests and event waiters when socket closes instead of leaving tra
   await assert.rejects(pending, /connection closed/i);
   await assert.rejects(waiter, /connection closed/i);
 });
+
+test('two event subscribers observe the same message without consuming each other', () => {
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's',
+    socketFactory: () => new FakeSocket(), heartbeatScheduler: () => 1, heartbeatCanceller: () => {},
+  });
+  const seenA = [];
+  const seenB = [];
+  session.subscribeEvents((message) => seenA.push(message));
+  session.subscribeEvents((message) => seenB.push(message));
+
+  session.handleMessage({ data: JSON.stringify({ payloadType: 2126, payload: { deal: { dealId: 91 } } }) });
+
+  assert.equal(seenA.length, 1);
+  assert.equal(seenB.length, 1);
+  assert.equal(seenA[0].payload.deal.dealId, 91);
+  assert.equal(seenB[0], seenA[0]);
+});
+
+test('event subscribers do not steal events from waitForEvent', async () => {
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's',
+    socketFactory: () => new FakeSocket(), heartbeatScheduler: () => 1, heartbeatCanceller: () => {},
+  });
+  const seen = [];
+  session.subscribeEvents((message) => seen.push(message));
+  const waiting = session.waitForEvent((message) => message.payload?.deal?.dealId === 92, { timeoutMs: 100 });
+
+  session.handleMessage({ data: JSON.stringify({ payloadType: 2126, payload: { deal: { dealId: 92 } } }) });
+  const waited = await waiting;
+
+  assert.equal(seen.length, 1);
+  assert.equal(waited.payload.deal.dealId, 92);
+  assert.equal(seen[0], waited);
+});
+
+test('request-correlated responses still resolve while event subscribers observe them', async () => {
+  const socket = new FakeSocket();
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's', socketFactory: () => socket,
+    heartbeatScheduler: () => 1, heartbeatCanceller: () => {}, requestTimeoutMs: 100,
+  });
+  session.socket = socket;
+  socket.readyState = 1;
+  const seen = [];
+  session.subscribeEvents((message) => seen.push(message));
+
+  const pending = session.request({ clientMsgId: 'correlated-1', payloadType: 2106, payload: {} }, { successPayloadTypes: [2126] });
+  socket.message({ clientMsgId: 'correlated-1', payloadType: 2126, payload: { position: { positionId: 501 } } });
+  const response = await pending;
+
+  assert.equal(response.payload.position.positionId, 501);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0], response);
+});
+
+test('throwing event subscriber cannot block sibling subscribers or request correlation', async () => {
+  const socket = new FakeSocket();
+  const session = new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's', socketFactory: () => socket,
+    heartbeatScheduler: () => 1, heartbeatCanceller: () => {}, requestTimeoutMs: 100,
+  });
+  session.socket = socket;
+  socket.readyState = 1;
+  let siblingCalls = 0;
+  session.subscribeEvents(() => { throw new Error('subscriber failure'); });
+  session.subscribeEvents(() => { siblingCalls += 1; });
+
+  const pending = session.request({ clientMsgId: 'correlated-2', payloadType: 2106, payload: {} }, { successPayloadTypes: [2126] });
+  assert.doesNotThrow(() => socket.message({ clientMsgId: 'correlated-2', payloadType: 2126, payload: { position: { positionId: 502 } } }));
+  const response = await pending;
+
+  assert.equal(response.payload.position.positionId, 502);
+  assert.equal(siblingCalls, 1);
+});
+
+test('unsubscribe removes only that event subscriber and subscriptions are session-local', () => {
+  const make = () => new CTraderJsonSession({
+    endpoint: 'wss://demo.ctraderapi.com:5036', clientId: 'c', clientSecret: 's',
+    socketFactory: () => new FakeSocket(), heartbeatScheduler: () => 1, heartbeatCanceller: () => {},
+  });
+  const a = make();
+  const b = make();
+  let aOne = 0;
+  let aTwo = 0;
+  let bOne = 0;
+  const unsubscribe = a.subscribeEvents(() => { aOne += 1; });
+  a.subscribeEvents(() => { aTwo += 1; });
+  b.subscribeEvents(() => { bOne += 1; });
+
+  unsubscribe();
+  a.handleMessage({ data: JSON.stringify({ payloadType: 2126, payload: { deal: { dealId: 93 } } }) });
+
+  assert.equal(aOne, 0);
+  assert.equal(aTwo, 1);
+  assert.equal(bOne, 0);
+});
