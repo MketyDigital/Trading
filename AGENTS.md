@@ -95,6 +95,14 @@ Important unresolved environment fact: current in-memory listener retry exhausti
 - Legacy Telegram remains until V1/source/broker acceptance is satisfactory.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
 
+## Zitadel authorization contract
+
+- JWT issuer, audience, expiry/not-before, signature, workspace entitlement, required role, and workspace-bound Zitadel organization must all verify before admin access.
+- When `ZITADEL_PROJECT_ID` is **unset**, the documented generic current-project role claim `urn:zitadel:iam:org:project:roles` may be used.
+- When `ZITADEL_PROJECT_ID` is **set**, authorization must use only `urn:zitadel:iam:org:project:<projectId>:roles`; never fall back to the generic current-project claim.
+- A role granted for another project or another organization must never authorize the Trading workspace.
+- Keep `trading_access_enabled=false` until real negative/positive Zitadel environment tests pass.
+
 ## Verified V1 foundation
 
 Implemented/tested: legacy shadow compatibility; signed `/api/v1/events`; cryptographic Zitadel/workspace authorization; AES-256-GCM secrets; persistent event reservation; deterministic parser + bounded AI; MT5/cTrader/Deriv normalization; metadata-driven risk/account safety; arbitrary-TP Position Groups; durable Trade State; signal/fast-completion/BE/partial/full-close/pending-cancel simulation; signed simulation acceptance; cTrader/MT5 demo acceptance foundations.
@@ -134,6 +142,7 @@ No real broker demo order, real Cloudflare Container/DO MTProto E2E, or real-mon
 20. Task 9 non-live multi-source operational gate — GREEN in source/CI. Soak GREEN `33629585665` @ `276abbc…`; destination-isolation RED `33630032190` @ `7c27ca5…` (378 pass, sole missing fan-out module); exact GREEN `33630219329` @ `fa253f0…`. Broader-plan Task 9 complete at source/CI level.
 21. Shared-Supabase privilege hardening — migration `0007`. Initial RED `33631221854` @ `4722d46…`; `trade_accounts` boundary RED `33631450772` @ `5f1d3ea…`; exact GREEN `33631626956` @ `0cb260c…`.
 22. Default-source RPC immutable search path — migration `0008`. Security Advisor found the new Trading-owned mutable-search-path warning after `0007`; RED `33632308325` @ `3215ca1…` (385 pass, sole missing `0008`); exact GREEN `33632407746` @ `bd0a737…`, all four mandatory gates passing.
+23. **Strict Zitadel project-role isolation — GREEN.** Current Zitadel docs distinguish generic current-project roles from explicit project-ID roles. RED `33633081151` @ `aa3db87a2eb9cef89050da6cd582993718baaa77`: 387 pass, sole failure proved a configured project ID incorrectly fell back to the generic role claim. Production fix `ff9980d8fdcc2866ced208842274568c2be56149` makes a configured `ZITADEL_PROJECT_ID` require the exact project-specific role claim while preserving generic-claim behavior when no project ID is configured. Exact GREEN `33633316579`, all four mandatory gates passing.
 
 ## Shared Supabase state — verified live 2026-09-02
 
@@ -184,16 +193,18 @@ Recent exact GREEN checkpoints:
 - `33630219329` @ `fa253f04eba80354781a91474a237ebd02c51f34`
 - `33631626956` @ `0cb260c35d97548d9af6937645df2cb419672f57`
 - `33632407746` @ `bd0a737aaa9ff8318cadeefdd96fab6804074fd9`
+- `33633316579` @ `ff9980d8fdcc2866ced208842274568c2be56149`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## External configuration still required
 
-Supabase migration readiness is complete. No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat.
+Supabase migration readiness is complete. No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat, and no Cloudflare/Zitadel connector is available in this session.
 
 Next non-live staging prerequisites:
 - configure intended Zitadel organization/workspace mapping;
-- keep `trading_access_enabled=false` until wrong-org, missing-role, and exact authorized-org tests pass;
+- decide whether the deployment uses an explicit `ZITADEL_PROJECT_ID`; if set, ensure tokens contain the matching project-specific roles claim;
+- keep `trading_access_enabled=false` until wrong-project, wrong-org, missing-role, and exact authorized project/org tests pass;
 - create one deliberately non-live source with encrypted server-side credentials only when the Worker encryption/auth configuration is ready;
 - deploy/verify V1 Worker, Queue, Container, DO and cron bindings before first-party Container E2E;
 - use Telegram test accounts/channels for Container/external/DO reconnect/catch-up/soak;
@@ -202,7 +213,7 @@ Next non-live staging prerequisites:
 
 ## Current priority
 
-1. **Non-live authorization/runtime configuration**: verify Zitadel/workspace mapping and Worker/Cloudflare readiness without enabling real execution.
+1. **Non-live authorization/runtime configuration**: verify real Zitadel project/org/role mapping and Worker/Cloudflare readiness without enabling real execution.
 2. Configure one non-live source identity with strict tenant/chat scope and encrypted credentials.
 3. Run signed V1 + MTProto non-live soak/replay/isolation acceptance.
 4. Run cTrader/MT5 demo probes/lifecycles behind existing explicit demo-only gates.
@@ -210,11 +221,12 @@ Next non-live staging prerequisites:
 
 ## Exact next safe starting point
 
-Shared-Supabase migrations/readiness are complete through `0008`. Do not add more schema/provider/fan-out code speculatively.
+Shared-Supabase migrations/readiness are complete through `0008`, and the static Zitadel project-role boundary is now fail-closed. Do not add more schema/provider/fan-out/auth code speculatively.
 
-Start with non-live auth/runtime readiness:
-- inspect the current Worker/Cloudflare deployment/bindings and Zitadel configuration by **configuration names/status only**, never secret values;
-- keep the existing Trading entitlement disabled until exact organization/role authorization is verified;
+Start with real non-live auth/runtime readiness when account access exists:
+- inspect actual Worker/Cloudflare deployment/bindings and Zitadel configuration by **configuration names/status only**, never secret values;
+- verify exact project-specific role behavior if `ZITADEL_PROJECT_ID` is configured;
+- keep the existing Trading entitlement disabled until exact organization/role/project authorization is verified;
 - do not create a live trade account or enable broker execution;
-- if Cloudflare/Zitadel account access is unavailable, stop short of claiming environment acceptance and continue only with static readiness work that is directly required for this gate;
+- if Cloudflare/Zitadel account access remains unavailable, stop short of claiming environment acceptance and continue only with static readiness work directly required by that gate;
 - after any repo change, rerun all four mandatory CI gates.
