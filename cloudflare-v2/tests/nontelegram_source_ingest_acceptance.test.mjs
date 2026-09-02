@@ -61,12 +61,7 @@ function makeDependencies(sources) {
 async function ingest(sourceRecord, payload, dependencies, secret = sourceRecord.secret) {
   const rawBody = JSON.stringify(payload);
   const timestamp = String(NOW);
-  const signature = await signSourcePayload({
-    rawBody,
-    sourceId: sourceRecord.id,
-    timestamp,
-    secret,
-  });
+  const signature = await signSourcePayload(rawBody, timestamp, secret);
   return ingestTradingEvent({
     rawBody,
     sourceId: sourceRecord.id,
