@@ -16,7 +16,7 @@ Operational source of truth for `MketyDigital/Trading`. Read before changing the
 
 ## Product / tenancy contract
 
-Mkety Trading is an enterprise/custom **multi-tenant** trading automation platform, not a Telegram-only copier.
+Mkety Trading is an enterprise/custom **multi-tenant** automation platform, not a Telegram-only copier.
 
 ```text
 Source Provider / Adapter
@@ -35,20 +35,15 @@ Source Provider / Adapter
 
 Isolation is mandatory at workspace, user, source, provider runtime, Telegram session, chat, event, trade account, destination, AI provider, retry, queue, idempotency key, Position Group, health, control-state, and credential boundaries. One tenant/runtime/integration failure must never receive, mutate, stall, disable, reorder, duplicate, roll back, or corrupt another tenant/integration's credentials, configuration, state, events, retries, health, idempotency, or broker actions.
 
-Sources are first-class pluggable providers. A workspace may enable multiple simultaneous sources across Telegram MTProto, MT5, cTrader, TradingView, REST/custom APIs, and future families.
-
-Rules:
-
+Key rules:
+- multiple source providers may be active simultaneously;
 - default source is preference, not exclusivity;
-- at most one enabled default per `(workspace_id, source_family)`;
-- other enabled sources remain active;
 - unconfigured providers are inert;
-- runtime identity is not canonical event identity;
-- redundant provider replays collapse through persistent canonical idempotency before AI/orchestration/trading;
-- browser/caller workspace/source/bootstrap fields are never authoritative when a server-side trusted source exists;
+- redundant provider replays collapse through persistent canonical idempotency after authentication;
+- browser/caller workspace/source/bootstrap fields are never authoritative when trusted server-side identity exists;
 - source, destination, broker, AI, retry, health, credentials, and control state stay scoped to the smallest responsible integration boundary;
 - fan-out destinations succeed/fail/retry independently and never roll back successful siblings;
-- retry of a failed destination must not redispatch successful siblings;
+- retrying a failed destination must not redispatch successful siblings;
 - foreign-workspace or duplicate destinations fail locally without blocking valid siblings.
 
 Provider types:
@@ -58,28 +53,19 @@ Provider types:
 - cTrader: `ctrader_source`
 - custom: `custom_signed_api`
 
-Design: `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
+Design/plan:
+- `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
+- `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
+- `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
+- `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
 
-Plan: `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
-
-External MTProto design: `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
-
-External MTProto plan: `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
-
-Task 9 operational runbook: `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
+Runbooks:
+- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
+- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 
 ## MTProto availability contract
 
 Preferred first-party runtime: **Cloudflare Container + Telethon**, one Telegram session listening to many configured chats/channels. Pure DO+mtcute and external MTProto remain alternate providers and must never become platform-wide startup dependencies.
-
-Required behavior:
-- continuous normal connectivity;
-- reconnect/process/container/DO restart recovery;
-- catch-up after interruption;
-- receive loop decoupled from downstream work;
-- Queue/retry-safe handoff;
-- provider failover does not change native identity;
-- duplicates/replays never duplicate trades.
 
 Canonical Telegram native identity:
 
@@ -87,27 +73,31 @@ Canonical Telegram native identity:
 telegram:<accountScope>:<chatId>:<messageId>
 ```
 
-Container disk is ephemeral and never authoritative durable state. DO storage, Supabase idempotency/event state, Queue delivery, and Telegram catch-up/replay are recovery authorities. No cloud runtime can promise literal zero interruption; target is no known lost recoverable signal and minimal normal latency.
+Required behavior: reconnect/restart recovery, catch-up, receive/downstream decoupling, Queue/retry-safe handoff, provider-independent native identity, persistent duplicate collapse, and secret-free health.
+
+Container disk is ephemeral and never authoritative durable state. DO storage, Supabase event/idempotency state, Queue delivery, and Telegram catch-up/replay are recovery authorities. Do not claim literal zero interruption or zero-loss recovery until real environment soak proves no known lost recoverable event.
+
+Important unresolved environment fact: current in-memory listener retry exhaustion can drop an event from that local queue after bounded retries; durable replay/catch-up/idempotency is the intended recovery path and still requires real reconnect/restart soak.
 
 ## Core safety
 
 - Connected broker metadata is authoritative for symbol/precision/tick economics/volume/order/account-mode semantics.
-- Clear signals use deterministic processing; ambiguous language may use bounded AI but must pass deterministic validation.
+- Clear signals use deterministic processing; bounded AI is only for ambiguity and must pass deterministic validation.
 - AI failure cannot block clear deterministic work.
-- Formatting is presentation only, never execution authority.
+- Formatting is presentation-only.
 - Fast-entry policies: `execute_immediately`, `wait_for_complete_signal`, `forward_only`.
 - Completed fast signals reuse the executed first leg as TP1 and add only missing targets.
 - Position Groups support arbitrary TP counts and hedged/netted behavior.
 - Persistent event/destination/order idempotency is mandatory.
-- Every trade account requires explicit execution enablement, symbol/risk/lot/daily-loss/exposure limits, and kill switch before broker dispatch.
-- Fail closed on ambiguity, tenant mismatch, provider outage, missing credentials, unavailable broker metadata, unreliable economics, invalid correlation, or unknown execution state.
-- Global kill switch blocks all actions; protective management may bypass only ordinary drawdown/open-risk locks.
-- Legacy Telegram route remains until V1/source/broker acceptance is satisfactory.
+- Every trade account requires explicit execution enablement, safety/risk limits, and kill switch before broker dispatch.
+- Fail closed on ambiguity, tenant mismatch, provider outage, missing credentials, unreliable broker economics/metadata, invalid correlation, or unknown execution state.
+- Global kill switch blocks everything; protective management may bypass only ordinary drawdown/open-risk locks.
+- Legacy Telegram remains until V1/source/broker acceptance is satisfactory.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
 
-## Existing verified V1 foundation
+## Verified V1 foundation
 
-Implemented/tested: legacy shadow compatibility; signed `/api/v1/events`; cryptographic Zitadel/workspace authorization; AES-256-GCM secrets; persistent event reservation; deterministic parser + bounded AI; MT5/cTrader/Deriv normalization; metadata-driven risk/account safety; arbitrary-TP Position Groups; `TradeStateNode`; signal/fast-completion/BE/partial/full-close/pending-cancel simulation; signed simulation acceptance; cTrader demo and MT5 demo acceptance foundations.
+Implemented/tested: legacy shadow compatibility; signed `/api/v1/events`; cryptographic Zitadel/workspace authorization; AES-256-GCM secrets; persistent event reservation; deterministic parser + bounded AI; MT5/cTrader/Deriv normalization; metadata-driven risk/account safety; arbitrary-TP Position Groups; durable Trade State; signal/fast-completion/BE/partial/full-close/pending-cancel simulation; signed simulation acceptance; cTrader/MT5 demo acceptance foundations.
 
 Commands:
 
@@ -118,97 +108,113 @@ npm run accept:mt5:demo
 npm run soak:mtproto:container
 ```
 
-No real external Worker acceptance, real broker demo order, real Cloudflare Container/DO MTProto deployment, or real-money execution has been performed in this session because account/runtime credentials are not available here.
+No real broker demo order, real Cloudflare Container/DO MTProto E2E, or real-money execution has been performed in this session.
 
 ## Multi-source implementation status — 2026-09-02
 
-1. **Provider registry + canonical identity — GREEN.** RED `33598485434`; GREEN `33598572539` @ `7d62761a072499f6f93910398b3be455b68a2913`.
-2. **Source registry/default semantics — GREEN.** Migration `0003`; atomic per-family default; multiple sources remain active. GREEN `33598900292` @ `215c136a0ed697aac8f00c241afbbb6fa7bb2b16`.
-3. **Cross-provider native-event idempotency — GREEN.** Migration `0004`; `(workspace_id, canonical_event_id)` collapse after authentication. GREEN `33599671009` @ `1f846fd7eee536cdb5ccd79e1118d3d31e30e39d`.
-4. **Cloudflare Container/Telethon provider skeleton — GREEN.** Deterministic runtime identity; reconnect/catch-up; multi-chat filtering; native identity; sanitized health; Python MTProto CI gate.
-5. **Cloudflare Queue -> signed V1 path — GREEN.** Listener carries no source HMAC; Worker resolves/decrypts HMAC server-side, signs exact V1 body, retries failures, DLQ. GREEN `33603127779` @ `837190d63f780f7c72f477ed5a1accb84d20071c`.
-6. **MTProto downstream retry isolation — GREEN.** Same-payload bounded retry; exhausted event cannot kill worker; later success recovers health; secret-free delivery health. GREEN `33612304712` @ `760395613316974a04973553d133c21b9413952a`.
-7. **Real stateful Cloudflare Container supervisor — GREEN.** `MtprotoContainerRuntime`, `MTPROTO_CONTAINER_NAMESPACE`, DO migration `v3`, strict tenant/source/account-scope runtime identity, secret-free persisted state, runtime-only start env, local health. GREEN `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`.
-8. **Server-side MTProto bootstrap resolver — GREEN.** Migration `0005`; exact workspace/source/provider lookup; provider credential decrypt server-side; caller bootstrap ignored. GREEN `33613707938` @ `4cafbcd3ad39ec09083840529087df92ccada3a8`.
-9. **Tenant-safe MTProto Container lifecycle service — GREEN.** Trusted workspace/source only; exact identity verification; server-derived runtime; restart re-resolves credentials; status strips secrets. GREEN `33614019384` @ `03c438567be97cbf9a765b7a10898f4a0ab486b5`.
-10. **Durable MTProto recovery supervisor + scheduled recovery — GREEN.** Migration `0006`; per-source counters/backoff/error codes; exact tenant/source writes; one-minute recovery cron isolated from legacy scheduler. GREEN `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954`.
-11. **MTProto recovery replay acceptance — GREEN.** Exact post-restart replay ACKs as duplicate with one orchestration; new message proceeds; redundant provider replay converges on same native identity. GREEN `33615820124` @ `b73abee97a736a4a53f726635df9d211a5f73986`.
-12. **External MTProto server-side authorization — GREEN.** Server-owned chat/account policy after HMAC but before reservation/AI; authenticated workspace remains authoritative. GREEN `33623854041` @ `904690f4c97208b1306a48179aba6bb8b689bd48`.
-13. **External MTProto signed-V1 HTTPS sink — GREEN.** Exact raw-body signing; retryable/permanent distinction; persistent duplicate terminal success; sanitized errors.
-14. **Portable external Telethon runtime — GREEN.** Per-adapter session/queue/retry/health isolation; multiple chats; native/thread/edit/media parity; clean cancellation. GREEN `33625107407` @ `9fb58507c2797c703c967d77648e6c7e5a1d50a0`.
-15. **Cross-provider replay + two-workspace isolation — GREEN.** Provider replay collapses only within workspace; identical Telegram identity remains distinct across workspaces. GREEN `33625278355` @ `c6c2c14fb3c389b23062d83a1a2240875dd97891`.
-16. **External MTProto CI/operator docs — GREEN.** Both MTProto Python suites are mandatory CI gates. GREEN `33626149089` @ `e2bc271842a5df1425f3fb879ba0c413bfb180e0`.
-17. **Heterogeneous source registration/configuration/coexistence — GREEN.** Six provider types coexist; invalid provider config cannot mutate siblings/defaults. GREEN `33626927619` @ `a78dc9fbe257f41b67337ad5f06587a018f1d573`. Broader-plan Task 7 complete.
-18. **Pure Durable Object + mtcute alternate provider — GREEN.** Per-DO persisted update state/catch-up/reconnect; same queue-compatible native identity; no global credential fallback; alternate/non-default. GREEN `33627974053` @ `b15e4b7afc864daba23d0e8b8d77773d1a3e0175`. Broader-plan Task 6 complete.
-19. **Zitadel-authorized source administration API — GREEN.** Existing V1 auth is sole gate; exact-workspace source list/status/default/enable/disable; secret-whitelisted responses. RED `33628546167`; GREEN `33628759094` @ `69b3d89b016d2d00335450046b5688541aa7649c`. Broader-plan Task 8 complete.
-20. **Task 9 non-live multi-source operational gate — GREEN in source/CI.** `source_provider_acceptance` covers source/provider failure isolation and cross-workspace canonical identity; MTProto recovery/cross-provider tests cover reconnect/replay duplicate collapse; observation-only soak harness exposed via `npm run soak:mtproto:container`; destination fan-out now runs siblings independently, sanitizes failures, rejects foreign-workspace/duplicate destinations locally, and supports retrying only failed destinations. Soak GREEN `33629585665` @ `276abbc362c03703d897f1410f1eeb534ff75b07`. Destination isolation RED `33630032190` @ `7c27ca546602b48fcbfa7b1db8051f6e4469af0f` (378 pass, sole failure missing fan-out module). Exact destination-isolation GREEN `33630219329` @ `fa253f04eba80354781a91474a237ebd02c51f34`, all four mandatory gates passing. Operational procedure is `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`. **Broader-plan Task 9 complete at source-code/CI level.**
+1. Provider registry + canonical identity — GREEN (`33598572539` @ `7d62761…`).
+2. Source registry/default semantics — GREEN; migration `0003` (`33598900292` @ `215c136…`).
+3. Cross-provider native-event idempotency — GREEN; migration `0004` (`33599671009` @ `1f846fd…`).
+4. Cloudflare Container/Telethon provider skeleton — GREEN.
+5. Cloudflare Queue -> signed V1 path — GREEN (`33603127779` @ `837190d…`).
+6. MTProto downstream retry isolation — GREEN (`33612304712` @ `7603956…`).
+7. Stateful Cloudflare Container supervisor — GREEN (`33613179989` @ `d65a95a…`).
+8. Server-side MTProto bootstrap resolver — GREEN; migration `0005` (`33613707938` @ `4cafbcd…`).
+9. Tenant-safe Container lifecycle service — GREEN (`33614019384` @ `03c4385…`).
+10. Durable per-source MTProto recovery + scheduled recovery — GREEN; migration `0006` (`33615599446` @ `aa34a16…`).
+11. Recovery replay acceptance — GREEN (`33615820124` @ `b73abee…`).
+12. External MTProto server-side authorization — GREEN (`33623854041` @ `904690f…`).
+13. External signed-V1 HTTPS sink — GREEN.
+14. Portable external Telethon runtime — GREEN (`33625107407` @ `9fb5850…`).
+15. Cross-provider replay + two-workspace isolation — GREEN (`33625278355` @ `c6c2c14…`).
+16. External MTProto CI/operator docs — GREEN (`33626149089` @ `e2bc271…`).
+17. Heterogeneous source registration/configuration/coexistence — GREEN (`33626927619` @ `a78dc9f…`). Broader-plan Task 7 complete.
+18. Pure DO+mtcute alternate provider — GREEN (`33627974053` @ `b15e4b7…`). Broader-plan Task 6 complete.
+19. Zitadel-authorized source administration API — RED `33628546167`; GREEN `33628759094` @ `69b3d89…`. Broader-plan Task 8 complete.
+20. Task 9 non-live multi-source operational gate — GREEN in source/CI. Soak GREEN `33629585665` @ `276abbc…`; destination-isolation RED `33630032190` @ `7c27ca5…` (378 pass, sole missing fan-out module); exact GREEN `33630219329` @ `fa253f0…`. Broader-plan Task 9 complete at source/CI level.
+21. Shared-Supabase privilege hardening — migration `0007`. Initial RED `33631221854` @ `4722d46…`; `trade_accounts` boundary RED `33631450772` @ `5f1d3ea…`; exact GREEN `33631626956` @ `0cb260c…`.
+22. Default-source RPC immutable search path — migration `0008`. Security Advisor found the new Trading-owned mutable-search-path warning after `0007`; RED `33632308325` @ `3215ca1…` (385 pass, sole missing `0008`); exact GREEN `33632407746` @ `bd0a737…`, all four mandatory gates passing.
 
-## Supabase boundary
+## Shared Supabase state — verified live 2026-09-02
 
-No Supabase development branch exists; use the existing Mkety Supabase with strict Trading-owned isolation.
+Connected project: `Mkety Digital`.
 
-Trading-owned:
-- `trading_workspace_access`
-- `source_connections`
-- `trading_events`
-- `position_groups`
-- `position_legs`
-- `destination_deliveries`
-- additive Trading policy columns on `trade_accounts`
+Migrations `0001` through `0008` are now applied. The live migration ledger explicitly includes:
+- `trading_0003_multi_source_provider_registry`
+- `trading_0004_cross_provider_event_identity`
+- `trading_0005_mtproto_provider_credentials`
+- `trading_0006_mtproto_recovery_state`
+- `trading_0007_internal_privilege_hardening`
+- `trading_0008_default_source_search_path`
 
-Rules:
-- never alter/drop/rewrite unrelated Mkety tables;
-- V1 auth does not depend on shared `public.workspaces`;
-- `trading_workspace_access` is Trading entitlement authority with no FK to shared workspaces;
-- migrations `0001` and `0002` were previously confirmed applied;
-- migrations `0003_multi_source_provider_registry.sql`, `0004_cross_provider_event_identity.sql`, `0005_mtproto_provider_credentials.sql`, and `0006_mtproto_recovery_state.sql` are **checked in but not yet claimed applied**;
-- keep previously verified Trading entitlement disabled/no Zitadel org until external authorization is configured and verified;
-- no paid/dev Supabase branch.
+Do **not** reapply them blindly.
 
-Runbooks:
-- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
-- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
+Verified database isolation/security:
+- shared `public.workspaces` retains its original 10-column schema;
+- V1 auth authority is `trading_workspace_access`, not shared `workspaces`;
+- `source_connections` has provider/default/health/recovery/provider-secret fields and family-scoped indexes;
+- `trading_events` has persistent `canonical_event_id` uniqueness per workspace;
+- `anon` and `authenticated` have no table privileges on `trading_workspace_access`, `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, or `trade_accounts`;
+- `service_role` retains required access;
+- RLS is enabled on all seven Trading tables and there are zero client policies by design;
+- `trading_set_default_source` is SECURITY INVOKER, `search_path=''`, and executable by `service_role` only;
+- Security Advisor no longer reports a mutable-search-path warning for this Trading function;
+- remaining Trading Advisor notices are intentional INFO `RLS enabled, no policy`; unrelated pre-existing project warnings are out of scope.
+
+Current data state:
+- `source_connections=0`
+- `trading_events=0`
+- `position_groups=0`
+- `position_legs=0`
+- `destination_deliveries=0`
+- `trade_accounts=0`
+- one `trading_workspace_access` row exists and remains `trading_access_enabled=false`, `zitadel_org_id=NULL`.
+
+No source, Telegram, broker, or execution credentials were inserted during staging migration readiness.
 
 ## CI rule
 
-Every meaningful head must pass:
+Every meaningful branch head must pass:
 1. Node Worker/trading-core tests;
 2. pure MT5 bridge tests;
-3. MTProto Python/container + external-adapter tests;
+3. both MTProto Python suites;
 4. Wrangler dry-run.
 
 Recent exact GREEN checkpoints:
-- `33627974053` @ `b15e4b7afc864daba23d0e8b8d77773d1a3e0175`
-- `33628759094` @ `69b3d89b016d2d00335450046b5688541aa7649c`
-- `33629585665` @ `276abbc362c03703d897f1410f1eeb534ff75b07`
 - `33630219329` @ `fa253f04eba80354781a91474a237ebd02c51f34`
+- `33631626956` @ `0cb260c35d97548d9af6937645df2cb419672f57`
+- `33632407746` @ `bd0a737aaa9ff8318cadeefdd96fab6804074fd9`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
-## External configuration still required later
+## External configuration still required
 
-No Cloudflare/Zitadel account connector is available in this session; no account-side settings have been changed. Never request secret values in chat.
+Supabase migration readiness is complete. No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat.
 
-Controlled staging later requires:
-- inspect the actual shared Supabase schema and migration history first;
-- review/apply only required Trading migrations `0003`-`0006`;
-- configure intended non-live Zitadel/workspace bindings before enabling Trading entitlement;
-- create non-live source identities with encrypted server-side credentials where applicable;
-- deploy/recognize Container runtime + `v3` DO migration before first-party Container E2E;
+Next non-live staging prerequisites:
+- configure intended Zitadel organization/workspace mapping;
+- keep `trading_access_enabled=false` until wrong-org, missing-role, and exact authorized-org tests pass;
+- create one deliberately non-live source with encrypted server-side credentials only when the Worker encryption/auth configuration is ready;
+- deploy/verify V1 Worker, Queue, Container, DO and cron bindings before first-party Container E2E;
 - use Telegram test accounts/channels for Container/external/DO reconnect/catch-up/soak;
 - run signed V1 simulation acceptance;
-- run cTrader/MT5 actual demo probes/lifecycles only with demo credentials and explicit existing demo gates.
-
-Do not claim zero-loss MTProto recovery until real reconnect/restart/catch-up soak proves no known lost recoverable event. Container disk remains ephemeral. Current in-memory listener retry exhaustion can drop an event from that local queue after bounded retries; durable replay/catch-up/idempotency remains the intended recovery path and requires real environment verification.
+- run cTrader/MT5 actual demo probes/lifecycles only with demo credentials and explicit demo gates.
 
 ## Current priority
 
-1. **Controlled staging readiness/migration review**: inspect actual shared Supabase state, compare migrations `0003`-`0006`, and apply only missing Trading-owned changes if account access is available.
-2. Configure non-live Zitadel/workspace/source bindings without enabling any real broker execution.
-3. Run signed V1 + MTProto non-live soak acceptance using `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`.
-4. Run cTrader/MT5 broker demo probes/lifecycles only behind their existing explicit demo gates.
-5. Tiny controlled live only after every non-live/demo gate is green and only after an explicit separate cutover decision.
+1. **Non-live authorization/runtime configuration**: verify Zitadel/workspace mapping and Worker/Cloudflare readiness without enabling real execution.
+2. Configure one non-live source identity with strict tenant/chat scope and encrypted credentials.
+3. Run signed V1 + MTProto non-live soak/replay/isolation acceptance.
+4. Run cTrader/MT5 demo probes/lifecycles behind existing explicit demo-only gates.
+5. Tiny controlled live only after every non-live/demo gate is green and after a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Task 9 is complete in source/CI. **Do not add more provider/fan-out code speculatively.** The next safe step is controlled staging readiness. First inspect the actual shared Supabase migration/schema state and confirm whether `0003`-`0006` are already present or missing. If Supabase/account access is unavailable, do not claim environment acceptance; continue only with clearly isolated static work that is necessary for the staging gate. Keep Trading entitlement disabled until Zitadel mapping is verified, keep broker/live execution disabled, and rerun all four mandatory CI gates after any repository change.
+Shared-Supabase migrations/readiness are complete through `0008`. Do not add more schema/provider/fan-out code speculatively.
+
+Start with non-live auth/runtime readiness:
+- inspect the current Worker/Cloudflare deployment/bindings and Zitadel configuration by **configuration names/status only**, never secret values;
+- keep the existing Trading entitlement disabled until exact organization/role authorization is verified;
+- do not create a live trade account or enable broker execution;
+- if Cloudflare/Zitadel account access is unavailable, stop short of claiming environment acceptance and continue only with static readiness work that is directly required for this gate;
+- after any repo change, rerun all four mandatory CI gates.
