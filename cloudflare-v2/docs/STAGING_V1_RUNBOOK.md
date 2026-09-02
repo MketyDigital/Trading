@@ -1,58 +1,102 @@
 # Trading V1 Shared-Supabase Acceptance Runbook
 
-This runbook is the current environment procedure for `MketyDigital/Trading` V1. The Trading runtime shares the existing Mkety Supabase project because a separate paid/development branch is not available, but **Trading V1 must remain schema-isolated from unrelated Mkety application tables**.
+This is the current environment procedure for `MketyDigital/Trading` V1. Trading shares the existing Mkety Supabase project because no separate development branch is available, so every change must remain strictly Trading-owned and must not alter unrelated Mkety application state.
 
 ## Hard safety boundary
 
-Allowed database changes:
+Trading-owned database surface:
 
-- new Trading-owned `public.trading_workspace_access`;
-- new Trading-owned `public.source_connections`;
-- new Trading-owned `public.trading_events`;
-- new Trading-owned `public.position_groups`;
-- new Trading-owned `public.position_legs`;
-- new Trading-owned `public.destination_deliveries`;
-- additive policy/index columns on the existing Trading-specific `public.trade_accounts` table.
+- `public.trading_workspace_access`
+- `public.source_connections`
+- `public.trading_events`
+- `public.position_groups`
+- `public.position_legs`
+- `public.destination_deliveries`
+- the existing Trading-specific `public.trade_accounts` table and additive Trading policy/index columns
 
-Do **not** alter, drop, rewrite, or add Trading entitlement columns to shared `public.workspaces` or unrelated Mkety tables such as users, campaigns, blogs, leads, chats, packages, or SaaS-template tables.
+Do not alter, drop, rewrite, or add Trading entitlement state to shared `public.workspaces` or unrelated Mkety tables/functions. Trading authorization belongs to `trading_workspace_access`; V1 does not use a browser-supplied workspace id as authority and does not depend on a foreign key to shared `public.workspaces`.
 
-The stable Trading workspace ID may mirror an existing Mkety workspace UUID, but Trading authorization belongs to `trading_workspace_access`; there is deliberately no foreign key from the new V1 tables to `public.workspaces`.
+Real-money execution remains disabled. Demo broker actions remain behind their explicit demo-only acceptance gates.
 
-Real broker execution remains disabled until demo acceptance is complete.
+## Verified database state — 2026-09-02
 
-## Current database state — 2026-09-01
+Connected project: `Mkety Digital`.
 
-The isolated Trading schema has already been applied to the existing Supabase project.
+The following Trading migrations have been reviewed, applied, and verified in the live shared Supabase project:
 
-Applied:
+1. `0001_enterprise_trading_foundation.sql`
+2. `0002_trade_correlation_and_account_policy.sql`
+3. `0003_multi_source_provider_registry.sql`
+4. `0004_cross_provider_event_identity.sql`
+5. `0005_mtproto_provider_credentials.sql`
+6. `0006_mtproto_recovery_state.sql`
+7. `0007_trading_internal_privilege_hardening.sql`
+8. `0008_trading_default_source_search_path.sql`
 
-1. `db/migrations/0001_enterprise_trading_foundation.sql`
-2. `db/migrations/0002_trade_correlation_and_account_policy.sql`
+Supabase migration ledger names for the newly applied staging batch are:
 
-Verified after application:
+- `trading_0003_multi_source_provider_registry`
+- `trading_0004_cross_provider_event_identity`
+- `trading_0005_mtproto_provider_credentials`
+- `trading_0006_mtproto_recovery_state`
+- `trading_0007_internal_privilege_hardening`
+- `trading_0008_default_source_search_path`
 
-- shared `public.workspaces` retained its exact pre-migration 10-column definition;
-- all new V1 workspace foreign keys point to `trading_workspace_access`;
-- RLS is enabled on all six new Trading-owned public tables;
-- no anon/authenticated RLS policies are intentionally created because these tables are server/service-role internals;
-- the five V1 foreign-key lookup indexes recommended by the Supabase performance advisor were added;
-- the reused Trading `trade_accounts.workspace_id` lookup is indexed;
-- one Trading workspace-access row exists but `trading_access_enabled=false` and `zitadel_org_id` is unset;
-- `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, and `trade_accounts` are empty.
+Do not re-run these migrations blindly. Inspect the real migration ledger and schema first if a later environment reports drift.
 
-Do not re-run migrations blindly. They are additive/idempotent, but inspect current schema and Git history first.
+### Verified effects
 
-Migrations `0003_multi_source_provider_registry.sql`, `0004_cross_provider_event_identity.sql`, `0005_mtproto_provider_credentials.sql`, and `0006_mtproto_recovery_state.sql` are checked in but are **not yet claimed applied**. Review the actual shared Supabase schema before applying any of them.
+`0003`:
+- provider/source-family/default/priority/external-identity/config/health columns exist on `source_connections`;
+- active family/default/provider indexes exist;
+- `trading_set_default_source(uuid,text,uuid)` exists and performs a family-scoped atomic default switch.
 
-## Supabase advisor notes
+`0004`:
+- `trading_events.canonical_event_id` exists;
+- unique partial `(workspace_id, canonical_event_id)` index exists for persistent cross-provider native-event collapse.
 
-Security advisor findings attributable to the new V1 tables are informational `RLS enabled, no policy`, which is intentional for service-role-only access.
+`0005`:
+- `source_connections.provider_secret_ciphertext` exists as the separate encrypted provider-credential envelope;
+- provider credentials remain server-side only and are not the same field as ingress HMAC ciphertext.
 
-Pre-existing warnings such as public-schema extensions, existing SECURITY DEFINER functions, or policies on unrelated Mkety tables are outside this Trading migration scope. Do not modify them from this repository without a separate Mkety security plan.
+`0006`:
+- per-source durable recovery attempt/backoff/error timestamps/counters exist;
+- the active first-party Container MTProto recovery index exists.
 
-Performance advisor initially identified missing V1 foreign-key indexes; those were added. Newly created indexes can show as `unused` until traffic exercises them; that is expected immediately after creation.
+`0007`:
+- `anon` and `authenticated` have no table privileges on `trading_workspace_access`, `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, or `trade_accounts`;
+- `service_role` retains the required table privileges;
+- RLS remains enabled on all seven Trading tables;
+- zero client RLS policies exist by design because these are server/service-role internals;
+- `trading_set_default_source` can be executed by `service_role` only.
 
-## Worker configuration required before V1 acceptance
+`0008`:
+- `trading_set_default_source` has pinned empty `search_path`;
+- the function remains SECURITY INVOKER;
+- `anon_execute=false`, `authenticated_execute=false`, `service_role_execute=true`.
+
+### Shared-schema and data invariants
+
+After the staging migration batch:
+
+- shared `public.workspaces` still has its pre-existing 10-column definition; no Trading column was added;
+- `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, and `trade_accounts` remain empty;
+- exactly one `trading_workspace_access` row exists;
+- that row remains `trading_access_enabled=false` and `zitadel_org_id` remains unset;
+- no source credentials, Telegram sessions, broker credentials, or execution accounts were inserted as part of migration readiness.
+
+## Supabase Security Advisor state
+
+After `0008`, the Trading-owned mutable-function-search-path warning is resolved.
+
+Trading tables still produce informational `RLS enabled, no policy` notices. That is intentional because client table privileges are explicitly revoked and the runtime uses server/service-role access.
+
+Other project warnings, including unrelated public-schema extensions or pre-existing SECURITY DEFINER functions, are outside this Trading migration scope. Do not modify them from this repository without a separate Mkety security plan.
+
+Supabase linter remediation reference for the intentional RLS/no-policy notices:
+https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy
+
+## Worker configuration required before non-live acceptance
 
 Server-side names:
 
@@ -69,9 +113,9 @@ Server-side names:
 - `TRADING_V1_SIMULATION` — default off
 - `TRADING_V1_AI_TIMEOUT_MS`
 
-Simulation-only context:
+Simulation context:
 
-- `TRADE_STATE_NAMESPACE` Durable Object binding
+- `TRADE_STATE_NAMESPACE`
 - `TRADING_V1_SIMULATION_INSTRUMENTS`
 - `TRADING_V1_SIMULATION_PRICES`
 - optional `TRADING_V1_SIMULATION_EXPOSURES`
@@ -86,7 +130,7 @@ Use:
 GET /api/v1/health
 ```
 
-The endpoint must return only readiness booleans, feature states, and missing configuration **names**, never values.
+The endpoint must expose readiness booleans, feature state, and missing configuration names only. It must never echo secret values.
 
 Before simulation acceptance:
 
@@ -96,229 +140,140 @@ Before simulation acceptance:
 
 ## Trading workspace authorization setup
 
-`trading_workspace_access` is now the V1 entitlement boundary.
+`trading_workspace_access` is the V1 entitlement boundary. The existing row is intentionally disabled.
 
-The existing seeded row is intentionally disabled. Before enabling it:
+Before enabling it:
 
-1. configure the correct Zitadel organization mapping;
-2. set the required Trading role;
-3. verify issuer/audience/JWKS configuration in the Worker;
-4. verify wrong-org and missing-role tokens fail;
-5. only then set `trading_access_enabled=true`.
+1. configure the intended Zitadel organization mapping;
+2. configure the required Trading role;
+3. verify issuer/audience/JWKS settings;
+4. prove wrong-organization and missing-role tokens fail;
+5. prove the authorized token maps to exactly one intended Trading workspace;
+6. only then set `trading_access_enabled=true`.
 
-The main Mkety control plane can later provision/revoke this Trading access without changing Trading runtime code.
-
-Do not use a browser-supplied workspace ID as authorization by itself.
+Do not enable entitlement merely to satisfy a readiness check.
 
 ## Source connection setup
 
-A source connection cannot be safely created until a Worker `TRADING_MASTER_KEY` exists.
+Do not create a source until the Worker `TRADING_MASTER_KEY` and the intended non-live workspace authorization are ready.
 
-When ready:
+For signed V1 ingress:
 
-1. generate a random source HMAC secret outside Git;
-2. encrypt it using the Trading AES-GCM secret envelope;
-3. store only the ciphertext in `source_connections.secret_ciphertext`;
-4. keep `is_active=true` only for the source being accepted;
-5. sign event requests with the exact raw body using:
-   - `X-Mkety-Source-Id`
-   - `X-Mkety-Timestamp`
-   - `X-Mkety-Signature`.
+1. generate a random per-source HMAC secret outside Git;
+2. encrypt it with the Trading AES-GCM envelope;
+3. store only ciphertext in `source_connections.secret_ciphertext`;
+4. configure provider-specific encrypted credentials separately in `provider_secret_ciphertext` when applicable;
+5. keep source/chat scope explicit and tenant-local;
+6. sign the exact raw request body with the registered source identity/timestamp/signature headers.
 
-Never store the plaintext source secret in Supabase.
+Never store plaintext source/provider credentials in Supabase.
 
-## External MTProto non-live setup
+## Non-live multi-source/MTProto acceptance
 
-The portable runtime is `cloudflare-v2/external/mtproto-adapter/`. It is transport-only and uses the existing signed `POST /api/v1/events` boundary. It does not own workspace authorization, chat authorization, signal interpretation, AI selection, risk, trade accounts, broker execution, or destination fan-out.
+Primary operational procedure:
 
-Customer/external-host configuration names:
+`cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 
-- `TELEGRAM_API_ID`
-- `TELEGRAM_API_HASH`
-- `TELEGRAM_SESSION`
-- `TRADING_ENDPOINT`
-- `TRADING_SOURCE_ID`
-- `TRADING_SOURCE_SECRET`
-- optional `TELEGRAM_ACCOUNT_SCOPE`
-- optional `ALLOWED_CHAT_IDS`
+Required observations include:
 
-The external host receives only its own Telegram credentials and its own source-specific Trading HMAC secret. It must never receive Supabase service role, `TRADING_MASTER_KEY`, Cloudflare internal transport token, AI credentials, broker credentials, or another tenant/source credential.
+- multiple source/provider families coexist without global coupling;
+- one source/provider failure does not alter sibling authorization, health, retries, defaults, credentials, or event handling;
+- Container, Durable Object, and external MTProto replays use provider-independent Telegram native identity;
+- reconnect/catch-up replay does not create a second orchestration path;
+- destination fan-out succeeds/fails/retries independently;
+- failed-destination retry does not redispatch successful siblings;
+- foreign-workspace/duplicate destinations fail locally;
+- health and errors remain secret-free.
 
-Telegram API/session credentials for `external_mtproto` stay on the customer host and are not stored in Mkety by this provider design.
-
-Server-side source policy is authoritative:
-
-- `source_connections.config.chat_acceptance_mode` defaults to fail-closed `allowlist`;
-- empty/missing server `allowed_chat_ids` accepts no chats;
-- `all_visible` requires an explicit server-side setting;
-- external payload/local forward-all metadata cannot authorize `all_visible`;
-- optional caller `metadata.account_scope` must match the authenticated source `external_identity` when supplied;
-- authenticated source workspace remains authoritative even if the caller supplies another workspace hint.
-
-`ALLOWED_CHAT_IDS` on the VM is only local transport filtering. Empty/absent means the adapter may forward all supported visible events to Mkety, where server policy still decides whether they are authorized. Changing Telegram channels should not require Telethon code changes.
-
-Canonical Telegram identity remains:
+Observation-only Container soak command:
 
 ```text
-telegram:<accountScope>:<chatId>:<messageId>
+npm run soak:mtproto:container
 ```
 
-Container, Durable Object, and external MTProto replay of the same native event must collapse through persistent workspace-scoped idempotency after authentication. The same Telegram native identity in two different workspaces must remain two tenant-scoped events.
+A static/CI GREEN harness is not proof of lossless real reconnect behavior. Container disk is ephemeral and real Telegram restart/catch-up must still be exercised using a test account/channel.
 
-Non-live acceptance procedure:
+## Static V1 simulation acceptance
 
-1. Review/apply only required pending Trading migrations after inspecting the real shared Supabase schema; do not apply them blindly.
-2. Create/select a non-live `external_mtproto` source in the correct Trading workspace.
-3. Keep broker/live execution disabled.
-4. Configure server `chat_acceptance_mode` / `allowed_chat_ids` deliberately; safe default is deny-all until the intended test chat is added.
-5. Configure the external host using the names above; keep values out of Git/chat/logs.
-6. Use a Telegram test account/channel and verify an authorized event reaches signed V1 once.
-7. Replay the same native message and verify persistent duplicate terminal success with zero second interpretation/orchestration/destination work.
-8. Send an unauthorized chat event and verify rejection before reservation/AI.
-9. Exercise a retryable network/429/5xx failure and verify only that source retries while another source/workspace continues.
-10. Revoke/disable one external source and verify a separate workspace/source remains operational.
-11. Inspect only sanitized health: status/connectivity/counters/timestamps/queue depth; no source secret, Telegram session, signature, or credential value may appear.
-
-External MTProto setup does not enable demo broker orders or real-money execution. Full operator detail: `external/mtproto-adapter/README.md`.
-
-## Trade account setup
-
-The existing Trading-specific `trade_accounts` table is being reused because it was empty before V1 migration.
-
-For initial simulation:
-
-- create a clearly labelled non-live/demo account record only after required encrypted credential handling exists;
-- default `execution_enabled=false`;
-- use conservative `safety_policy` values;
-- configure `fast_entry_policy` deliberately;
-- configure `entry_zone_policy` deliberately;
-- do not insert fake live credentials merely to satisfy a schema.
-
-Simulation can later test an enabled account because the V1 simulation orchestrator has no broker-dispatch dependency. That does not authorize demo or live broker orders.
-
-## Static simulation acceptance matrix
-
-Once Worker configuration, one source connection, and one non-live account exist, enable only:
+When non-live workspace/source configuration is ready, enable only simulation and run:
 
 ```text
-TRADING_V1_SIMULATION=true
+npm run accept:v1:simulation
 ```
 
-Use `POST /api/v1/events` and test at minimum:
+Acceptance must cover at minimum:
 
-### 1. Complete deterministic signal
-
-Verify one event reservation, canonical READY interpretation, account-policy evaluation, risk-sized Position Group/legs, simulation actions matching arbitrary TP count, and zero broker dispatch.
-
-### 2. Duplicate event
-
-Send the same source/external event identity twice. Verify persistent duplicate recognition, one event row, no second Position Group, and no repeated planning.
-
-### 3. Invalid signature/replay
-
-Verify rejection occurs before event persistence.
-
-### 4. AI-required conversational signal
-
-Verify AI is loaded only after authenticated workspace resolution, obeys latency budget, and its structured result is deterministically validated. Malformed/impossible geometry must fail closed.
-
-### 5. Kill switch / disabled account
-
-Verify zero actions and no executable Position Group.
-
-### 6. Fast-entry wait policy
-
-With `wait_for_complete_signal`, an incomplete fast signal must remain action-free.
-
-### 7. Fast-entry completion
-
-Verify full signal correlates to the existing incomplete group and does not create duplicate TP legs/positions.
-
-### 8. Reply/thread management
-
-Verify BE, close/partial close, cancel pending, and other management target the correct existing group. Ambiguous unthreaded management must fail closed.
-
-### 9. Missing market metadata
-
-Verify simulation blocks rather than guessing tick value, volume, symbol mapping, or price.
+- complete deterministic signal;
+- exact duplicate event;
+- invalid signature/stale replay rejection before persistence;
+- bounded AI ambiguity that still passes deterministic validation;
+- disabled account/kill switch producing zero actions;
+- fast-entry wait policy and completion without duplicate legs;
+- reply/thread-targeted management;
+- missing broker/market metadata failing closed;
+- zero broker dispatch from the simulation path.
 
 ## cTrader demo acceptance
 
-After static simulation passes, configure a real authorized **demo** account outside source control.
+Only after static simulation is green, configure a real authorized **demo** account outside source control and run:
 
-The acceptance matrix must exercise:
+```text
+npm run accept:ctrader:demo
+```
 
-- app authentication then account authentication;
-- account trading rights;
-- live account-specific symbol catalog and IDs;
-- live bid/ask acquisition;
-- symbol aliases/suffixes resolved through actual catalog metadata;
-- correct cTrader protocol-cent volume conversion;
-- market orders waiting for `ORDER_FILLED`/position-bearing event before protection;
-- pending orders;
-- absolute SL/TP protection;
-- arbitrary multi-TP Position Groups;
-- fast-entry promotion without duplicate positions;
-- BE and subsequent protection ladder;
-- partial/full close;
-- pending cancellation;
-- hedged and netted semantics where available;
-- persistent destination idempotency/replay safety.
+Validate app/account authentication, account trading rights, live demo symbol metadata/quotes, raw cTrader protocol-cent volume semantics, market/pending orders, fill-before-protection, arbitrary TP groups, BE, partial/full close, pending cancellation, account mode, and persistent destination idempotency.
 
-Do not use a live cTrader endpoint unless deliberately enabled after demo acceptance.
+Never point the acceptance command at a live cTrader environment unless a later deliberate live-cutover decision explicitly authorizes it.
 
 ## MT5 demo acceptance
 
-Use a reachable authenticated Python/EA bridge attached to a demo terminal/account.
+Only with a reachable authenticated demo bridge/terminal and explicit demo gate:
 
-Verify:
+```text
+npm run accept:mt5:demo
+```
 
-- signed `mkety.mt5.v1` envelope;
-- command expiry/replay rejection;
-- `symbols_get`/`symbol_info` metadata normalization;
-- `order_check` before placement;
-- broker symbol suffix/prefix mapping;
-- volume min/max/step;
-- market/pending orders;
-- SL/TP;
-- multi-leg TP groups;
-- BE/protection changes;
-- partial/full close;
-- pending cancel;
-- persistent idempotency.
+Validate signed command expiry/replay rejection, account/server identity, broker symbol metadata/suffixes, `order_check`, volume constraints, market/pending orders, SL/TP, arbitrary TP groups, BE/protection, partial/full close, cancel pending, and persistent idempotency.
 
-## Legacy Trading cutover
+## Legacy cutover
 
-Do not delete or rename legacy Trading tables simply because V1 tables exist.
+Do not delete/rename legacy Trading runtime/tables simply because V1 exists.
 
-Cutover sequence:
+Cutover remains:
 
-1. pass V1 static simulation;
-2. pass cTrader demo matrix;
-3. pass MT5 demo matrix;
-4. migrate the MTProto listener to signed V1 events while retaining legacy fallback;
-5. validate destination/customer formatting profiles;
-6. compare V1 state/output with the legacy path;
-7. only then plan migration/retirement of obsolete legacy Trading tables.
-
-Any legacy replacement must have a separate migration, rollback path, and data verification even if the legacy tables are currently empty.
+1. pass signed V1 simulation;
+2. pass non-live source/provider soak;
+3. pass cTrader demo matrix;
+4. pass MT5 demo matrix;
+5. compare V1 behavior/state with the legacy path;
+6. only then design a separately reversible legacy retirement/cutover.
 
 ## Stop conditions
 
 Stop and fix the root cause if any of these occur:
 
-- an unrelated Mkety table is modified by Trading migration;
+- an unrelated Mkety table/function/schema is modified by Trading work;
 - shared `workspaces` schema changes;
-- secrets appear in database plaintext, API responses, or logs;
+- client table privileges reappear on Trading internal tables;
+- secrets appear in plaintext database fields, logs, health, or API responses;
 - invalid/replayed source events reach persistence;
 - ambiguous AI output becomes executable;
 - blocked accounts produce actions;
-- duplicate events produce duplicate Position Groups/orders;
+- duplicate events create duplicate Position Groups/orders/deliveries;
+- a source/provider/destination failure changes a sibling integration's state or behavior;
 - simulation reaches a broker executor;
-- correlation targets the wrong trade;
-- broker metadata is guessed instead of discovered/validated;
-- one workspace/source/provider failure changes another workspace/source/provider's authorization, retry state, health, credentials, idempotency, or execution behavior.
+- broker metadata/economics are guessed rather than discovered/validated.
 
 ## Current next step
 
-External MTProto source/static acceptance is implemented in code and CI. The next environment step for that provider is a controlled **non-live external VM soak** using a Telegram test account/channel and a non-live `external_mtproto` source after the real shared-Supabase migration state is reviewed. If those runtime credentials are not available, do not block unrelated work: continue the multi-source implementation with TradingView/custom/MT5/cTrader source adapters. cTrader and MT5 broker order acceptance remain demo-only gates, and real-money execution remains disabled.
+The shared-Supabase migration/readiness gate is complete and verified through `0008`.
+
+Next safe environment work is **non-live authorization/runtime configuration**:
+
+1. configure and verify Zitadel/workspace mapping while keeping `trading_access_enabled=false` until negative/positive auth tests pass;
+2. configure one deliberately non-live source identity using server-side encrypted credentials;
+3. deploy/verify the required Cloudflare V1/Container/DO bindings without enabling real broker execution;
+4. run signed V1 simulation and MTProto non-live soak/replay/isolation acceptance;
+5. then run cTrader/MT5 demo acceptance behind their explicit demo-only gates.
+
+Real-money execution remains disabled.
