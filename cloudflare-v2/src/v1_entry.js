@@ -3,6 +3,7 @@ import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
+import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
@@ -121,6 +122,7 @@ export function createTradingV1Entrypoint({
   shadowBuilder = buildCanonicalShadow,
   eventsHandler = handleV1EventsRequest,
   adminHandler = handleV1AdminRequest,
+  queueRuntime = null,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -169,6 +171,11 @@ export function createTradingV1Entrypoint({
 
       const legacyResponse = await legacy.fetch(request, env, ctx);
       return attachShadowDiagnostics(legacyResponse, shadowPromise);
+    },
+
+    async queue(batch, env, ctx) {
+      const runtime = queueRuntime || createSourceQueueRuntime();
+      return runtime(batch, env, { ctx });
     },
 
     async scheduled(event, env, ctx) {
