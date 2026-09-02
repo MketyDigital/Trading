@@ -2,6 +2,7 @@ import { verifySignedSourcePayload } from '../security/source_auth.js';
 import { normalizeTradingEvent } from '../events/trading_event.js';
 import { interpretTradingEvent } from '../ai/trading_interpreter.js';
 import { buildCanonicalSourceEventId } from '../sources/canonical_event_id.js';
+import { authorizeExternalMtprotoEvent } from '../sources/mtproto/external_policy.js';
 
 function deriveCanonicalEventId(source, input) {
   if (!source?.source_family || !source?.external_identity) return null;
@@ -59,6 +60,12 @@ export async function ingestTradingEvent({
   } catch {
     return { ok: false, status: 400, reason: 'INVALID_JSON' };
   }
+
+  // External MTProto authorization is server-owned and runs only after source
+  // HMAC authentication, but before normalization, reservation, AI or trading
+  // work. Local VM filtering is an optimization and never an authority.
+  const sourcePolicy = authorizeExternalMtprotoEvent({ source, input });
+  if (!sourcePolicy.ok) return sourcePolicy;
 
   // Source identity and workspace authority come from the authenticated source
   // registry, never from client-controlled payload fields.
