@@ -1,6 +1,25 @@
 import { verifySignedSourcePayload } from '../security/source_auth.js';
 import { normalizeTradingEvent } from '../events/trading_event.js';
 import { interpretTradingEvent } from '../ai/trading_interpreter.js';
+import { buildCanonicalSourceEventId } from '../sources/canonical_event_id.js';
+
+function deriveCanonicalEventId(source, input) {
+  if (!source?.source_family || !source?.external_identity) return null;
+  const nativeIdentity = input?.metadata?.native_identity;
+  if (!nativeIdentity || typeof nativeIdentity !== 'object') return null;
+
+  try {
+    return buildCanonicalSourceEventId({
+      sourceFamily: source.source_family,
+      accountScope: source.external_identity,
+      nativeIdentity,
+    });
+  } catch {
+    // Backward compatibility: older/custom providers without a complete native
+    // identity continue to use the existing source-scoped external_event_id.
+    return null;
+  }
+}
 
 export async function ingestTradingEvent({
   rawBody,
@@ -58,7 +77,8 @@ export async function ingestTradingEvent({
   }
 
   const event = normalized.event;
-  const reservation = await eventStore.reserve({
+  const canonicalEventId = deriveCanonicalEventId(source, input);
+  const reservationRow = {
     workspace_id: source.workspace_id,
     source_connection_id: source.id,
     external_event_id: event.external_event_id,
@@ -70,7 +90,10 @@ export async function ingestTradingEvent({
     structured_payload: event.structured_payload,
     thread: event.thread,
     metadata: event.metadata,
-  });
+  };
+  if (canonicalEventId) reservationRow.canonical_event_id = canonicalEventId;
+
+  const reservation = await eventStore.reserve(reservationRow);
 
   if (reservation?.duplicate) {
     return {
