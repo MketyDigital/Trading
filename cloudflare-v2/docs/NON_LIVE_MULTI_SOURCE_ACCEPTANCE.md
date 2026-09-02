@@ -1,21 +1,31 @@
 # Non-live Multi-source Acceptance and Operational Gate
 
-This runbook closes implementation-plan Task 9 for `cloudflare-v2`. It is deliberately non-live. It does not authorize real broker execution, does not replace the broker demo acceptance gates, and does not relax the shared-Supabase or multi-tenant isolation rules in `AGENTS.md`.
+This runbook closes implementation-plan Task 9 for `cloudflare-v2` and records the current non-live source boundary. It is deliberately non-live. It does not authorize real broker execution, does not replace the broker demo acceptance gates, and does not relax the shared-Supabase or multi-tenant isolation rules in `AGENTS.md`.
 
 ## Preconditions
 
 Before any environment run:
 
-- inspect the real shared Supabase schema before applying checked-in Trading migrations `0003`-`0006`;
+- inspect the real shared Supabase schema before applying checked-in Trading migrations;
 - keep unrelated Mkety tables unchanged;
 - keep `trading_access_enabled=false` until the intended Zitadel organization/role mapping is configured and independently verified;
 - keep real-money execution disabled;
 - use test Telegram accounts/channels and non-live Trading sources only;
-- never place secret values in Git, chat, command output, health responses, or acceptance summaries.
+- never place secret values in Git, chat, command output, health responses, or acceptance summaries;
+- for TradingView, never place reusable source secrets in the webhook URL/query/body and never treat caller workspace/source/destination/execution fields as authority.
+
+Verified Trading-owned Supabase state as of 2026-09-02:
+
+- migrations through `trading_0010_tradingview_public_source_handle` are applied;
+- `0010` ledger version is `20260902184215`;
+- `source_connections.public_source_handle` is nullable `text`;
+- `idx_source_connections_public_source_handle` is a unique partial index for non-null handles;
+- `anon` and `authenticated` retain no table privileges on `source_connections`; `service_role` retains required access;
+- no TradingView source row, broker credential, destination, or execution setting was created by migration `0010`.
 
 ## Static/CI gate
 
-The exact Task 9 acceptance suite must prove all of the following before environment testing:
+The exact acceptance suite must prove all of the following before environment testing:
 
 1. Multiple source/provider families coexist without a global provider dependency.
 2. A source/provider failure is scoped to that source/workspace and does not mutate sibling authorization, credentials, health, retry state, defaults, or canonical identity.
@@ -26,13 +36,19 @@ The exact Task 9 acceptance suite must prove all of the following before environ
 7. A foreign-workspace destination is rejected locally without preventing valid sibling destinations from running.
 8. Duplicate destination identifiers are rejected independently instead of being dispatched twice.
 9. Sanitized results contain fixed error codes/health fields only and never echo provider, source, Telegram-session, destination, broker, signing, or database credential values.
-10. All four mandatory CI gates pass at the same exact branch head: Node Worker/trading-core, pure MT5 bridge, both MTProto Python suites, and Wrangler dry-run.
+10. TradingView direct ingress remains source-only: transport verification precedes acceptance, exact server-side public-handle lookup establishes source authority, stable native `event_id` is required, forbidden authority/credential hints are removed, and accepted work is queued into the existing source-event path only.
+11. A TradingView source/queue failure never suppresses another TradingView handle or Telegram/MT5/cTrader/custom source.
+12. Existing signed `/api/v1/events` HMAC behavior remains independent and unchanged by the TradingView route.
+13. All four mandatory CI gates pass at the same exact branch head: Node Worker/trading-core, pure MT5 bridge, both MTProto Python suites, and Wrangler dry-run.
 
-Task 9 TDD checkpoints:
+Key TDD/CI checkpoints:
 
 - destination fan-out RED: run `33630032190` at `7c27ca546602b48fcbfa7b1db8051f6e4469af0f`; 378 tests passed and the only failure was missing `src/destinations/destination_fanout.js`;
 - destination fan-out GREEN: run `33630219329` at `fa253f04eba80354781a91474a237ebd02c51f34`; all four mandatory gates passed;
-- MTProto soak harness GREEN: run `33629585665` at `276abbc362c03703d897f1410f1eeb534ff75b07`.
+- MTProto soak harness GREEN: run `33629585665` at `276abbc362c03703d897f1410f1eeb534ff75b07`;
+- TradingView duplicate-contract RED: run `33668236026` at `7cd66319e312856bceb5255ff0cbb15ecf5930d0`; 490/493 Node tests passed and the only failures were newly added tests using alternate names instead of the already implemented `public_source_handle` contract;
+- TradingView reconciliation GREEN: run `33668462127` at `8e83294d0578e0278b5f3eea7037faa305fe1503`; all four mandatory gates passed;
+- post-Supabase handoff GREEN: run `33668981424` at `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`; all four mandatory gates passed after live migration `0010` verification was recorded.
 
 ## MTProto soak command
 
@@ -56,6 +72,24 @@ Use at least two independent workspaces or source identities when practical so i
 - Inject a retryable failure into source A transport/downstream path; source B must continue without authorization, health, retry, or queue-state changes.
 - Disable/revoke source A; source B must remain operational.
 - Attempt a caller workspace/source override; trusted server-side source/workspace identity must remain authoritative.
+
+### TradingView direct-ingress transport gate
+
+Direct TradingView staging is intentionally fail-closed. Do not enable it merely because the route exists.
+
+1. Confirm the deployed Worker has the expected TradingView route but `TRADINGVIEW_DIRECT_INGRESS_ENABLED` remains disabled initially.
+2. Send a request with spoofed ordinary HTTP headers claiming certificate/IP verification. Expect `403 TRADINGVIEW_TRANSPORT_NOT_VERIFIED` and confirm there is no source lookup/queue reservation downstream.
+3. Observe a real TradingView webhook at Cloudflare using non-secret metadata only. Confirm the exact `request.cf.tlsClientAuth` fields and SHA-256 certificate fingerprint behavior expected by `tradingview_transport.js`.
+4. Configure the observed/validated certificate fingerprint through the secret/environment management path only. Never paste the fingerprint alongside any unrelated secrets or source credentials.
+5. Enable `TRADINGVIEW_DIRECT_INGRESS_ENABLED` only for controlled non-live acceptance after the certificate behavior is proven.
+6. Create one non-execution `tradingview_webhook` source row with a unique `public_source_handle`. Do not attach a broker/destination and do not enable any trade account as part of ingress verification.
+7. Post a valid TradingView alert with a stable `event_id`; expect HTTP `202` and one queue envelope for the exact resolved source.
+8. Repeat the same native `event_id`; confirm persistent canonical duplicate handling prevents second interpretation/orchestration work.
+9. Include malicious `workspace_id`, `source_id`, destination, broker, execution, token, password, credential and API-key-like fields at nested levels; confirm they never become authority or appear in the queued source event.
+10. Test a second source handle/workspace. Failure or disablement of source A must not change source B's source resolution, queueing, idempotency, health, or credentials.
+11. Turn direct ingress back off after the controlled test unless there is a separate reviewed decision to keep staging enabled.
+
+Do **not** substitute an IP-only allowlist, caller-supplied verification header, query-string secret, or body secret for the certificate gate. If Cloudflare does not expose stable verifiable TradingView client-certificate metadata in the real environment, keep direct ingress disabled and revisit the trust-boundary design rather than weakening it.
 
 ### Reconnect/catch-up/replay
 
@@ -85,10 +119,12 @@ Stop the environment acceptance immediately if:
 - a replay produces a second Position Group/orchestration/destination delivery for the same canonical event;
 - a successful destination is rolled back or automatically redispatched because a sibling failed;
 - secret values appear in logs, health, API responses, or summaries;
+- TradingView direct ingress accepts traffic without the exact reviewed transport verification;
+- TradingView caller-provided workspace/source/destination/execution fields become authority;
 - any non-live acceptance path reaches a real broker executor.
 
 ## Gate outcome and next boundary
 
-Task 9 is complete at the source-code/CI level. Environment acceptance still requires real account/runtime access and therefore must be performed only after the actual shared-Supabase migration state is inspected and the non-live staging identities are configured.
+The source-code/CI and TradingView `0010` database-schema portions are complete and verified. Direct TradingView **environment** acceptance is not complete because this session has no Cloudflare account connector and therefore cannot prove the real TradingView client-certificate metadata/fingerprint behavior. Keep direct ingress disabled until that proof exists.
 
-The next safe engineering boundary is controlled staging readiness: inspect/apply only the required Trading-owned migrations, configure non-live source/auth bindings, run signed V1 and MTProto soak acceptance, then run cTrader/MT5 demo probes/lifecycles behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
+The next safe engineering boundary is controlled account-side staging readiness: inspect the actual Cloudflare Worker/Queue bindings by names/status only, prove TradingView TLS client-certificate behavior without exposing secrets, configure one non-execution TradingView source for acceptance, then continue signed V1/MTProto/Zitadel non-live gates. cTrader/MT5 demo probes/lifecycles stay behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
