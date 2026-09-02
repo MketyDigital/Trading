@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import { handleTradingViewWebhookRequest } from '../src/http/tradingview_webhook.js';
 
 const URL = 'https://trading.example.com/api/v1/webhooks/tradingview/tv_public_abc123';
+const FP = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
 
-function request(body, { method = 'POST', headers = {} } = {}) {
-  return new Request(URL, {
+function request(body, { method = 'POST', headers = {}, cf } = {}) {
+  const req = new Request(URL, {
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
     body: method === 'POST' ? body : undefined,
   });
+  if (cf !== undefined) Object.defineProperty(req, 'cf', { value: cf, configurable: true });
+  return req;
 }
 
 function validBody(overrides = {}) {
@@ -75,6 +78,85 @@ test('failed TradingView transport verification stops before source lookup and q
   const response = await handleTradingViewWebhookRequest(request(validBody()), {}, options);
   assert.equal(response.status, 403);
   assert.deepEqual(await json(response), { ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' });
+  assert.equal(state.lookups.length, 0);
+  assert.equal(state.queued.length, 0);
+});
+
+test('certificate probe is silent by default when normal ingress is disabled', async () => {
+  const observations = [];
+  const { options, state } = deps({
+    verifyTransport: () => ({ ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' }),
+    probeLogger: (entry) => observations.push(entry),
+  });
+  const response = await handleTradingViewWebhookRequest(request(validBody(), {
+    cf: { tlsClientAuth: { certPresented: '1', certFingerprintSHA256: FP } },
+  }), { TRADINGVIEW_CERT_PROBE_ENABLED: 'false' }, options);
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(observations, []);
+  assert.equal(state.lookups.length, 0);
+  assert.equal(state.queued.length, 0);
+});
+
+test('certificate probe records only sanitized presentation state when no client certificate is present', async () => {
+  const observations = [];
+  const { options, state } = deps({
+    verifyTransport: () => ({ ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' }),
+    probeLogger: (entry) => observations.push(entry),
+  });
+  const response = await handleTradingViewWebhookRequest(request(validBody(), {
+    headers: { 'cf-client-cert-sha256': FP, 'x-cert-subject-dn': 'CN=spoofed' },
+    cf: { tlsClientAuth: { certPresented: '0', certFingerprintSHA256: FP } },
+  }), { TRADINGVIEW_CERT_PROBE_ENABLED: 'true' }, options);
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(observations, [{
+    event: 'TRADINGVIEW_CERT_PROBE',
+    certPresented: false,
+    fingerprintAvailable: false,
+    certFingerprintSHA256: null,
+  }]);
+  assert.equal(state.lookups.length, 0);
+  assert.equal(state.queued.length, 0);
+});
+
+test('certificate probe records exact normalized Cloudflare-observed fingerprint but never authorizes ingress', async () => {
+  const observations = [];
+  const { options, state } = deps({
+    verifyTransport: () => ({ ok: false, reason: 'TRADINGVIEW_TRANSPORT_NOT_VERIFIED' }),
+    probeLogger: (entry) => observations.push(entry),
+  });
+  const response = await handleTradingViewWebhookRequest(request(validBody(), {
+    headers: {
+      'cf-client-cert-sha256': '11'.repeat(32),
+      'x-cert-subject-dn': 'CN=spoofed',
+      'authorization': 'Bearer private',
+    },
+    cf: {
+      tlsClientAuth: {
+        certPresented: '1',
+        certVerified: 'FAILED:unable to get local issuer certificate',
+        certFingerprintSHA256: FP,
+        certSubjectDN: 'CN=private-subject',
+        certIssuerDN: 'CN=private-issuer',
+      },
+    },
+  }), {
+    TRADINGVIEW_CERT_PROBE_ENABLED: 'true',
+    TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false',
+  }, options);
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(observations, [{
+    event: 'TRADINGVIEW_CERT_PROBE',
+    certPresented: true,
+    fingerprintAvailable: true,
+    certFingerprintSHA256: FP.toLowerCase().replaceAll(':', ''),
+  }]);
+  const serialized = JSON.stringify(observations);
+  for (const forbidden of ['private-subject', 'private-issuer', 'Bearer private', 'spoofed', '11'.repeat(32)]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
   assert.equal(state.lookups.length, 0);
   assert.equal(state.queued.length, 0);
 });
