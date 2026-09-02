@@ -143,6 +143,7 @@ No real broker demo order, real Cloudflare Container/DO MTProto E2E, or real-mon
 21. Shared-Supabase privilege hardening — migration `0007`. Initial RED `33631221854` @ `4722d46…`; `trade_accounts` boundary RED `33631450772` @ `5f1d3ea…`; exact GREEN `33631626956` @ `0cb260c…`.
 22. Default-source RPC immutable search path — migration `0008`. Security Advisor found the new Trading-owned mutable-search-path warning after `0007`; RED `33632308325` @ `3215ca1…` (385 pass, sole missing `0008`); exact GREEN `33632407746` @ `bd0a737…`, all four mandatory gates passing.
 23. **Strict Zitadel project-role isolation — GREEN.** Current Zitadel docs distinguish generic current-project roles from explicit project-ID roles. RED `33633081151` @ `aa3db87a2eb9cef89050da6cd582993718baaa77`: 387 pass, sole failure proved a configured project ID incorrectly fell back to the generic role claim. Production fix `ff9980d8fdcc2866ced208842274568c2be56149` makes a configured `ZITADEL_PROJECT_ID` require the exact project-specific role claim while preserving generic-claim behavior when no project ID is configured. Exact GREEN `33633316579`, all four mandatory gates passing.
+24. **First-party MTProto component readiness — GREEN.** `/api/v1/health` now reports first-party Container readiness independently from core V1 readiness. Required runtime dependencies are checked by configuration name only: `MTPROTO_CONTAINER_NAMESPACE`, `MTPROTO_INTERNAL_SOURCE_URL`, `INTERNAL_SOURCE_TRANSPORT_TOKEN`, and `SOURCE_EVENT_QUEUE`, in addition to existing core requirements. Missing Container/Telegram runtime configuration does not degrade unrelated core V1 health. RED `33640233999` @ `81788d52d7f43162264427e674d1081e8cb34d0d`: 388 existing tests passed and only the four new readiness assertions failed. Exact GREEN `33640530231` @ `b96d974051b8b74a5976f4ad9fc7b56f56c1c24c`, all four mandatory gates passing. This is static/source readiness only, not real Cloudflare/Zitadel environment acceptance.
 
 ## Shared Supabase state — verified live 2026-09-02
 
@@ -194,12 +195,13 @@ Recent exact GREEN checkpoints:
 - `33631626956` @ `0cb260c35d97548d9af6937645df2cb419672f57`
 - `33632407746` @ `bd0a737aaa9ff8318cadeefdd96fab6804074fd9`
 - `33633316579` @ `ff9980d8fdcc2866ced208842274568c2be56149`
+- `33640530231` @ `b96d974051b8b74a5976f4ad9fc7b56f56c1c24c`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## External configuration still required
 
-Supabase migration readiness is complete. No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat, and no Cloudflare/Zitadel connector is available in this session.
+Supabase migration readiness is complete. No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat, and no Cloudflare/Zitadel connector or installable plugin is available in this session.
 
 Next non-live staging prerequisites:
 - configure intended Zitadel organization/workspace mapping;
@@ -207,6 +209,7 @@ Next non-live staging prerequisites:
 - keep `trading_access_enabled=false` until wrong-project, wrong-org, missing-role, and exact authorized project/org tests pass;
 - create one deliberately non-live source with encrypted server-side credentials only when the Worker encryption/auth configuration is ready;
 - deploy/verify V1 Worker, Queue, Container, DO and cron bindings before first-party Container E2E;
+- call `/api/v1/health` after deployment and require `ready=true` plus `mtprotoContainerReady=true` before first-party Container E2E; inspect missing configuration names only, never values;
 - use Telegram test accounts/channels for Container/external/DO reconnect/catch-up/soak;
 - run signed V1 simulation acceptance;
 - run cTrader/MT5 actual demo probes/lifecycles only with demo credentials and explicit demo gates.
@@ -221,12 +224,13 @@ Next non-live staging prerequisites:
 
 ## Exact next safe starting point
 
-Shared-Supabase migrations/readiness are complete through `0008`, and the static Zitadel project-role boundary is now fail-closed. Do not add more schema/provider/fan-out/auth code speculatively.
+Shared-Supabase migrations/readiness are complete through `0008`; static Zitadel project-role isolation is fail-closed; first-party MTProto component readiness is now exposed independently through `/api/v1/health`. Do not add more schema/provider/fan-out/auth/readiness code speculatively.
 
 Start with real non-live auth/runtime readiness when account access exists:
 - inspect actual Worker/Cloudflare deployment/bindings and Zitadel configuration by **configuration names/status only**, never secret values;
+- verify `/api/v1/health` reports `ready=true` and inspect `mtprotoContainerReady`/`mtprotoContainerMissing` independently so an optional Telegram runtime never becomes a global V1 dependency;
 - verify exact project-specific role behavior if `ZITADEL_PROJECT_ID` is configured;
 - keep the existing Trading entitlement disabled until exact organization/role/project authorization is verified;
 - do not create a live trade account or enable broker execution;
-- if Cloudflare/Zitadel account access remains unavailable, stop short of claiming environment acceptance and continue only with static readiness work directly required by that gate;
+- Cloudflare/Zitadel account access is unavailable in the current session, so stop short of claiming environment acceptance and continue only with static work directly required by a newly identified environment gate;
 - after any repo change, rerun all four mandatory CI gates.
