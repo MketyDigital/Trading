@@ -47,4 +47,6 @@ jobs:
           PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
 
       - name: Wrangler dry run
-        run: npx wrangler deploy --dry-run
+        run: |
+          npx wrangler deploy --dry-run
+          npx wrangler deploy --dry-run --config wrangler.free.toml
