@@ -109,7 +109,7 @@ class InternalHttpSinkTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MtprotoListenerTests(unittest.IsolatedAsyncioTestCase):
-    def make_listener(self, *, sink=None, chats=None, session='saved-session'):
+    def make_listener(self, *, sink=None, chats=None, session='saved-session', retry_delays=None, sleep=None):
         client = FakeClient()
         factory_calls = []
 
@@ -132,6 +132,8 @@ class MtprotoListenerTests(unittest.IsolatedAsyncioTestCase):
             client_factory=client_factory,
             sink=sink or default_sink,
             queue_size=10,
+            retry_delays=retry_delays,
+            sleep=sleep,
         )
         return listener, client, factory_calls, delivered
 
@@ -220,6 +222,43 @@ class MtprotoListenerTests(unittest.IsolatedAsyncioTestCase):
         gate.set()
         await listener.wait_until_idle()
         self.assertEqual(len(delivered), 1)
+        await listener.stop()
+
+    async def test_delivery_failure_retries_same_payload_without_killing_worker(self):
+        attempts = []
+        sleep_delays = []
+
+        async def flaky_sink(payload):
+            attempts.append(payload)
+            if len(attempts) < 3:
+                raise RuntimeError('temporary 503')
+
+        async def fake_sleep(delay):
+            sleep_delays.append(delay)
+
+        listener, _, _, _ = self.make_listener(
+            sink=flaky_sink,
+            retry_delays=(1, 2, 5),
+            sleep=fake_sleep,
+        )
+        await listener.start()
+        await listener.handle_new_message(FakeEvent(chat_id=-1001, message_id=101))
+        await asyncio.wait_for(listener.wait_until_idle(), timeout=0.1)
+
+        self.assertEqual(len(attempts), 3)
+        self.assertIs(attempts[0], attempts[1])
+        self.assertIs(attempts[1], attempts[2])
+        self.assertEqual(sleep_delays, [1, 2])
+        health = listener.health()
+        self.assertEqual(health['delivery_failures'], 2)
+        self.assertEqual(health['delivery_successes'], 1)
+        self.assertIsNotNone(health['last_delivery_error_at'])
+        self.assertIsNotNone(health['last_delivery_at'])
+        self.assertEqual(health['status'], 'HEALTHY')
+
+        await listener.handle_new_message(FakeEvent(chat_id=-1001, message_id=102))
+        await asyncio.wait_for(listener.wait_until_idle(), timeout=0.1)
+        self.assertEqual(len(attempts), 4)
         await listener.stop()
 
     async def test_start_restores_session_registers_handler_then_catches_up(self):
