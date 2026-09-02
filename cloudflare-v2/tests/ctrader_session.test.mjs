@@ -202,7 +202,7 @@ test('request-correlated responses still resolve while event subscribers observe
   session.subscribeEvents((message) => seen.push(message));
 
   const pending = session.request({ clientMsgId: 'correlated-1', payloadType: 2106, payload: {} }, { successPayloadTypes: [2126] });
-  socket.message({ clientMsgId: 'correlated-1', payloadType: 2126, payload: { position: { positionId: 501 } } });
+  session.handleMessage({ data: JSON.stringify({ clientMsgId: 'correlated-1', payloadType: 2126, payload: { position: { positionId: 501 } } }) });
   const response = await pending;
 
   assert.equal(response.payload.position.positionId, 501);
@@ -223,7 +223,7 @@ test('throwing event subscriber cannot block sibling subscribers or request corr
   session.subscribeEvents(() => { siblingCalls += 1; });
 
   const pending = session.request({ clientMsgId: 'correlated-2', payloadType: 2106, payload: {} }, { successPayloadTypes: [2126] });
-  assert.doesNotThrow(() => socket.message({ clientMsgId: 'correlated-2', payloadType: 2126, payload: { position: { positionId: 502 } } }));
+  assert.doesNotThrow(() => session.handleMessage({ data: JSON.stringify({ clientMsgId: 'correlated-2', payloadType: 2126, payload: { position: { positionId: 502 } } }) }));
   const response = await pending;
 
   assert.equal(response.payload.position.positionId, 502);
