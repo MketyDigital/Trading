@@ -16,6 +16,23 @@ Make Trading V1 source-agnostic and multi-provider: a workspace may enable any c
 6. **At-least-once transport plus deterministic idempotency.** Recovery/retries/redundant listeners may replay events; canonical source identity prevents duplicate trading actions.
 7. **No secrets in plaintext logs or API responses.** Provider credentials use existing encrypted-secret patterns.
 8. **Legacy runtime remains intact until V1 is independently proven.**
+9. **Failure isolation is mandatory across every pluggable boundary.** A source, destination, broker adapter, AI provider, customer integration, queue consumer, or workspace-specific configuration failure must not stall, disable, reorder, corrupt, or change the health/execution state of unrelated integrations. Retry state, circuit/health state, idempotency, rate limits, queues, credentials, kill switches, and error reporting are scoped to the smallest responsible integration/workspace/destination boundary. Global controls may exist only where intentionally defined as global safety controls.
+10. **Fan-out is independently fault-tolerant.** When one canonical event targets multiple destinations/accounts, each delivery/execution receives its own persistent destination idempotency and outcome. One destination failure may be retried or failed independently and must never roll back, duplicate, or block already-valid sibling destinations.
+11. **Source ingestion is independently fault-tolerant.** A slow, disconnected, misconfigured, or retrying source provider must not block another enabled source provider. Per-source receive/handoff queues and health are isolated; canonical event deduplication is shared only at the authenticated persistent ingestion boundary.
+12. **Provider fallbacks never create hidden coupling.** A fallback provider may replace only the failed function it is explicitly configured to replace. Failure of an optional AI provider, MTProto runtime, broker, or destination cannot become a platform-wide startup/runtime dependency.
+
+## Isolation Contract
+
+The platform must enforce isolation at six levels:
+
+1. **Workspace isolation** — one tenant's secrets, health, source configuration, risk policy, kill switch, queue retry, or destination failure never changes another tenant's state.
+2. **Source isolation** — each source connection owns its transport/session health, receive-loop state, retry/backoff, checkpoint/recovery state, and provider configuration. Source defaults are preferences only and never disable sibling sources.
+3. **Event isolation** — one malformed/ambiguous event fails closed for that event only. Persistent idempotency/correlation prevents replay from contaminating unrelated events.
+4. **Destination/account isolation** — every destination delivery and broker account execution has independent authorization, risk policy, idempotency key, status, retry policy, and kill switch. A rejected/failed destination cannot suppress unrelated destinations.
+5. **Provider isolation** — AI/broker/source provider availability is evaluated per provider call/connection. Provider health and rate-limit/backoff state must not be stored as one global mutable flag shared by unrelated tenants/providers.
+6. **Control-plane isolation** — admin APIs may mutate only the explicitly authenticated workspace and targeted integration. Status APIs are read-only and must not have side effects on unrelated runtimes.
+
+Tests must deliberately inject failures into one source/destination/provider/workspace and prove sibling integrations continue normally. This is a release gate, not optional resilience work.
 
 ## Source Provider Model
 
@@ -96,6 +113,8 @@ Hard requirements:
 - health endpoint/heartbeat exposed to the managing Worker/DO;
 - restart-safe catch-up/backfill;
 - outbound delivery decoupled from Telegram receive loop;
+- delivery retry/backoff is scoped to this listener/source and never blocks unrelated source providers;
+- a failed handoff retries the same payload without killing the delivery worker;
 - no broker execution logic inside the listener;
 - no tenant plaintext secrets returned through control APIs.
 
@@ -130,7 +149,8 @@ The system does not promise that any cloud process can never restart. The operat
 - restore session without a new Telegram login;
 - recover missed Telegram updates/messages within Telegram's available history/update window;
 - duplicate replays remain harmless;
-- downstream outages do not block the receive loop.
+- downstream outages do not block the receive loop;
+- retry exhaustion degrades only the affected source connection and records sanitized health instead of terminating unrelated source/provider runtimes.
 
 The preferred Container runtime minimizes normal receive latency; catch-up/checkpointing protects against infrastructure restart gaps.
 
@@ -146,6 +166,8 @@ Benefits:
 - Trading V1 remains the sole interpretation/correlation/risk authority.
 
 Queue use is optional for external/custom providers that already provide reliable delivery, but canonical idempotency remains mandatory.
+
+Queue retry/DLQ behavior must preserve source/event identity and must not use a global failure latch that pauses unrelated source connections or destination processing.
 
 ## Other Source Families
 
@@ -178,8 +200,11 @@ Each source connection reports provider-appropriate health without forcing a com
 - `last_disconnected_at`
 - `restart_count`
 - `last_error_code` (sanitized)
+- delivery attempt/success/failure counters where the runtime performs handoff delivery
+- `last_delivery_at`
+- `last_delivery_error_at`
 
-Health changes do not mutate canonical trade state.
+Health changes do not mutate canonical trade state. Health state is scoped to the relevant source/provider/destination; aggregations are derived views and never become shared mutable execution state.
 
 ## Security
 
@@ -188,6 +213,7 @@ Health changes do not mutate canonical trade state.
 - Container/DO/external runtimes authenticate to V1 with registered source identity and HMAC or an equivalent scoped internal credential.
 - Workspace identity is server-resolved from source registration, never trusted from listener payload.
 - Cross-provider duplicates are deduplicated only after source authentication.
+- Internal transport credentials authorize only the narrow handoff operation and never confer broker/destination/admin authority.
 
 ## Data Model Changes
 
@@ -205,6 +231,8 @@ Expected additions:
 - health timestamps/status
 
 Database constraints/indexes enforce one default per workspace/source-family and efficient enabled-provider lookup.
+
+Destination/account execution state remains separately persisted so one destination retry/failure never rewrites canonical source/event state or sibling destination state.
 
 ## Compatibility
 
@@ -228,10 +256,15 @@ Coverage must include:
 - cross-provider Telegram duplicate collapses to one canonical event;
 - provider-specific authentication still resolves trusted workspace server-side;
 - Container provider health/restart/catch-up unit contracts using fakes (no live Telegram in CI);
+- listener delivery failure retries the same payload with bounded backoff and the listener remains alive;
+- one failed source handoff does not block another source/provider;
+- one failed destination/account delivery does not block or duplicate sibling destinations;
+- one workspace kill switch/provider outage/config error does not affect another workspace;
+- AI provider timeout/failure is scoped to the requesting pipeline and configured fallback chain;
 - DO provider recovery/catch-up contracts;
 - MT5/cTrader/TradingView/custom source registrations coexist;
 - legacy route remains unchanged;
-- full Worker/core, MT5 bridge, and Wrangler dry-run CI remain green.
+- full Worker/core, MT5 bridge, MTProto listener, and Wrangler dry-run CI remain green.
 
 ## Delivery Sequence
 
@@ -239,11 +272,13 @@ Coverage must include:
 2. Add provider registry/interfaces and canonical source identity helpers.
 3. Add cross-provider idempotency tests.
 4. Build Cloudflare Container MTProto provider skeleton with Telethon listener, health, persistence contract, and signed/queued V1 delivery.
-5. Harden existing DO MTProto provider to the same provider interface and canonical identity.
-6. Add external MTProto provider bootstrap/validation.
-7. Register MT5/cTrader/TradingView/custom source provider metadata without changing destination/execution behavior.
-8. Add admin read/update APIs for enabling/disabling/default selection and health.
-9. Run non-live acceptance and long-duration MTProto soak/restart tests before production activation.
+5. Harden Container handoff retry/recovery and prove source-level failure isolation.
+6. Harden existing DO MTProto provider to the same provider interface and canonical identity.
+7. Add external MTProto provider bootstrap/validation.
+8. Register MT5/cTrader/TradingView/custom source provider metadata without changing destination/execution behavior.
+9. Add admin read/update APIs for enabling/disabling/default selection and health.
+10. Add explicit source/destination/workspace/provider failure-isolation acceptance tests.
+11. Run non-live acceptance and long-duration MTProto soak/restart tests before production activation.
 
 ## Non-Goals for This Batch
 
