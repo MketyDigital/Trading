@@ -42,6 +42,8 @@ Verified after application:
 
 Do not re-run migrations blindly. They are additive/idempotent, but inspect current schema and Git history first.
 
+Migrations `0003_multi_source_provider_registry.sql`, `0004_cross_provider_event_identity.sql`, `0005_mtproto_provider_credentials.sql`, and `0006_mtproto_recovery_state.sql` are checked in but are **not yet claimed applied**. Review the actual shared Supabase schema before applying any of them.
+
 ## Supabase advisor notes
 
 Security advisor findings attributable to the new V1 tables are informational `RLS enabled, no policy`, which is intentional for service-role-only access.
@@ -124,6 +126,60 @@ When ready:
    - `X-Mkety-Signature`.
 
 Never store the plaintext source secret in Supabase.
+
+## External MTProto non-live setup
+
+The portable runtime is `cloudflare-v2/external/mtproto-adapter/`. It is transport-only and uses the existing signed `POST /api/v1/events` boundary. It does not own workspace authorization, chat authorization, signal interpretation, AI selection, risk, trade accounts, broker execution, or destination fan-out.
+
+Customer/external-host configuration names:
+
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_SESSION`
+- `TRADING_ENDPOINT`
+- `TRADING_SOURCE_ID`
+- `TRADING_SOURCE_SECRET`
+- optional `TELEGRAM_ACCOUNT_SCOPE`
+- optional `ALLOWED_CHAT_IDS`
+
+The external host receives only its own Telegram credentials and its own source-specific Trading HMAC secret. It must never receive Supabase service role, `TRADING_MASTER_KEY`, Cloudflare internal transport token, AI credentials, broker credentials, or another tenant/source credential.
+
+Telegram API/session credentials for `external_mtproto` stay on the customer host and are not stored in Mkety by this provider design.
+
+Server-side source policy is authoritative:
+
+- `source_connections.config.chat_acceptance_mode` defaults to fail-closed `allowlist`;
+- empty/missing server `allowed_chat_ids` accepts no chats;
+- `all_visible` requires an explicit server-side setting;
+- external payload/local forward-all metadata cannot authorize `all_visible`;
+- optional caller `metadata.account_scope` must match the authenticated source `external_identity` when supplied;
+- authenticated source workspace remains authoritative even if the caller supplies another workspace hint.
+
+`ALLOWED_CHAT_IDS` on the VM is only local transport filtering. Empty/absent means the adapter may forward all supported visible events to Mkety, where server policy still decides whether they are authorized. Changing Telegram channels should not require Telethon code changes.
+
+Canonical Telegram identity remains:
+
+```text
+telegram:<accountScope>:<chatId>:<messageId>
+```
+
+Container, Durable Object, and external MTProto replay of the same native event must collapse through persistent workspace-scoped idempotency after authentication. The same Telegram native identity in two different workspaces must remain two tenant-scoped events.
+
+Non-live acceptance procedure:
+
+1. Review/apply only required pending Trading migrations after inspecting the real shared Supabase schema; do not apply them blindly.
+2. Create/select a non-live `external_mtproto` source in the correct Trading workspace.
+3. Keep broker/live execution disabled.
+4. Configure server `chat_acceptance_mode` / `allowed_chat_ids` deliberately; safe default is deny-all until the intended test chat is added.
+5. Configure the external host using the names above; keep values out of Git/chat/logs.
+6. Use a Telegram test account/channel and verify an authorized event reaches signed V1 once.
+7. Replay the same native message and verify persistent duplicate terminal success with zero second interpretation/orchestration/destination work.
+8. Send an unauthorized chat event and verify rejection before reservation/AI.
+9. Exercise a retryable network/429/5xx failure and verify only that source retries while another source/workspace continues.
+10. Revoke/disable one external source and verify a separate workspace/source remains operational.
+11. Inspect only sanitized health: status/connectivity/counters/timestamps/queue depth; no source secret, Telegram session, signature, or credential value may appear.
+
+External MTProto setup does not enable demo broker orders or real-money execution. Full operator detail: `external/mtproto-adapter/README.md`.
 
 ## Trade account setup
 
@@ -260,8 +316,9 @@ Stop and fix the root cause if any of these occur:
 - duplicate events produce duplicate Position Groups/orders;
 - simulation reaches a broker executor;
 - correlation targets the wrong trade;
-- broker metadata is guessed instead of discovered/validated.
+- broker metadata is guessed instead of discovered/validated;
+- one workspace/source/provider failure changes another workspace/source/provider's authorization, retry state, health, credentials, idempotency, or execution behavior.
 
 ## Current next step
 
-The database schema is ready but intentionally inert. Next external setup is Worker/Zitadel/source-secret configuration, followed by signed V1 simulation acceptance. After that, cTrader and MT5 demo E2E are the priority execution gates.
+External MTProto source/static acceptance is implemented in code and CI. The next environment step for that provider is a controlled **non-live external VM soak** using a Telegram test account/channel and a non-live `external_mtproto` source after the real shared-Supabase migration state is reviewed. If those runtime credentials are not available, do not block unrelated work: continue the multi-source implementation with TradingView/custom/MT5/cTrader source adapters. cTrader and MT5 broker order acceptance remain demo-only gates, and real-money execution remains disabled.
