@@ -12,7 +12,7 @@ Operational source of truth for `MketyDigital/Trading`. Read before changing the
 - Real-money execution remains disabled.
 - TDD is mandatory: exact RED before production code; full GREEN before completion claims.
 - Never paste/log/commit broker, database, auth, source, Telegram-session, provider, transport, signing, destination, or AI secrets.
-- Update this file after every meaningful implementation/testing batch.
+- Update this file after every meaningful implementation/testing/environment batch.
 
 ## Product / tenancy contract
 
@@ -63,7 +63,7 @@ Provider types:
 - Every trade account requires explicit execution enablement, safety/risk limits, and kill switch before broker dispatch.
 - Global kill switch blocks everything; protective management may bypass only ordinary drawdown/open-risk locks.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
-- No current identity/admin work enables broker execution.
+- No identity/admin/database acceptance work enables broker execution.
 
 ## MTProto availability contract
 
@@ -81,7 +81,7 @@ Known environment fact: bounded in-memory listener retries can exhaust; durable 
 
 ## Shared Mkety Zitadel identity contract
 
-- **One managed Mkety Zitadel instance is the global identity authority for MKSaaS and Trading.** Trading is an enterprise Mkety product, not a second identity system.
+- **One managed Mkety Zitadel instance is the global identity authority for MKSaaS and Trading.**
 - MKSaaS and Trading use separate Zitadel projects/apps and separate product databases.
 - A Zitadel subject may have MKSaaS access, Trading access, both, or neither.
 - A Trading-only user may authenticate through the same Zitadel instance without any MKSaaS database row/profile.
@@ -91,36 +91,32 @@ Known environment fact: bounded in-memory listener retries can exhaust; durable 
 - `trading_workspace_memberships` is the exact subject-to-workspace membership boundary.
 - Admin authorization order: workspace entitlement -> cryptographic Zitadel token/issuer/audience/project/org role -> exact enabled `(workspace_id, auth.sub)` membership -> Trading workspace permission.
 - When `ZITADEL_PROJECT_ID` is configured, only `urn:zitadel:iam:org:project:<projectId>:roles` may authorize; never fall back to the generic claim.
-- Workspace roles are Trading-owned and independent from broad Zitadel product access:
+- Workspace roles:
   - owner: workspace/members/sources read-write
   - admin: workspace/members/sources read-write
   - operator: workspace/source read + source write
   - viewer: workspace/source read
-  - unknown roles: fail closed
+  - unknown: fail closed
 - No workspace role grants `broker.execute`.
-- Trading authorization must never query or depend on the MKSaaS database.
-- Keep live staging `trading_access_enabled=false` until real positive/negative Zitadel acceptance passes.
+- Trading authorization must never query or depend on the MKSaaS database/shared Mkety workspace table.
+- Keep `trading_access_enabled=false` until real non-live positive/negative Zitadel acceptance passes.
 
-Identity spec/plan:
+Identity docs:
 - `docs/superpowers/specs/2026-09-02-mkety-shared-zitadel-enterprise-identity-design.md`
 - `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`
-
-Operator identity guide:
 - `cloudflare-v2/docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`
+- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
 
 Other active design/plan docs:
 - `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
 - `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
 - `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
 - `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
-
-Runbooks:
-- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
 - `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 
 ## Implemented/verified foundation
 
-Already GREEN before the shared-Zitadel slice:
+GREEN before the shared-Zitadel slice:
 - signed `/api/v1/events`, legacy shadow compatibility, cryptographic Zitadel/workspace auth, AES-256-GCM secrets;
 - persistent event reservation/idempotency, deterministic parser + bounded AI;
 - MT5/cTrader/Deriv normalization, metadata-driven risk/account safety;
@@ -138,28 +134,56 @@ Already GREEN before the shared-Zitadel slice:
 
 Notable prior exact GREEN checkpoints include `33630219329`, `33631626956`, `33632407746`, `33633316579`, `33640530231`.
 
-## Shared-Zitadel implementation status — 2026-09-02
+## Shared-Zitadel source/CI implementation — complete 2026-09-02
 
-1. **Architecture approved/planned.** Spec commit `db59d0d…`; plan commit starts `7f1c9fa…`.
-2. **Task 1 — subject membership schema GREEN.** Migration `0009_trading_workspace_memberships.sql`. RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`: 392 existing tests passed, sole failure migration absent. GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`, all four gates pass. `0009` is checked in but not yet claimed live-applied.
-3. **Task 2 — exact Zitadel-subject membership authorization GREEN.** RED `33647073934` @ `4bb2e9844aac9b6f8cd89783c8c2114edc910f82`: 393 pass with only intended membership-store/gate failures. GREEN `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`, all four gates pass. Valid Zitadel identity without exact enabled workspace membership is denied.
-4. **Task 3 — workspace role permissions GREEN.** Initial RED `33647710823` @ `a09a4e7…`; final workspace-read RED `33647947785` @ `d4fc01a…` had 404/405 tests passing and sole failure unknown role read. GREEN `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`, all four gates pass.
-5. **Task 4 — tenant-safe membership administration GREEN.** RED `33648606711` @ `26d310fa5aa6e7c98d66b04037affb6e3e7fb7d8`: 405 tests pass; only missing admin-store methods and missing membership handler fail. Production adds exact-workspace `listMemberships`, `upsertMembership`, role/enable mutations, owner counting, authenticated routes `GET/POST /api/v1/admin/members` and subject role/enable/disable actions, role validation, Trading-only subjects, independent same-subject multi-workspace membership, permission denial before mutation, and `409 LAST_WORKSPACE_OWNER`. Exact GREEN `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`, all four mandatory gates pass.
-6. **Task 5 — dual-access/static MKSaaS-independence acceptance + operator docs GREEN.** RED `33649663301` @ `e5f1df41a31e1467c64304f59e09684694c73e66`: 426/427 tests passed and the sole failure was the deliberately missing `cloudflare-v2/docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`. The nine behavioral/static acceptance cases already passed: existing-Mkety and Trading-only logical users converge on the same `sub` membership gate; missing/disabled/wrong-workspace membership fails; wrong Trading project/org fails before membership lookup; workspace roles remain independent; auth/admin modules contain no MKSaaS/shared-`workspaces` dependency; membership provisioning touches no source/destination/trade-account/execution state. Operator guide + staging checklist were then added. Exact implementation/docs GREEN `33649915332` @ `e093e8db37b0df03352f320b2dc51f048a209cf2`, all four mandatory gates pass.
+1. **Task 1 — subject membership schema GREEN.** Migration `0009_trading_workspace_memberships.sql`. RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`; GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`.
+2. **Task 2 — exact Zitadel-subject membership authorization GREEN.** RED `33647073934` @ `4bb2e9844aac9b6f8cd89783c8c2114edc910f82`; GREEN `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`.
+3. **Task 3 — workspace role permissions GREEN.** RED `33647710823` / final workspace-read RED `33647947785`; GREEN `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`.
+4. **Task 4 — tenant-safe membership administration GREEN.** RED `33648606711` @ `26d310fa5aa6e7c98d66b04037affb6e3e7fb7d8`; GREEN `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`.
+5. **Task 5 — dual-access/static MKSaaS-independence acceptance + operator docs GREEN.** RED `33649663301` @ `e5f1df41a31e1467c64304f59e09684694c73e66`: 426/427 passed, sole failure was deliberately missing identity guide. GREEN `33649915332` @ `e093e8db37b0df03352f320b2dc51f048a209cf2`.
+6. Final source/CI handoff head before live DB application: `33650151789` @ `8c80ec649f550f8c5eb0cd4690e3cf138118bc2b`, all four mandatory gates GREEN.
 
-**Shared-Zitadel source/CI implementation Tasks 1–5 are complete.** This is not real-environment identity acceptance: the existing managed Mkety Zitadel project/application, deployed Cloudflare Worker, and live database migration `0009` still require separate non-live verification.
+Source/CI acceptance proves existing-Mkety and Trading-only logical users converge on the same immutable `sub` + Trading membership gate, wrong project/org/workspace/disabled membership fails closed, workspace roles remain isolated, no MKSaaS DB dependency exists, and membership provisioning does not mutate trading execution/source state.
 
-## Shared Supabase live state
+## Shared Supabase live state — `0009` verified 2026-09-02
 
-Connected project previously verified: `Mkety Digital` Trading database.
+Connected project: `Mkety Digital` (`vdblajgxrfndjesoyayy`, PostgreSQL 17.6.1).
 
-- Migrations `0001` through `0008` are applied live.
-- Migration `0009_trading_workspace_memberships.sql` is checked into the branch but **has not yet been claimed applied live**.
-- Do not reapply `0001`-`0008` blindly.
-- Existing Trading internal tables are service-role-only with RLS enabled and no anon/authenticated policies.
-- `trading_set_default_source` is SECURITY INVOKER, `search_path=''`, service-role only.
-- Before `0009` application: source/event/position/delivery/trade-account tables were empty; one `trading_workspace_access` row existed with `trading_access_enabled=false`, `zitadel_org_id=NULL`.
-- No source, Telegram, broker, or execution credentials were inserted during migration readiness.
+Live Trading migrations now include `0003` through `0009`. Verified `0009` ledger entry:
+
+```text
+20260902154413  trading_0009_workspace_memberships
+```
+
+`public.trading_workspace_memberships` live verification:
+- expected columns/defaults are present;
+- FK `workspace_id -> trading_workspace_access(id) ON DELETE CASCADE` present;
+- role check allows only `owner/admin/operator/viewer`;
+- unique `(workspace_id, zitadel_subject)` present;
+- expected subject/workspace indexes present;
+- RLS enabled;
+- zero RLS policies by design;
+- `anon`/`authenticated` have zero table privileges;
+- `service_role` retains required access;
+- membership row count remains `0`.
+
+Post-migration isolation verification:
+- shared `public.workspaces` remains exactly 10 columns;
+- `source_connections=0`;
+- `trading_events=0`;
+- `position_groups=0`;
+- `position_legs=0`;
+- `destination_deliveries=0`;
+- `trade_accounts=0`;
+- existing workspace entitlement remains `trading_access_enabled=false`;
+- `zitadel_org_id` remains `NULL`;
+- no source, Telegram, broker, execution, or membership credentials/data inserted.
+
+Advisor review after `0009`:
+- new Trading membership table has expected INFO `RLS enabled, no policy` because it is service-only;
+- two new empty-table indexes have expected unused-index INFO;
+- no new Trading-specific WARN requiring a migration fix was introduced;
+- pre-existing unrelated WARNs include public `vector`, `public.rls_auto_enable()` SECURITY DEFINER executability, and unrelated policy/performance findings; do not modify them from this Trading repo without a separate Mkety security plan.
 
 ## CI rule
 
@@ -175,29 +199,30 @@ Recent shared-Zitadel GREEN checkpoints:
 - `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`
 - `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`
 - `33649915332` @ `e093e8db37b0df03352f320b2dc51f048a209cf2`
+- `33650151789` @ `8c80ec649f550f8c5eb0cd4690e3cf138118bc2b`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. **Close the shared-Zitadel plan/handoff and verify the final documentation head in CI.**
-2. Apply and verify migration `0009` to the Trading database only when account/database write access is intentionally used; preserve `trading_access_enabled=false` until identity acceptance is ready.
-3. Configure/verify the Trading project/application and exact workspace-bound organization in the existing managed Mkety Zitadel instance.
-4. Run real non-live positive/negative project/org/`sub` membership acceptance, including a Trading-only test identity with no MKSaaS DB profile.
-5. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration without enabling real broker execution.
+1. Verify the docs-only live-`0009` handoff head in all four CI gates.
+2. Configure/verify the Trading project/application and exact workspace-bound organization in the existing managed Mkety Zitadel instance if an appropriate connector/account-side path is available.
+3. Run real non-live project/org/`sub` positive/negative acceptance, including a Trading-only test identity with no MKSaaS DB profile.
+4. Keep entitlement disabled until the negative/positive identity setup is ready; enable only the intended non-live entitlement after evidence passes.
+5. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration without enabling broker execution.
 6. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance.
 7. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
 8. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Shared-Zitadel Tasks 1–5 are source/CI GREEN through `33649915332` @ `e093e8db37b0df03352f320b2dc51f048a209cf2`. Migration `0009` is still **not claimed live-applied**.
+Migration `0009` is now **live-applied and verified**. Shared-Zitadel Tasks 1–5 are source/CI GREEN. The existing Trading workspace entitlement remains disabled/unbound.
 
-Next safe work is environment acceptance, not more identity schema/auth behavior unless a real environment test exposes a gap:
-- apply/verify only `0009` and confirm its service-only/RLS boundary;
-- keep entitlement disabled while configuring the Trading Zitadel project/app/org mapping;
+Next safe work is real non-live identity environment acceptance:
+- configure the Trading-specific Zitadel project/app and exact organization binding without relying on MKSaaS DB state;
+- create/provision only deliberate test identities/memberships;
 - prove wrong project, wrong org, missing/disabled/wrong-workspace membership all fail;
 - prove an existing-Mkety logical user and a Trading-only subject both succeed through the same immutable `sub` gate;
-- do not query the MKSaaS DB for Trading authorization;
-- do not enable broker/live execution;
+- keep broker/live execution disabled;
+- keep source/destination/integration isolation unchanged;
 - do not merge `main` without explicit user instruction.
