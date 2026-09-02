@@ -35,28 +35,34 @@ The recommended endpoint remains the existing versioned source-ingress contract 
 2. **No code changes when signal channels change.** A customer can add/remove allowed Telegram chats in Mkety configuration without redeploying the external listener.
 3. **No code changes when another customer connects.** A new external MTProto customer creates another isolated `external_mtproto` source connection; the same fixed ingestion contract handles it.
 4. **Adapter-side filtering is optional optimization only.** Customers may forward every Telegram event visible to the userbot or only selected chats.
-5. **The external adapter holds only its own secrets.** It must never receive Trading master secrets, Supabase service-role credentials, broker credentials, AI credentials, Cloudflare internal transport tokens, or another source's credentials.
-6. **Provider failover/redundancy does not change native identity.** Container MTProto, DO MTProto, and external MTProto events for the same Telegram account/chat/message converge on one canonical event identity.
-7. **Duplicate success is terminal success.** A replay that resolves to an existing canonical event must not trigger interpretation, orchestration, or destination work again.
-8. **Failure isolation is mandatory.** One external adapter/source/workspace/network failure or retry loop cannot block, restart, reorder, mutate, or poison another source or tenant.
-9. **External runtime is presentation/transport only.** It never decides whether a message is tradable beyond optional local chat filtering; Mkety performs interpretation, correlation, risk, and execution safety.
+5. **Forwarding is not authorization.** A VM configured to forward all visible events does not implicitly grant Mkety permission to process all visible chats. Mkety's independent server-side chat policy still decides what is accepted.
+6. **The external adapter holds only its own secrets.** It must never receive Trading master secrets, Supabase service-role credentials, broker credentials, AI credentials, Cloudflare internal transport tokens, or another source's credentials.
+7. **Provider failover/redundancy does not change native identity.** Container MTProto, DO MTProto, and external MTProto events for the same Telegram account/chat/message converge on one canonical event identity.
+8. **Duplicate success is terminal success.** A replay that resolves to an existing canonical event must not trigger interpretation, orchestration, or destination work again.
+9. **Failure isolation is mandatory.** One external adapter/source/workspace/network failure or retry loop cannot block, restart, reorder, mutate, or poison another source or tenant.
+10. **External runtime is presentation/transport only.** It never decides whether a message is tradable beyond optional local chat filtering; Mkety performs interpretation, correlation, risk, and execution safety.
 
 ## Two supported external forwarding modes
 
+These are **transport choices on the external VM only**. They are separate from Mkety's server-side authorization mode described later.
+
 ### Mode A — Forward all visible Telegram events
 
-The external Telethon listener subscribes broadly and sends every relevant incoming Telegram event it can see to Mkety.
+The external Telethon listener subscribes broadly and sends all supported incoming Telegram events it can see to Mkety.
+
+This does **not** mean Mkety accepts all of those chats. For example, the VM may forward every event while the Mkety source remains in the default `allowlist` authorization mode; Mkety will reject every chat that is not in that source's server-side allowlist.
 
 Mkety then:
 
 1. authenticates the submitted `source_id`;
 2. resolves that exact source's workspace and provider definition server-side;
 3. verifies the Telegram account scope associated with that source;
-4. verifies the submitted native `chat_id` is authorized for that source;
-5. rejects/ignores unauthorized chats before interpretation or trading;
-6. derives canonical Telegram identity and proceeds through persistent idempotency.
+4. applies that source's server-side `chat_acceptance_mode`;
+5. when in `allowlist`, verifies the submitted native `chat_id` is authorized for that exact source;
+6. rejects/ignores unauthorized chats before interpretation or trading;
+7. derives canonical Telegram identity and proceeds through persistent idempotency.
 
-This mode lets customers change signal channels entirely from Mkety without touching their VM deployment.
+This transport mode lets customers change signal channels entirely from Mkety without touching their VM deployment.
 
 ### Mode B — Pre-filter locally
 
@@ -102,6 +108,8 @@ Where:
 
 Provider runtime IDs, VM hostnames, webhook request IDs, and retry attempt numbers are never part of the canonical identity.
 
+Canonical-event uniqueness remains workspace-scoped in Trading persistence, so two different customer workspaces observing the same Telegram account/chat/message do not merge into one tenant's event.
+
 ## External adapter configuration contract
 
 A minimal external runtime should require configuration equivalent to:
@@ -113,8 +121,8 @@ TELEGRAM_SESSION
 TRADING_ENDPOINT
 TRADING_SOURCE_ID
 TRADING_SOURCE_SECRET
-TELEGRAM_ACCOUNT_SCOPE   # only if required locally for self-checking; server remains authoritative
-ALLOWED_CHAT_IDS         # optional optimization
+TELEGRAM_ACCOUNT_SCOPE   # optional local self-check; server remains authoritative
+ALLOWED_CHAT_IDS         # optional transport optimization
 ```
 
 Exact variable names may change during implementation, but the trust model may not.
@@ -165,7 +173,7 @@ Retry state belongs only to that external source/runtime. It cannot create a glo
 
 ## Server-side chat authorization
 
-Mkety must maintain allowed Telegram signal-source chat IDs in server-side source configuration.
+Mkety must maintain the authorization policy for Telegram chats in server-side source configuration. This policy is independent of whether the external VM forwards all chats or pre-filters locally.
 
 The exact storage shape can reuse the source connection configuration model so long as:
 
@@ -175,7 +183,7 @@ The exact storage shape can reuse the source connection configuration model so l
 - one source cannot authorize another source's chats through shared mutable state;
 - an empty configured allowed-chat set has an explicit fail-closed meaning for `external_mtproto` rather than silently meaning “all chats”, unless the customer explicitly enables an “accept all visible chats” policy.
 
-### Recommended policy field
+### Recommended authorization policy field
 
 Use an explicit server-side mode rather than inferring policy from an empty list:
 
@@ -184,9 +192,13 @@ chat_acceptance_mode = "allowlist" | "all_visible"
 allowed_chat_ids = [...]
 ```
 
-Default should be `allowlist`.
+Default must be `allowlist`.
 
-`all_visible` is an explicit customer choice. It means all Telegram chats visible to that authenticated external userbot may enter interpretation, but they are still isolated to that source/workspace.
+In `allowlist` mode, an empty `allowed_chat_ids` means **accept no chats**.
+
+`all_visible` is an explicit customer authorization choice. It means all Telegram chats submitted by that authenticated external source may enter interpretation, but they are still isolated to that source/workspace and still pass all later idempotency/interpretation/risk controls.
+
+`all_visible` is not inferred from the external adapter forwarding everything. The two settings are deliberately independent.
 
 This distinction prevents accidental trading from unrelated chats because someone forgot to configure an allowlist.
 
@@ -326,7 +338,9 @@ Changing allowed signal channels must not require changing the owner's Telethon 
 - caller workspace/account-scope overrides are ignored or rejected;
 - allowlisted chat passes;
 - unlisted chat fails closed;
-- `all_visible` only works when explicitly configured;
+- empty allowlist accepts no chats;
+- `all_visible` only works when explicitly configured server-side;
+- VM forward-all does not imply server-side `all_visible`;
 - local adapter filtering is optional and never required for server authorization;
 - semantic event identity is stable across retries;
 - duplicate V1 result is terminal success;
