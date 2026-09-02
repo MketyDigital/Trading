@@ -75,7 +75,7 @@ Provider types:
 - Workspace roles are owner/admin/operator/viewer; unknown fails closed. No workspace role grants `broker.execute`.
 - Trading authorization must never query/depend on the MKSaaS user database/shared Mkety workspace table.
 - Keep `trading_access_enabled=false` until real non-live Zitadel acceptance passes.
-- Live Supabase Trading migrations through `0009_trading_workspace_memberships` are applied/verified. No cTrader/MT5 source work in this batch added a migration.
+- Live Supabase Trading migrations through `0009_trading_workspace_memberships` are applied/verified. No cTrader/MT5/custom source work in this batch added a migration.
 
 ## MTProto availability contract
 
@@ -152,7 +152,22 @@ The source path is physically/logically separate from execution-oriented `bridge
    - each sender instance closes over its own source ID/secret/transport/retry/clock;
    - it does **not** use `MKETY_MT5_BRIDGE_SECRET`, `ReplayLedger`, `MT5Engine`, `/v1/command`, or any broker execution state.
 
-No DB migration, destination coupling, broker command modification, execution enablement, or live-money change was introduced by cTrader/MT5 source work.
+## Custom signed API producer isolation — GREEN 2026-09-02
+
+1. Producer RED `33656847755` @ `48d9537a0c72f65b119a60303cb35a7972630bbb`: 458/459 Node tests passed, sole failure was missing `custom_signed_api_producer.js`.
+2. Initial implementation `af8329eba16d49697bab85dbcadac29f14adb75b` exposed a test-contract mismatch only: production correctly returned the existing canonical builder error `SOURCE_NATIVE_EVENT_ID_REQUIRED`, while the new test expected an invented error name.
+3. Corrected test-contract GREEN `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`, all four mandatory gates pass.
+   - file: `cloudflare-v2/src/sources/nontelegram/custom_signed_api_producer.js`;
+   - composes only `createSignedV1SourceClient` + `createNonTelegramSourceRuntime`; no parallel auth stack;
+   - caller workspace/source/destination/execution authority is never copied into runtime input;
+   - one producer instance closes over one source ID/secret/retry/health state;
+   - retry reuses the same normalized event; duplicate is terminal success;
+   - invalid caller event fails before transport and cannot poison another event/source;
+   - blocked/retrying producer A does not delay producer B;
+   - status is secret/source-ID/endpoint free;
+   - no database migration, destination coupling, broker command change, execution enablement, or live-money change.
+
+No DB migration, destination coupling, broker command modification, execution enablement, or live-money change was introduced by cTrader/MT5/custom source work.
 
 ## TradingView caveat
 
@@ -167,21 +182,20 @@ Every meaningful branch head must pass:
 4. Wrangler dry-run.
 
 Recent exact GREEN checkpoints:
-- `33653159677` @ `2871e195eaf2b7aea2a4db9695e7af8e0073b27a`
-- `33654538322` @ `69ea76310689db9890534f1ef520b9fc24d88442`
 - `33654983528` @ `0027a849fddcf810d6fa541a39b03658773b9925`
-- `33655301310` @ `87c504087ed03243ade095bc2f337037d5d7f54d`
 - `33655782502` @ `3dcf689b319acc49fd15df7f9174281e48927ade`
 - `33656303876` @ `61241796fdc420035e23acfc0d9d744974aff07e`
+- `33656669204` @ `5f85bdd209aae1e3ac7461a16a0fe73bc56514e8`
+- `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify this MT5 handoff/documentation head in all four CI gates.
-2. Continue `custom_signed_api` source composition using the existing generic event builder + isolated signed client + per-source runtime; do not introduce destination/execution coupling.
-3. Add an executable MT5 source-only runtime/runner only if needed for deployment: initialize MT5 observation, load source-only config, compose `MT5SourceCapture` + `create_mt5_signed_v1_delivery`, poll safely, and never import/use `MT5Engine` or command-secret state.
-4. Design TradingView direct webhook authentication separately before adding any public route.
+1. Verify this custom-source handoff/documentation head in all four CI gates.
+2. Design TradingView direct webhook authentication separately before adding any public route; never weaken signed V1 auth to accommodate TradingView webhook header limitations.
+3. After TradingView design approval, implement it under its own TDD slice with exact source/workspace isolation and no broker/destination authority.
+4. Add an executable MT5 source-only runtime/runner only if needed for deployment; never import/use `MT5Engine` or command-secret state.
 5. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when an account-side connector/path is available.
 6. Run real non-live Zitadel positive/negative acceptance when environment access exists.
 7. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists.
@@ -191,15 +205,15 @@ Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Exact next safe starting point
 
-Latest implementation GREEN: `33656303876` @ `61241796fdc420035e23acfc0d9d744974aff07e`.
+Latest implementation GREEN: `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`.
 
 Next safe source work:
 - keep MT5/cTrader/custom ingress source-only;
 - retain cTrader capture as a non-destructive observer with exact account filtering;
 - retain MT5 source capture/sender entirely separate from execution bridge secret, ledger, commands and lifecycle;
-- continue custom signed API composition with per-instance credentials/retries/health and authenticated V1 server authority;
-- prove one custom producer's invalid request/retry/failure/health cannot affect sibling custom/MT5/cTrader/Telegram sources;
-- do not create TradingView direct ingress until its auth contract is separately designed/reviewed;
+- retain custom producer as thin composition over existing event builder + signed client + per-source runtime;
+- design TradingView direct ingress as a separate trust boundary before implementation;
+- do not place reusable TradingView source secrets in URL paths/query strings or treat caller workspace/source fields as authority;
 - keep entitlement disabled until real Zitadel environment acceptance;
 - keep broker/live execution disabled;
 - do not merge `main` without explicit user instruction.
