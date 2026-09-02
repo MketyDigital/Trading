@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import tempfile
 import unittest
@@ -6,6 +8,7 @@ from types import SimpleNamespace
 
 from mt5_bridge import MT5Engine, ReplayLedger
 from mt5_source_capture import MT5SourceCapture
+from mt5_source_delivery import MT5SourceDeliveryError, create_mt5_signed_v1_delivery
 
 
 class FakeMT5:
@@ -85,6 +88,24 @@ def source_deal(ticket, time_msc, symbol='XAUUSD.a', order=7001, position_id=500
         fee=0.0,
         reason=3,
     )
+
+
+def captured_source_event(ticket='9001', occurred_at='2026-02-02T02:40:00.100000+00:00'):
+    return {
+        'providerType': 'mt5_source_bridge',
+        'nativeEventId': str(ticket),
+        'occurredAt': occurred_at,
+        'structuredPayload': {
+            'ticket': int(ticket),
+            'order': 7001,
+            'position_id': 5001,
+            'time_msc': 1770000000100,
+            'symbol': 'XAUUSD.a',
+            'volume': 0.01,
+            'price': 2526.15,
+        },
+        'metadata': {'native_kind': 'deal'},
+    }
 
 
 class MT5BridgeTests(unittest.TestCase):
@@ -214,6 +235,153 @@ class MT5SourceCaptureTests(unittest.TestCase):
 
         for forbidden in ('secret', 'token', 'password', 'credential', 'accountid', 'account_id', 'login'):
             self.assertNotIn(forbidden, serialized)
+
+
+class MT5SourceDeliveryTests(unittest.TestCase):
+    def test_builds_exact_v1_body_and_hmac_without_execution_or_account_authority(self):
+        calls = []
+
+        def transport(**kwargs):
+            calls.append(kwargs)
+            return 200, b'{"ok":true,"duplicate":false}'
+
+        delivery = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events',
+            source_id='mt5-source-a',
+            source_secret='source-secret-a',
+            transport=transport,
+            now_ms=lambda: 1770000005000,
+        )
+        result = delivery(captured_source_event())
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(len(calls), 1)
+        raw = calls[0]['body']
+        body = json.loads(raw.decode('utf-8'))
+        self.assertEqual(body['external_event_id'], '9001')
+        self.assertEqual(body['occurred_at'], '2026-02-02T02:40:00.100000+00:00')
+        self.assertEqual(body['metadata']['native_identity'], {'transaction_id': '9001'})
+        self.assertEqual(body['metadata']['native_kind'], 'deal')
+        self.assertEqual(body['structured_payload']['ticket'], 9001)
+        serialized = json.dumps(body).lower()
+        for forbidden in ('workspace_id', 'source_connection_id', 'account_id', 'accountid', 'broker_secret', 'execution_enabled'):
+            self.assertNotIn(forbidden, serialized)
+
+        timestamp = '1770000005000'
+        expected = 'v1=' + hmac.new(
+            b'source-secret-a',
+            b'v1:' + timestamp.encode('ascii') + b':' + raw,
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(calls[0]['headers']['X-Mkety-Source-Id'], 'mt5-source-a')
+        self.assertEqual(calls[0]['headers']['X-Mkety-Timestamp'], timestamp)
+        self.assertEqual(calls[0]['headers']['X-Mkety-Signature'], expected)
+
+    def test_duplicate_is_terminal_success_and_retryable_failures_use_only_local_schedule(self):
+        responses = [
+            (503, b'private upstream body'),
+            (429, b'private rate body'),
+            (200, b'{"ok":true,"duplicate":true}'),
+        ]
+        sleeps = []
+        bodies = []
+
+        def transport(**kwargs):
+            bodies.append(kwargs['body'])
+            return responses.pop(0)
+
+        delivery = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events',
+            source_id='mt5-source-a',
+            source_secret='source-secret-a',
+            transport=transport,
+            retry_delays=(0.1, 0.2),
+            sleep=sleeps.append,
+            now_ms=lambda: 1770000005000,
+        )
+        result = delivery(captured_source_event())
+
+        self.assertTrue(result['duplicate'])
+        self.assertEqual(sleeps, [0.1, 0.2])
+        self.assertEqual(len(bodies), 3)
+        self.assertTrue(all(body == bodies[0] for body in bodies))
+
+    def test_network_failure_retries_but_permanent_4xx_fails_without_retry_and_never_echoes_secrets(self):
+        network_attempts = 0
+
+        def flaky_transport(**_kwargs):
+            nonlocal network_attempts
+            network_attempts += 1
+            if network_attempts == 1:
+                raise OSError('network down source-secret-a')
+            return 200, b'{"ok":true}'
+
+        delivery = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events',
+            source_id='mt5-source-a',
+            source_secret='source-secret-a',
+            transport=flaky_transport,
+            retry_delays=(0,),
+            sleep=lambda _delay: None,
+        )
+        self.assertTrue(delivery(captured_source_event())['ok'])
+        self.assertEqual(network_attempts, 2)
+
+        permanent_attempts = 0
+
+        def rejected_transport(**_kwargs):
+            nonlocal permanent_attempts
+            permanent_attempts += 1
+            return 403, b'source-secret-a private response'
+
+        rejected = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events',
+            source_id='mt5-source-a',
+            source_secret='source-secret-a',
+            transport=rejected_transport,
+            retry_delays=(0, 0),
+            sleep=lambda _delay: None,
+        )
+        with self.assertRaises(MT5SourceDeliveryError) as caught:
+            rejected(captured_source_event())
+        self.assertEqual(permanent_attempts, 1)
+        rendered = str(caught.exception)
+        self.assertIn('HTTP_403', rendered)
+        self.assertNotIn('source-secret-a', rendered)
+        self.assertNotIn('private response', rendered)
+
+    def test_instances_keep_credentials_retry_state_and_headers_independent(self):
+        calls_a = []
+        calls_b = []
+        a = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events', source_id='source-a', source_secret='secret-a',
+            transport=lambda **kwargs: (calls_a.append(kwargs) or (200, b'{"ok":true}')),
+            now_ms=lambda: 1000,
+        )
+        b = create_mt5_signed_v1_delivery(
+            endpoint='https://trading.example.com/api/v1/events', source_id='source-b', source_secret='secret-b',
+            transport=lambda **kwargs: (calls_b.append(kwargs) or (200, b'{"ok":true}')),
+            now_ms=lambda: 1000,
+        )
+
+        a(captured_source_event('1'))
+        b(captured_source_event('1'))
+
+        self.assertEqual(calls_a[0]['headers']['X-Mkety-Source-Id'], 'source-a')
+        self.assertEqual(calls_b[0]['headers']['X-Mkety-Source-Id'], 'source-b')
+        self.assertNotEqual(calls_a[0]['headers']['X-Mkety-Signature'], calls_b[0]['headers']['X-Mkety-Signature'])
+
+    def test_configuration_fails_closed_for_non_https_or_wrong_endpoint_and_missing_source_credentials(self):
+        invalid = [
+            {'endpoint': 'http://trading.example.com/api/v1/events', 'source_id': 'a', 'source_secret': 's'},
+            {'endpoint': 'https://trading.example.com/other', 'source_id': 'a', 'source_secret': 's'},
+            {'endpoint': 'https://trading.example.com/api/v1/events', 'source_id': '', 'source_secret': 's'},
+            {'endpoint': 'https://trading.example.com/api/v1/events', 'source_id': 'a', 'source_secret': ''},
+        ]
+        for config in invalid:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError):
+                    create_mt5_signed_v1_delivery(**config)
 
 
 if __name__ == '__main__':
