@@ -41,8 +41,10 @@ jobs:
       - name: Run pure MT5 bridge tests
         run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
 
-      - name: Run pure MTProto container listener tests
-        run: PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
 
       - name: Wrangler dry run
         run: npx wrangler deploy --dry-run
