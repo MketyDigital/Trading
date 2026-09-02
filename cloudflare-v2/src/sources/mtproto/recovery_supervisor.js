@@ -57,6 +57,31 @@ export function createMtprotoRecoverySupervisor({
         const attemptCount = asCount(source.recoveryAttemptCount);
         const clock = now();
         const nextAttemptAt = dueAt(source.recoveryNextAttemptAt);
+        const request = {
+          workspaceId: String(source.workspaceId),
+          sourceId: String(source.id),
+        };
+
+        let status = null;
+        try {
+          status = await lifecycle.status(request);
+        } catch {
+          // A failed health probe is treated as unhealthy. Durable backoff still
+          // decides whether a restart may be attempted, so probe errors cannot
+          // bypass an existing retry window or exhausted state.
+        }
+
+        if (isHealthy(status)) {
+          summary.healthy += 1;
+          if (attemptCount > 0 || nextAttemptAt || source.lastRecoveryErrorCode) {
+            await store.updateRecoveryState(source.id, {
+              recoveryAttemptCount: 0,
+              recoveryNextAttemptAt: null,
+              lastRecoveryErrorCode: null,
+            });
+          }
+          continue;
+        }
 
         if (attemptCount >= boundedMaxAttempts) {
           summary.exhausted += 1;
@@ -67,25 +92,7 @@ export function createMtprotoRecoverySupervisor({
           continue;
         }
 
-        const request = {
-          workspaceId: String(source.workspaceId),
-          sourceId: String(source.id),
-        };
-
         try {
-          const status = await lifecycle.status(request);
-          if (isHealthy(status)) {
-            summary.healthy += 1;
-            if (attemptCount > 0 || nextAttemptAt || source.lastRecoveryErrorCode) {
-              await store.updateRecoveryState(source.id, {
-                recoveryAttemptCount: 0,
-                recoveryNextAttemptAt: null,
-                lastRecoveryErrorCode: null,
-              });
-            }
-            continue;
-          }
-
           const restart = await lifecycle.restart(request);
           if (!restart?.restarted) throw new Error('runtime restart not confirmed');
 
