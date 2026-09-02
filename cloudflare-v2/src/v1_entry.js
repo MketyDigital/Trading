@@ -5,10 +5,13 @@ import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
+import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
 export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js';
+
+const MTPROTO_RECOVERY_CRON = '* * * * *';
 
 function isEnabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
@@ -136,6 +139,7 @@ export function createTradingV1Entrypoint({
   adminHandler = handleV1AdminRequest,
   internalSourceHandler = handleInternalSourceEventRequest,
   queueRuntime = null,
+  recoveryRuntime = null,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -198,6 +202,10 @@ export function createTradingV1Entrypoint({
     },
 
     async scheduled(event, env, ctx) {
+      if (event?.cron === MTPROTO_RECOVERY_CRON) {
+        const runtime = recoveryRuntime || createMtprotoRecoveryRuntime();
+        return runtime(env, { ctx });
+      }
       if (typeof legacy.scheduled === 'function') {
         return legacy.scheduled(event, env, ctx);
       }
