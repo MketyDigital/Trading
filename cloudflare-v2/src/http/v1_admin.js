@@ -1,4 +1,5 @@
 import { authenticateTradingBearer } from '../security/zitadel_auth.js';
+import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -75,6 +76,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
 export async function handleV1AdminRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   authenticateFn = authenticateTradingBearer,
+  sourceStoreFactory = createAdminSourceStore,
 } = {}) {
   let supabase;
   try {
@@ -93,6 +95,16 @@ export async function handleV1AdminRequest(request, env = {}, {
       subject: authorization.auth.subject,
       workspace: publicWorkspace(authorization.workspace),
     });
+  }
+
+  if (url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')) {
+    let sourceStore;
+    try {
+      sourceStore = sourceStoreFactory(supabase);
+    } catch {
+      return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503);
+    }
+    return handleAuthorizedV1AdminSourcesRequest(request, authorization, { sourceStore });
   }
 
   return json({ ok: false, reason: 'ADMIN_ROUTE_NOT_FOUND' }, 404);
