@@ -45,9 +45,7 @@ function normalize(row) {
 }
 
 function sortSources(a, b) {
-  if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-  if (a.priority !== b.priority) return a.priority - b.priority;
-  return String(a.id).localeCompare(String(b.id));
+  return a.priority - b.priority;
 }
 
 export function createSourceConnectionStore(supabase) {
