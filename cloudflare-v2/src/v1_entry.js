@@ -3,6 +3,7 @@ import { buildCanonicalShadow } from './pipeline/canonical_shadow.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
+import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -141,6 +142,7 @@ export function createTradingV1Entrypoint({
   eventsHandler = handleV1EventsRequest,
   adminHandler = handleV1AdminRequest,
   internalSourceHandler = handleInternalSourceEventRequest,
+  tradingViewHandler = handleTradingViewWebhookRequest,
   queueRuntime = null,
   recoveryRuntime = null,
 } = {}) {
@@ -164,6 +166,12 @@ export function createTradingV1Entrypoint({
       }
       if (url.pathname.startsWith('/api/v1/admin/')) {
         return adminHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/webhooks/tradingview/')) {
+        return tradingViewHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/webhooks/')) {
+        return notFoundResponse();
       }
 
       // The old admin implementation includes unscoped workspace listing and a
