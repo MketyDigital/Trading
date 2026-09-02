@@ -12,7 +12,7 @@ export function createSupabaseIngestStores(supabase, {
       if (!sourceId) return null;
       const { data, error } = await supabase
         .from('source_connections')
-        .select('id,workspace_id,source_type,source_instance_id,source_family,provider_type,external_identity,secret_ciphertext,settings,is_active')
+        .select('id,workspace_id,source_type,source_instance_id,source_family,provider_type,external_identity,config,secret_ciphertext,settings,is_active')
         .eq('id', String(sourceId))
         .eq('is_active', true)
         .maybeSingle();
@@ -27,6 +27,7 @@ export function createSupabaseIngestStores(supabase, {
         source_family: data.source_family ?? null,
         provider_type: data.provider_type ?? null,
         external_identity: data.external_identity ?? null,
+        config: data.config || {},
         settings: data.settings || {},
         secret,
       };
