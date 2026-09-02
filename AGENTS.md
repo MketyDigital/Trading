@@ -106,6 +106,7 @@ Important unresolved environment fact: current in-memory listener retry exhausti
 - The immutable Zitadel token subject (`sub`) is the cross-product user identity key; never use email as the permanent authorization link.
 - Successful Zitadel authentication is not sufficient for Trading access. Trading-owned workspace entitlement/membership must also authorize the exact subject/workspace.
 - `trading_workspace_access` remains the workspace/org entitlement switch; `trading_workspace_memberships` is the subject-to-workspace membership boundary.
+- Admin authorization order is: workspace entitlement -> cryptographic Zitadel token/project/org role -> exact enabled `(workspace_id, auth.sub)` membership -> route permission.
 - JWT issuer, audience, expiry/not-before, signature, workspace entitlement, required role, and workspace-bound Zitadel organization must all verify before admin access.
 - When `ZITADEL_PROJECT_ID` is **unset**, the documented generic current-project role claim `urn:zitadel:iam:org:project:roles` may be used.
 - When `ZITADEL_PROJECT_ID` is **set**, authorization must use only `urn:zitadel:iam:org:project:<projectId>:roles`; never fall back to the generic current-project claim.
@@ -152,11 +153,12 @@ No real broker demo order, real Cloudflare Container/DO MTProto E2E, or real-mon
 19. Zitadel-authorized source administration API — RED `33628546167`; GREEN `33628759094` @ `69b3d89…`. Broader-plan Task 8 complete.
 20. Task 9 non-live multi-source operational gate — GREEN in source/CI. Soak GREEN `33629585665` @ `276abbc…`; destination-isolation RED `33630032190` @ `7c27ca5…` (378 pass, sole missing fan-out module); exact GREEN `33630219329` @ `fa253f0…`. Broader-plan Task 9 complete at source/CI level.
 21. Shared-Supabase privilege hardening — migration `0007`. Initial RED `33631221854` @ `4722d46…`; `trade_accounts` boundary RED `33631450772` @ `5f1d3ea…`; exact GREEN `33631626956` @ `0cb260c…`.
-22. Default-source RPC immutable search path — migration `0008`. Security Advisor found the new Trading-owned mutable-search-path warning after `0007`; RED `33632308325` @ `3215ca1…` (385 pass, sole missing `0008`); exact GREEN `33632407746` @ `bd0a737…`, all four mandatory gates passing.
+22. Default-source RPC immutable search path — migration `0008`. RED `33632308325` @ `3215ca1…`; exact GREEN `33632407746` @ `bd0a737…`.
 23. **Strict Zitadel project-role isolation — GREEN.** RED `33633081151` @ `aa3db87…`; exact GREEN `33633316579` @ `ff9980d…`.
 24. **First-party MTProto component readiness — GREEN.** RED `33640233999` @ `81788d5…`; exact GREEN `33640530231` @ `b96d974…`. Static/source readiness only, not real environment acceptance.
-25. **Shared Mkety Zitadel enterprise identity architecture — APPROVED + PLANNED.** One managed Mkety Zitadel instance; MKSaaS/Trading separate products and DBs; Trading-only users allowed without MKSaaS DB records; entitlement-controlled access; Zitadel `sub` is identity key. Spec `db59d0d…`; implementation plan `7f1c9fa…`.
-26. **Trading workspace subject-membership schema — GREEN; migration `0009` checked in, NOT yet claimed live-applied.** RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`: 392 existing tests passed and sole failure was missing migration `0009`. GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`, all four mandatory gates passing. New service-only table is `trading_workspace_memberships`, unique by `(workspace_id, zitadel_subject)`, roles owner/admin/operator/viewer, RLS enabled, anon/authenticated revoked, service-role only.
+25. **Shared Mkety Zitadel enterprise identity architecture — APPROVED + PLANNED.** Spec `db59d0d…`; implementation plan `7f1c9fa…`.
+26. **Trading workspace subject-membership schema — GREEN; migration `0009` checked in, NOT yet claimed live-applied.** RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`: 392 existing tests passed and sole failure was missing migration `0009`. GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`, all four mandatory gates passing.
+27. **Exact Zitadel-subject Trading membership authorization — GREEN.** RED `33647073934` @ `4bb2e9844aac9b6f8cd89783c8c2114edc910f82`: 393 tests passed; only four intended failures remained (missing membership store and current admin gate allowing valid Zitadel identity without membership). Production adds `trading_membership_store.js`, exact `(workspace_id, zitadel_subject)` lookup, disabled/missing membership rejection, and membership context before admin/source handlers. Exact GREEN `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`, all four mandatory gates passing. No MKSaaS database lookup or production bypass exists.
 
 ## Shared Supabase state — verified live 2026-09-02
 
@@ -210,6 +212,7 @@ Recent exact GREEN checkpoints:
 - `33633316579` @ `ff9980d8fdcc2866ced208842274568c2be56149`
 - `33640530231` @ `b96d974051b8b74a5976f4ad9fc7b56f56c1c24c`
 - `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`
+- `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -218,7 +221,7 @@ Always inspect the exact newest branch-head run before calling the branch green.
 No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat, and no Cloudflare/Zitadel connector or installable plugin is available in this session.
 
 Next non-live staging prerequisites:
-- finish Tasks 2-5 of `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`;
+- finish Tasks 3-5 of `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`;
 - apply/verify migration `0009` to the Trading database only when the source/CI membership authorization work is ready for staging; preserve the disabled current entitlement;
 - configure intended Zitadel Trading project/application and organization/workspace mapping in the existing Mkety Zitadel instance;
 - if `ZITADEL_PROJECT_ID` is set, ensure tokens contain the matching project-specific roles claim;
@@ -232,23 +235,22 @@ Next non-live staging prerequisites:
 
 ## Current priority
 
-1. **Shared-Zitadel implementation Task 2:** add server-side membership store and require exact enabled `(workspace_id, Zitadel sub)` membership after JWT project/org authentication and before admin operations.
-2. Task 3: workspace role permissions independent from broad Zitadel product role.
-3. Task 4: tenant-safe membership admin APIs.
-4. Task 5: dual-access acceptance + MKSaaS-independence/static docs.
-5. Apply/verify `0009` and perform real non-live Zitadel project/org/subject acceptance when account-side access exists.
-6. Continue non-live source/MTProto soak and broker demo gates only after identity gate is green.
-7. Tiny controlled live only after every non-live/demo gate is green and after separate explicit cutover decision.
+1. **Shared-Zitadel implementation Task 3:** enforce Trading workspace-role permissions independently from broad Zitadel project/org access.
+2. Task 4: tenant-safe membership admin APIs.
+3. Task 5: dual-access acceptance + MKSaaS-independence/static docs.
+4. Apply/verify `0009` and perform real non-live Zitadel project/org/subject acceptance when account-side access exists.
+5. Continue non-live source/MTProto soak and broker demo gates only after identity gate is green.
+6. Tiny controlled live only after every non-live/demo gate is green and after separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Task 1 of the shared-Zitadel implementation is source/CI GREEN. Migration `0009` is **not yet claimed live-applied**.
+Tasks 1-2 of the shared-Zitadel implementation are source/CI GREEN. Migration `0009` is **not yet claimed live-applied**.
 
-Start Task 2 with exact RED tests:
-- create `trading_membership_store.js` only after failing store tests exist;
-- make `authorizeV1AdminRequest` authenticate token/project/org first, then resolve exact `auth.subject` membership for the selected Trading workspace;
-- missing/disabled/cross-workspace membership must fail before any source/admin operation;
-- never use email or query the MKSaaS database;
-- preserve `trading_access_enabled=false` in live staging until real authorization acceptance;
+Start Task 3 with exact RED tests:
+- create `trading_permissions.js` only after failing permission tests exist;
+- owner/admin may manage members and sources; operator may manage sources but not members; viewer is read-only;
+- source mutations must reject missing `sources.write` before touching the source store;
+- permissions are workspace-role capabilities only and never enable broker execution;
+- preserve exact authenticated workspace isolation;
 - broker execution remains disabled;
 - after the batch, rerun all four mandatory gates and update this file plus the implementation plan.
