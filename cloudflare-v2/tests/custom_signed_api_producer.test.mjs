@@ -70,7 +70,7 @@ test('invalid custom event fails before transport and cannot poison producer hea
 
   await assert.rejects(
     producer.publish(customEvent({ eventId: '', text: '', structuredPayload: null })),
-    /SOURCE_EVENT_ID_REQUIRED|SOURCE_EVENT_CONTENT_REQUIRED/
+    /SOURCE_NATIVE_EVENT_ID_REQUIRED|SOURCE_EVENT_CONTENT_REQUIRED/
   );
   assert.equal(calls, 0);
   assert.equal(producer.status().deliveryAttempts, 0);
