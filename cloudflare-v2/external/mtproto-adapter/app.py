@@ -75,15 +75,18 @@ async def run(config=None):
         await adapter.stop(drain=False)
 
 
+def format_fatal_error(exc):
+    """Return operator-safe fatal output without echoing exception details."""
+    return f'{type(exc).__name__}: external MTProto adapter stopped'
+
+
 def main():
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
         return
     except Exception as exc:
-        # Error output intentionally contains only exception class/message from
-        # validation/runtime contracts; secret values are never printed here.
-        raise SystemExit(f'{type(exc).__name__}: {exc}') from None
+        raise SystemExit(format_fatal_error(exc)) from None
 
 
 if __name__ == '__main__':
