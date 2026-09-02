@@ -51,7 +51,9 @@ Key TDD/CI checkpoints:
 - TradingView reconciliation GREEN: run `33668462127` at `8e83294d0578e0278b5f3eea7037faa305fe1503`; all four mandatory gates passed;
 - post-Supabase handoff GREEN: run `33668981424` at `3626cbe3191c9e95cc9bc5f7a63ee76859efe90e`; all four mandatory gates passed after live migration `0010` verification was recorded;
 - Free-compatible TradingView transport RED: run `33677097755` at `1f5a04130097df8c20d9ba8843909926bcff21ef`; exactly the two new cases that no longer require Cloudflare CA verification failed while production still required `certVerified='SUCCESS'`;
-- Free-compatible TradingView transport GREEN: run `33677199850` at `6531589c3f5106cf5dddc91080feb34698d09716`; all four mandatory gates passed after removing the Enterprise-dependent Cloudflare CA-verification requirement while retaining presented-certificate and exact SHA-256 fingerprint pinning.
+- Free-compatible TradingView transport GREEN: run `33677199850` at `6531589c3f5106cf5dddc91080feb34698d09716`; all four mandatory gates passed after removing the Enterprise-dependent Cloudflare CA-verification requirement while retaining presented-certificate and exact SHA-256 fingerprint pinning;
+- fail-closed certificate probe RED: run `33683387828` at `09959c829d4a975cc8873b7fc125939da3c0ca86`; 496/498 Node tests passed and only the two new probe-observation cases failed because no probe log existed yet;
+- fail-closed certificate probe GREEN: run `33683493798` at `84bd40e8c714b884f003869693203ea0148e0b85`; Worker/trading-core, MT5 bridge, both MTProto Python suites, and Wrangler dry-run all passed.
 
 ## MTProto soak command
 
@@ -94,22 +96,40 @@ For the dedicated TradingView hostname, the intended Cloudflare configuration is
 
 If the Cloudflare plan/dashboard cannot expose the required certificate presentation/fingerprint metadata without an Enterprise-only feature, stop. Do not upgrade the trust boundary to Enterprise and do not weaken authentication.
 
-1. Confirm the deployed Worker has the expected TradingView route but `TRADINGVIEW_DIRECT_INGRESS_ENABLED` remains disabled initially.
-2. Confirm the dedicated hostname is configured only to collect/pass client-certificate metadata to the Worker; verify there is no BYOCA dependency and no WAF rule requiring `cert_verified` for the TradingView route.
-3. Send a request with spoofed ordinary HTTP headers claiming certificate/IP verification. Expect `403 TRADINGVIEW_TRANSPORT_NOT_VERIFIED` and confirm there is no source lookup/queue reservation downstream.
-4. Observe a real TradingView HTTPS webhook at the actual non-Enterprise Cloudflare deployment using non-secret metadata only. Confirm that `request.cf.tlsClientAuth.certPresented` is available and that Cloudflare supplies a stable `certFingerprintSHA256` for the certificate TradingView presents. `certVerified='SUCCESS'` is **not** a requirement.
-5. Before allowlisting the observed fingerprint, confirm an unconfigured fingerprint remains rejected. The existing `tradingview_transport.test.mjs` contract requires a presented certificate with the wrong fingerprint to return `TRADINGVIEW_TRANSPORT_NOT_VERIFIED`, including when `certVerified` reports an issuer-verification failure.
-6. If the real Free-compatible deployment does not pass the presented certificate through to the Worker, or does not expose a usable stable fingerprint, stop here and redesign the trust boundary. Do not weaken it to IP-only authentication, caller headers, subject strings, or reusable URL/body secrets.
-7. Validate the observed fingerprint through the controlled non-secret certificate-observation process, then configure only that validated fingerprint through the secret/environment management path. Never paste it alongside unrelated secrets or source credentials.
-8. Enable `TRADINGVIEW_DIRECT_INGRESS_ENABLED` only for controlled non-live acceptance after certificate presentation/fingerprint behavior is proven.
-9. Create one non-execution `tradingview_webhook` source row with a unique `public_source_handle`. Do not attach a broker/destination and do not enable any trade account as part of ingress verification.
-10. Post a valid TradingView alert with a stable `event_id`; expect HTTP `202` and one queue envelope for the exact resolved source.
-11. Repeat the same native `event_id`; confirm persistent canonical duplicate handling prevents second interpretation/orchestration work.
-12. Include malicious `workspace_id`, `source_id`, destination, broker, execution, token, password, credential and API-key-like fields at nested levels; confirm they never become authority or appear in the queued source event.
-13. Test a second source handle/workspace. Failure or disablement of source A must not change source B's source resolution, queueing, idempotency, health, or credentials.
-14. Turn direct ingress back off after the controlled test unless there is a separate reviewed decision to keep staging enabled.
+#### Temporary fail-closed certificate probe
 
-The Worker-side transport gate requires all of the following: the direct-ingress feature flag, a configured SHA-256 allowlist, `request.cf.tlsClientAuth.certPresented === '1'`, and an exact normalized match of `certFingerprintSHA256`. It deliberately does not trust ordinary HTTP headers and does not require Cloudflare to validate TradingView's external CA.
+The Worker includes a temporary observation mode controlled by `TRADINGVIEW_CERT_PROBE_ENABLED`. This is not an authorization mode and must remain disabled during normal operation.
+
+When `TRADINGVIEW_CERT_PROBE_ENABLED` is true:
+
+- every POST reaching the TradingView webhook handler returns `403 TRADINGVIEW_TRANSPORT_NOT_VERIFIED` before normal transport verification;
+- the handler does not parse the public source handle or request body, does not construct a Supabase client, does not perform source lookup, and does not enqueue anything;
+- even if `TRADINGVIEW_DIRECT_INGRESS_ENABLED` is accidentally true at the same time, probe mode wins and the request still terminates at 403;
+- the only observation emitted is `TRADINGVIEW_CERT_PROBE` with `certPresented`, `fingerprintAvailable`, and the normalized SHA-256 fingerprint when and only when Cloudflare reports a certificate as presented;
+- subject/issuer values, request/body content, source/workspace identifiers, credentials, broker data, and caller-supplied certificate headers are never part of the probe observation;
+- spoofed ordinary HTTP headers cannot create or replace the observed fingerprint because the probe reads only `request.cf.tlsClientAuth`;
+- disable the probe immediately after the controlled real TradingView observation is recorded.
+
+Controlled observation sequence:
+
+1. Confirm the deployed Worker has the expected TradingView route and keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`.
+2. Confirm the dedicated hostname is configured only to collect/pass client-certificate metadata to the Worker; verify there is no BYOCA dependency and no WAF rule requiring `cert_verified` for the TradingView route.
+3. Temporarily set `TRADINGVIEW_CERT_PROBE_ENABLED=true` while keeping direct ingress disabled.
+4. Send a spoof-only request first. Expect HTTP 403 and either `certPresented:false` with no fingerprint or no genuine presented-certificate observation. Caller certificate headers must not become the logged fingerprint.
+5. Trigger one real TradingView HTTPS webhook and inspect only the sanitized `TRADINGVIEW_CERT_PROBE` observation. Require `certPresented:true`, `fingerprintAvailable:true`, and one normalized 64-hex SHA-256 fingerprint.
+6. Repeat only as needed to establish that the TradingView-observed fingerprint is stable. If it is absent, malformed, or unstable, stop and redesign.
+7. Disable `TRADINGVIEW_CERT_PROBE_ENABLED` immediately after observation. Confirm the probe is off before proceeding.
+8. Validate the observed fingerprint through the controlled non-secret certificate-observation process, then configure only that validated fingerprint through the secret/environment management path. Never paste it alongside unrelated secrets or source credentials.
+9. Before enabling ingress, confirm an unconfigured fingerprint remains rejected. The existing transport test contract requires `TRADINGVIEW_TRANSPORT_NOT_VERIFIED` for a presented but unpinned certificate, including when `certVerified` reports an issuer-verification failure.
+10. Enable `TRADINGVIEW_DIRECT_INGRESS_ENABLED` only for controlled non-live acceptance after certificate presentation/fingerprint behavior is proven and the probe is disabled.
+11. Create one non-execution `tradingview_webhook` source row with a unique `public_source_handle`. Do not attach a broker/destination and do not enable any trade account as part of ingress verification.
+12. Post a valid TradingView alert with a stable `event_id`; expect HTTP `202` and one queue envelope for the exact resolved source.
+13. Repeat the same native `event_id`; confirm persistent canonical duplicate handling prevents second interpretation/orchestration work.
+14. Include malicious `workspace_id`, `source_id`, destination, broker, execution, token, password, credential and API-key-like fields at nested levels; confirm they never become authority or appear in the queued source event.
+15. Test a second source handle/workspace. Failure or disablement of source A must not change source B's source resolution, queueing, idempotency, health, or credentials.
+16. Turn direct ingress back off after the controlled test unless there is a separate reviewed decision to keep staging enabled.
+
+The Worker-side transport gate requires all of the following after probe mode is disabled: the direct-ingress feature flag, a configured SHA-256 allowlist, `request.cf.tlsClientAuth.certPresented === '1'`, and an exact normalized match of `certFingerprintSHA256`. It deliberately does not trust ordinary HTTP headers and does not require Cloudflare to validate TradingView's external CA.
 
 Do **not** substitute an IP-only allowlist, caller-supplied verification header, query-string secret, body secret, subject/CN/SAN comparison, or `certVerified` status for the fingerprint gate. If Cloudflare does not expose stable verifiable TradingView client-certificate metadata in the real Free-compatible environment, keep direct ingress disabled and revisit the trust-boundary design rather than weakening it.
 
@@ -144,11 +164,13 @@ Stop the environment acceptance immediately if:
 - TradingView direct ingress accepts traffic without the exact reviewed transport verification;
 - TradingView caller-provided workspace/source/destination/execution fields become authority;
 - a presented but unpinned client certificate is accepted;
+- probe mode ever performs source lookup, body parsing, queueing, or accepts a TradingView request;
+- `TRADINGVIEW_CERT_PROBE_ENABLED` remains enabled after the controlled observation window;
 - a WAF `cert_verified` requirement or BYOCA/other Cloudflare Enterprise-only dependency becomes necessary for the TradingView trust boundary;
 - any non-live acceptance path reaches a real broker executor.
 
 ## Gate outcome and next boundary
 
-The source-code/CI and TradingView `0010` database-schema portions are complete and verified. The transport code is Free-plan compatible by design: it pins the exact Cloudflare-observed SHA-256 fingerprint of a presented client certificate and does not require Enterprise BYOCA/Cloudflare CA verification. The operational design now separates client-certificate collection from authorization: Cloudflare passes trusted TLS metadata to the Worker, while the Worker performs the fingerprint authorization decision. Direct TradingView **environment** acceptance is still not complete because this session cannot prove that a real TradingView webhook reaches the Worker with the required `request.cf.tlsClientAuth` presentation/fingerprint metadata on the actual non-Enterprise deployment. Keep direct ingress disabled until that proof exists.
+The source-code/CI and TradingView `0010` database-schema portions are complete and verified. The transport code is Free-plan compatible by design: it pins the exact Cloudflare-observed SHA-256 fingerprint of a presented client certificate and does not require Enterprise BYOCA/Cloudflare CA verification. A temporary fail-closed certificate probe now provides a controlled way to observe only presentation/fingerprint metadata while forcing HTTP 403 before source lookup or queueing. Direct TradingView **environment** acceptance is still not complete because this session cannot prove that a real TradingView webhook reaches the Worker with the required `request.cf.tlsClientAuth` presentation/fingerprint metadata on the actual non-Enterprise deployment. Keep direct ingress disabled until that proof exists.
 
-The next safe engineering boundary is controlled account-side staging readiness: inspect the actual Cloudflare Worker/Queue bindings by names/status only, configure the dedicated hostname for Free-compatible certificate collection without `cert_verified` enforcement, prove TradingView TLS client-certificate presentation/fingerprint behavior without exposing secrets, and only then configure one non-execution TradingView source for acceptance. cTrader/MT5 demo probes/lifecycles stay behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
+The next safe engineering boundary is controlled account-side staging readiness: inspect the actual Cloudflare Worker/Queue bindings by names/status only, configure the dedicated hostname for Free-compatible certificate collection without `cert_verified` enforcement, deploy the probe-capable Worker, keep direct ingress disabled, temporarily enable the certificate probe, observe one real TradingView certificate fingerprint, disable the probe, and only then configure one non-execution TradingView source for acceptance. cTrader/MT5 demo probes/lifecycles stay behind their existing explicit demo gates. Real-money execution remains disabled until all non-live and demo acceptance is green and a separate deliberate live cutover decision is made.
