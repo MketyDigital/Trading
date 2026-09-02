@@ -115,6 +115,7 @@ No real external Worker acceptance, real broker demo order, or real Cloudflare C
 7. **Real stateful Cloudflare Container supervisor — GREEN.** `MtprotoContainerRuntime`, `MTPROTO_CONTAINER_NAMESPACE`, DO migration `v3`, strict persisted `(sourceId, workspaceId, accountScope)`, secret-free DO state, runtime-only start env, local `/health`, `lite`, staged `max_instances=100`. RED `33612630711`; intermediate `33612963137` exposed `@cloudflare/containers@0.3.7` Node ESM issue, so implementation uses official low-level `ctx.container` API. GREEN `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`.
 8. **Server-side MTProto bootstrap resolver — GREEN.** Migration `0005` adds separate `provider_secret_ciphertext`; existing `secret_ciphertext` remains ingress HMAC only. Exact workspace/source/provider/active lookup, provider credential decrypt with `TRADING_MASTER_KEY`, non-secret chat IDs from config, internal URL/token from Worker env; caller bootstrap/config credentials ignored. RED `33613601588` @ `5284443596a10a674456aa2a10b635ddd9cba879`; GREEN `33613707938` @ `4cafbcd3ad39ec09083840529087df92ccada3a8`.
 9. **Tenant-safe MTProto Container lifecycle service — GREEN.** `src/sources/mtproto/container_lifecycle_service.js` is the server-side start/restart/stop/status boundary. It accepts trusted `workspaceId/sourceId` only, invokes the bootstrap resolver, verifies the resolved identity exactly matches the trusted request, derives runtime `mtproto:<workspaceId>:<accountScope>`, and never accepts caller bootstrap as authority. Restart re-resolves/decrypts current credentials so rotations/revocations take effect. Tests prove two workspaces get distinct runtime names/bootstrap and status cannot leak secret/ciphertext fields. RED `33613934166` @ `1a95e5c32791e60962264a1a78637e01d66b2cbc`; GREEN `33614019384` @ `03c438567be97cbf9a765b7a10898f4a0ab486b5` across all four gates.
+10. **Durable MTProto recovery supervisor + scheduled recovery — GREEN.** Migration `0006_mtproto_recovery_state.sql` adds per-source `recovery_attempt_count`, `recovery_next_attempt_at`, `last_recovery_at`, and `last_recovery_error_code`. `recovery_supervisor.js` probes each source independently, clears stale retry state when a runtime self-recovers, gates only restart attempts behind durable exponential backoff/exhaustion, and restarts through the lifecycle service so credentials are reacquired server-side. `recovery_store.js` scans only active `telegram/cloudflare_container_mtproto` rows and constrains every recovery write by exact `workspace_id + source_id + provider_type + source_family + active`. `recovery_runtime.js` composes one server-side Supabase client/store/lifecycle/supervisor context and fails closed on missing configuration names before dependency creation. Wrangler now keeps legacy `*/15 * * * *` scheduled work unchanged and adds a separate `* * * * *` trigger routed only to MTProto recovery; one-minute recovery never invokes legacy VIP/scheduled work. TDD evidence: RED `33614712990` (only missing supervisor/migration); intermediate `33614818871` exposed stale-backoff-before-health ordering; isolated GREEN `33615007257` @ `22dd0e8b93c2e47a94c315499b72de85e4059413`; store/runtime/cron RED `33615213124` (319/323); stricter tenant-write RED `33615397670` (316/323, exactly seven intentional gaps); final GREEN `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954` across Node core, MT5 bridge, MTProto listener, and Wrangler.
 
 ## Supabase boundary
 
@@ -126,7 +127,7 @@ Rules:
 - V1 auth does not depend on shared `public.workspaces`;
 - `trading_workspace_access` is Trading entitlement authority with no FK to shared workspaces;
 - migrations `0001` and `0002` were previously confirmed applied;
-- migrations `0003_multi_source_provider_registry.sql`, `0004_cross_provider_event_identity.sql`, `0005_mtproto_provider_credentials.sql` are **checked in but not yet claimed applied**;
+- migrations `0003_multi_source_provider_registry.sql`, `0004_cross_provider_event_identity.sql`, `0005_mtproto_provider_credentials.sql`, and `0006_mtproto_recovery_state.sql` are **checked in but not yet claimed applied**;
 - keep previously verified Trading entitlement disabled/no Zitadel org until external authorization is configured and verified;
 - no paid/dev Supabase branch.
 
@@ -148,6 +149,8 @@ Recent exact GREEN checkpoints:
 - `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`
 - `33613707938` @ `4cafbcd3ad39ec09083840529087df92ccada3a8`
 - `33614019384` @ `03c438567be97cbf9a765b7a10898f4a0ab486b5`
+- `33615007257` @ `22dd0e8b93c2e47a94c315499b72de85e4059413`
+- `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -155,21 +158,20 @@ Always inspect the exact newest branch-head run before calling the branch green.
 
 No Cloudflare/Zitadel account connector is available in this session; no account-side settings have been changed. Never request secret values in chat.
 
-Container MTProto E2E later requires: review/apply migrations `0003`-`0005`; deploy/recognize Container runtime + `v3` DO migration; create non-live `cloudflare_container_mtproto` source; encrypt provider credentials server-side; set chat IDs and trusted internal handoff settings; use a Telegram test account/channel for reconnect/catch-up/soak. cTrader/MT5 real demo acceptance still requires existing demo-only credentials/gates.
+Container MTProto E2E later requires: review/apply migrations `0003`-`0006`; deploy/recognize Container runtime + `v3` DO migration; create non-live `cloudflare_container_mtproto` source; encrypt provider credentials server-side; set chat IDs and trusted internal handoff settings; use a Telegram test account/channel for reconnect/catch-up/soak. cTrader/MT5 real demo acceptance still requires existing demo-only credentials/gates.
 
 ## Current priority
 
-1. Add **supervisor recovery/monitoring** around the lifecycle service: unexpected Container stop/unhealthy state must reacquire that exact source's current encrypted bootstrap and restart only that runtime, with bounded restart/backoff and no cross-tenant effect.
-2. Prove recovery/catch-up/replay safety and duplicate collapse under deterministic tests.
-3. Add external MTProto direct signed-V1 runtime.
-4. Complete TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
-5. Harden pure DO+mtcute alternate provider.
-6. Add Zitadel-authorized source admin/default/status APIs.
-7. Add non-live multi-source acceptance, reconnect/soak harness, runbook/CI expansion.
-8. External staging configuration and signed V1 + MTProto soak acceptance.
-9. Broker demo probes/lifecycles only behind explicit demo gates.
-10. Tiny controlled live only after all acceptance is green.
+1. Prove **recovery/catch-up/replay safety** end-to-end in deterministic tests: a restarted listener may replay the same native Telegram message, but Queue/V1 persistent canonical idempotency must collapse it before orchestration/destination work, while genuinely new message IDs still proceed.
+2. Add external MTProto direct signed-V1 runtime.
+3. Complete TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
+4. Harden pure DO+mtcute alternate provider.
+5. Add Zitadel-authorized source admin/default/status APIs.
+6. Add non-live multi-source acceptance, reconnect/soak harness, runbook/CI expansion.
+7. External staging configuration and signed V1 + MTProto soak acceptance.
+8. Broker demo probes/lifecycles only behind explicit demo gates.
+9. Tiny controlled live only after all acceptance is green.
 
 ## Exact next safe starting point
 
-Define an intentional RED for an MTProto **recovery supervisor**. Given trusted workspace/source identities, it must obtain sanitized lifecycle status; do nothing when healthy/disabled; on unexpected `DEGRADED`/stopped state use the lifecycle service's `restart()` (therefore re-resolving current tenant credentials server-side); enforce per-source bounded restart/backoff/circuit behavior in durable/server-authoritative state rather than global memory; never allow one source failure to restart or block another workspace; and never expose decrypted bootstrap in health/logs. Then implement the minimal supervisor and rerun all four CI gates.
+Define an intentional RED for **MTProto recovery replay acceptance**. Simulate one first-party Container Telegram native event being accepted before a runtime interruption, then replay the exact same `(accountScope, chatId, messageId)` after recovery through the existing Queue -> signed V1 path. The replay must resolve to the same provider-independent canonical event id, return persistent duplicate acknowledgment, be acknowledged by the Queue consumer, and execute zero interpretation/orchestration/destination work. A different Telegram `messageId` from the recovered runtime must remain distinct and proceed normally. Also prove the same replay coming from a redundant Telegram provider collapses identically. Then implement only any missing glue and rerun all four CI gates.
