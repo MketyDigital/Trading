@@ -29,6 +29,7 @@ export class CTraderJsonSession {
     this.pending = new Map();
     this.eventBuffer = [];
     this.eventWaiters = new Set();
+    this.eventSubscribers = new Set();
     this.sequence = 0;
     this.heartbeatHandle = null;
     this.isApplicationAuthenticated = false;
@@ -141,7 +142,31 @@ export class CTraderJsonSession {
     });
   }
 
+  subscribeEvents(handler) {
+    if (typeof handler !== 'function') throw new TypeError('event subscriber is required');
+    this.eventSubscribers.add(handler);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.eventSubscribers.delete(handler);
+    };
+  }
+
+  notifyEventSubscribers(message) {
+    for (const handler of [...this.eventSubscribers]) {
+      try {
+        handler(message);
+      } catch {
+        // Source/event observers are intentionally isolated from request
+        // correlation, waiter delivery, and sibling observers.
+      }
+    }
+  }
+
   dispatchEvent(message) {
+    this.notifyEventSubscribers(message);
+
     for (const waiter of [...this.eventWaiters]) {
       let matched = false;
       try { matched = Boolean(waiter.predicate(message)); } catch { matched = false; }
