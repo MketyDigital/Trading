@@ -12,7 +12,6 @@
     "accept:v1:simulation": "node scripts/v1_simulation_acceptance.mjs"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.3.7",
     "@mtcute/web": "^0.31.0",
     "@supabase/supabase-js": "^2.48.1"
   },
