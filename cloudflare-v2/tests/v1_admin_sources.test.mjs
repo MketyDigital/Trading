@@ -74,10 +74,11 @@ function makeStore(sources = [source()]) {
   };
 }
 
-function authorizedRequest(req, store) {
+function authorizedRequest(req, store, role = 'admin') {
   return handleAuthorizedV1AdminSourcesRequest(req, {
     workspace,
     auth: { subject: 'u-1' },
+    membership: { workspaceId: 'ws-1', subject: 'u-1', role, enabled: true },
   }, { sourceStore: store });
 }
 
