@@ -3,10 +3,17 @@ main = "src/v1_entry.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+[[containers]]
+class_name = "MtprotoContainerRuntime"
+image = "./containers/mtproto-listener/Dockerfile"
+max_instances = 100
+instance_type = "lite"
+
 [durable_objects]
 bindings = [
   { name = "MTPROTO_LISTENER_NAMESPACE", class_name = "MTProtoListenerNode" },
-  { name = "TRADE_STATE_NAMESPACE", class_name = "TradeStateNode" }
+  { name = "TRADE_STATE_NAMESPACE", class_name = "TradeStateNode" },
+  { name = "MTPROTO_CONTAINER_NAMESPACE", class_name = "MtprotoContainerRuntime" }
 ]
 
 [[migrations]]
@@ -16,6 +23,10 @@ new_sqlite_classes = ["MTProtoListenerNode"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["TradeStateNode"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["MtprotoContainerRuntime"]
 
 [[queues.producers]]
 binding = "SOURCE_EVENT_QUEUE"
