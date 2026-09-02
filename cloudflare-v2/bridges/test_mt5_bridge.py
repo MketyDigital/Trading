@@ -1,9 +1,11 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from mt5_bridge import MT5Engine, ReplayLedger
+from mt5_source_capture import MT5SourceCapture
 
 
 class FakeMT5:
@@ -52,6 +54,39 @@ class FakeMT5:
         return ()
 
 
+class FakeMT5Source:
+    def __init__(self, login=42, deals=None):
+        self.login = login
+        self.deals = list(deals or [])
+        self.history_calls = []
+
+    def account_info(self):
+        return SimpleNamespace(login=self.login)
+
+    def history_deals_get(self, start, end):
+        self.history_calls.append((start, end))
+        return tuple(self.deals)
+
+
+def source_deal(ticket, time_msc, symbol='XAUUSD.a', order=7001, position_id=5001):
+    return SimpleNamespace(
+        ticket=ticket,
+        order=order,
+        position_id=position_id,
+        time_msc=time_msc,
+        type=0,
+        entry=0,
+        symbol=symbol,
+        volume=0.01,
+        price=2526.15,
+        commission=-0.2,
+        swap=0.0,
+        profit=1.5,
+        fee=0.0,
+        reason=3,
+    )
+
+
 class MT5BridgeTests(unittest.TestCase):
     def test_market_open_uses_ask_for_buy_and_checks_before_send(self):
         mt5 = FakeMT5()
@@ -83,6 +118,102 @@ class MT5BridgeTests(unittest.TestCase):
             self.assertIsNone(ledger.get('same-command'))
             ledger.put('same-command', stored)
             self.assertEqual(ledger.get('same-command'), stored)
+
+
+class MT5SourceCaptureTests(unittest.TestCase):
+    def test_poll_emits_sorted_exact_account_deals_with_stable_native_identity(self):
+        deals = [source_deal(2, 1770000000200), source_deal(1, 1770000000100)]
+        mt5 = FakeMT5Source(login=42, deals=deals)
+        delivered = []
+        capture = MT5SourceCapture(mt5=mt5, deliver=delivered.append, account_id=42, lookback_ms=5000, overlap_ms=1000)
+
+        result = capture.poll_once(now_ms=1770000005000)
+
+        self.assertEqual(result['delivered'], 2)
+        self.assertEqual([item['nativeEventId'] for item in delivered], ['1', '2'])
+        self.assertEqual(delivered[0]['providerType'], 'mt5_source_bridge')
+        self.assertEqual(delivered[0]['occurredAt'], datetime.fromtimestamp(1770000000100 / 1000, tz=timezone.utc).isoformat())
+        self.assertEqual(delivered[0]['metadata'], {'native_kind': 'deal'})
+        self.assertEqual(delivered[0]['structuredPayload']['ticket'], 1)
+        self.assertEqual(delivered[0]['structuredPayload']['symbol'], 'XAUUSD.a')
+        self.assertNotIn('account_id', delivered[0])
+        self.assertNotIn('accountId', delivered[0])
+
+    def test_exact_account_mismatch_fails_closed_before_history_or_delivery(self):
+        mt5 = FakeMT5Source(login=99, deals=[source_deal(1, 1770000000100)])
+        delivered = []
+        capture = MT5SourceCapture(mt5=mt5, deliver=delivered.append, account_id=42)
+
+        with self.assertRaisesRegex(RuntimeError, 'MT5_SOURCE_ACCOUNT_MISMATCH'):
+            capture.poll_once(now_ms=1770000005000)
+
+        self.assertEqual(mt5.history_calls, [])
+        self.assertEqual(delivered, [])
+
+    def test_overlapping_poll_window_does_not_redeliver_seen_deal_in_same_capture(self):
+        mt5 = FakeMT5Source(login=42, deals=[source_deal(10, 1770000009000)])
+        delivered = []
+        capture = MT5SourceCapture(mt5=mt5, deliver=delivered.append, account_id=42, lookback_ms=5000, overlap_ms=2000)
+
+        capture.poll_once(now_ms=1770000010000)
+        capture.poll_once(now_ms=1770000011000)
+
+        self.assertEqual([item['nativeEventId'] for item in delivered], ['10'])
+        first_start, first_end = mt5.history_calls[0]
+        second_start, second_end = mt5.history_calls[1]
+        self.assertEqual(first_start, datetime.fromtimestamp(1770000005000 / 1000, tz=timezone.utc))
+        self.assertEqual(first_end, datetime.fromtimestamp(1770000010000 / 1000, tz=timezone.utc))
+        self.assertEqual(second_start, datetime.fromtimestamp(1770000008000 / 1000, tz=timezone.utc))
+        self.assertEqual(second_end, datetime.fromtimestamp(1770000011000 / 1000, tz=timezone.utc))
+
+    def test_malformed_deal_is_ignored_and_one_delivery_failure_does_not_stop_next_deal(self):
+        malformed = SimpleNamespace(ticket=None, time_msc=1770000000000)
+        mt5 = FakeMT5Source(login=42, deals=[malformed, source_deal(1, 1770000000100), source_deal(2, 1770000000200)])
+        attempted = []
+
+        def deliver(event):
+            attempted.append(event['nativeEventId'])
+            if event['nativeEventId'] == '1':
+                raise RuntimeError('source-local delivery failed')
+
+        capture = MT5SourceCapture(mt5=mt5, deliver=deliver, account_id=42)
+        result = capture.poll_once(now_ms=1770000005000)
+
+        self.assertEqual(attempted, ['1', '2'])
+        self.assertEqual(result['ignored'], 1)
+        self.assertEqual(result['failed'], 1)
+        self.assertEqual(result['delivered'], 1)
+        self.assertEqual(capture.status()['failedEvents'], 1)
+        self.assertEqual(capture.status()['deliveredEvents'], 1)
+        self.assertEqual(capture.status()['status'], 'healthy')
+
+    def test_two_capture_instances_keep_seen_state_health_and_failures_independent(self):
+        mt5_a = FakeMT5Source(login=42, deals=[source_deal(1, 1770000000100)])
+        mt5_b = FakeMT5Source(login=99, deals=[source_deal(1, 1770000000100)])
+        b_delivered = []
+
+        def fail_a(_event):
+            raise RuntimeError('A failed')
+
+        a = MT5SourceCapture(mt5=mt5_a, deliver=fail_a, account_id=42)
+        b = MT5SourceCapture(mt5=mt5_b, deliver=b_delivered.append, account_id=99)
+
+        a.poll_once(now_ms=1770000005000)
+        b.poll_once(now_ms=1770000005000)
+
+        self.assertEqual(a.status()['failedEvents'], 1)
+        self.assertEqual(a.status()['deliveredEvents'], 0)
+        self.assertEqual(b.status()['failedEvents'], 0)
+        self.assertEqual(b.status()['deliveredEvents'], 1)
+        self.assertEqual([event['nativeEventId'] for event in b_delivered], ['1'])
+
+    def test_status_is_sanitized_and_does_not_expose_account_or_transport_credentials(self):
+        capture = MT5SourceCapture(mt5=FakeMT5Source(login=42), deliver=lambda _event: None, account_id=42)
+        capture.poll_once(now_ms=1770000005000)
+        serialized = json.dumps(capture.status()).lower()
+
+        for forbidden in ('secret', 'token', 'password', 'credential', 'accountid', 'account_id', 'login'):
+            self.assertNotIn(forbidden, serialized)
 
 
 if __name__ == '__main__':
