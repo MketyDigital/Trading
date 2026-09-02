@@ -7,6 +7,7 @@ This is the current environment procedure for `MketyDigital/Trading` V1. Trading
 Trading-owned database surface:
 
 - `public.trading_workspace_access`
+- `public.trading_workspace_memberships` after migration `0009` is applied
 - `public.source_connections`
 - `public.trading_events`
 - `public.position_groups`
@@ -14,7 +15,7 @@ Trading-owned database surface:
 - `public.destination_deliveries`
 - the existing Trading-specific `public.trade_accounts` table and additive Trading policy/index columns
 
-Do not alter, drop, rewrite, or add Trading entitlement state to shared `public.workspaces` or unrelated Mkety tables/functions. Trading authorization belongs to `trading_workspace_access`; V1 does not use a browser-supplied workspace id as authority and does not depend on a foreign key to shared `public.workspaces`.
+Do not alter, drop, rewrite, or add Trading entitlement state to shared `public.workspaces` or unrelated Mkety tables/functions. Trading authorization belongs to `trading_workspace_access` plus exact Trading-owned subject membership; V1 does not use a browser-supplied workspace id as authority and does not depend on a foreign key to shared `public.workspaces`.
 
 Real-money execution remains disabled. Demo broker actions remain behind their explicit demo-only acceptance gates.
 
@@ -33,7 +34,9 @@ The following Trading migrations have been reviewed, applied, and verified in th
 7. `0007_trading_internal_privilege_hardening.sql`
 8. `0008_trading_default_source_search_path.sql`
 
-Supabase migration ledger names for the newly applied staging batch are:
+Migration `0009_trading_workspace_memberships.sql` is checked into the active feature branch but **is not yet claimed live-applied**. Do not treat source/CI presence as migration-ledger evidence.
+
+Supabase migration ledger names already verified live include:
 
 - `trading_0003_multi_source_provider_registry`
 - `trading_0004_cross_provider_event_identity`
@@ -66,7 +69,7 @@ Do not re-run these migrations blindly. Inspect the real migration ledger and sc
 `0007`:
 - `anon` and `authenticated` have no table privileges on `trading_workspace_access`, `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, or `trade_accounts`;
 - `service_role` retains the required table privileges;
-- RLS remains enabled on all seven Trading tables;
+- RLS remains enabled on all existing Trading internal tables;
 - zero client RLS policies exist by design because these are server/service-role internals;
 - `trading_set_default_source` can be executed by `service_role` only.
 
@@ -75,9 +78,14 @@ Do not re-run these migrations blindly. Inspect the real migration ledger and sc
 - the function remains SECURITY INVOKER;
 - `anon_execute=false`, `authenticated_execute=false`, `service_role_execute=true`.
 
+`0009` source contract, pending live application/verification:
+- creates `trading_workspace_memberships` as the exact `(workspace_id, zitadel_subject)` Trading entitlement boundary;
+- keeps client access closed and service-side authority explicit;
+- does not add Trading authorization state to shared `public.workspaces` or MKSaaS user tables.
+
 ### Shared-schema and data invariants
 
-After the staging migration batch:
+Before `0009` live application:
 
 - shared `public.workspaces` still has its pre-existing 10-column definition; no Trading column was added;
 - `source_connections`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, and `trade_accounts` remain empty;
@@ -96,6 +104,26 @@ Other project warnings, including unrelated public-schema extensions or pre-exis
 Supabase linter remediation reference for the intentional RLS/no-policy notices:
 https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy
 
+## Shared Mkety Zitadel identity model
+
+Identity topology:
+
+```text
+One managed Mkety Zitadel instance
+  -> MKSaaS project/app (separate DB)
+  -> Trading project/app (Trading DB)
+       -> trading_workspace_access
+       -> trading_workspace_memberships
+```
+
+Authoritative operator reference:
+
+`cloudflare-v2/docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`
+
+Zitadel login is identity only. Trading entitlement additionally requires exact Trading workspace access, exact project/org authorization, exact immutable token `sub` membership, and a Trading workspace-role capability. Trading authorization must not query the MKSaaS database or shared Mkety user/workspace tables.
+
+A Trading-only identity with no MKSaaS DB profile is supported. Broker execution is a separate safety boundary and is not granted by identity, membership, or workspace role.
+
 ## Worker configuration required before non-live acceptance
 
 Server-side names:
@@ -107,7 +135,7 @@ Server-side names:
 - `ZITADEL_ISSUER`
 - `ZITADEL_AUDIENCE`
 - `ZITADEL_JWKS_URL`
-- optional `ZITADEL_PROJECT_ID`
+- `ZITADEL_PROJECT_ID` for strict Trading project isolation in the intended environment
 - optional `ZITADEL_TRADING_ROLE`
 - `TRADING_V1_SHADOW` — default off
 - `TRADING_V1_SIMULATION` — default off
@@ -140,18 +168,26 @@ Before simulation acceptance:
 
 ## Trading workspace authorization setup
 
-`trading_workspace_access` is the V1 entitlement boundary. The existing row is intentionally disabled.
+`trading_workspace_access` is the V1 workspace entitlement boundary. `trading_workspace_memberships` is the exact subject-to-workspace membership boundary after `0009` is live-applied. The existing workspace entitlement row is intentionally disabled.
 
-Before enabling it:
+### Real non-live shared-Zitadel acceptance checklist
 
-1. configure the intended Zitadel organization mapping;
-2. configure the required Trading role;
-3. verify issuer/audience/JWKS settings;
-4. prove wrong-organization and missing-role tokens fail;
-5. prove the authorized token maps to exactly one intended Trading workspace;
-6. only then set `trading_access_enabled=true`.
+Keep `trading_access_enabled=false` while preparing the test identities and configuration. Verify all of the following against the deployed non-live Worker and the existing managed Mkety Zitadel instance before enabling the intended non-live workspace entitlement:
 
-Do not enable entitlement merely to satisfy a readiness check.
+1. **Same issuer identity plane:** both product entry paths use the intended managed Mkety Zitadel issuer.
+2. **Trading-specific application/audience:** Trading tokens are issued for the intended Trading application/client and `ZITADEL_AUDIENCE`.
+3. **Exact project claim:** with `ZITADEL_PROJECT_ID` configured, the matching `urn:zitadel:iam:org:project:<projectId>:roles` claim authorizes; a role only in another project or generic fallback claim fails.
+4. **Exact organization:** the Trading role must be granted for the workspace-bound Zitadel organization; the same role for another org fails.
+5. **Exact immutable `sub` membership:** the token subject must match an enabled `(workspace_id, zitadel_subject)` Trading membership.
+6. **Wrong-workspace membership:** a subject who belongs only to another Trading workspace fails for the selected workspace.
+7. **Disabled membership:** a disabled membership fails without affecting an enabled sibling member.
+8. **Existing-Mkety logical user:** an intended user that also exists in MKSaaS succeeds only because its Zitadel `sub` has Trading entitlement/membership, not because of any MKSaaS DB row.
+9. **Trading-only logical user:** a separate test subject with no MKSaaS DB profile succeeds when the same Zitadel identity/project/org checks and Trading membership are valid.
+10. **MKSaaS independence:** Trading remains operable for the Trading-only test identity without reading/querying the MKSaaS database or shared Mkety user/workspace tables.
+11. **No broker/live coupling:** no live broker account, real-money execution, or execution enablement is introduced during identity acceptance.
+12. **Secret-free evidence:** logs and responses contain no bearer tokens, secrets, service-role keys, or private credentials.
+
+Only after the negative and positive identity cases pass should the intended non-live workspace entitlement be enabled for subsequent source/runtime acceptance. Do not enable entitlement merely to satisfy a readiness check.
 
 ## Source connection setup
 
@@ -241,12 +277,13 @@ Do not delete/rename legacy Trading runtime/tables simply because V1 exists.
 
 Cutover remains:
 
-1. pass signed V1 simulation;
-2. pass non-live source/provider soak;
-3. pass cTrader demo matrix;
-4. pass MT5 demo matrix;
-5. compare V1 behavior/state with the legacy path;
-6. only then design a separately reversible legacy retirement/cutover.
+1. pass shared-Zitadel non-live project/org/sub membership acceptance;
+2. pass signed V1 simulation;
+3. pass non-live source/provider soak;
+4. pass cTrader demo matrix;
+5. pass MT5 demo matrix;
+6. compare V1 behavior/state with the legacy path;
+7. only then design a separately reversible legacy retirement/cutover.
 
 ## Stop conditions
 
@@ -254,6 +291,8 @@ Stop and fix the root cause if any of these occur:
 
 - an unrelated Mkety table/function/schema is modified by Trading work;
 - shared `workspaces` schema changes;
+- Trading auth/admin code depends on the MKSaaS database or shared Mkety user/workspace tables;
+- wrong project/org/subject/workspace membership is accepted;
 - client table privileges reappear on Trading internal tables;
 - secrets appear in plaintext database fields, logs, health, or API responses;
 - invalid/replayed source events reach persistence;
@@ -266,14 +305,16 @@ Stop and fix the root cause if any of these occur:
 
 ## Current next step
 
-The shared-Supabase migration/readiness gate is complete and verified through `0008`.
+Source/CI shared-Zitadel acceptance is being completed on the feature branch. Migration `0009` remains checked in but not yet claimed live-applied.
 
-Next safe environment work is **non-live authorization/runtime configuration**:
+Next safe environment work is **non-live identity and runtime configuration**:
 
-1. configure and verify Zitadel/workspace mapping while keeping `trading_access_enabled=false` until negative/positive auth tests pass;
-2. configure one deliberately non-live source identity using server-side encrypted credentials;
-3. deploy/verify the required Cloudflare V1/Container/DO bindings without enabling real broker execution;
-4. run signed V1 simulation and MTProto non-live soak/replay/isolation acceptance;
-5. then run cTrader/MT5 demo acceptance behind their explicit demo-only gates.
+1. apply and verify migration `0009` to the Trading database only, preserving the disabled entitlement until identity tests are ready;
+2. configure the Trading project/application and workspace-bound organization in the existing managed Mkety Zitadel instance;
+3. run the exact project/org/`sub` negative/positive checklist above, including a Trading-only identity with no MKSaaS DB profile;
+4. configure one deliberately non-live source identity using server-side encrypted credentials;
+5. deploy/verify the required Cloudflare V1/Container/DO bindings without enabling real broker execution;
+6. run signed V1 simulation and MTProto non-live soak/replay/isolation acceptance;
+7. then run cTrader/MT5 demo acceptance behind their explicit demo-only gates.
 
 Real-money execution remains disabled.
