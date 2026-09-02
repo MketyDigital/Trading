@@ -219,6 +219,23 @@ Scope: source-side MT5, cTrader, and custom signed API producers only. No broker
    - Concurrency acceptance proves runtime A may remain blocked in its own retry sleep while runtime B completes successfully and updates only B health.
    - Provider mismatch is rejected before any client delivery; duplicate V1 success remains healthy terminal success.
 
+## cTrader source-capture isolation checkpoint — 2026-09-02
+
+1. **Non-destructive cTrader session event subscriptions GREEN.** Corrected RED `33654023354` @ `bec542b9062e22e582b5dd27282e68c84663a953`: all prior cTrader/request/waiter behavior passed and the five new tests failed only because `subscribeEvents()` did not exist. GREEN `33654538322` @ `69ea76310689db9890534f1ef520b9fc24d88442`, all four mandatory gates pass.
+   - `CTraderJsonSession.subscribeEvents()` is a per-session observation tap; it does not consume `waitForEvent()` events or alter request correlation.
+   - Multiple observers receive the same event independently.
+   - One observer exception is swallowed locally and cannot block sibling observers, request correlation, or execution waiters.
+   - Unsubscribe is idempotent and subscriptions never cross session instances.
+2. **Exact-account cTrader source capture GREEN.** RED `33654765459` @ `fb05e447c3064e4b2e2621384a31d9fad5563d4e`: 452/453 Node tests passed; sole failure was the deliberately missing `src/sources/nontelegram/ctrader_source_capture.js`. GREEN push run `33654983528` @ `0027a849fddcf810d6fa541a39b03658773b9925`; matching PR run `33654989002` also passed.
+   - Capture accepts only `ProtoOAExecutionEvent` (`payloadType=2126`) for its exact configured `ctidTraderAccountId`.
+   - Initial source semantics are deal-only: a stable native `dealId` plus `deal.executionTimestamp` is required; malformed/non-deal/wrong-account events are ignored locally.
+   - Broker account ID is a local capture filter only and is not forwarded as workspace/source authority or exposed in health.
+   - Forwarded structured data contains execution type and cloned deal/order/position payloads; source runtime still performs the canonical V1 build/sign/delivery boundary.
+   - Each capture owns its own serial promise chain so native order is preserved within that source; blocked capture A cannot delay capture B even when both observe one shared websocket session.
+   - Delivery failure degrades/counts only the owning capture and later events still proceed; a later successful event restores healthy status.
+   - Start/stop are idempotent; health is source-local and contains no credentials/account ID.
+   - No database migration, destination coupling, broker execution path, or live enablement was introduced by this slice.
+
 **TradingView caveat:** do not route direct TradingView alerts through this HMAC client. TradingView webhooks cannot supply the dynamic Mkety HMAC headers used by the signed V1 contract. Direct TradingView ingress requires a separate reviewed authentication design; do not weaken V1 by placing reusable secrets in URLs/bodies merely to force compatibility.
 
 ## CI rule
@@ -238,31 +255,36 @@ Recent GREEN checkpoints:
 - `33652558801` @ `f0bae16e24e0abe46ca7a35ecc4e0c6b9e366b7b`
 - `33652790629` @ `927511f822ad6b9593ad248cebb50b6225df7c9a`
 - `33653159677` @ `2871e195eaf2b7aea2a4db9695e7af8e0073b27a`
+- `33654538322` @ `69ea76310689db9890534f1ef520b9fc24d88442`
+- `33654983528` @ `0027a849fddcf810d6fa541a39b03658773b9925`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
 1. Verify this updated handoff/documentation head in all four CI gates.
-2. Inspect existing MT5 bridge and cTrader event/client plumbing before creating concrete source-capture adapters; reuse native platform event IDs and avoid destination/execution code coupling.
-3. Add the smallest provider-native capture adapter(s) that feed `createNonTelegramSourceRuntime` with per-instance state and no shared queue/retry/health authority.
-4. Design TradingView direct webhook authentication separately before adding any public route; never weaken signed V1 auth to accommodate TradingView limitations.
-5. Configure/verify the Trading project/application and exact workspace-bound organization in managed Mkety Zitadel when an appropriate account connector/path exists; none is currently available in this chat.
-6. Run real non-live project/org/`sub` positive/negative acceptance when account-side Zitadel access exists.
-7. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists; no connector is currently available in this chat.
-8. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
-9. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
-10. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
+2. Add an MT5 source observation/capture boundary that is physically and logically separate from the existing execution-oriented `bridges/mt5_bridge.py` command path; do not share command retry/execution state with source delivery.
+3. Compose MT5 native event capture into the existing non-Telegram source runtime with stable native transaction/deal/order identity, exact account scope, per-instance ordering/retry/health, and no destination/execution authority.
+4. Continue custom signed API composition after MT5 capture acceptance.
+5. Design TradingView direct webhook authentication separately before adding any public route; never weaken signed V1 auth to accommodate TradingView limitations.
+6. Configure/verify the Trading project/application and exact workspace-bound organization in managed Mkety Zitadel when an appropriate account connector/path exists; none is currently available in this chat.
+7. Run real non-live project/org/`sub` positive/negative acceptance when account-side Zitadel access exists.
+8. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists; no connector is currently available in this chat.
+9. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
+10. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
+11. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Latest implementation GREEN: `33653159677` @ `2871e195eaf2b7aea2a4db9695e7af8e0073b27a`.
+Latest implementation GREEN: `33654983528` @ `0027a849fddcf810d6fa541a39b03658773b9925`.
 
 Next safe source work:
 - keep MT5/cTrader/custom ingress source-only;
-- inspect/reuse existing platform-native event/client primitives instead of inventing parallel transports;
-- compose provider-native capture into `buildSignedSourceEventPayload` + `createSignedV1SourceClient` + `createNonTelegramSourceRuntime` with per-instance state only;
-- prove one producer's event capture/retry/failure/health cannot block or mutate another producer;
+- retain cTrader source capture as a non-destructive observer; never replace execution `waitForEvent()` semantics with source-consumer behavior;
+- when one cTrader websocket authenticates multiple accounts, every source capture must enforce its own exact account ID before delivery;
+- add MT5 provider-native source observation separately from `MT5Engine` command execution and its replay ledger;
+- use stable provider-native IDs/timestamps and compose into `buildSignedSourceEventPayload` + `createSignedV1SourceClient` + `createNonTelegramSourceRuntime` with per-instance state only;
+- prove one MT5 source's capture/retry/failure/health cannot block or mutate another source or execution bridge;
 - do not create TradingView direct ingress until its auth contract is separately designed/reviewed;
 - keep entitlement disabled until real Zitadel environment acceptance;
 - keep broker/live execution disabled;
