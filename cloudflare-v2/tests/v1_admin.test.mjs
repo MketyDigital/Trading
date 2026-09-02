@@ -22,6 +22,16 @@ function workspaceQuery(workspace) {
   };
 }
 
+function enabledMembership(subject = 'u1', role = 'admin') {
+  return () => ({
+    async getMembership(workspaceId, requestedSubject) {
+      assert.equal(workspaceId, 'ws-1');
+      assert.equal(requestedSubject, subject);
+      return { id: 'membership-1', workspaceId: 'ws-1', subject, role, enabled: true, metadata: {} };
+    },
+  });
+}
+
 test('admin authorization fails closed without workspace selector or disabled entitlement', async () => {
   const missing = await authorizeV1AdminRequest(new Request('https://trade.test/api/v1/admin/workspace'), {}, {
     supabase: workspaceQuery(null), authenticateFn: async () => ({ ok: true }),
@@ -48,10 +58,12 @@ test('admin authorization binds JWT role to exact Trading workspace Zitadel orga
   const result = await authorizeV1AdminRequest(request, zitadelEnv, {
     supabase: workspaceQuery({ id: 'ws-1', zitadel_org_id: 'org-1', trading_access_enabled: true, trading_required_role: 'trading_admin' }),
     authenticateFn: async (_request, options) => { authOptions = options; return { ok: true, subject: 'u1', workspaceId: 'ws-1' }; },
+    membershipStoreFactory: enabledMembership(),
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.workspace.id, 'ws-1');
+  assert.equal(result.membership.subject, 'u1');
   assert.equal(authOptions.requiredRole, 'trading_admin');
   assert.equal(authOptions.workspace.zitadelOrgId, 'org-1');
   assert.equal(authOptions.audience, 'trading-api');
@@ -67,6 +79,7 @@ test('GET workspace returns only authenticated Trading access record and strips 
   }), zitadelEnv, {
     supabaseFactory: async () => workspaceQuery(workspace),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1' }),
+    membershipStoreFactory: enabledMembership(),
   });
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -81,6 +94,7 @@ test('generic legacy admin proxy paths are not exposed through V1 admin handler'
   }), zitadelEnv, {
     supabaseFactory: async () => workspaceQuery({ id: 'ws-1', zitadel_org_id: 'org-1', trading_access_enabled: true, trading_required_role: 'trading_admin' }),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1' }),
+    membershipStoreFactory: enabledMembership(),
   });
   assert.equal(response.status, 404);
 });
