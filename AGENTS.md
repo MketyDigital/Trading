@@ -11,7 +11,7 @@ Operational source of truth for `MketyDigital/Trading`. Read before changing the
 - **Never merge `main` without explicit user instruction.**
 - Real-money execution remains disabled.
 - TDD is mandatory: exact RED before production feature/bugfix code; full GREEN before completion claims.
-- Never paste/log/commit broker, database, auth, source, Telegram-session, provider, transport, or signing secrets.
+- Never paste/log/commit broker, database, auth, source, Telegram-session, provider, transport, signing, or AI secrets.
 - Update this file after every meaningful implementation/testing batch.
 
 ## Product / tenancy contract
@@ -33,7 +33,7 @@ Source Provider / Adapter
  -> destination / broker adapter
 ```
 
-Isolation is mandatory at workspace, user, source, provider runtime, Telegram session, chat, event, trade account, destination, AI provider, retry, idempotency key, position group, and broker credential boundaries. One tenant/runtime/integration failure must never receive, mutate, stall, disable, reorder, or corrupt another tenant/integration's credentials, configuration, state, events, retries, health, idempotency, or broker actions.
+Isolation is mandatory at workspace, user, source, provider runtime, Telegram session, chat, event, trade account, destination, AI provider, retry, queue, idempotency key, position group, health, control state, and credential boundaries. One tenant/runtime/integration failure must never receive, mutate, stall, disable, reorder, duplicate, or corrupt another tenant/integration's credentials, configuration, state, events, retries, health, idempotency, or broker actions.
 
 Sources are first-class pluggable providers. A workspace may enable multiple simultaneous sources across Telegram MTProto, MT5, cTrader, TradingView, REST/custom APIs, and future families.
 
@@ -46,7 +46,8 @@ Rules:
 - runtime identity is not canonical event identity;
 - redundant provider replays collapse through persistent canonical idempotency before AI/orchestration/trading;
 - browser/caller workspace/source/bootstrap fields are never authoritative when a server-side trusted source exists;
-- source, destination, broker, AI, retry, health, credentials, and control state stay scoped to the smallest responsible integration boundary.
+- source, destination, broker, AI, retry, health, credentials, and control state stay scoped to the smallest responsible integration boundary;
+- fan-out destinations succeed/fail/retry independently and never roll back successful siblings.
 
 Provider types:
 - Telegram: `cloudflare_container_mtproto`, `cloudflare_do_mtproto`, `external_mtproto`
@@ -95,7 +96,7 @@ Container disk is ephemeral and never authoritative durable state. DO storage, S
 - Position Groups support arbitrary TP counts and hedged/netted behavior.
 - Persistent event/destination/order idempotency is mandatory.
 - Every trade account requires explicit execution enablement, symbol/risk/lot/daily-loss/exposure limits, and kill switch before broker dispatch.
-- Fail closed on ambiguity, tenant mismatch, provider outage, missing credentials, unavailable broker metadata, unreliable economics, or invalid correlation.
+- Fail closed on ambiguity, tenant mismatch, provider outage, missing credentials, unavailable broker metadata, unreliable economics, invalid correlation, or unknown execution state.
 - Global kill switch blocks all actions; protective management may bypass only ordinary drawdown/open-risk locks.
 - Legacy Telegram route remains until V1/source/broker acceptance is satisfactory.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
@@ -112,7 +113,7 @@ npm run accept:ctrader:demo
 npm run accept:mt5:demo
 ```
 
-No real external Worker acceptance, real broker demo order, or real Cloudflare Container/DO MTProto deployment has been performed in this session because account/runtime credentials are not available here.
+No real external Worker acceptance, real broker demo order, real Cloudflare Container/DO MTProto deployment, or real-money execution has been performed in this session because account/runtime credentials are not available here.
 
 ## Multi-source implementation status — 2026-09-02
 
@@ -133,7 +134,8 @@ No real external Worker acceptance, real broker demo order, or real Cloudflare C
 15. **External MTProto cross-provider replay + two-workspace isolation acceptance — GREEN.** Container/external replay collapses only within workspace; identical Telegram identity remains distinct across workspaces; credentials/policy/disabled/failure state never cross tenants. GREEN `33625278355` @ `c6c2c14fb3c389b23062d83a1a2240875dd97891`.
 16. **External MTProto CI contract + operator/staging docs — GREEN.** Static CI contract protects both MTProto Python suites; README/runbook documents trust boundary, credential scope, replay, rotation, non-live acceptance. Exact GREEN `33626149089` @ `e2bc271842a5df1425f3fb879ba0c413bfb180e0`.
 17. **Heterogeneous source registration/configuration/coexistence — GREEN.** `provider_config_validation.js` validates one source at a time; stable non-secret canonical scope; no source-to-broker/destination/execution coupling. Six provider types coexist; one invalid provider cannot mutate siblings/defaults. RED `33626475474` @ `7eaaac74bdd8d76a5b1522d63f36d447d0058cac`; production GREEN `33626665176` @ `01e388ac6d94e2770461d9264340ec1fca7a3ab8`; store-level GREEN `33626927619` @ `a78dc9fbe257f41b67337ad5f06587a018f1d573`. Broader-plan Task 7 complete.
-18. **Pure Durable Object + mtcute alternate MTProto provider — GREEN.** `src/sources/mtproto/do_provider.js` persists mtcute storage/update state in the exact DO, enables `updates.catchUp`, uses per-DO alarms for reconnect, keeps disconnected/reconnect health local, emits the same queue-compatible Telegram native identity as Container, and never exposes API hash/session material through status. `listener_node.js` now delegates `/start`, `/send_code`, `/stop`, `/status`, and `alarm()` to this isolated provider; `/send_code` persists the exported Telegram session internally but returns only `{status:"authenticated"}`; provider exceptions return fixed `MTPROTO_DO_CONTROL_FAILED`; legacy direct `GLOBAL_ROUTER_URL` forwarding and admin-env credential fallback are removed from the active DO path. The DO produces into the existing `SOURCE_EVENT_QUEUE` so downstream server-side source resolution, HMAC signing, persistent idempotency, and V1 ingest stay shared without cross-provider coupling. It remains alternate/non-default and does not become a platform startup dependency. Initial provider RED `33627432162` @ `0db0865287e5d577c628378aff3b7f64593cdd42` (only missing provider module); focused provider GREEN `33627556140` @ `222905ae86367300cf49c6e78e1195ccd98bacc3`; control-surface RED `33627701249` @ `5ec317f1b746fd18564bd061b97431bf0f3e9192` (359 pass, only two intentional control failures); final exact-head GREEN `33627974053` @ `b15e4b7afc864daba23d0e8b8d77773d1a3e0175`, all four mandatory gates passing. Broader-plan Task 6 complete.
+18. **Pure Durable Object + mtcute alternate MTProto provider — GREEN.** `src/sources/mtproto/do_provider.js` persists mtcute storage/update state in the exact DO, enables `updates.catchUp`, uses per-DO alarms for reconnect, keeps disconnected/reconnect health local, emits the same queue-compatible Telegram native identity as Container, and never exposes API hash/session material through status. `listener_node.js` delegates `/start`, `/send_code`, `/stop`, `/status`, and `alarm()` to this isolated provider; `/send_code` persists the exported Telegram session internally but returns only `{status:"authenticated"}`; provider exceptions return fixed `MTPROTO_DO_CONTROL_FAILED`; legacy direct `GLOBAL_ROUTER_URL` forwarding and admin-env credential fallback are removed from the active DO path. The DO produces into `SOURCE_EVENT_QUEUE`, so downstream server-side source resolution, HMAC signing, persistent idempotency, and V1 ingest stay shared without cross-provider coupling. It remains alternate/non-default and does not become a platform startup dependency. Provider RED `33627432162` @ `0db0865287e5d577c628378aff3b7f64593cdd42`; focused GREEN `33627556140` @ `222905ae86367300cf49c6e78e1195ccd98bacc3`; control RED `33627701249` @ `5ec317f1b746fd18564bd061b97431bf0f3e9192`; final GREEN `33627974053` @ `b15e4b7afc864daba23d0e8b8d77773d1a3e0175`. Broader-plan Task 6 complete.
+19. **Zitadel-authorized source administration API — GREEN.** Existing `authorizeV1AdminRequest` remains the sole trust gate. Source-store construction happens only after Trading entitlement + exact workspace/Zitadel organization/role authorization succeeds. `src/http/v1_admin_sources.js` owns an admin-specific store whose list/read/enable/disable queries are all constrained by the trusted `authorization.workspace.id`; caller body/path workspace overrides are never authority. Supported routes are workspace source list/status, family-scoped default change via existing `trading_set_default_source` RPC, and exact-source enable/disable. Disabling clears only that source's default flag; default switching remains family-scoped and atomic. The admin store selects no source/provider ciphertext columns, response serialization is whitelist-based, and nested config recursively strips secret/cipher/session/token/password/API-key/API-hash/credential/authorization/private-key shaped fields. Wrong Zitadel org, missing Trading role, or disabled Trading entitlement stop before source-store creation. Clean RED `33628546167` @ `635809c6c67f341abc9351eae29c55a7cd6fc517` (361 pass, only missing source-admin module); exact final GREEN `33628759094` @ `69b3d89b016d2d00335450046b5688541aa7649c`, all four mandatory gates passing. Broader-plan Task 8 complete.
 
 ## Supabase boundary
 
@@ -159,7 +161,6 @@ Every meaningful head must pass:
 4. Wrangler dry-run.
 
 Recent exact GREEN checkpoints:
-- `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954`
 - `33615820124` @ `b73abee97a736a4a53f726635df9d211a5f73986`
 - `33623854041` @ `904690f4c97208b1306a48179aba6bb8b689bd48`
 - `33625107407` @ `9fb58507c2797c703c967d77648e6c7e5a1d50a0`
@@ -169,6 +170,7 @@ Recent exact GREEN checkpoints:
 - `33626927619` @ `a78dc9fbe257f41b67337ad5f06587a018f1d573`
 - `33627556140` @ `222905ae86367300cf49c6e78e1195ccd98bacc3`
 - `33627974053` @ `b15e4b7afc864daba23d0e8b8d77773d1a3e0175`
+- `33628759094` @ `69b3d89b016d2d00335450046b5688541aa7649c`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -180,13 +182,12 @@ Container MTProto E2E later requires: review/apply migrations `0003`-`0006`; dep
 
 ## Current priority
 
-1. Add **Task 8: Zitadel-authorized source admin/default/status APIs**, scoped to the authenticated Trading workspace and never exposing source/provider secrets.
-2. Add Task 9 non-live multi-source acceptance, reconnect/soak harness, runbook/CI expansion.
-3. Review/apply checked-in Trading migrations and configure non-live staging only when account/runtime access is available.
-4. Run external signed-V1 + MTProto source soak acceptance when runtime credentials are available.
-5. Run broker demo probes/lifecycles only behind explicit demo gates.
-6. Tiny controlled live only after all non-live/demo acceptance is green.
+1. Complete **Task 9: Non-live Multi-source Acceptance and Operational Gate** with explicit workspace/source/provider/destination failure-isolation acceptance, reconnect/replay acceptance, soak harness, runbook and CI coverage.
+2. Review/apply checked-in Trading migrations and configure non-live staging only when account/runtime access is available.
+3. Run external signed-V1 + MTProto source soak acceptance when runtime credentials are available.
+4. Run broker demo probes/lifecycles only behind explicit demo gates.
+5. Tiny controlled live only after all non-live/demo acceptance is green.
 
 ## Exact next safe starting point
 
-Continue `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md` at **Task 8: Admin Source Management API**. First inspect the existing V1 admin authorization/route shape and current source connection store. Write `cloudflare-v2/tests/v1_admin_sources.test.mjs` as an intentional RED covering: wrong Zitadel org, missing Trading role, disabled Trading entitlement, exact-workspace source listing/status, family-scoped default changes, enable/disable behavior, and zero secret/ciphertext/session/provider-credential leakage. Writes must stay scoped to Trading-owned `source_connections`; one source mutation must not modify sibling providers/defaults outside the intended family. Confirm the exact RED before creating `src/http/v1_admin_sources.js` or changing V1 routing. After the next meaningful GREEN checkpoint, update this `AGENTS.md` again before proceeding.
+Continue `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md` at **Task 9: Non-live Multi-source Acceptance and Operational Gate**. Fetch the exact Task 9 checklist before writing code/tests. Preserve the current multi-tenant isolation contract: inject failure into one workspace/source/provider/destination and prove unrelated siblings continue; replay/catch-up must not duplicate orchestration; health/retry/idempotency must stay integration-scoped; real broker/live execution remains disabled. Write the Task 9 acceptance RED first, observe the exact failure, implement only the smallest missing harness/glue, run all four mandatory gates at the exact head, then update this file again before any staging/deployment work.
