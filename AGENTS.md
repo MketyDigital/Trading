@@ -106,6 +106,7 @@ Active design/plan docs:
 - `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`
 - `docs/superpowers/specs/2026-09-02-lightweight-tradingview-direct-ingress-design.md`
 - `docs/superpowers/plans/2026-09-02-lightweight-tradingview-direct-ingress-v2.md`
+- `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
 - `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 - `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
 
@@ -250,12 +251,13 @@ Recent exact GREEN checkpoints:
 - `33677530649` @ `cd053e99f11fe680194fff24a09f58adb77e2d5a`
 - `33683493798` @ `84bd40e8c714b884f003869693203ea0148e0b85`
 - `33691531352` @ `07753802ed80dace07376c3a738d3ff03edcfaa7`
+- `33691801653` @ `1ee0e865939c81c75807d8a0933b0874e79cb008`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify the final Paid/Free deployment-contract handoff synchronization head in all four CI gates, including both Wrangler configs.
+1. Execute the approved production V1 launch program in `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`; Gate 1 scope freeze is now IN PROGRESS and must be exact-head CI verified before Gate 2 account-side staging work.
 2. Keep direct TradingView ingress disabled until real Cloudflare/TradingView TLS client-certificate presentation/fingerprint behavior is proven non-live on the actual non-Enterprise deployment.
 3. No Cloudflare Enterprise-only feature may be introduced. In particular, do not use BYOCA or Enterprise mTLS trust; Free-plan-compatible primitives are the baseline.
 4. Keep Containers optional and explicit on Workers Paid; never make Container availability a global MTProto dependency and never start a Container for DO/external sources.
@@ -273,11 +275,13 @@ Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Exact next safe starting point
 
-Latest Paid+Free deployment implementation GREEN: `33691531352` @ `07753802ed80dace07376c3a738d3ff03edcfaa7`.
-Latest probe implementation GREEN: `33683493798` @ `84bd40e8c714b884f003869693203ea0148e0b85`.
-Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. No TradingView source row exists. The current deployment/runbook/agent synchronization head must be re-verified in CI before account-side observation work.
+Latest exact branch-head GREEN before the launch-plan batch: `33691801653` @ `1ee0e865939c81c75807d8a0933b0874e79cb008`.
+Production launch plan added at `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md` in commit `0b2527c9fec29f54075f7630d09ff1d40e4ca498`.
+Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. No TradingView source row exists.
 
 Next safe source work:
+- exact-head verify the launch-plan + `AGENTS.md` synchronization batch in all four mandatory CI gates before marking Gate 1 GREEN;
+- after Gate 1 GREEN, begin Gate 2 with account-side Cloudflare staging resource/binding inspection only; do not enable TradingView ingress or broker execution;
 - keep the existing Paid config available for explicit Container sources and use `wrangler.free.toml` when validating/deploying the no-Container baseline;
 - never treat the presence of `MTPROTO_CONTAINER_NAMESPACE` as source selection or permission to start a Container;
 - keep TradingView direct ingress disabled while configuring/observing client-certificate metadata;
@@ -285,12 +289,20 @@ Next safe source work:
 - temporarily use the fail-closed certificate probe only for the real certificate observation; it must stay 403-only and source/database/queue-free;
 - disable the probe immediately after observation, then require the Worker-side exact fingerprint pin and reject every presented-but-unpinned certificate;
 - if Free-compatible Cloudflare does not expose the required real TradingView certificate fingerprint to the Worker, redesign the trust boundary rather than introducing Enterprise or weakening to IP-only/caller-header/subject-string authentication;
-- keep TradingView source-only: public handle routes, server source record authorizes workspace/source, queue consumer owns signed V1 handoff;
-- never put reusable TradingView secrets in URL/query/body and never treat caller workspace/source/destination/execution fields as authority;
-- keep MT5/cTrader/custom ingress source-only;
-- retain cTrader capture as a non-destructive observer with exact account filtering;
-- retain MT5 source capture/sender entirely separate from execution bridge secret, ledger, commands and lifecycle;
-- retain custom producer as thin composition over existing event builder + signed client + per-source runtime;
 - keep entitlement disabled until real Zitadel environment acceptance;
 - keep broker/live execution disabled;
 - do not merge `main` without explicit user instruction.
+
+## Production V1 launch program — IN PROGRESS 2026-09-03
+
+Governing plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
+
+The launch program is the controlling roadmap until general production. Unrelated feature expansion is deferred unless a missing capability is proven necessary to satisfy one of the ten launch gates.
+
+Production launch gate: **Gate 1 — Freeze Production V1 Scope and Launch Contract**
+Status: **IN PROGRESS**
+Exact branch head before this `AGENTS.md` synchronization write: `0b2527c9fec29f54075f7630d09ff1d40e4ca498`
+CI/environment evidence: previous exact-head GREEN `33691801653` @ `1ee0e865939c81c75807d8a0933b0874e79cb008`; launch-plan/docs synchronization head still requires fresh CI verification.
+Safety state: `trading_access_enabled=false`; TradingView direct ingress disabled; TradingView certificate probe disabled except during a controlled observation window; broker/live execution disabled.
+Blockers: fresh exact-head CI for the launch-plan + `AGENTS.md` batch; Cloudflare/Zitadel account-side acceptance remains unavailable from the current connector set.
+Exact next safe action: run/inspect all four mandatory CI gates at the new branch head; if GREEN, update this section to Gate 1 GREEN and move to Gate 2 account-side Cloudflare staging inspection without enabling TradingView ingress or broker execution.
