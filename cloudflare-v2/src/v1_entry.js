@@ -85,6 +85,7 @@ function healthResponse(request, env = {}) {
 
   const core = validateStagingReadiness(env);
   const simulation = validateStagingReadiness(env, { requireSimulation: true });
+  const mtprotoContainer = validateStagingReadiness(env, { requireMtprotoContainer: true });
   const status = !core.ready
     ? 'not_ready'
     : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
@@ -95,8 +96,10 @@ function healthResponse(request, env = {}) {
     status,
     ready: core.ready,
     simulationReady: simulation.ready,
+    mtprotoContainerReady: mtprotoContainer.ready,
     missing: core.missing,
     simulationMissing: simulation.missing,
+    mtprotoContainerMissing: mtprotoContainer.missing,
     optionalMissing: core.optionalMissing,
     features: core.features,
   }), {
