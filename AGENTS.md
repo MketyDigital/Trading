@@ -75,7 +75,8 @@ Provider types:
 - Workspace roles are owner/admin/operator/viewer; unknown fails closed. No workspace role grants `broker.execute`.
 - Trading authorization must never query/depend on the MKSaaS user database/shared Mkety workspace table.
 - Keep `trading_access_enabled=false` until real non-live Zitadel acceptance passes.
-- Live Supabase Trading migrations through `0009_trading_workspace_memberships` are applied/verified. No cTrader/MT5/custom source work in this batch added a migration.
+- Live Supabase Trading migrations through `0009_trading_workspace_memberships` are applied/verified.
+- Migration `0010_tradingview_public_source_handle.sql` exists in code but is **not** considered live-applied until Supabase is separately applied and verified. It adds only a non-secret `public_source_handle` routing identifier plus a partial unique index.
 
 ## MTProto availability contract
 
@@ -91,7 +92,7 @@ Container disk is ephemeral and never authoritative durable state. DO storage, S
 
 ## Implemented foundation
 
-Verified foundations include signed `/api/v1/events`, source HMAC auth, persistent canonical event reservation/idempotency, deterministic parser + bounded AI, encrypted source/provider secrets, MT5/cTrader/Deriv normalization, account safety/risk/kill switch, arbitrary-TP Position Groups, durable Trade State, simulation, destination fan-out isolation, Container Telethon, DO+mtcute, external MTProto signed V1 adapter, source admin, shared-Zitadel memberships, and Supabase privilege hardening.
+Verified foundations include signed `/api/v1/events`, source HMAC auth, persistent canonical event reservation/idempotency, deterministic parser + bounded AI, encrypted source/provider secrets, MT5/cTrader/Deriv normalization, account safety/risk/kill switch, arbitrary-TP Position Groups, durable Trade State, simulation, destination fan-out isolation, Container Telethon, DO+mtcute, external MTProto signed V1 adapter, source admin, shared-Zitadel memberships, Supabase privilege hardening, isolated MT5/cTrader/custom source capture, and lightweight direct TradingView queue ingress in code.
 
 Active design/plan docs:
 - `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
@@ -100,6 +101,8 @@ Active design/plan docs:
 - `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
 - `docs/superpowers/specs/2026-09-02-mkety-shared-zitadel-enterprise-identity-design.md`
 - `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`
+- `docs/superpowers/specs/2026-09-02-lightweight-tradingview-direct-ingress-design.md`
+- `docs/superpowers/plans/2026-09-02-lightweight-tradingview-direct-ingress-v2.md`
 - `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 - `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
 
@@ -169,9 +172,28 @@ The source path is physically/logically separate from execution-oriented `bridge
 
 No DB migration, destination coupling, broker command modification, execution enablement, or live-money change was introduced by cTrader/MT5/custom source work.
 
-## TradingView caveat
+## Lightweight TradingView direct ingress — CODE GREEN 2026-09-02
 
-Do not route direct TradingView alerts through the current dynamic-HMAC client. TradingView webhooks cannot supply the dynamic Mkety HMAC headers used by signed V1. Direct TradingView ingress requires a separate reviewed authentication design. Never weaken V1 by putting reusable secrets in URLs/bodies merely for compatibility.
+The approved direct TradingView trust boundary is implemented in code and is independent of signed external V1 HMAC clients.
+
+- Spec: `docs/superpowers/specs/2026-09-02-lightweight-tradingview-direct-ingress-design.md`.
+- Route: `POST /api/v1/webhooks/tradingview/:public_source_handle`.
+- Storage migration: `cloudflare-v2/db/migrations/0010_tradingview_public_source_handle.sql`; adds `public_source_handle TEXT` plus a partial unique index. **Code exists; live Supabase application is not yet verified.**
+- Source lookup: `getActiveTradingViewSourceByPublicHandle()` resolves only exact active `source_family='tradingview'` + `provider_type='tradingview_webhook'`; it does not decrypt a source secret.
+- Transport gate: direct ingress is inert unless `TRADINGVIEW_DIRECT_INGRESS_ENABLED` is explicitly enabled, a SHA-256 client-certificate fingerprint allowlist is configured, and Cloudflare `request.cf.tlsClientAuth` reports a presented/verified certificate with an exact allowed fingerprint.
+- Ordinary caller headers are never transport authority. There is no reusable secret in the webhook URL or alert body.
+- Handler requires stable `event_id`, enforces bounded body size/JSON shape, recursively strips workspace/source/destination/broker/execution/secret/token/password/credential/API-key/private-key authority fields, and queues only a source-native event.
+- Successful direct ingress returns `202 { ok: true, queued: true }`; queue/source failures are request-local and do not claim acceptance.
+- The queue consumer re-resolves the source server-side and uses the existing signed `/api/v1/events` path; direct ingress does not call interpretation, destination fan-out, broker adapters, or execution code directly.
+- Existing dynamic HMAC source auth remains byte-exact and independent.
+- Multiple TradingView handles/workspaces remain isolated; same native event ID is scoped by canonical source/workspace identity and one source failure cannot suppress a sibling.
+- Production enablement remains **blocked** until the real Cloudflare/TradingView client-certificate metadata and fingerprint behavior are verified non-live. Do not replace this with an IP-only or caller-header fallback.
+
+TDD/reconciliation evidence:
+- Approved spec head `5c007265c462c7f3aec856e900cf8d51e72df8b3` passed CI (`33660724964`, `33660718778`).
+- During plan execution, duplicate tests accidentally assumed alternate names `webhook_handle` / `getActiveTradingViewByHandle`; exact RED `33668236026` @ `7cd66319e312856bceb5255ff0cbb15ecf5930d0` produced 490/493 Node PASS with exactly three duplicate-contract failures. Existing TradingView transport/handler/acceptance/routing tests were already GREEN in that run.
+- Root cause was test-contract duplication, not production failure. Tests were aligned to the existing approved `public_source_handle` / `getActiveTradingViewSourceByPublicHandle()` contract; no production/schema duplication was added.
+- Reconciliation GREEN `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`, all mandatory gates successful.
 
 ## CI rule
 
@@ -187,33 +209,37 @@ Recent exact GREEN checkpoints:
 - `33656303876` @ `61241796fdc420035e23acfc0d9d744974aff07e`
 - `33656669204` @ `5f85bdd209aae1e3ac7461a16a0fe73bc56514e8`
 - `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`
+- `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify this custom-source handoff/documentation head in all four CI gates.
-2. Design TradingView direct webhook authentication separately before adding any public route; never weaken signed V1 auth to accommodate TradingView webhook header limitations.
-3. After TradingView design approval, implement it under its own TDD slice with exact source/workspace isolation and no broker/destination authority.
-4. Add an executable MT5 source-only runtime/runner only if needed for deployment; never import/use `MT5Engine` or command-secret state.
-5. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when an account-side connector/path is available.
-6. Run real non-live Zitadel positive/negative acceptance when environment access exists.
-7. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists.
-8. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
-9. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
-10. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
+1. Verify this `AGENTS.md` TradingView progress head in all four CI gates.
+2. Do **not** duplicate the TradingView schema/lookup/transport/handler already present; continue from the existing `public_source_handle` contract.
+3. Apply and verify migration `0010_tradingview_public_source_handle.sql` in the Trading Supabase project before any real direct TradingView webhook test.
+4. Verify real Cloudflare/TradingView TLS client-certificate metadata/fingerprint behavior non-live before enabling `TRADINGVIEW_DIRECT_INGRESS_ENABLED`; remain fail-closed otherwise.
+5. Update `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`/runbook if any account-side TradingView staging steps are added.
+6. Add an executable MT5 source-only runtime/runner only if needed for deployment; never import/use `MT5Engine` or command-secret state.
+7. Configure/verify Trading Zitadel project/application and exact workspace-bound organization when an account-side connector/path is available.
+8. Run real non-live Zitadel positive/negative acceptance when environment access exists.
+9. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists.
+10. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
+11. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
+12. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Latest implementation GREEN: `33658279622` @ `1769345919f30f46bc119051f8d63f5863bfa65d`.
+Latest implementation GREEN: `33668462127` @ `8e83294d0578e0278b5f3eea7037faa305fe1503`.
 
 Next safe source work:
+- keep TradingView direct ingress disabled until real TLS client-certificate verification and migration `0010` are verified account-side;
+- keep TradingView source-only: public handle routes, server source record authorizes workspace/source, queue consumer owns signed V1 handoff;
+- never put reusable TradingView secrets in URL/query/body and never treat caller workspace/source/destination/execution fields as authority;
 - keep MT5/cTrader/custom ingress source-only;
 - retain cTrader capture as a non-destructive observer with exact account filtering;
 - retain MT5 source capture/sender entirely separate from execution bridge secret, ledger, commands and lifecycle;
 - retain custom producer as thin composition over existing event builder + signed client + per-source runtime;
-- design TradingView direct ingress as a separate trust boundary before implementation;
-- do not place reusable TradingView source secrets in URL paths/query strings or treat caller workspace/source fields as authority;
 - keep entitlement disabled until real Zitadel environment acceptance;
 - keep broker/live execution disabled;
 - do not merge `main` without explicit user instruction.
