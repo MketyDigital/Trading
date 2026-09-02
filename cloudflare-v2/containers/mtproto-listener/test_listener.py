@@ -5,13 +5,27 @@ from listener import MtprotoListener
 
 
 class FakeEvent:
-    def __init__(self, *, chat_id, message_id, text='BUY GOLD NOW', outgoing=False):
+    def __init__(
+        self,
+        *,
+        chat_id,
+        message_id,
+        text='BUY GOLD NOW',
+        outgoing=False,
+        reply_to_message_id=None,
+        topic_id=None,
+        edited=False,
+    ):
         self.chat_id = chat_id
         self.id = message_id
         self.raw_text = text
         self.out = outgoing
         self.message = self
         self.media = None
+        self.reply_to_msg_id = reply_to_message_id
+        self.is_topic_message = topic_id is not None
+        self.reply_to = None if topic_id is None else type('ReplyHeader', (), {'forum_topic': True, 'reply_to_top_id': topic_id})()
+        self.edit_date = object() if edited else None
 
 
 class FakeClient:
@@ -76,6 +90,43 @@ class MtprotoListenerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered[0]['metadata']['native_identity'], {'chat_id': '-1001', 'message_id': '10'})
         self.assertEqual(delivered[1]['metadata']['native_identity'], {'chat_id': '-1002', 'message_id': '11'})
         self.assertEqual(delivered[0]['source_id'], 'source-1')
+        await listener.stop()
+
+    async def test_preserves_reply_topic_and_edit_identity_for_trade_correlation(self):
+        listener, _, _, delivered = self.make_listener()
+        await listener.start()
+
+        await listener.handle_new_message(FakeEvent(
+            chat_id=-1001,
+            message_id=77,
+            text='MOVE SL TO BE',
+            reply_to_message_id=76,
+            topic_id=55,
+            edited=True,
+        ))
+        await listener.wait_until_idle()
+
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]['thread'], {
+            'thread_id': 'telegram:-1001:topic:55',
+            'reply_to_event_id': 'telegram:-1001:76',
+            'edited_event_id': 'telegram:-1001:77',
+        })
+        self.assertEqual(delivered[0]['metadata']['account_scope'], 'telegram-account-42')
+        await listener.stop()
+
+    async def test_plain_message_emits_explicit_empty_thread_contract(self):
+        listener, _, _, delivered = self.make_listener()
+        await listener.start()
+
+        await listener.handle_new_message(FakeEvent(chat_id=-1001, message_id=78))
+        await listener.wait_until_idle()
+
+        self.assertEqual(delivered[0]['thread'], {
+            'thread_id': None,
+            'reply_to_event_id': None,
+            'edited_event_id': None,
+        })
         await listener.stop()
 
     async def test_outgoing_and_unconfigured_chat_messages_are_ignored(self):
