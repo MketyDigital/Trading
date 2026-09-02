@@ -97,3 +97,58 @@ test('getSourceById returns null when no Trading source exists', async () => {
   const store = createSourceConnectionStore({ from: () => query });
   assert.equal(await store.getSourceById('missing'), null);
 });
+
+test('TradingView public handle lookup is exact active provider-family scoped and normalized', async () => {
+  const filters = [];
+  const row = {
+    id: 'tv-source-a',
+    workspace_id: 'ws-a',
+    source_type: 'tradingview_webhook',
+    source_instance_id: 'tv-strategy-a',
+    provider_type: 'tradingview_webhook',
+    source_family: 'tradingview',
+    is_active: true,
+    is_default: true,
+    priority: 10,
+    external_identity: 'tv-strategy-a',
+    public_source_handle: 'tv_public_abc123',
+    config: {},
+  };
+  const query = {
+    select(columns) {
+      assert.match(columns, /public_source_handle/);
+      return query;
+    },
+    eq(column, value) { filters.push([column, value]); return query; },
+    maybeSingle: async () => ({ data: row, error: null }),
+  };
+  const store = createSourceConnectionStore({
+    from(table) { assert.equal(table, 'source_connections'); return query; },
+  });
+
+  const source = await store.getActiveTradingViewSourceByPublicHandle('  tv_public_abc123  ');
+
+  assert.deepEqual(filters, [
+    ['public_source_handle', 'tv_public_abc123'],
+    ['is_active', true],
+    ['provider_type', 'tradingview_webhook'],
+    ['source_family', 'tradingview'],
+  ]);
+  assert.equal(source.id, 'tv-source-a');
+  assert.equal(source.workspaceId, 'ws-a');
+  assert.equal(source.providerType, 'tradingview_webhook');
+  assert.equal(source.sourceFamily, 'tradingview');
+  assert.equal(source.publicSourceHandle, 'tv_public_abc123');
+});
+
+test('TradingView public handle lookup fails closed for blank or missing handle without querying', async () => {
+  let calls = 0;
+  const store = createSourceConnectionStore({
+    from() { calls += 1; throw new Error('must not query'); },
+  });
+
+  assert.equal(await store.getActiveTradingViewSourceByPublicHandle(''), null);
+  assert.equal(await store.getActiveTradingViewSourceByPublicHandle('   '), null);
+  assert.equal(await store.getActiveTradingViewSourceByPublicHandle(null), null);
+  assert.equal(calls, 0);
+});
