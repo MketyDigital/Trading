@@ -17,5 +17,16 @@ new_sqlite_classes = ["MTProtoListenerNode"]
 tag = "v2"
 new_sqlite_classes = ["TradeStateNode"]
 
+[[queues.producers]]
+binding = "SOURCE_EVENT_QUEUE"
+queue = "mkety-trading-source-events"
+
+[[queues.consumers]]
+queue = "mkety-trading-source-events"
+max_batch_size = 5
+max_batch_timeout = 1
+max_retries = 8
+dead_letter_queue = "mkety-trading-source-events-dlq"
+
 [triggers]
 crons = ["*/15 * * * *"]
