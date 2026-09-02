@@ -12,7 +12,7 @@ export function createSupabaseIngestStores(supabase, {
       if (!sourceId) return null;
       const { data, error } = await supabase
         .from('source_connections')
-        .select('id,workspace_id,source_type,source_instance_id,secret_ciphertext,settings,is_active')
+        .select('id,workspace_id,source_type,source_instance_id,source_family,provider_type,external_identity,secret_ciphertext,settings,is_active')
         .eq('id', String(sourceId))
         .eq('is_active', true)
         .maybeSingle();
@@ -24,6 +24,9 @@ export function createSupabaseIngestStores(supabase, {
         workspace_id: data.workspace_id,
         source_type: data.source_type,
         source_instance_id: data.source_instance_id,
+        source_family: data.source_family ?? null,
+        provider_type: data.provider_type ?? null,
+        external_identity: data.external_identity ?? null,
         settings: data.settings || {},
         secret,
       };
@@ -43,13 +46,20 @@ export function createSupabaseIngestStores(supabase, {
       }
 
       if (error?.code === '23505') {
-        const { data: existing, error: lookupError } = await supabase
+        let lookup = supabase
           .from('trading_events')
           .select('id')
-          .eq('workspace_id', row.workspace_id)
-          .eq('source_connection_id', row.source_connection_id)
-          .eq('external_event_id', row.external_event_id)
-          .maybeSingle();
+          .eq('workspace_id', row.workspace_id);
+
+        if (row.canonical_event_id) {
+          lookup = lookup.eq('canonical_event_id', row.canonical_event_id);
+        } else {
+          lookup = lookup
+            .eq('source_connection_id', row.source_connection_id)
+            .eq('external_event_id', row.external_event_id);
+        }
+
+        const { data: existing, error: lookupError } = await lookup.maybeSingle();
         if (!lookupError && existing?.id) {
           return { ok: true, duplicate: true, eventId: existing.id };
         }
