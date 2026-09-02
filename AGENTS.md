@@ -63,7 +63,7 @@ Provider types:
 - Every trade account requires explicit execution enablement, safety/risk limits, and kill switch before broker dispatch.
 - Global kill switch blocks everything; protective management may bypass only ordinary drawdown/open-risk locks.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
-- No identity/admin/database acceptance work enables broker execution.
+- No identity/admin/database/source-adapter acceptance work enables broker execution.
 
 ## MTProto availability contract
 
@@ -185,6 +185,34 @@ Advisor review after `0009`:
 - no new Trading-specific WARN requiring a migration fix was introduced;
 - pre-existing unrelated WARNs include public `vector`, `public.rls_auto_enable()` SECURITY DEFINER executability, and unrelated policy/performance findings; do not modify them from this Trading repo without a separate Mkety security plan.
 
+Exact live-`0009` handoff CI: `33650914537` @ `3ded017581693a4e660b57dbfc9b729cafe78188`, all four mandatory gates GREEN.
+
+## Non-Telegram signed source adapter checkpoint — 2026-09-02
+
+Scope: source-side MT5, cTrader, and custom signed API producers only. No broker/destination/execution behavior was added.
+
+1. **Pure event builder GREEN.** RED `33651565078` @ `e50f4e5d6731c8e7dcec4cec0130e3a2e54a8c9e`: 427 existing tests passed, sole failure was missing `src/sources/nontelegram/source_event_adapter.js`. GREEN `33651715322` @ `27b2c706ea3d98e56b5dcf7c2eab0c41ccb8a276`, all four gates pass.
+   - Supports `mt5_source_bridge`, `ctrader_source`, `custom_signed_api`.
+   - Emits V1 event body only; MT5 uses native `transaction_id`, cTrader/custom use native `event_id`.
+   - Strips caller workspace/source authority, broker/destination/execution fields, and secret-like metadata.
+   - Same native event remains deterministic across retries.
+2. **Real signed-ingest composition GREEN.** Initial acceptance head `8a9309a92591c4914c7bc33c0b89888c408620b5` failed only because the new test harness called positional `signSourcePayload(rawBody,timestamp,secret)` as an object; production code was not implicated. Harness correction `0c0a34d3ce6a278486d919c886437c85c21c9d66`; exact GREEN `33652188423`, all four gates pass.
+   - MT5/cTrader/custom sources authenticate and reserve independently through real `ingestTradingEvent`.
+   - Duplicate in one family is terminal locally and does not suppress sibling families.
+   - Bad credential cannot reserve/poison another source.
+   - Authenticated source workspace overrides caller hints.
+   - Same scoped native event remains isolated across workspaces.
+3. **Isolated external signed-V1 client GREEN.** RED `33652397788` @ `632094dbd3c2651e6e11c9e0a8d67b532b932d56`: 437/438 passed, sole failure missing `signed_v1_client.js`. GREEN `33652558801` @ `f0bae16e24e0abe46ca7a35ecc4e0c6b9e366b7b`, all four gates pass.
+   - Exact HMAC/header parity with `/api/v1/events`.
+   - HTTPS exact `/api/v1/events` endpoint only.
+   - Duplicate response is terminal success.
+   - Network/429/5xx classified retryable; other non-2xx and invalid 2xx bodies permanent.
+   - Errors never echo response bodies or source secrets.
+   - Client performs one attempt only; retry/backoff ownership remains source-runtime-local, preventing hidden global retry coupling.
+   - Each client instance closes over its own source ID/secret; no global mutable credential state.
+
+**TradingView caveat:** do not route direct TradingView alerts through this HMAC client. TradingView webhooks cannot supply the dynamic Mkety HMAC headers used by the signed V1 contract. Direct TradingView ingress requires a separate reviewed authentication design; do not weaken V1 by placing reusable secrets in URLs/bodies merely to force compatibility.
+
 ## CI rule
 
 Every meaningful branch head must pass:
@@ -193,36 +221,37 @@ Every meaningful branch head must pass:
 3. both MTProto Python suites;
 4. Wrangler dry-run.
 
-Recent shared-Zitadel GREEN checkpoints:
-- `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`
-- `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`
-- `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`
-- `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`
+Recent GREEN checkpoints:
 - `33649915332` @ `e093e8db37b0df03352f320b2dc51f048a209cf2`
 - `33650151789` @ `8c80ec649f550f8c5eb0cd4690e3cf138118bc2b`
+- `33650914537` @ `3ded017581693a4e660b57dbfc9b729cafe78188`
+- `33651715322` @ `27b2c706ea3d98e56b5dcf7c2eab0c41ccb8a276`
+- `33652188423` @ `0c0a34d3ce6a278486d919c886437c85c21c9d66`
+- `33652558801` @ `f0bae16e24e0abe46ca7a35ecc4e0c6b9e366b7b`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
 ## Current priority
 
-1. Verify the docs-only live-`0009` handoff head in all four CI gates.
-2. Configure/verify the Trading project/application and exact workspace-bound organization in the existing managed Mkety Zitadel instance if an appropriate connector/account-side path is available.
-3. Run real non-live project/org/`sub` positive/negative acceptance, including a Trading-only test identity with no MKSaaS DB profile.
-4. Keep entitlement disabled until the negative/positive identity setup is ready; enable only the intended non-live entitlement after evidence passes.
-5. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration without enabling broker execution.
-6. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance.
-7. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
-8. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
+1. Verify this handoff/documentation head in all four CI gates.
+2. Continue unblocked source-provider work for MT5/cTrader/custom without introducing destination/execution coupling; next useful slice should compose provider-native event capture with the new event builder + isolated signed client and prove per-instance retry/health isolation.
+3. Design TradingView direct webhook authentication separately before adding any public route; never weaken signed V1 auth to accommodate TradingView limitations.
+4. Configure/verify the Trading project/application and exact workspace-bound organization in managed Mkety Zitadel when an appropriate account connector/path exists; none is currently available in this chat.
+5. Run real non-live project/org/`sub` positive/negative acceptance when account-side Zitadel access exists.
+6. Deploy/verify Cloudflare V1/Queue/Container/DO runtime configuration when Cloudflare account-side access exists; no connector is currently available in this chat.
+7. Continue MTProto non-live soak/reconnect/replay and signed V1 simulation acceptance where credentials/environment are available.
+8. Run cTrader/MT5 demo gates only after identity/runtime acceptance is green.
+9. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Migration `0009` is now **live-applied and verified**. Shared-Zitadel Tasks 1–5 are source/CI GREEN. The existing Trading workspace entitlement remains disabled/unbound.
+Latest implementation GREEN: `33652558801` @ `f0bae16e24e0abe46ca7a35ecc4e0c6b9e366b7b`.
 
-Next safe work is real non-live identity environment acceptance:
-- configure the Trading-specific Zitadel project/app and exact organization binding without relying on MKSaaS DB state;
-- create/provision only deliberate test identities/memberships;
-- prove wrong project, wrong org, missing/disabled/wrong-workspace membership all fail;
-- prove an existing-Mkety logical user and a Trading-only subject both succeed through the same immutable `sub` gate;
+Next safe source work:
+- keep MT5/cTrader/custom ingress source-only;
+- add provider-native capture/adapter composition around `buildSignedSourceEventPayload` + `createSignedV1SourceClient` using per-instance state only;
+- prove one producer's retry/failure/health cannot block or mutate another producer;
+- do not create TradingView direct ingress until its auth contract is separately designed/reviewed;
+- keep entitlement disabled until real Zitadel environment acceptance;
 - keep broker/live execution disabled;
-- keep source/destination/integration isolation unchanged;
 - do not merge `main` without explicit user instruction.
