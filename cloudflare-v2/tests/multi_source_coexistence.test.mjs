@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { validateProviderConfiguration } from '../src/sources/provider_config_validation.js';
+import { createSourceConnectionStore } from '../src/sources/source_connection_store.js';
 
 const workspaceId = 'ws-coexist';
 
@@ -18,6 +19,23 @@ function source(overrides = {}) {
     config: {},
     ...overrides,
   };
+}
+
+function makeListQuery(rows) {
+  const filters = [];
+  const query = {
+    select() { return query; },
+    eq(column, value) { filters.push([column, value]); return query; },
+    order() { return query; },
+    then(resolve) {
+      let data = rows;
+      for (const [column, value] of filters) {
+        data = data.filter((row) => row[column] === value);
+      }
+      resolve({ data, error: null });
+    },
+  };
+  return query;
 }
 
 test('all supported provider families can be configured independently in one workspace', () => {
@@ -47,6 +65,37 @@ test('all supported provider families can be configured independently in one wor
   const results = records.map((record) => validateProviderConfiguration(record));
   assert.equal(results.every((result) => result.ok), true);
   assert.deepEqual(results.map((result) => result.source.id), records.map((record) => record.id));
+});
+
+test('source store lists all enabled provider families together and keeps defaults family-scoped', async () => {
+  const rows = [
+    { id: 'tg-container', workspace_id: workspaceId, provider_type: 'cloudflare_container_mtproto', source_family: 'telegram', is_active: true, is_default: true, priority: 10, external_identity: 'telegram-account-1', config: { chat_ids: ['-1001'] } },
+    { id: 'tg-external', workspace_id: workspaceId, provider_type: 'external_mtproto', source_family: 'telegram', is_active: true, is_default: false, priority: 20, external_identity: 'telegram-account-1', config: { chat_acceptance_mode: 'allowlist', allowed_chat_ids: ['-1001'] } },
+    { id: 'mt5-source', workspace_id: workspaceId, provider_type: 'mt5_source_bridge', source_family: 'mt5', is_active: true, is_default: true, priority: 30, external_identity: 'mt5-terminal-1', config: {} },
+    { id: 'ctrader-source', workspace_id: workspaceId, provider_type: 'ctrader_source', source_family: 'ctrader', is_active: true, is_default: true, priority: 40, external_identity: 'ctrader-account-1', config: {} },
+    { id: 'tv-source', workspace_id: workspaceId, provider_type: 'tradingview_webhook', source_family: 'tradingview', is_active: true, is_default: true, priority: 50, external_identity: 'tv-strategy-1', config: {} },
+    { id: 'custom-source', workspace_id: workspaceId, provider_type: 'custom_signed_api', source_family: 'custom_api', is_active: true, is_default: true, priority: 60, external_identity: 'custom-client-1', config: {} },
+    { id: 'other-workspace', workspace_id: 'ws-other', provider_type: 'tradingview_webhook', source_family: 'tradingview', is_active: true, is_default: true, priority: 1, external_identity: 'other', config: {} },
+    { id: 'disabled-source', workspace_id: workspaceId, provider_type: 'custom_signed_api', source_family: 'custom_api', is_active: false, is_default: false, priority: 1, external_identity: 'disabled', config: {} },
+  ];
+  const store = createSourceConnectionStore({ from: () => makeListQuery(rows) });
+
+  const active = await store.listEnabledSources(workspaceId);
+  assert.deepEqual(active.map((item) => item.id), [
+    'tg-container',
+    'tg-external',
+    'mt5-source',
+    'ctrader-source',
+    'tv-source',
+    'custom-source',
+  ]);
+  assert.equal(active.filter((item) => item.sourceFamily === 'telegram').length, 2);
+  assert.equal(active.filter((item) => item.sourceFamily === 'telegram' && item.isDefault).length, 1);
+  for (const family of ['mt5', 'ctrader', 'tradingview', 'custom_api']) {
+    assert.equal(active.filter((item) => item.sourceFamily === family && item.isDefault).length, 1);
+  }
+  assert.equal(active.some((item) => item.id === 'other-workspace'), false);
+  assert.equal(active.some((item) => item.id === 'disabled-source'), false);
 });
 
 test('invalid configuration is scoped to only the provider being validated', () => {
