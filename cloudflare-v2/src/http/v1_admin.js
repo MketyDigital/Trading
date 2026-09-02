@@ -1,4 +1,5 @@
 import { authenticateTradingBearer } from '../security/zitadel_auth.js';
+import { createTradingMembershipStore } from '../security/trading_membership_store.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 
 function json(body, status = 200) {
@@ -32,6 +33,7 @@ function publicWorkspace(workspace = {}) {
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
   authenticateFn = authenticateTradingBearer,
+  membershipStoreFactory = createTradingMembershipStore,
 } = {}) {
   const workspaceId = request.headers.get('X-Mkety-Workspace-Id');
   if (!workspaceId) return { ok: false, status: 400, reason: 'MISSING_WORKSPACE_SELECTOR' };
@@ -70,12 +72,35 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
 
-  return { ok: true, workspace, auth };
+  let membershipStore;
+  try {
+    membershipStore = membershipStoreFactory(supabase);
+  } catch {
+    return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' };
+  }
+
+  let membership;
+  try {
+    membership = await membershipStore.getMembership(workspace.id, auth.subject);
+  } catch {
+    return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_LOOKUP_FAILED' };
+  }
+
+  if (
+    !membership?.enabled ||
+    String(membership.workspaceId) !== String(workspace.id) ||
+    String(membership.subject) !== String(auth.subject)
+  ) {
+    return { ok: false, status: 403, reason: 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING' };
+  }
+
+  return { ok: true, workspace, auth, membership };
 }
 
 export async function handleV1AdminRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   authenticateFn = authenticateTradingBearer,
+  membershipStoreFactory = createTradingMembershipStore,
   sourceStoreFactory = createAdminSourceStore,
 } = {}) {
   let supabase;
@@ -85,7 +110,11 @@ export async function handleV1AdminRequest(request, env = {}, {
     return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503);
   }
 
-  const authorization = await authorizeV1AdminRequest(request, env, { supabase, authenticateFn });
+  const authorization = await authorizeV1AdminRequest(request, env, {
+    supabase,
+    authenticateFn,
+    membershipStoreFactory,
+  });
   if (!authorization.ok) return json({ ok: false, reason: authorization.reason }, authorization.status);
 
   const url = new URL(request.url);
