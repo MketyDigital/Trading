@@ -3,7 +3,7 @@ import os
 import unittest
 
 from adapter import ExternalMtprotoAdapter, build_telegram_event
-from app import load_config
+from app import format_fatal_error, load_config
 from v1_sink import PermanentV1DeliveryError, RetryableV1DeliveryError
 
 
@@ -99,6 +99,15 @@ class ConfigTests(unittest.TestCase):
 
         forward_all = load_config(self.valid_env(ALLOWED_CHAT_IDS=''))
         self.assertEqual(forward_all['allowed_chat_ids'], set())
+
+    def test_fatal_error_format_never_echoes_arbitrary_runtime_exception_text(self):
+        secret_values = 'telegram-session-secret source-hmac-secret api-hash-secret'
+        rendered = format_fatal_error(RuntimeError(secret_values))
+        self.assertIn('RuntimeError', rendered)
+        self.assertIn('external MTProto adapter stopped', rendered)
+        self.assertNotIn('telegram-session-secret', rendered)
+        self.assertNotIn('source-hmac-secret', rendered)
+        self.assertNotIn('api-hash-secret', rendered)
 
 
 class ExternalAdapterTests(unittest.IsolatedAsyncioTestCase):
