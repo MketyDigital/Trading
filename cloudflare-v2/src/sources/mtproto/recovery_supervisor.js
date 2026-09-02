@@ -74,7 +74,7 @@ export function createMtprotoRecoverySupervisor({
         if (isHealthy(status)) {
           summary.healthy += 1;
           if (attemptCount > 0 || nextAttemptAt || source.lastRecoveryErrorCode) {
-            await store.updateRecoveryState(source.id, {
+            await store.updateRecoveryState(request.workspaceId, request.sourceId, {
               recoveryAttemptCount: 0,
               recoveryNextAttemptAt: null,
               lastRecoveryErrorCode: null,
@@ -97,7 +97,7 @@ export function createMtprotoRecoverySupervisor({
           if (!restart?.restarted) throw new Error('runtime restart not confirmed');
 
           summary.restarted += 1;
-          await store.updateRecoveryState(source.id, {
+          await store.updateRecoveryState(request.workspaceId, request.sourceId, {
             recoveryAttemptCount: 0,
             recoveryNextAttemptAt: null,
             lastRecoveryAt: iso(clock),
@@ -107,7 +107,7 @@ export function createMtprotoRecoverySupervisor({
           const nextAttempt = attemptCount + 1;
           const delay = backoffMs(nextAttempt, boundedBaseBackoffMs, boundedMaxBackoffMs);
           summary.failed += 1;
-          await store.updateRecoveryState(source.id, {
+          await store.updateRecoveryState(request.workspaceId, request.sourceId, {
             recoveryAttemptCount: nextAttempt,
             recoveryNextAttemptAt: iso(new Date(clock.getTime() + delay)),
             lastRecoveryAt: iso(clock),
