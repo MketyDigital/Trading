@@ -10,13 +10,15 @@ Operational source of truth for `MketyDigital/Trading`. Read before changing the
 - Wrangler entrypoint: `cloudflare-v2/src/v1_entry.js`.
 - **Never merge `main` without explicit user instruction.**
 - Real-money execution remains disabled.
-- TDD is mandatory: exact RED before production feature/bugfix code; full GREEN before completion claims.
+- TDD is mandatory: exact RED before production code; full GREEN before completion claims.
 - Never paste/log/commit broker, database, auth, source, Telegram-session, provider, transport, signing, destination, or AI secrets.
 - Update this file after every meaningful implementation/testing batch.
 
 ## Product / tenancy contract
 
-Mkety Trading is an enterprise/custom **multi-tenant** automation platform, not a Telegram-only copier.
+Mkety Trading is an enterprise/custom multi-tenant automation product. Isolation is mandatory at workspace, user, source, provider runtime, Telegram session, chat, event, trade account, destination, AI provider, retry, queue, idempotency, Position Group, health, control-state, and credential boundaries. One tenant/integration failure must never receive, mutate, stall, disable, reorder, duplicate, roll back, or corrupt unrelated tenants/integrations.
+
+Pipeline:
 
 ```text
 Source Provider / Adapter
@@ -33,17 +35,13 @@ Source Provider / Adapter
  -> destination / broker adapter
 ```
 
-Isolation is mandatory at workspace, user, source, provider runtime, Telegram session, chat, event, trade account, destination, AI provider, retry, queue, idempotency key, Position Group, health, control-state, and credential boundaries. One tenant/runtime/integration failure must never receive, mutate, stall, disable, reorder, duplicate, roll back, or corrupt another tenant/integration's credentials, configuration, state, events, retries, health, idempotency, or broker actions.
-
-Key rules:
-- multiple source providers may be active simultaneously;
+Critical isolation rules:
+- multiple source providers may remain active simultaneously;
 - default source is preference, not exclusivity;
 - unconfigured providers are inert;
-- redundant provider replays collapse through persistent canonical idempotency after authentication;
-- browser/caller workspace/source/bootstrap fields are never authoritative when trusted server-side identity exists;
-- source, destination, broker, AI, retry, health, credentials, and control state stay scoped to the smallest responsible integration boundary;
-- fan-out destinations succeed/fail/retry independently and never roll back successful siblings;
-- retrying a failed destination must not redispatch successful siblings;
+- redundant provider replays collapse only after authentication through persistent canonical identity;
+- caller workspace/source/bootstrap fields are never authority when trusted server identity exists;
+- fan-out destinations succeed/fail/retry independently; retrying one failure never redispatches successful siblings;
 - foreign-workspace or duplicate destinations fail locally without blocking valid siblings.
 
 Provider types:
@@ -53,152 +51,110 @@ Provider types:
 - cTrader: `ctrader_source`
 - custom: `custom_signed_api`
 
-Design/plan:
-- `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
-- `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
-- `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
-- `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
-- `docs/superpowers/specs/2026-09-02-mkety-shared-zitadel-enterprise-identity-design.md`
-- `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`
+## Core trading safety
 
-Runbooks:
-- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
-- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
-
-## MTProto availability contract
-
-Preferred first-party runtime: **Cloudflare Container + Telethon**, one Telegram session listening to many configured chats/channels. Pure DO+mtcute and external MTProto remain alternate providers and must never become platform-wide startup dependencies.
-
-Canonical Telegram native identity:
-
-```text
-telegram:<accountScope>:<chatId>:<messageId>
-```
-
-Required behavior: reconnect/restart recovery, catch-up, receive/downstream decoupling, Queue/retry-safe handoff, provider-independent native identity, persistent duplicate collapse, and secret-free health.
-
-Container disk is ephemeral and never authoritative durable state. DO storage, Supabase event/idempotency state, Queue delivery, and Telegram catch-up/replay are recovery authorities. Do not claim literal zero interruption or zero-loss recovery until real environment soak proves no known lost recoverable event.
-
-Important unresolved environment fact: current in-memory listener retry exhaustion can drop an event from that local queue after bounded retries; durable replay/catch-up/idempotency is the intended recovery path and still requires real reconnect/restart soak.
-
-## Core safety
-
-- Connected broker metadata is authoritative for symbol/precision/tick economics/volume/order/account-mode semantics.
-- Clear signals use deterministic processing; bounded AI is only for ambiguity and must pass deterministic validation.
+- Connected broker metadata is authoritative for symbols, precision, tick economics, volume/order/account-mode semantics.
+- Deterministic processing handles clear signals; bounded AI is only for ambiguity and must pass deterministic validation.
 - AI failure cannot block clear deterministic work.
-- Formatting is presentation-only.
 - Fast-entry policies: `execute_immediately`, `wait_for_complete_signal`, `forward_only`.
 - Completed fast signals reuse the executed first leg as TP1 and add only missing targets.
 - Position Groups support arbitrary TP counts and hedged/netted behavior.
 - Persistent event/destination/order idempotency is mandatory.
 - Every trade account requires explicit execution enablement, safety/risk limits, and kill switch before broker dispatch.
-- Fail closed on ambiguity, tenant mismatch, provider outage, missing credentials, unreliable broker economics/metadata, invalid correlation, or unknown execution state.
 - Global kill switch blocks everything; protective management may bypass only ordinary drawdown/open-risk locks.
-- Legacy Telegram remains until V1/source/broker acceptance is satisfactory.
 - Critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion.
+- No current identity/admin work enables broker execution.
 
-## Zitadel authorization contract
+## MTProto availability contract
 
-- **One managed Mkety Zitadel instance is the global identity authority for MKSaaS and Trading.** Trading is an enterprise Mkety product, not a second identity system.
-- MKSaaS and Trading remain separate Zitadel projects/applications and separate product databases.
-- A Zitadel subject may have MKSaaS access, Trading access, both, or neither.
-- A Trading-only user may authenticate through the same Mkety Zitadel instance without any MKSaaS database row/profile.
-- The immutable Zitadel token subject (`sub`) is the cross-product user identity key; never use email as the permanent authorization link.
-- Successful Zitadel authentication is not sufficient for Trading access. Trading-owned workspace entitlement/membership must also authorize the exact subject/workspace.
-- `trading_workspace_access` remains the workspace/org entitlement switch; `trading_workspace_memberships` is the subject-to-workspace membership boundary.
-- Admin authorization order is: workspace entitlement -> cryptographic Zitadel token/project/org role -> exact enabled `(workspace_id, auth.sub)` membership -> route permission.
-- Workspace roles are Trading-owned capabilities independent from broad Zitadel product access: `owner` and `admin` can manage members/sources; `operator` can manage sources but not members; `viewer` is read-only; unknown roles fail closed.
-- No workspace role grants `broker.execute`; broker execution remains separately safety-gated per trade account and is disabled in current work.
-- JWT issuer, audience, expiry/not-before, signature, workspace entitlement, required role, and workspace-bound Zitadel organization must all verify before admin access.
-- When `ZITADEL_PROJECT_ID` is **unset**, the documented generic current-project role claim `urn:zitadel:iam:org:project:roles` may be used.
-- When `ZITADEL_PROJECT_ID` is **set**, authorization must use only `urn:zitadel:iam:org:project:<projectId>:roles`; never fall back to the generic current-project claim.
-- A role granted for another project or another organization must never authorize the Trading workspace.
-- Trading authorization must never depend on the MKSaaS database being available.
-- Keep `trading_access_enabled=false` until real negative/positive Zitadel environment tests pass.
-- Written identity design: `docs/superpowers/specs/2026-09-02-mkety-shared-zitadel-enterprise-identity-design.md`.
+Preferred first-party runtime: Cloudflare Container + Telethon, one Telegram session listening to many configured chats/channels. Pure DO+mtcute and external MTProto remain alternate providers and must never become platform-wide startup dependencies.
 
-## Verified V1 foundation
-
-Implemented/tested: legacy shadow compatibility; signed `/api/v1/events`; cryptographic Zitadel/workspace authorization; AES-256-GCM secrets; persistent event reservation; deterministic parser + bounded AI; MT5/cTrader/Deriv normalization; metadata-driven risk/account safety; arbitrary-TP Position Groups; durable Trade State; signal/fast-completion/BE/partial/full-close/pending-cancel simulation; signed simulation acceptance; cTrader/MT5 demo acceptance foundations.
-
-Commands:
+Canonical Telegram identity:
 
 ```text
-npm run accept:v1:simulation
-npm run accept:ctrader:demo
-npm run accept:mt5:demo
-npm run soak:mtproto:container
+telegram:<accountScope>:<chatId>:<messageId>
 ```
 
-No real broker demo order, real Cloudflare Container/DO MTProto E2E, or real-money execution has been performed in this session.
+Container disk is ephemeral and never authoritative durable state. DO storage, Supabase event/idempotency state, Queue delivery, and Telegram catch-up/replay are recovery authorities. Do not claim literal zero interruption/zero loss until real reconnect/restart soak proves it.
 
-## Multi-source implementation status — 2026-09-02
+Known environment fact: bounded in-memory listener retries can exhaust; durable replay/catch-up/idempotency is the intended recovery path and still needs real environment soak.
 
-1. Provider registry + canonical identity — GREEN (`33598572539` @ `7d62761…`).
-2. Source registry/default semantics — GREEN; migration `0003` (`33598900292` @ `215c136…`).
-3. Cross-provider native-event idempotency — GREEN; migration `0004` (`33599671009` @ `1f846fd…`).
-4. Cloudflare Container/Telethon provider skeleton — GREEN.
-5. Cloudflare Queue -> signed V1 path — GREEN (`33603127779` @ `837190d…`).
-6. MTProto downstream retry isolation — GREEN (`33612304712` @ `7603956…`).
-7. Stateful Cloudflare Container supervisor — GREEN (`33613179989` @ `d65a95a…`).
-8. Server-side MTProto bootstrap resolver — GREEN; migration `0005` (`33613707938` @ `4cafbcd…`).
-9. Tenant-safe Container lifecycle service — GREEN (`33614019384` @ `03c4385…`).
-10. Durable per-source MTProto recovery + scheduled recovery — GREEN; migration `0006` (`33615599446` @ `aa34a16…`).
-11. Recovery replay acceptance — GREEN (`33615820124` @ `b73abee…`).
-12. External MTProto server-side authorization — GREEN (`33623854041` @ `904690f…`).
-13. External signed-V1 HTTPS sink — GREEN.
-14. Portable external Telethon runtime — GREEN (`33625107407` @ `9fb5850…`).
-15. Cross-provider replay + two-workspace isolation — GREEN (`33625278355` @ `c6c2c14…`).
-16. External MTProto CI/operator docs — GREEN (`33626149089` @ `e2bc271…`).
-17. Heterogeneous source registration/configuration/coexistence — GREEN (`33626927619` @ `a78dc9f…`). Broader-plan Task 7 complete.
-18. Pure DO+mtcute alternate provider — GREEN (`33627974053` @ `b15e4b7…`). Broader-plan Task 6 complete.
-19. Zitadel-authorized source administration API — RED `33628546167`; GREEN `33628759094` @ `69b3d89…`. Broader-plan Task 8 complete.
-20. Task 9 non-live multi-source operational gate — GREEN in source/CI. Soak GREEN `33629585665` @ `276abbc…`; destination-isolation RED `33630032190` @ `7c27ca5…` (378 pass, sole missing fan-out module); exact GREEN `33630219329` @ `fa253f0…`. Broader-plan Task 9 complete at source/CI level.
-21. Shared-Supabase privilege hardening — migration `0007`. Initial RED `33631221854` @ `4722d46…`; `trade_accounts` boundary RED `33631450772` @ `5f1d3ea…`; exact GREEN `33631626956` @ `0cb260c…`.
-22. Default-source RPC immutable search path — migration `0008`. RED `33632308325` @ `3215ca1…`; exact GREEN `33632407746` @ `bd0a737…`.
-23. **Strict Zitadel project-role isolation — GREEN.** RED `33633081151` @ `aa3db87…`; exact GREEN `33633316579` @ `ff9980d…`.
-24. **First-party MTProto component readiness — GREEN.** RED `33640233999` @ `81788d5…`; exact GREEN `33640530231` @ `b96d974…`. Static/source readiness only, not real environment acceptance.
-25. **Shared Mkety Zitadel enterprise identity architecture — APPROVED + PLANNED.** Spec `db59d0d…`; implementation plan `7f1c9fa…`.
-26. **Trading workspace subject-membership schema — GREEN; migration `0009` checked in, NOT yet claimed live-applied.** RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`: 392 existing tests passed and sole failure was missing migration `0009`. GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`, all four mandatory gates passing.
-27. **Exact Zitadel-subject Trading membership authorization — GREEN.** RED `33647073934` @ `4bb2e9844aac9b6f8cd89783c8c2114edc910f82`: 393 tests passed; only four intended failures remained. Exact GREEN `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`, all four mandatory gates passing. No MKSaaS database lookup or production bypass exists.
-28. **Trading workspace role permissions — GREEN.** Initial RED `33647710823` @ `a09a4e766fa3cac241d719b9dc240d6dd2710cd8`: 400 tests passed; failures were the intentionally missing permission module plus viewer/unknown source access. Pure capability module and source checks were added, then final workspace-read RED `33647947785` @ `d4fc01a39b540ae3565cdac0be66be260a484136`: 404/405 tests passed and sole failure was unknown role receiving workspace metadata. Exact GREEN `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`, all four mandatory gates passing. `owner/admin` have members+sources read/write; `operator` has workspace/source read + source write; `viewer` has workspace/source read; unknown roles fail closed; no role has broker execution permission.
+## Shared Mkety Zitadel identity contract
 
-## Shared Supabase state — verified live 2026-09-02
+- **One managed Mkety Zitadel instance is the global identity authority for MKSaaS and Trading.** Trading is an enterprise Mkety product, not a second identity system.
+- MKSaaS and Trading use separate Zitadel projects/apps and separate product databases.
+- A Zitadel subject may have MKSaaS access, Trading access, both, or neither.
+- A Trading-only user may authenticate through the same Zitadel instance without any MKSaaS database row/profile.
+- Immutable Zitadel `sub` is the user identity key; never email.
+- Successful Zitadel login alone never grants Trading access.
+- `trading_workspace_access` is the Trading workspace/org entitlement switch.
+- `trading_workspace_memberships` is the exact subject-to-workspace membership boundary.
+- Admin authorization order: workspace entitlement -> cryptographic Zitadel token/issuer/audience/project/org role -> exact enabled `(workspace_id, auth.sub)` membership -> Trading workspace permission.
+- When `ZITADEL_PROJECT_ID` is configured, only `urn:zitadel:iam:org:project:<projectId>:roles` may authorize; never fall back to the generic claim.
+- Workspace roles are Trading-owned and independent from broad Zitadel product access:
+  - owner: workspace/members/sources read-write
+  - admin: workspace/members/sources read-write
+  - operator: workspace/source read + source write
+  - viewer: workspace/source read
+  - unknown roles: fail closed
+- No workspace role grants `broker.execute`.
+- Trading authorization must never query or depend on the MKSaaS database.
+- Keep live staging `trading_access_enabled=false` until real positive/negative Zitadel acceptance passes.
 
-Connected project: `Mkety Digital`.
+Identity spec/plan:
+- `docs/superpowers/specs/2026-09-02-mkety-shared-zitadel-enterprise-identity-design.md`
+- `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`
 
-Migrations `0001` through `0008` are applied live. Migration `0009_trading_workspace_memberships.sql` is checked into the branch but **has not been claimed applied live**. Do not reapply `0001`-`0008` blindly and do not claim `0009` live until the migration ledger/database is verified after application.
+Other active design/plan docs:
+- `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-runtime-design.md`
+- `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
+- `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
+- `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
 
-Live migration ledger already includes:
-- `trading_0003_multi_source_provider_registry`
-- `trading_0004_cross_provider_event_identity`
-- `trading_0005_mtproto_provider_credentials`
-- `trading_0006_mtproto_recovery_state`
-- `trading_0007_internal_privilege_hardening`
-- `trading_0008_default_source_search_path`
+Runbooks:
+- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
+- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 
-Verified database isolation/security before `0009` application:
-- shared `public.workspaces` retains its original 10-column schema;
-- V1 auth authority is `trading_workspace_access`, not shared `workspaces`;
-- `source_connections` has provider/default/health/recovery/provider-secret fields and family-scoped indexes;
-- `trading_events` has persistent `canonical_event_id` uniqueness per workspace;
-- `anon` and `authenticated` have no table privileges on existing Trading internal tables;
-- `service_role` retains required access;
-- RLS is enabled on existing Trading tables and there are zero client policies by design;
-- `trading_set_default_source` is SECURITY INVOKER, `search_path=''`, and executable by `service_role` only;
-- Security Advisor no longer reports a mutable-search-path warning for this Trading function;
-- remaining Trading Advisor notices are intentional INFO `RLS enabled, no policy`; unrelated pre-existing project warnings are out of scope.
+## Implemented/verified foundation
 
-Current live data state before `0009` application:
-- `source_connections=0`
-- `trading_events=0`
-- `position_groups=0`
-- `position_legs=0`
-- `destination_deliveries=0`
-- `trade_accounts=0`
-- one `trading_workspace_access` row exists and remains `trading_access_enabled=false`, `zitadel_org_id=NULL`.
+Already GREEN before the shared-Zitadel slice:
+- signed `/api/v1/events`, legacy shadow compatibility, cryptographic Zitadel/workspace auth, AES-256-GCM secrets;
+- persistent event reservation/idempotency, deterministic parser + bounded AI;
+- MT5/cTrader/Deriv normalization, metadata-driven risk/account safety;
+- arbitrary-TP Position Groups, durable Trade State, simulation orchestration;
+- cTrader/MT5 demo acceptance foundations;
+- multi-source provider registry/default semantics and canonical cross-provider identity;
+- Container Telethon, Queue -> signed V1, retry isolation, Container supervisor/bootstrap/lifecycle/recovery/replay;
+- external MTProto signed-V1 adapter + portable Telethon runtime;
+- pure DO+mtcute alternate provider;
+- Zitadel-authorized source admin;
+- destination fan-out isolation;
+- Supabase privilege hardening migrations `0007`/`0008`;
+- strict Zitadel project-role isolation;
+- first-party MTProto static component readiness.
 
-No source, Telegram, broker, or execution credentials were inserted during staging migration readiness.
+Notable prior exact GREEN checkpoints include `33630219329`, `33631626956`, `33632407746`, `33633316579`, `33640530231`.
+
+## Shared-Zitadel implementation status — 2026-09-02
+
+1. **Architecture approved/planned.** Spec commit `db59d0d…`; plan commit starts `7f1c9fa…`.
+2. **Task 1 — subject membership schema GREEN.** Migration `0009_trading_workspace_memberships.sql`. RED `33646617046` @ `f687c9d09fe0c5ff93c05d1a181720895d70f159`: 392 existing tests passed, sole failure migration absent. GREEN `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`, all four gates pass. `0009` is checked in but not yet claimed live-applied.
+3. **Task 2 — exact Zitadel-subject membership authorization GREEN.** RED `33647073934` @ `4bb2e9844aac9b6f8cd89783c8c2114edc910f82`: 393 pass with only intended membership-store/gate failures. GREEN `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`, all four gates pass. Valid Zitadel identity without exact enabled workspace membership is denied.
+4. **Task 3 — workspace role permissions GREEN.** Initial RED `33647710823` @ `a09a4e7…`; final workspace-read RED `33647947785` @ `d4fc01a…` had 404/405 tests passing and sole failure unknown role read. GREEN `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`, all four gates pass.
+5. **Task 4 — tenant-safe membership administration GREEN.** RED `33648606711` @ `26d310fa5aa6e7c98d66b04037affb6e3e7fb7d8`: 405 tests pass; only missing admin-store methods and missing membership handler fail. Production adds exact-workspace `listMemberships`, `upsertMembership`, role/enable mutations, owner counting, authenticated routes `GET/POST /api/v1/admin/members` and subject role/enable/disable actions, role validation, Trading-only subjects, independent same-subject multi-workspace membership, permission denial before mutation, and `409 LAST_WORKSPACE_OWNER`. Exact GREEN `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`, all four mandatory gates pass.
+6. **Task 5 — NOT STARTED.** Next: dual-access acceptance, static MKSaaS-independence contract, operator docs/runbook, final source/CI verification.
+
+## Shared Supabase live state
+
+Connected project previously verified: `Mkety Digital` Trading database.
+
+- Migrations `0001` through `0008` are applied live.
+- Migration `0009_trading_workspace_memberships.sql` is checked into the branch but **has not yet been claimed applied live**.
+- Do not reapply `0001`-`0008` blindly.
+- Existing Trading internal tables are service-role-only with RLS enabled and no anon/authenticated policies.
+- `trading_set_default_source` is SECURITY INVOKER, `search_path=''`, service-role only.
+- Before `0009` application: source/event/position/delivery/trade-account tables were empty; one `trading_workspace_access` row existed with `trading_access_enabled=false`, `zitadel_org_id=NULL`.
+- No source, Telegram, broker, or execution credentials were inserted during migration readiness.
 
 ## CI rule
 
@@ -208,54 +164,27 @@ Every meaningful branch head must pass:
 3. both MTProto Python suites;
 4. Wrangler dry-run.
 
-Recent exact GREEN checkpoints:
-- `33630219329` @ `fa253f04eba80354781a91474a237ebd02c51f34`
-- `33631626956` @ `0cb260c35d97548d9af6937645df2cb419672f57`
-- `33632407746` @ `bd0a737aaa9ff8318cadeefdd96fab6804074fd9`
-- `33633316579` @ `ff9980d8fdcc2866ced208842274568c2be56149`
-- `33640530231` @ `b96d974051b8b74a5976f4ad9fc7b56f56c1c24c`
+Recent shared-Zitadel GREEN checkpoints:
 - `33646729170` @ `471a26615752d5ab0672ba0057f1a2fba84bce4d`
 - `33647392530` @ `f66d806ca9b2ed204c59e417931b8ab5c619d7cf`
 - `33648262293` @ `46a0f038b7c26f66105e515d3b4e5048e91fba05`
+- `33648962778` @ `6a60a457712c858fb2b568b5512ff028ac368f0d`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
-## External configuration still required
-
-No Cloudflare/Zitadel secrets or account-side runtime settings have been configured through chat, and no Cloudflare/Zitadel connector or installable plugin is available in this session.
-
-Next non-live staging prerequisites:
-- finish Tasks 4-5 of `docs/superpowers/plans/2026-09-02-mkety-shared-zitadel-enterprise-identity.md`;
-- apply/verify migration `0009` to the Trading database only when the source/CI membership authorization work is ready for staging; preserve the disabled current entitlement;
-- configure intended Zitadel Trading project/application and organization/workspace mapping in the existing Mkety Zitadel instance;
-- if `ZITADEL_PROJECT_ID` is set, ensure tokens contain the matching project-specific roles claim;
-- keep `trading_access_enabled=false` until wrong-project, wrong-org, missing-role, wrong-subject/workspace, disabled-membership, and exact authorized project/org/subject tests pass in the real environment;
-- create one deliberately non-live source only after Worker encryption/auth configuration is ready;
-- deploy/verify V1 Worker, Queue, Container, DO and cron bindings before first-party Container E2E;
-- call `/api/v1/health` after deployment and require `ready=true` plus `mtprotoContainerReady=true` before first-party Container E2E;
-- use Telegram test accounts/channels for Container/external/DO reconnect/catch-up/soak;
-- run signed V1 simulation acceptance;
-- run cTrader/MT5 actual demo probes/lifecycles only with demo credentials and explicit demo gates.
-
 ## Current priority
 
-1. **Shared-Zitadel implementation Task 4:** add tenant-safe workspace membership administration APIs with last-owner protection.
-2. Task 5: dual-access acceptance + MKSaaS-independence/static docs.
-3. Apply/verify `0009` and perform real non-live Zitadel project/org/subject acceptance when account-side access exists.
-4. Continue non-live source/MTProto soak and broker demo gates only after identity gate is green.
-5. Tiny controlled live only after every non-live/demo gate is green and after separate explicit cutover decision.
+1. **Shared-Zitadel Task 5:** write dual-access acceptance proving existing-Mkety logical users and Trading-only users converge on the same Zitadel `sub` + Trading membership gate, with wrong project/org/workspace/disabled membership failing closed.
+2. Add static contract proving Trading auth/admin code has no MKSaaS DB dependency and membership provisioning cannot mutate source/destination/trade-account/execution state.
+3. Add `SHARED_ZITADEL_ENTERPRISE_IDENTITY.md` and update `STAGING_V1_RUNBOOK.md`.
+4. Update active plan and this file; run exact newest-head four-gate CI.
+5. Apply/verify migration `0009` to the Trading database when safe, preserving disabled entitlement.
+6. Perform real non-live Zitadel project/org/sub acceptance and Cloudflare runtime verification when account-side access exists.
+7. Continue MTProto non-live soak and broker demo gates only after identity environment acceptance.
+8. Tiny controlled live only after every non-live/demo gate is green and a separate explicit cutover decision.
 
 ## Exact next safe starting point
 
-Tasks 1-3 of the shared-Zitadel implementation are source/CI GREEN. Migration `0009` is **not yet claimed live-applied**.
+Tasks 1-4 of the shared-Zitadel implementation are source/CI GREEN. Migration `0009` is not yet claimed live-applied.
 
-Start Task 4 with exact RED tests:
-- membership API routes: `GET/POST /api/v1/admin/members` plus role/enable/disable actions by immutable Zitadel `sub`;
-- all membership reads/writes must use exact authenticated workspace ID and never caller-supplied workspace/org authority;
-- `members.read`/`members.write` capability checks must happen before membership mutation;
-- owner/admin can mutate membership; operator/viewer cannot;
-- preserve at least one enabled owner: disabling or demoting the last owner must return `409 LAST_WORKSPACE_OWNER`;
-- same Zitadel subject may independently belong to different workspaces; no MKSaaS DB or Zitadel management API is required;
-- membership changes must not mutate sources, destinations, trade accounts, or broker execution state;
-- broker execution remains disabled;
-- after the batch, rerun all four mandatory gates and update this file plus the implementation plan.
+Start Task 5 with RED acceptance tests only. Do not add more auth/schema behavior unless those tests expose a real gap. No MKSaaS DB dependency, no broker/live execution, no `main` merge.
