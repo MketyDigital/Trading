@@ -1,5 +1,6 @@
 import { authenticateTradingBearer } from '../security/zitadel_auth.js';
 import { createTradingMembershipStore } from '../security/trading_membership_store.js';
+import { hasTradingPermission } from '../security/trading_permissions.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 
 function json(body, status = 200) {
@@ -119,6 +120,9 @@ export async function handleV1AdminRequest(request, env = {}, {
 
   const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/workspace' && request.method === 'GET') {
+    if (!hasTradingPermission(authorization.membership?.role, 'workspace.read')) {
+      return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    }
     return json({
       ok: true,
       subject: authorization.auth.subject,
