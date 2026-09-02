@@ -1,6 +1,7 @@
 import { authenticateTradingBearer } from '../security/zitadel_auth.js';
 import { createTradingMembershipStore } from '../security/trading_membership_store.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 
 function json(body, status = 200) {
@@ -128,6 +129,16 @@ export async function handleV1AdminRequest(request, env = {}, {
       subject: authorization.auth.subject,
       workspace: publicWorkspace(authorization.workspace),
     });
+  }
+
+  if (url.pathname === '/api/v1/admin/members' || url.pathname.startsWith('/api/v1/admin/members/')) {
+    let membershipStore;
+    try {
+      membershipStore = membershipStoreFactory(supabase);
+    } catch {
+      return json({ ok: false, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }, 503);
+    }
+    return handleAuthorizedV1AdminMembersRequest(request, authorization, { membershipStore });
   }
 
   if (url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')) {
