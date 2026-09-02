@@ -18,6 +18,40 @@ def _default_client_factory(*, api_id, api_hash, session_string):
     )
 
 
+def _telegram_event_id(chat_id, message_id):
+    if message_id is None or str(message_id) == '':
+        return None
+    return f'telegram:{chat_id}:{message_id}'
+
+
+def _topic_id(event):
+    reply_header = getattr(event, 'reply_to', None)
+    if reply_header is None:
+        reply_header = getattr(getattr(event, 'message', None), 'reply_to', None)
+    if reply_header is None or not getattr(reply_header, 'forum_topic', False):
+        return None
+    value = getattr(reply_header, 'reply_to_top_id', None)
+    if value is None:
+        value = getattr(reply_header, 'reply_to_msg_id', None)
+    return None if value is None else str(value)
+
+
+def _thread_contract(event, chat_id, message_id):
+    reply_to_message_id = getattr(event, 'reply_to_msg_id', None)
+    if reply_to_message_id is None:
+        reply_to_message_id = getattr(getattr(event, 'message', None), 'reply_to_msg_id', None)
+    topic_id = _topic_id(event)
+    edited = getattr(event, 'edit_date', None) is not None or getattr(
+        getattr(event, 'message', None), 'edit_date', None
+    ) is not None
+
+    return {
+        'thread_id': None if topic_id is None else f'telegram:{chat_id}:topic:{topic_id}',
+        'reply_to_event_id': _telegram_event_id(chat_id, reply_to_message_id),
+        'edited_event_id': _telegram_event_id(chat_id, message_id) if edited else None,
+    }
+
+
 class MtprotoListener:
     """Transport-only Telegram listener.
 
@@ -140,6 +174,7 @@ class MtprotoListener:
             'external_event_id': f'telegram:{chat_id}:{message_id}',
             'occurred_at': utc_now_iso(),
             'text': str(getattr(event, 'raw_text', '') or ''),
+            'thread': _thread_contract(event, chat_id, message_id),
             'metadata': {
                 'native_identity': {
                     'chat_id': chat_id,
