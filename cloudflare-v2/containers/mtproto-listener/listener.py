@@ -72,6 +72,8 @@ class MtprotoListener:
         client_factory=None,
         sink,
         queue_size=256,
+        retry_delays=None,
+        sleep=None,
     ):
         if not source_id or not account_scope:
             raise ValueError('source_id and account_scope are required')
@@ -87,6 +89,12 @@ class MtprotoListener:
         self.client_factory = client_factory or _default_client_factory
         self.sink = sink
         self.queue = asyncio.Queue(maxsize=max(1, int(queue_size)))
+        self.retry_delays = tuple(
+            max(0, float(delay)) for delay in (
+                retry_delays if retry_delays is not None else (0.25, 1.0, 2.0)
+            )
+        )
+        self.sleep = sleep or asyncio.sleep
 
         self.client = None
         self._worker_task = None
@@ -96,6 +104,10 @@ class MtprotoListener:
         self._last_event_at = None
         self._last_message_id = None
         self._restart_count = 0
+        self._delivery_failures = 0
+        self._delivery_successes = 0
+        self._last_delivery_error_at = None
+        self._last_delivery_at = None
 
     async def start(self):
         if self._running:
@@ -193,11 +205,37 @@ class MtprotoListener:
         self._last_message_id = message_id
         return True
 
+    async def _deliver_with_retry(self, payload):
+        attempt = 0
+        while True:
+            try:
+                await self.sink(payload)
+                self._delivery_successes += 1
+                self._last_delivery_at = utc_now_iso()
+                if self._connected:
+                    self._status = 'HEALTHY'
+                return True
+            except Exception:
+                self._delivery_failures += 1
+                self._last_delivery_error_at = utc_now_iso()
+                if self._connected:
+                    self._status = 'DEGRADED'
+
+                if attempt >= len(self.retry_delays):
+                    return False
+
+                delay = self.retry_delays[attempt]
+                attempt += 1
+                await self.sleep(delay)
+
     async def _delivery_worker(self):
         while True:
             payload = await self.queue.get()
             try:
-                await self.sink(payload)
+                # Delivery failure is isolated to this source event. Exhausting
+                # retries must not terminate the listener worker because a later
+                # event may succeed and recover the source health state.
+                await self._deliver_with_retry(payload)
             finally:
                 self.queue.task_done()
 
@@ -212,4 +250,8 @@ class MtprotoListener:
             last_message_id=self._last_message_id,
             restart_count=self._restart_count,
             queue_depth=self.queue.qsize(),
+            delivery_failures=self._delivery_failures,
+            delivery_successes=self._delivery_successes,
+            last_delivery_error_at=self._last_delivery_error_at,
+            last_delivery_at=self._last_delivery_at,
         )
