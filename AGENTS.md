@@ -53,6 +53,10 @@ Design: `docs/superpowers/specs/2026-09-02-multi-source-provider-and-mtproto-run
 
 Plan: `docs/superpowers/plans/2026-09-02-multi-source-provider-foundation.md`
 
+External MTProto design: `docs/superpowers/specs/2026-09-02-external-mtproto-signed-v1-adapter-design.md`
+
+External MTProto plan: `docs/superpowers/plans/2026-09-02-external-mtproto-signed-v1-adapter.md`
+
 ## MTProto availability contract
 
 Preferred first-party runtime: **Cloudflare Container + Telethon**, one Telegram session listening to many configured chats/channels. Pure DO+mtcute and external MTProto remain alternate providers.
@@ -117,6 +121,7 @@ No real external Worker acceptance, real broker demo order, or real Cloudflare C
 9. **Tenant-safe MTProto Container lifecycle service — GREEN.** `src/sources/mtproto/container_lifecycle_service.js` is the server-side start/restart/stop/status boundary. It accepts trusted `workspaceId/sourceId` only, invokes the bootstrap resolver, verifies the resolved identity exactly matches the trusted request, derives runtime `mtproto:<workspaceId>:<accountScope>`, and never accepts caller bootstrap as authority. Restart re-resolves/decrypts current credentials so rotations/revocations take effect. Tests prove two workspaces get distinct runtime names/bootstrap and status cannot leak secret/ciphertext fields. RED `33613934166` @ `1a95e5c32791e60962264a1a78637e01d66b2cbc`; GREEN `33614019384` @ `03c438567be97cbf9a765b7a10898f4a0ab486b5` across all four gates.
 10. **Durable MTProto recovery supervisor + scheduled recovery — GREEN.** Migration `0006_mtproto_recovery_state.sql` adds per-source `recovery_attempt_count`, `recovery_next_attempt_at`, `last_recovery_at`, and `last_recovery_error_code`. `recovery_supervisor.js` probes each source independently, clears stale retry state when a runtime self-recovers, gates only restart attempts behind durable exponential backoff/exhaustion, and restarts through the lifecycle service so credentials are reacquired server-side. `recovery_store.js` scans only active `telegram/cloudflare_container_mtproto` rows and constrains every recovery write by exact `workspace_id + source_id + provider_type + source_family + active`. `recovery_runtime.js` composes one server-side Supabase client/store/lifecycle/supervisor context and fails closed on missing configuration names before dependency creation. Wrangler keeps legacy `*/15 * * * *` work unchanged and adds a separate `* * * * *` trigger routed only to MTProto recovery. TDD: RED `33614712990`; intermediate `33614818871`; isolated GREEN `33615007257`; store/runtime/cron RED `33615213124`; stricter tenant-write RED `33615397670`; final GREEN `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954`.
 11. **MTProto recovery replay acceptance — GREEN with no production change required.** `tests/mtproto_recovery_replay_acceptance.test.mjs` drives the actual `source_queue_consumer` -> signed V1 `ingestTradingEvent` path using persistent canonical reservation state. An exact post-restart replay of `(accountScope, chatId, messageId)` is ACKed by Queue as a successful duplicate, does not retry, and leaves interpretation/orchestration count at one. A genuinely new Telegram `messageId` proceeds and increments work once. The same native replay from redundant `cloudflare_do_mtproto` collapses to the same provider-independent identity and is ACKed without second work. Existing production idempotency already satisfied the acceptance contract; no duplicate-handling glue was needed. GREEN `33615820124` @ `b73abee97a736a4a53f726635df9d211a5f73986` across all four gates.
+12. **External MTProto server-side source/chat/account authorization — GREEN.** `external_policy.js` applies only to authenticated `external_mtproto` sources after HMAC verification and JSON parse but before normalization/reservation/AI. Source `config` is loaded server-side from Trading-owned `source_connections`; missing mode defaults to fail-closed `allowlist`, empty allowlist accepts no chats, `all_visible` requires explicit server config, caller forwarding metadata cannot authorize chats, caller account scope must match server `external_identity` when supplied, and authenticated source workspace remains authoritative. No new table or provider/session credential storage was added. RED `33623557990` (policy module absent) and `33623657099` (policy + source config absent); GREEN `33623854041` @ `904690f4c97208b1306a48179aba6bb8b689bd48`: Node 337/337, MT5 3/3, Container MTProto 11/11, Wrangler dry-run all pass.
 
 ## Supabase boundary
 
@@ -145,12 +150,12 @@ Every meaningful head must pass:
 
 Recent exact GREEN checkpoints:
 
-- `33613179989` @ `d65a95a1b37cf6ae644cc74213eb81313035802d`
 - `33613707938` @ `4cafbcd3ad39ec09083840529087df92ccada3a8`
 - `33614019384` @ `03c438567be97cbf9a765b7a10898f4a0ab486b5`
 - `33615007257` @ `22dd0e8b93c2e47a94c315499b72de85e4059413`
 - `33615599446` @ `aa34a1681414b0abc6d6b73f84c6de9e3f30b954`
 - `33615820124` @ `b73abee97a736a4a53f726635df9d211a5f73986`
+- `33623854041` @ `904690f4c97208b1306a48179aba6bb8b689bd48`
 
 Always inspect the exact newest branch-head run before calling the branch green.
 
@@ -162,7 +167,7 @@ Container MTProto E2E later requires: review/apply migrations `0003`-`0006`; dep
 
 ## Current priority
 
-1. Add **external MTProto direct signed-V1 runtime** as a first-class Telegram provider without giving it Worker/Supabase secrets; it should hold only that source's own signing credential and preserve the same canonical Telegram native identity.
+1. Complete the **external MTProto direct signed-V1 runtime** as a first-class Telegram provider without giving it Worker/Supabase secrets; it should hold only that source's own signing credential and preserve the same canonical Telegram native identity.
 2. Complete TradingView + custom REST + MT5 + cTrader source adapters and coexistence/feedback-loop acceptance.
 3. Harden pure DO+mtcute alternate provider.
 4. Add Zitadel-authorized source admin/default/status APIs.
@@ -173,4 +178,4 @@ Container MTProto E2E later requires: review/apply migrations `0003`-`0006`; dep
 
 ## Exact next safe starting point
 
-Define an intentional RED for the **external MTProto direct signed-V1 runtime**. It must accept one configured source identity plus that source's own signing secret, normalize Telegram messages into the same native identity metadata used by first-party providers, serialize one exact V1 body, sign the exact raw body/timestamp with the existing HMAC contract, and POST only to `/api/v1/events`. It must not receive Supabase service credentials, Trading master key, another source's credentials, or broker/destination secrets. Retries must resend the exact same native event identity/body semantics; successful V1 duplicate acknowledgment is terminal success; non-2xx/downstream failures are bounded/retryable; status output is secret-free. Prove a redundant external replay and Container replay converge on the same canonical id before any interpretation/orchestration duplication. Then implement the minimum standalone runtime/adapter and rerun all four CI gates.
+Define an intentional RED for the **external Python signed-V1 HTTPS sink** under `cloudflare-v2/external/mtproto-adapter/`. It must serialize one compact deterministic semantic event body, sign the exact raw body using `v1:<timestamp_ms>:<raw_json_body>` HMAC-SHA256, send only its own source ID/timestamp/signature headers to the existing `/api/v1/events` endpoint, treat accepted and persistent-duplicate V1 responses as terminal success, classify network/429/5xx failures as retryable and permanent auth/policy/validation failures as non-retryable, regenerate freshness-sensitive timestamp/signature without changing body bytes across retries, and never expose the source secret in body/errors/repr/diagnostics. Then implement the minimum dependency-free sink, add it to the mandatory Python CI gate, and continue into the portable Telethon adapter runtime.
