@@ -19,6 +19,8 @@ Build and launch an enterprise, multi-tenant trading automation platform with st
 - Audit checkpoint 1 document commit: `9a2b1e05437da8bfb7beacab190092eb5905b649`.
 - Audit-reopen AGENTS synchronization: `265684933aede9ffca230457bc9a02ad90f950cd`.
 - Audit checkpoint 2 document commit: `af53fe94bd985843eb47916564642449e94fd4c5`.
+- Audit checkpoint 2 AGENTS synchronization: `13dc1d4861c106a7c65bbdf2c60f3b2c91a3a9c0`.
+- Audit checkpoint 3 document commit: `e5d83c663afc8e00bb8ba7441d831ac7f6fa0f7d`.
 - Current stage: **LATEST-APPROVED STATIC PRODUCTION AUDIT / REMEDIATION REQUIRED BEFORE REMAINING REAL ACCEPTANCE**.
 - No Cloudflare mutation, protected external probe, broker order, `main` merge, or live-money action is authorized by this state.
 
@@ -90,6 +92,7 @@ Source Provider/Adapter
 - cTrader `ProtoOASymbol.lotSize` uses raw protocol-cent semantics; never add an extra x100.
 - Caller workspace/account/provider/destination/broker/credential/execution hints are never authority.
 - Critical source/workspace/account/safety revocation must win before broker dispatch.
+- Successful broker truth must remain reconcilable with persistent destination state and exact Trade State without resending solely to repair state.
 - Identity/admin/database/source/infrastructure operations never implicitly enable broker execution.
 
 ## Cloudflare deployment topology
@@ -204,6 +207,15 @@ CONFIRMED STATIC GAP.
 - latest resilience design explicitly names source disablement as a critical revocation and exact source ownership as mandatory hot-path security.
 - durable authority already exists: `trading_events.source_connection_id` and `destination_deliveries.trading_event_id` allow first dispatch/retry to re-resolve the originating source from server-owned records without trusting caller hints.
 
+### F5 — successful broker result can remain durably unbound from Trade State
+CONFIRMED STATIC RECOVERY GAP.
+- MT5/cTrader executors persist destination delivery `SUCCEEDED` with broker identifiers before returning.
+- coordinator binds those identifiers to Trade State afterward.
+- if state binding fails, coordinator reports `STATE_BIND_FAILED`, but the delivery remains terminal `SUCCEEDED`.
+- retry recovery scans only `RETRYABLE`; source replay is terminal duplicate; duplicate broker results are explicitly skipped by state binding.
+- no production repair path was found for `SUCCEEDED delivery + missing Trade State binding`.
+- remediation must bind/reconcile from already-persisted broker/delivery truth and must never resend a broker action solely to repair Trade State.
+
 ### I1 — runtime execution snapshot production integration incomplete
 - `runtime_execution_snapshot.js` and isolated tests are GREEN.
 - latest approved resilience Task 5 requires production integration for bounded non-authoritative configuration reuse plus fresh final authority.
@@ -230,6 +242,7 @@ NOT YET A CONFIRMED VULNERABILITY.
 - Coordinator validates loaded account workspace/id, active state and `execution_enabled`.
 - Persistent destination idempotency/retry remains the execution ledger; uncertain broker outcomes are not intended for blind retry.
 - Retry claim uses bounded due scanning and optimistic-concurrency predicates to prevent two workers claiming the same attempt.
+- Trade State binder targets exact workspace shard/group/leg and stores normalized broker identifiers only when it succeeds.
 - cTrader live environment still requires a separate server-side live opt-in.
 - all Wrangler launch controls remain false by default.
 - no real external environment action was performed by the latest static audit.
@@ -240,7 +253,7 @@ NOT YET A CONFIRMED VULNERABILITY.
 - latency trace/integration GREEN.
 - runtime snapshot helper/unit contract GREEN, but production integration reopened by latest audit.
 - provider-isolated circuit breaker GREEN.
-- failure-injection matrix GREEN for its covered cases; latest audit identified missing latest-approved execution-lock cases to add.
+- failure-injection matrix GREEN for its covered cases; latest audit identified missing latest-approved execution-lock/recovery cases to add.
 - secret-free operations readiness metrics GREEN.
 - production cutover runbook and external acceptance readiness matrix exist and remain the operator contracts.
 - last trusted broad regression on `89944d3...`: run `33766769463` SUCCESS; Node/trading-core 649/649, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; Cloudflare inspect/probe/deploy/accept jobs skipped.
@@ -264,11 +277,12 @@ CLOSED / not started.
 
 ## Exact pickup / immediate safe next actions
 1. Continue the latest-approved root-cause audit from `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`: finish the clean durable composition for source + workspace entitlement + account/safety final authority on initial dispatch and retry.
-2. Finish MT5 metadata topology decision and cTrader/MT5 warm-context lifecycle audit.
-3. Compare F1–F4 against the current failure-injection/integration tests and identify exact missing RED cases.
-4. Do not modify production code until root-cause audit is complete. Then write one focused remediation implementation plan based only on confirmed Sept 3 requirements.
-5. Implement each safety fix with Superpowers TDD: failing regression first, verify RED, minimal production change, focused GREEN, then ordinary PR CI exact-head GREEN.
-6. Synchronize this `AGENTS.md` and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` after every meaningful verified milestone with exact SHA/run/test counts and next pickup point.
-7. Keep all four launch controls OFF throughout static remediation.
-8. Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static audit/remediation.
-9. Only after latest-approved static audit/remediation is GREEN return to separately authorized real Gates 4–9.
+2. Include F5 in recovery design: repair Trade State from already-persisted successful delivery/broker result without any broker resend.
+3. Finish MT5 metadata topology decision and cTrader/MT5 warm-context lifecycle audit.
+4. Compare F1–F5 against current failure-injection/integration tests and identify exact missing RED cases.
+5. Do not modify production code until root-cause audit is complete. Then write one focused remediation implementation plan based only on confirmed Sept 3 requirements.
+6. Implement each safety/recovery fix with Superpowers TDD: failing regression first, verify RED, minimal production change, focused GREEN, then ordinary PR CI exact-head GREEN.
+7. Synchronize this `AGENTS.md` and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` after every meaningful verified milestone with exact SHA/run/test counts and next pickup point.
+8. Keep all four launch controls OFF throughout static remediation.
+9. Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static audit/remediation.
+10. Only after latest-approved static audit/remediation is GREEN return to separately authorized real Gates 4–9.
