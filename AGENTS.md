@@ -296,7 +296,9 @@ GREEN as a pure non-authoritative cache.
 Important: this cache is not broker safety authority. Final account/safety/fuse checks remain fresh and server-side immediately before broker dispatch.
 
 ### Resilience Task 6 — provider-isolated circuit breakers
-Pure breaker GREEN.
+GREEN.
+
+Pure breaker:
 - RED `4d9d634358c9f1b0becbadaa432374f5f070b4d5`, run `33758879231`: 620/621, sole missing-module failure
 - GREEN `c080f6fe4d0e2decb254584b225f626cd55ab5df`, run `33759115827`: all mandatory suites pass; every Cloudflare/deploy/probe job skipped
 
@@ -308,16 +310,37 @@ Breaker contract:
 - malformed or secret-bearing keys fail open without retained state
 - breaker clock/internal failure cannot block dependency work
 
-Integration TDD is active:
-- RED `ef2df71927aa360f07c09a27ff7ad67ab3e128ae`
-- run `33759263942`
-- 632 total, 628 passed, exactly 4 intended failures: ambiguity open/record and destination open/record
-- deterministic execution and breaker-internal fail-open tests already passed
-- integration GREEN candidate commit `19f27c6ad54b328be22ec225c3bc8fbd245921ae` has been created atomically but must not be considered branch-accepted until the branch ref is moved and fresh exact-head CI is GREEN.
+Integration authority boundary:
+- AI breaker integration baseline GREEN `76bea8f94a30935b9fb85cb2d9bb8d6cceffbc90`, run `33759820559`
+- authority RED `39d0d94389d71e24fe6d63bfe5704b40dcc6c552`: proves caller event workspace/provider hints must not select circuit identity
+- router/factory/interpreter GREEN `cc3a23d3ea4f5551843e7810ad97ea225a883071`
+- authenticated production composition GREEN `d6992034b0d8d3b5bd50ce33acaaf473a0a1ce4a`
+- exact-head run `33763045959`: Worker/trading-core, pure MT5, and pure MTProto suites all SUCCESS; every Cloudflare inspect/probe/deploy/accept job skipped
+
+Production ambiguity-AI circuit identity is now owned by the server-side workspace router: trusted workspace comes from the authenticated source, provider identity comes from the exact server-loaded database provider row, and caller workspace/provider hints are ignored. Sibling providers are independently attempted/recorded, and deterministic work remains outside the AI breaker path.
+
+### Resilience Task 7 — launch failure-injection matrix
+GREEN at implementation head `248607248e0a82dbb7d138813b3cfefccfa275b9`.
+- test file: `cloudflare-v2/tests/hot_path_failure_isolation.test.mjs`
+- run `33763774552`: Worker/trading-core, pure MT5 bridge, and pure MTProto Python suites all SUCCESS
+- every Cloudflare inspect/probe/deploy/accept job skipped
+
+Static launch contracts cover:
+- deterministic clear work survives AI outage and telemetry observer failure
+- ambiguous AI outage degrades to `NEEDS_REVIEW` and never constructs broker dependencies
+- Telegram format/send failure remains destination-local and cannot cancel a healthy broker path
+- DB/config planning outage fails closed before broker dependency construction
+- stale runtime snapshot never overrides fresh authoritative account state
+- persistent MT5 idempotency reservation failure blocks broker transport before send
+- broker master fuse, account kill switch, and inactive account each block dispatch
+- uncertain broker outcome is not blindly retried inside the coordinator
+- duplicate replay exits before planning/execution
+- front-door missing authentication rejects before database access
+
+No Task 7 production-runtime modification was required: the existing Task 1–6 isolation primitives already satisfy the matrix, so Task 7 adds composed launch-contract coverage only.
 
 ## Immediate safe next actions
-1. Move `design/enterprise-trading-event-core` to integration candidate `19f27c6ad54b328be22ec225c3bc8fbd245921ae` with `force:false` after confirming parent/head relationship.
-2. Run/fetch fresh exact-head ordinary regression; no Cloudflare/broker mutations.
-3. If GREEN, wire circuit-breaker provider identity only through trusted server-side production composition; never accept caller-selected breaker/provider authority.
-4. Continue resilience failure-injection / latency acceptance contracts.
-5. Keep all launch/execution fuses OFF until the corresponding real-environment gates and separate final real-money approval.
+1. Run fresh exact-head ordinary CI after this `AGENTS.md` synchronization commit and record the resulting head/run only after all mandatory suites are GREEN.
+2. Review the remaining static/non-live resilience plan items and launch-readiness evidence; do not enter a real environment gate merely because static CI is GREEN.
+3. Keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` unless a separately authorized acceptance gate explicitly requires otherwise.
+4. Do not deploy, mutate Cloudflare, run live probes, merge `main`, place broker orders, or enable real-money execution without the corresponding explicit gate/approval.
