@@ -33,6 +33,20 @@ on:
 
 jobs:
   test:
+    if: >-
+      ${{
+        github.event_name == 'pull_request' ||
+        github.ref == 'refs/heads/main' ||
+        (
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/design/enterprise-trading-event-core' &&
+          (
+            github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' ||
+            github.event.head_commit.message == 'cloudflare: accept staging gate 2' ||
+            github.event.head_commit.message == 'cloudflare: probe tradingview gate 3'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     defaults:
       run:
