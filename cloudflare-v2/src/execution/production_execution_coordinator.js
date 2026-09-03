@@ -4,6 +4,14 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function safeMark(latencyTrace, name) {
+  try {
+    latencyTrace?.mark?.(name);
+  } catch {
+    // Telemetry is observational only and must never control broker execution.
+  }
+}
+
 function workspaceIdOf(account = {}) {
   return text(account.workspace_id ?? account.workspaceId);
 }
@@ -98,7 +106,7 @@ function summarize(accounts = [], executionEnabled = true) {
   return { executionEnabled, status, accounts, succeeded, failed, blocked };
 }
 
-async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispatchAction, stateBinder }) {
+async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispatchAction, stateBinder, latencyTrace }) {
   const requestedAccountId = text(plan?.accountId);
   if (!requestedAccountId) return blockedAccount('', 'ACCOUNT_ID_REQUIRED');
 
@@ -142,6 +150,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispa
 
     let result;
     try {
+      safeMark(latencyTrace, 'BROKER_SEND');
       result = await dispatchAction({
         workspaceId,
         eventId,
@@ -149,6 +158,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispa
         account,
         action,
       });
+      safeMark(latencyTrace, 'BROKER_ACK');
       if (result?.ok === false || result?.success === false) {
         outcomes.push({
           status: 'FAILED',
@@ -223,6 +233,7 @@ export async function executeProductionPlan({
   accountLoader,
   dispatchAction,
   stateBinder,
+  latencyTrace,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
   if (!trustedWorkspaceId) throw new TypeError('workspaceId is required');
@@ -230,7 +241,7 @@ export async function executeProductionPlan({
 
   // The Worker-wide broker master fuse is deliberately the first broker-capable
   // decision. When it is off, no account lookup, delivery reservation, state
-  // mutation, destination dependency, or broker adapter may be reached.
+  // mutation, destination dependency, broker adapter, or latency mark may be reached.
   if (brokerExecutionEnabled !== true) {
     const accounts = accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED'));
     return summarize(accounts, false);
@@ -246,6 +257,7 @@ export async function executeProductionPlan({
     accountLoader,
     dispatchAction,
     stateBinder,
+    latencyTrace,
   })));
 
   return summarize(accounts, true);

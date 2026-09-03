@@ -4,6 +4,14 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function safeMark(latencyTrace, name) {
+  try {
+    latencyTrace?.mark?.(name);
+  } catch {
+    // Destination telemetry is observational only and must never block delivery.
+  }
+}
+
 function workspaceOf(destination = {}) {
   return text(destination.workspaceId ?? destination.workspace_id);
 }
@@ -32,7 +40,7 @@ function rejectedOutcome(destinationId, reason) {
   };
 }
 
-async function dispatchOne({ workspaceId, destination, event, dispatch, aiFormatter }) {
+async function dispatchOne({ workspaceId, destination, event, dispatch, aiFormatter, latencyTrace }) {
   const destinationId = destinationIdOf(destination);
 
   try {
@@ -43,15 +51,20 @@ async function dispatchOne({ workspaceId, destination, event, dispatch, aiFormat
     };
 
     if (destinationTypeOf(destination) === 'telegram') {
+      safeMark(latencyTrace, 'DESTINATION_FORMAT_START');
       input.presentation = await renderTelegramDestination({
         canonicalEvent: event,
         destination,
         aiFormatter,
         timeoutMs: destination?.presentation?.aiTimeoutMs,
       });
+      safeMark(latencyTrace, 'DESTINATION_FORMAT_DONE');
     }
 
     const result = await dispatch(input);
+    if (destinationTypeOf(destination) === 'telegram') {
+      safeMark(latencyTrace, 'DESTINATION_ACK');
+    }
 
     if (result?.success === false || result?.ok === false) {
       return {
@@ -81,6 +94,7 @@ export async function dispatchDestinationFanout({
   event,
   dispatch,
   aiFormatter,
+  latencyTrace,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
   if (!trustedWorkspaceId) throw new TypeError('workspaceId is required');
@@ -111,6 +125,7 @@ export async function dispatchDestinationFanout({
       event,
       dispatch,
       aiFormatter,
+      latencyTrace,
     });
   });
 
