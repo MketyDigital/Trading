@@ -264,8 +264,8 @@ Always inspect the exact newest branch-head run before calling the branch green.
 2. Keep direct TradingView ingress disabled until Gate 3 proves real Cloudflare/TradingView TLS client-certificate presentation/fingerprint behavior non-live on the actual non-Enterprise deployment.
 3. No Cloudflare Enterprise-only feature may be introduced. In particular, do not use BYOCA or Enterprise mTLS trust; Free-plan-compatible primitives are the baseline.
 4. Keep Containers optional and explicit on Workers Paid; never make Container availability a global MTProto dependency and never start a Container for DO/external sources.
-5. No direct Cloudflare connector/plugin is available in this session. GitHub Actions is the approved indirect Cloudflare capability for Gate 2; never claim account-side state until the manual staging workflow returns evidence.
-6. Use `.github/workflows/cloudflare-staging-gate.yml` from the active PR #2 branch. Its default `inspect` mode must be used before any deployment mode.
+5. No direct Cloudflare connector/plugin is available in this session. GitHub Actions is the approved indirect Cloudflare capability for Gate 2; never claim account-side state until the staging CI returns evidence.
+6. Because `workflow_dispatch` workflows are only surfaced from the default branch and the manual staging workflow intentionally lives only on PR #2, the active PR branch uses the push-triggered `cloudflare-inspect` job in `.github/workflows/trading-v1-ci.yml` for account inspection. Do not copy the workflow to `main` merely to surface the button.
 7. After Gate 2 infrastructure acceptance, execute Gate 3 certificate probe/TradingView acceptance, then Gate 4 Zitadel, Gate 5 Telegram soak, Gate 6 MT5/cTrader sources, Gate 7 broker demo destinations, Gate 8 end-to-end staging, Gate 9 production operations, and Gate 10 controlled cutover.
 8. Tiny controlled live still requires a separate explicit user cutover approval after all prior gates are GREEN.
 
@@ -273,16 +273,15 @@ Always inspect the exact newest branch-head run before calling the branch green.
 
 Production launch Gate 1 GREEN: `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
 Cloudflare staging bridge implementation GREEN: `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`.
+Cloudflare account preflight GREEN: push run `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`.
 Governing launch plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
 Live Trading Supabase migration `trading_0010_tradingview_public_source_handle` is applied/verified. No TradingView source row exists.
 
 Next safe source work:
-- create/configure GitHub repository environment `staging` and add environment secrets named `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; never paste their values into chat, docs, issues, PR comments, or logs;
-- the Cloudflare token must be a dedicated least-privilege API token for the Trading staging capability, not the Global API Key;
-- if repository/environment protection permits, require manual approval before the `staging` environment releases secrets;
-- manually run `Cloudflare Staging Gate` from branch `design/enterprise-trading-event-core` with mode `inspect` first;
-- stop on missing secrets, failed `wrangler whoami`, or either Paid/Free Wrangler dry-run failure;
-- only after sanitized inspect evidence is accepted may `deploy-paid` or `deploy-free` be considered;
+- extend the existing inspect-only push job to inventory existing Cloudflare Queues and Container applications before creating infrastructure; use current Wrangler read-only commands and fail closed on permission/API errors;
+- expected planned queues from current configs are `mkety-trading-source-events` for Paid and `mkety-trading-source-events-free` for Free; inspect actual account state before deployment;
+- inspect Container application/account state without starting any Container instance; absence is an acceptable pre-deploy result;
+- after account resource inventory is accepted, deploy only the reviewed staging profile needed for Gate 2 with all TradingView/auth/broker execution gates disabled;
 - keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and broker/live execution disabled during Gate 2;
 - verify the deployed Paid profile retains optional Container semantics while DO/external sources do not start Containers;
 - verify the Free profile remains a no-Container baseline with isolated queue/DLQ names;
@@ -299,23 +298,26 @@ Gate 1 — Freeze Production V1 Scope and Launch Contract: **GREEN**
 Evidence: `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`; all four mandatory gates passed, including dual Paid+Free Wrangler validation.
 
 Production launch gate: **Gate 2 — Real Cloudflare Staging Infrastructure Acceptance**
-Status: **READY FOR GITHUB-TO-CLOUDFLARE INSPECT; ACCOUNT SECRETS NOT YET CONFIGURED/VERIFIED**
-CI/environment evidence: staging workflow contract RED `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f` (501/506 existing Node tests passed; exactly five new tests failed because the workflow file was absent). Implementation GREEN `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`; all mandatory CI gates passed, including Worker/trading-core, MT5 bridge, both MTProto Python suites, and Paid+Free Wrangler dry-runs.
-Workflow: `.github/workflows/cloudflare-staging-gate.yml`; manual `workflow_dispatch` only; `environment: staging`; active-branch guard; default mode `inspect`; explicit `deploy-paid` / `deploy-free` choices; secrets consumed only as `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the GitHub staging environment.
-Safety state: `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`; `TRADINGVIEW_CERT_PROBE_ENABLED=false`; `TRADING_ACCESS_ENABLED=false`; broker/live execution disabled.
-No Cloudflare deployment or account inspection has been performed by this batch. The GitHub staging environment and secret presence are not yet verified from this session.
-Exact next safe action: configure the GitHub `staging` environment secrets, then manually run `Cloudflare Staging Gate` in `inspect` mode on `design/enterprise-trading-event-core`; review only sanitized identity/deployment/dry-run evidence before considering any staging deployment.
+Status: **ACCOUNT AUTH/PREFLIGHT GREEN; RESOURCE INVENTORY + FIRST STAGING DEPLOYMENT PENDING**
+CI/environment evidence:
+- PR-branch inspect fallback RED `33718333743` @ `d9a1920f168ff338e83512215d2d6067ece2b3be`: 506/507 Node tests passed; sole failure was the intentionally missing `cloudflare-inspect` CI job.
+- First inspect implementation `a1ffe0d9f31a4d702521d2081df0a44f5c83e295`; push run `33718408321` authenticated successfully and both Paid/Free dry-runs passed. The job then failed only because `wrangler deployments list` returned Cloudflare code `10007` for the not-yet-deployed Paid Worker and short-circuited before checking Free.
+- Undeployed-worker classification RED `33718560104` @ `15266bdff3ea4eebc90dd47093a4f9f90bab0aa4`: the new test required both Worker names to be inspected and code `10007` to be classified as pre-deploy state while unexpected API failures still fail closed.
+- Corrected account preflight GREEN push run `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`: mandatory test job GREEN; Cloudflare inspect job GREEN; `wrangler whoami` authenticated with the dedicated Account API Token; both Paid/Free Wrangler dry-runs GREEN; both Worker deployment-history checks ran; both `mkety-copier-engine` and `mkety-copier-engine-free` returned code `10007` and were correctly recorded as **not deployed yet**.
+Wrangler observed config bindings during real authenticated dry-run:
+- Paid: `MTPROTO_LISTENER_NAMESPACE` DO, `TRADE_STATE_NAMESPACE` DO, optional `MTPROTO_CONTAINER_NAMESPACE` DO/Container runtime, queue `mkety-trading-source-events`, Container image contract `mkety-copier-engine-mtprotocontainerruntime`.
+- Free: `MTPROTO_LISTENER_NAMESPACE` DO, `TRADE_STATE_NAMESPACE` DO, queue `mkety-trading-source-events-free`; no Container binding/application in the Free config.
+Safety state remained explicit throughout: `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`; `TRADINGVIEW_CERT_PROBE_ENABLED=false`; `TRADING_ACCESS_ENABLED=false`; `BROKER_EXECUTION_ENABLED=false`. No Worker was deployed by these runs.
+Exact next safe action: inventory existing account Queues and Container applications using read-only Wrangler commands, then proceed to the first controlled staging deployment only after collision/permission state is known.
 
 ## Cloudflare GitHub staging bridge — GREEN 2026-09-03
 
 - Direct Cloudflare connector/plugin access is unavailable in the current ChatGPT environment; this is no longer a hard Gate 2 blocker because GitHub Actions is the approved controlled bridge to Cloudflare.
-- Workflow: `.github/workflows/cloudflare-staging-gate.yml`.
-- The workflow is manual-only and tied to GitHub environment `staging`; it cannot be triggered by push or pull request.
-- The workflow refuses to operate from a branch other than `design/enterprise-trading-event-core`.
-- `inspect` is the default mode. Deployment requires explicit selection of `deploy-paid` or `deploy-free`.
-- Both Wrangler profiles are dry-run validated before any deployment step.
-- Required GitHub environment secrets are referenced by name only: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. Never expose their values.
-- Safety flags remain explicitly disabled in the workflow: TradingView direct ingress, TradingView certificate probe, Trading access entitlement, and broker execution.
-- RED: `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f`; 501/506 Node tests passed and only the five new workflow-contract tests failed because `.github/workflows/cloudflare-staging-gate.yml` was intentionally absent.
-- GREEN: `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`; all mandatory CI gates passed.
-- This bridge does not itself prove Cloudflare account state. Account-side evidence begins only after the user configures the GitHub `staging` environment secrets and manually runs `inspect`.
+- Manual workflow remains `.github/workflows/cloudflare-staging-gate.yml`, but GitHub does not surface a branch-only `workflow_dispatch` workflow in Actions until that workflow exists on the default branch. Do not merge/copy it to `main` solely for UI visibility.
+- Active PR #2 account inspection therefore runs through the push-only `cloudflare-inspect` job in `.github/workflows/trading-v1-ci.yml` and GitHub environment `staging`.
+- PR-triggered copies skip `cloudflare-inspect`; only direct pushes to `design/enterprise-trading-event-core` can consume the protected staging environment secrets.
+- Required environment secrets are referenced by name only: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`; values are masked and must never be exposed.
+- The inspector authenticates with `wrangler whoami`, dry-runs both deployment configs, inspects both Worker histories, classifies Cloudflare Worker-not-found code `10007` as a valid pre-deploy state, and fails closed on every other deployment-inspection API failure.
+- Safety flags remain explicitly disabled in the inspect environment: TradingView direct ingress, TradingView certificate probe, Trading access entitlement, and broker execution.
+- No real `wrangler deploy` command exists in the inspect job.
+- Latest real account evidence: `33718622191` @ `aa05a902006001845826dd9a70c9374350350000` GREEN; account authentication and both config dry-runs succeeded; both planned Worker names are absent pre-deployment.
