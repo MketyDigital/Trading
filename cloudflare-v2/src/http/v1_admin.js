@@ -4,6 +4,7 @@ import { hasTradingPermission } from '../security/trading_permissions.js';
 import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
+import { createAdminOperationsStore, handleAuthorizedV1AdminOperationsRequest } from './v1_admin_operations.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -106,6 +107,7 @@ export async function handleV1AdminRequest(request, env = {}, {
   membershipStoreFactory = createTradingMembershipStore,
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
+  operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
   let supabase;
   try {
@@ -131,6 +133,16 @@ export async function handleV1AdminRequest(request, env = {}, {
       subject: authorization.auth.subject,
       workspace: publicWorkspace(authorization.workspace),
     });
+  }
+
+  if (url.pathname === '/api/v1/admin/operations') {
+    let operationsStore;
+    try {
+      operationsStore = operationsStoreFactory(supabase);
+    } catch {
+      return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503);
+    }
+    return handleAuthorizedV1AdminOperationsRequest(request, authorization, { operationsStore });
   }
 
   if (url.pathname === '/api/v1/admin/members' || url.pathname.startsWith('/api/v1/admin/members/')) {
