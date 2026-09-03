@@ -61,11 +61,11 @@ Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-cor
 ## Production launch gates
 1. Scope freeze — **GREEN**
 2. Real Cloudflare staging infrastructure — **GREEN**
-3. TradingView certificate/direct ingress — **DEFERRED / FAIL-CLOSED**
+3. TradingView certificate/direct ingress — **DEFERRED / FAIL-CLOSED; STATIC PRODUCTION PATH GREEN**
 4. Zitadel real non-live identity — **AVAILABLE IN PARALLEL**
 5. Telegram runtime soak — **STATIC GREEN / REAL SOAK PENDING**
 6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
-7. Broker demo destinations — **CURRENT**
+7. Broker demo destinations — **LIFECYCLE BRIDGE GREEN / REAL DEMO LIFECYCLES PENDING**
 8. End-to-end staging
 9. Production operations
 10. Tiny controlled cutover
@@ -89,12 +89,12 @@ Independent gates may proceed out of number order. Final production still requir
 Do not redo Gate 2.
 
 ## Gate 3 — TradingView
-**DEFERRED / FAIL-CLOSED.**
+**DEFERRED / FAIL-CLOSED; STATIC PRODUCTION PATH GREEN.**
 - static security implementation GREEN: exact SHA-256 fingerprint trust, Cloudflare `request.cf.tlsClientAuth` authority only, caller-header spoof rejection, fail-closed sanitized probe.
 - hostname corrected/pinned to `trade.mkety.com`; `mkety.app` excluded.
 - real probe run `33728657084`, job `100563529178`: temporary probe deployed, curl spoof rejected 403, 0 genuine fingerprints, safe rollback succeeded.
 - user later confirmed the request was Windows `curl`, not TradingView-originated. Genuine TradingView webhook currently unavailable due subscription tier.
-- keep direct ingress/probe OFF; do not weaken authentication. Resume later with genuine TradingView-originated HTTPS request before shipping TradingView in V1.
+- production contract: keep TradingView fully built/tested behind explicit admin/runtime enablement; default direct ingress and certificate probe OFF. Do not weaken authentication. Resume genuine external acceptance later before enabling it for production traffic.
 
 ## Gate 4 — Zitadel
 **NOT YET REAL-ACCEPTED; MAY PROCEED IN PARALLEL.**
@@ -161,10 +161,15 @@ RED:
 - run `33731808116`, job `100573224493`
 - Node 526/528; exactly two missing Gate 6 job contracts failed; Cloudflare skipped.
 
-GREEN:
+GREEN bridge:
 - head `c24a97af7da92981cee37934718d1bde0b8d5778`
 - ordinary push run `33732167256`: mandatory Node/Worker, MT5 bridge, MTProto suites GREEN; Cloudflare jobs skipped.
-- dedicated Gate 6 run `33732167285`: mandatory test job GREEN; `mt5-demo-probe-gate6` SKIPPED; `ctrader-demo-probe-gate6` SKIPPED because implementation commit was not an exact marker.
+- dedicated Gate 6 run `33732167285`: mandatory test job GREEN; both real probe jobs SKIPPED because implementation commit was not an exact marker.
+
+MT5 runtime mapping regression:
+- RED head `560394823233c2cf0cd06c230565ef11b0bb657e`, run `33732387061`, job `100575069854`: Node 527/528; only missing `MT5_DEMO_SERVER` runtime mapping failed; all Cloudflare jobs skipped.
+- GREEN head `3a082b6da1ae255a2c2aa497eddd192606b947fa`, run `33733468585`, job `100578505896`: Node/Worker, MT5 bridge, both MTProto suites GREEN; every Cloudflare/deploy/probe job skipped.
+- protected secret remains named `MT5_EXPECTED_DEMO_SERVER`; workflow maps it to runtime `MT5_DEMO_SERVER`.
 
 Required `staging` secrets for an MT5 probe:
 - `MT5_BRIDGE_URL`
@@ -178,7 +183,48 @@ Required `staging` secrets for a cTrader probe:
 - `CTRADER_ACCESS_TOKEN`
 - `CTRADER_ACCOUNT_ID`
 
-Never paste these values in chat or commits.
+### Gate 7 protected demo-destination lifecycle bridge — GREEN
+Dedicated workflow: `.github/workflows/gate7-demo-destinations.yml`.
+Dedicated trigger: `cloudflare-v2/docs/GATE7_DEMO_DESTINATION_TRIGGER.md`.
+
+Exact lifecycle markers:
+- `demo: lifecycle mt5 gate 7`
+- `demo: lifecycle ctrader gate 7`
+
+Safety contract:
+- one broker lifecycle at a time;
+- protected `staging` environment;
+- mandatory Node/Worker + MT5 + MTProto tests first;
+- acceptance mode forced `lifecycle` and platform demo-order gate forced true only inside the matching exact-marker job;
+- MT5 exact expected demo server required; cTrader remains hard-pinned `environment='demo'` / `allowLiveTrading=false` in production code;
+- persistent Supabase delivery idempotency required and scoped by exact workspace/account/destination;
+- Worker-wide `BROKER_EXECUTION_ENABLED=false` remains pinned;
+- no Wrangler or Cloudflare deployment;
+- default lifecycle volume `0.01` lots, protected environment variable override only when broker demo minimum/step requires it.
+
+RED:
+- head `b71592bd549d105979bb64a51ede07a43dc2b631`
+- run `33733620119`, job `100578987551`
+- Node 528/530; exactly the two absent Gate 7 workflow contracts failed; Cloudflare skipped.
+
+GREEN:
+- head `a40c4b2ccb45204b1dd4ee24b53c860b78765681`
+- dedicated Gate 7 run `33733929722`: mandatory Node/Worker, MT5 bridge, and both MTProto suites GREEN; `mt5-demo-lifecycle-gate7` SKIPPED; `ctrader-demo-lifecycle-gate7` SKIPPED because implementation commit was not an exact lifecycle marker.
+- ordinary CI run `33733933644`: mandatory suite GREEN; Cloudflare inspection jobs skipped.
+
+Additional Gate 7 `staging` secrets:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `TRADING_WORKSPACE_ID`
+plus the relevant Gate 6 platform secrets above.
+
+Optional protected environment variables:
+- `MT5_DEMO_TEST_LOTS` (default `0.01`)
+- `MT5_DEMO_SYMBOL` (default `XAUUSD`)
+- `CTRADER_DEMO_TEST_LOTS` (default `0.01`)
+- `CTRADER_DEMO_SYMBOL` (default `XAUUSD`)
+
+Never paste any protected values in chat or commits.
 
 ## Exact next safe action
-Prepare Gate 7 protected **demo-order lifecycle** acceptance as a separate exact-marker workflow layer. It may place only demo orders, must retain persistent Supabase destination idempotency, require explicit platform demo-order opt-in, remain pinned to cTrader demo / MT5 expected demo server, and keep Worker-wide real-money execution disabled. Do not trigger a Gate 6 real platform probe or Gate 7 demo lifecycle until the relevant platform demo credentials have been added to the protected `staging` environment.
+Continue production-completion work without spending external credentials prematurely: verify and harden admin/runtime feature controls for Trading access, TradingView ingress/probe, provider activation, and broker execution so every integration is deployable but fail-closed by default. Then prepare real Gate 4/5/6/7 acceptance to run only when their protected external credentials are available. Do not trigger Gate 6 real probes or Gate 7 demo lifecycle markers merely to discover missing credentials.
