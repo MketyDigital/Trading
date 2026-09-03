@@ -4,6 +4,7 @@ import {
   validateMT5DemoCommandEnvironment,
   buildMT5DemoCommandDependencies,
 } from '../src/testing/mt5_demo_command.js';
+import { runMT5DemoCommand } from '../src/testing/mt5_demo_runner.js';
 
 test('MT5 demo command reports required server-side config names only', () => {
   const result = validateMT5DemoCommandEnvironment({
@@ -54,4 +55,25 @@ test('dependency builder fails before client creation when command environment i
     createClientFn: () => { calls += 1; return { from() {} }; },
   }), /TRADING_WORKSPACE_ID/);
   assert.equal(calls, 0);
+});
+
+test('MT5 probe mode does not require Supabase delivery-store configuration', async () => {
+  const logs = [];
+  const result = await runMT5DemoCommand({
+    env: {
+      MT5_DEMO_ACCEPTANCE_MODE: 'probe',
+      MT5_BRIDGE_URL: 'https://bridge.example.test',
+      MT5_BRIDGE_SECRET: 'bridge-secret',
+      MT5_ACCOUNT_ID: '1001',
+      MT5_DEMO_SERVER: 'Demo-Server',
+    },
+    logger: { log: (value) => logs.push(value), error: (value) => logs.push(value) },
+    dependencyBuilder: () => { throw new Error('dependency builder must not run in probe mode'); },
+    acceptanceRunner: async ({ deliveryStore }) => ({ mode: 'probe', deliveryStoreProvided: Boolean(deliveryStore) }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.output.mode, 'probe');
+  assert.equal(result.output.deliveryStoreProvided, false);
 });

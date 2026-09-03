@@ -4,6 +4,7 @@ import {
   validateCTraderDemoCommandEnvironment,
   buildCTraderDemoCommandDependencies,
 } from '../src/testing/ctrader_demo_command.js';
+import { runCTraderDemoCommand } from '../src/testing/ctrader_demo_runner.js';
 
 test('cTrader demo command reports required server-side config names only', () => {
   const result = validateCTraderDemoCommandEnvironment({
@@ -54,4 +55,25 @@ test('dependency builder fails before client creation when command environment i
     createClientFn: () => { calls += 1; return { from() {} }; },
   }), /TRADING_WORKSPACE_ID/);
   assert.equal(calls, 0);
+});
+
+test('cTrader probe mode does not require Supabase delivery-store configuration', async () => {
+  const logs = [];
+  const result = await runCTraderDemoCommand({
+    env: {
+      CTRADER_DEMO_ACCEPTANCE_MODE: 'probe',
+      CTRADER_CLIENT_ID: 'client-id',
+      CTRADER_CLIENT_SECRET: 'client-secret',
+      CTRADER_ACCESS_TOKEN: 'access-token',
+      CTRADER_ACCOUNT_ID: '77',
+    },
+    logger: { log: (value) => logs.push(value), error: (value) => logs.push(value) },
+    dependencyBuilder: () => { throw new Error('dependency builder must not run in probe mode'); },
+    acceptanceRunner: async ({ deliveryStore }) => ({ mode: 'probe', deliveryStoreProvided: Boolean(deliveryStore) }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.output.mode, 'probe');
+  assert.equal(result.output.deliveryStoreProvided, false);
 });
