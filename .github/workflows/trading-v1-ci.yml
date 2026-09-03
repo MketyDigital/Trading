@@ -87,6 +87,12 @@ jobs:
           npx wrangler deploy --dry-run --config wrangler.toml
           npx wrangler deploy --dry-run --config wrangler.free.toml
 
+      - name: Inventory Cloudflare queues
+        run: npx wrangler queues list
+
+      - name: Inventory Cloudflare Container applications
+        run: npx wrangler containers list
+
       - name: Inspect Paid Worker deployment history
         id: paid_deployments
         continue-on-error: true
