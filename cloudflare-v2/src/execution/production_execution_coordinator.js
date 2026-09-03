@@ -106,7 +106,29 @@ function summarize(accounts = [], executionEnabled = true) {
   return { executionEnabled, status, accounts, succeeded, failed, blocked };
 }
 
-async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispatchAction, stateBinder, latencyTrace }) {
+function validateAccountAuthority(account, workspaceId, requestedAccountId) {
+  if (!account) return blockedAccount(requestedAccountId, 'ACCOUNT_NOT_FOUND');
+  if (workspaceIdOf(account) !== workspaceId) {
+    return blockedAccount(requestedAccountId, 'ACCOUNT_WORKSPACE_MISMATCH');
+  }
+  if (accountIdOf(account) !== requestedAccountId) {
+    return blockedAccount(requestedAccountId, 'ACCOUNT_ID_MISMATCH');
+  }
+  if (!accountIsActive(account)) return blockedAccount(requestedAccountId, 'ACCOUNT_INACTIVE');
+  if (!accountExecutionEnabled(account)) return blockedAccount(requestedAccountId, 'ACCOUNT_EXECUTION_DISABLED');
+  return null;
+}
+
+async function runAccountPlan({
+  workspaceId,
+  eventId,
+  plan,
+  accountLoader,
+  authorityLoader,
+  dispatchAction,
+  stateBinder,
+  latencyTrace,
+}) {
   const requestedAccountId = text(plan?.accountId);
   if (!requestedAccountId) return blockedAccount('', 'ACCOUNT_ID_REQUIRED');
 
@@ -117,23 +139,36 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispa
     return failedAccount(requestedAccountId, 'ACCOUNT_LOAD_FAILED');
   }
 
-  if (!account) return blockedAccount(requestedAccountId, 'ACCOUNT_NOT_FOUND');
-  if (workspaceIdOf(account) !== workspaceId) {
-    return blockedAccount(requestedAccountId, 'ACCOUNT_WORKSPACE_MISMATCH');
-  }
-  if (accountIdOf(account) !== requestedAccountId) {
-    return blockedAccount(requestedAccountId, 'ACCOUNT_ID_MISMATCH');
-  }
-  if (!accountIsActive(account)) return blockedAccount(requestedAccountId, 'ACCOUNT_INACTIVE');
-  if (!accountExecutionEnabled(account)) return blockedAccount(requestedAccountId, 'ACCOUNT_EXECUTION_DISABLED');
+  const initialAuthorityBlock = validateAccountAuthority(account, workspaceId, requestedAccountId);
+  if (initialAuthorityBlock) return initialAuthorityBlock;
 
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   if (actions.length === 0) return blockedAccount(requestedAccountId, 'ACCOUNT_ACTIONS_REQUIRED');
 
-  const safetyPolicy = accountSafetyPolicy(account);
   const outcomes = [];
 
   for (const action of actions) {
+    let currentAccount = account;
+    if (typeof authorityLoader === 'function') {
+      try {
+        const authority = await authorityLoader({
+          workspaceId,
+          tradingEventId: eventId,
+          accountId: requestedAccountId,
+        });
+        currentAccount = authority?.account || null;
+      } catch (error) {
+        if (error?.code === 'EXECUTION_AUTHORITY_REVOKED') {
+          return blockedAccount(requestedAccountId, 'EXECUTION_AUTHORITY_REVOKED');
+        }
+        return failedAccount(requestedAccountId, 'EXECUTION_AUTHORITY_LOAD_FAILED', outcomes);
+      }
+
+      const currentAuthorityBlock = validateAccountAuthority(currentAccount, workspaceId, requestedAccountId);
+      if (currentAuthorityBlock) return currentAuthorityBlock;
+    }
+
+    const safetyPolicy = accountSafetyPolicy(currentAccount);
     const policy = evaluateAccountPolicy(safetyPolicy, policyRequest(plan, action));
     if (!policy.allowed) {
       if (policy.reasons?.includes('KILL_SWITCH')) {
@@ -155,7 +190,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, dispa
         workspaceId,
         eventId,
         groupId: plan?.groupId ?? null,
-        account,
+        account: currentAccount,
         action,
       });
       safeMark(latencyTrace, 'BROKER_ACK');
@@ -231,6 +266,7 @@ export async function executeProductionPlan({
   brokerExecutionEnabled = false,
 } = {}, {
   accountLoader,
+  authorityLoader,
   dispatchAction,
   stateBinder,
   latencyTrace,
@@ -240,8 +276,8 @@ export async function executeProductionPlan({
   if (!Array.isArray(accountPlans)) throw new TypeError('accountPlans must be an array');
 
   // The Worker-wide broker master fuse is deliberately the first broker-capable
-  // decision. When it is off, no account lookup, delivery reservation, state
-  // mutation, destination dependency, broker adapter, or latency mark may be reached.
+  // decision. When it is off, no account lookup, authority lookup, delivery
+  // reservation, state mutation, broker adapter, or latency mark may be reached.
   if (brokerExecutionEnabled !== true) {
     const accounts = accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED'));
     return summarize(accounts, false);
@@ -255,6 +291,7 @@ export async function executeProductionPlan({
     eventId,
     plan,
     accountLoader,
+    authorityLoader,
     dispatchAction,
     stateBinder,
     latencyTrace,
