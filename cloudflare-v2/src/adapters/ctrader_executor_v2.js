@@ -96,15 +96,25 @@ async function resolveMarketFill(session, acceptedResponse, action) {
 async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, retryDelayMs }) {
   const failure = { code: error?.code || 'CTRADER_EXECUTION_FAILED', error: error?.message || 'cTrader execution failed' };
   if (error?.deliveryFailureClass === 'RETRYABLE') {
-    if (!deliveryStore?.markRetryable) throw new Error('deliveryStore markRetryable required for retryable cTrader outcome');
-    await deliveryStore.markRetryable(idempotencyKey, failure, {
-      nextAttemptAt: new Date(Number(nowMs) + Number(retryDelayMs)).toISOString(),
-    });
+    if (deliveryStore?.markRetryable) {
+      await deliveryStore.markRetryable(idempotencyKey, failure, {
+        nextAttemptAt: new Date(Number(nowMs) + Number(retryDelayMs)).toISOString(),
+      });
+    } else {
+      // Compatibility/fail-closed path for older injected stores: never invent an
+      // automatic retry when durable retry semantics are unavailable.
+      await deliveryStore.fail(idempotencyKey, failure);
+    }
     return;
   }
   if (error?.deliveryFailureClass === 'UNCERTAIN') {
-    if (!deliveryStore?.markUncertain) throw new Error('deliveryStore markUncertain required for uncertain cTrader outcome');
-    await deliveryStore.markUncertain(idempotencyKey, failure);
+    if (deliveryStore?.markUncertain) {
+      await deliveryStore.markUncertain(idempotencyKey, failure);
+    } else {
+      // Preserve the original broker error while terminally recording the
+      // outcome when the store cannot represent UNCERTAIN explicitly.
+      await deliveryStore.fail(idempotencyKey, failure);
+    }
     return;
   }
   await deliveryStore.fail(idempotencyKey, failure);
