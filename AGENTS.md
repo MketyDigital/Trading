@@ -56,7 +56,7 @@ BROKER_EXECUTION_ENABLED=false
 
 Paid profile: `cloudflare-v2/wrangler.toml`; Free no-Container profile: `cloudflare-v2/wrangler.free.toml`. Paid/Free queue names remain isolated.
 
-Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-core, pure MT5 bridge, and both MTProto Python suites and does not invoke Cloudflare. Cloudflare actions are exact-marker-only.
+Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-core, pure MT5 bridge, and both MTProto Python suites and does not invoke Cloudflare. On the active feature branch ordinary source/config commits execute that regression suite through the PR workflow only; the push copy is skipped. Feature-branch push testing is retained only for exact marker jobs that declare `needs: test`: `cloudflare: deploy paid staging gate 2`, `cloudflare: accept staging gate 2`, and `cloudflare: probe tradingview gate 3`. Cloudflare actions remain exact-marker-only.
 
 ## Production launch gates
 1. Scope freeze — **GREEN**
@@ -66,8 +66,8 @@ Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-cor
 5. Telegram runtime soak — **STATIC GREEN / REAL SOAK PENDING**
 6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
 7. Broker demo destinations — **LIFECYCLE BRIDGE GREEN / REAL DEMO LIFECYCLES PENDING**
-8. End-to-end staging
-9. Production operations — **ADMIN ACCOUNT CONTROL LAYER GREEN; REMAINING OPS ACCEPTANCE PENDING**
+8. End-to-end staging — **PRODUCTION EXECUTION BRIDGE STATIC TASKS 1–5 GREEN; RETRY/OUTBOX + REAL ACCEPTANCE PENDING**
+9. Production operations — **ADMIN ACCOUNT CONTROL + FAIL-CLOSED EXECUTION BRIDGE GREEN; REMAINING OPS ACCEPTANCE PENDING**
 10. Tiny controlled cutover
 
 Independent gates may proceed out of number order. Final production still requires every mandatory in-scope gate GREEN or an explicit reviewed V1 scope change. Real-money cutover additionally requires separate user approval.
@@ -247,5 +247,55 @@ GREEN:
 - run `33734775292`, job `100582660782` — SUCCESS
 - Node **534/534**; MT5 bridge 14/14; Container MTProto 11/11; external MTProto 22/22; all Cloudflare/deploy/probe jobs skipped.
 
+## Production execution bridge — STATIC TASKS 1–5 GREEN
+Approved design/plan:
+- `docs/superpowers/plans/2026-09-03-production-execution-bridge-design.md`
+- `docs/superpowers/plans/2026-09-03-production-execution-bridge-implementation-plan.md`
+
+### Task 1 — Worker-wide Trading access fuse
+External V1 application/admin/TradingView routes require exact server-side `TRADING_ACCESS_ENABLED=true`; missing/false fails closed. Health and exact trusted internal source handoff remain independent infrastructure surfaces.
+GREEN run `33736148469`: Node 537/537 plus MT5/MTProto suites GREEN; all external Cloudflare jobs skipped.
+
+### Task 2 — production execution coordinator
+`production_execution_coordinator.js` checks `BROKER_EXECUTION_ENABLED` before account lookup, destination idempotency, state access, or adapter dispatch. It revalidates exact workspace/account, active state, `execution_enabled`, safety policy and kill switch. Sibling account failures remain isolated; drawdown locks may still permit risk-reducing management when kill switch is off.
+GREEN run `33736812704`: Node 542/542; MT5 14/14; Container MTProto 11/11; external MTProto 22/22; Cloudflare skipped.
+
+### Task 3 — server-authoritative production broker dependencies
+Exact GREEN head `62ef4d92e6dd02e50a2fb1e71746579373139586`, run `33738168500`.
+- `trade_accounts` is broker destination authority; caller credentials are never authoritative.
+- persistent `destination_deliveries` store is workspace/account scoped.
+- MT5 requires server bridge URL/secret plus exact DB login/server and broker symbol metadata.
+- cTrader decrypts exact DB account token server-side; app credentials remain server-side; live account mode additionally requires `CTRADER_LIVE_TRADING_ENABLED=true`.
+- no schema change.
+
+### Task 4 — V1 production execution stage
+RED head `75691de336ef890b706fcf72e91a6500151b8451`, run `33738694975`: 547/551, only four new execution-stage contracts failed.
+GREEN head `9fa41086a035bf2171c50608ced3b386a6c22a1e`, run `33739118996`: full Node/MT5/MTProto regression GREEN; all external jobs skipped.
+Contract:
+- only successful, non-duplicate, trusted `SIMULATED` plans with per-account `READY` actions may reach production execution;
+- trusted workspace comes from authenticated event authority, not caller payload;
+- simulation-only markers are stripped;
+- `BROKER_EXECUTION_ENABLED` missing/false returns `BROKER_EXECUTION_DISABLED` before production dependencies exist;
+- duplicate / `NEEDS_REVIEW` / blocked plans cannot execute.
+
+### Task 5 — normalized broker result -> exact Trade State leg binding
+RED head `e76e148a944d580dfce47d2ef253aacad643d90f`, run `33739415946`: Node 551/554; exactly three new binding contracts failed; Cloudflare skipped.
+GREEN head `541ee14e06339bc23f4d5bc710c178342d3fc983`; verified run `33739693026`:
+- Node **554/554**;
+- MT5 bridge **14/14**;
+- Container MTProto **11/11**;
+- external MTProto **22/22**;
+- all Cloudflare/Gate/deploy jobs skipped.
+Contract:
+- exact workspace Durable Object shard;
+- exact Position Group + leg endpoint;
+- internal Trade State token only;
+- persist only normalized broker position/order/deal IDs and fill price;
+- workspace/group/leg mismatch fails before Durable Object access;
+- credentials/raw broker response never enter Trade State binding.
+
+### Low-consumption CI de-duplication
+Observed Task 5 source commit launched duplicate ordinary push + PR regression jobs. Workflow changed at `c09da32dea20a6355aa56914de2ba7aa8f9bb032` so ordinary active-feature pushes skip `test`; the PR run remains the single regression authority. Push-side test remains allowed only for the three exact marker jobs that require `needs: test`. Permanent static contract added at `a78eaddd4cafa021bc0129c1d210d303d3caeca3`; its push workflow `33740185164` was SKIPPED as intended and its PR regression run is the exact-head verification authority.
+
 ## Exact next safe action
-Continue Gate 9 production operations and Gate 8 staging completion without spending external broker credentials prematurely. Audit the deployed runtime-control semantics so `TRADING_ACCESS_ENABLED`, TradingView source state, per-account execution, account kill switch, and Worker-wide `BROKER_EXECUTION_ENABLED` form an explicit fail-closed activation chain. Then prepare/run real Gate 4/5/6/7 acceptance only when the relevant protected external credentials or genuine external provider event are available. Do not enable `BROKER_EXECUTION_ENABLED` and do not merge `main` without explicit user instruction.
+Implement Task 6 persistent destination retry/exactly-once semantics before any full Telegram-to-broker demo/live activation. The critical failure mode to eliminate is: a source event can already be durably reserved before a transient broker dispatch fails, so replaying the source event must not be the only retry mechanism because source dedupe correctly treats the replay as a duplicate. Destination execution therefore needs its own durable recovery/outbox semantics, keyed by persistent destination idempotency, so broker failures can retry independently without duplicate orders. Keep `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false`, do not deploy or spend broker credentials during this implementation, and do not merge `main` without explicit user instruction.
