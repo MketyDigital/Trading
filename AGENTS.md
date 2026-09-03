@@ -64,7 +64,7 @@ Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-cor
 3. TradingView certificate/direct ingress — **DEFERRED / FAIL-CLOSED**
 4. Zitadel real non-live identity — **AVAILABLE IN PARALLEL**
 5. Telegram runtime soak — **STATIC GREEN / REAL SOAK PENDING**
-6. MT5/cTrader source acceptance — **CURRENT**
+6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
 7. Broker demo destinations — **CURRENT**
 8. End-to-end staging
 9. Production operations
@@ -112,28 +112,73 @@ Acceptance commands:
 MT5 probe verifies exact demo login/server, broker symbol catalog and live tick. cTrader is pinned to `environment='demo'`, `allowLiveTrading=false`, authoritative account/symbol/quote metadata and raw protocol `lotSize` semantics. Actual demo order lifecycle remains separately explicit and persistent-idempotent.
 
 ### Probe/persistence decoupling — GREEN
-Goal: safe connectivity/source probes must not require Supabase delivery state because they place no orders; lifecycle/order mode must still require persistent delivery idempotency.
-
 RED:
 - head `540d272dc9d8f2cd84d382c7fc99a2e37aef9195`
 - run `33730750537`, job `100569873364`
-- Node tests: **523/525 passed, exactly 2 failed**:
-  - `MT5 probe mode does not require Supabase delivery-store configuration`
-  - `cTrader probe mode does not require Supabase delivery-store configuration`
-- every Cloudflare job skipped.
+- Node 523/525; exactly the MT5/cTrader probe persistence contracts failed; Cloudflare skipped.
 
-GREEN implementation:
+GREEN:
 - head `705e628eba02d6fb7c5925d4b8a2a0b6ca04c1dd`
-- run `33731004622`, job `100570687765` — **SUCCESS**
-- Node Worker/trading-core GREEN
-- pure MT5 bridge GREEN
-- both MTProto Python suites GREEN
-- every Cloudflare job skipped
+- run `33731004622`, job `100570687765` — SUCCESS
+- Node/Worker, MT5 bridge, MTProto suites GREEN; Cloudflare skipped.
 
-Resulting contract:
-- MT5/cTrader default `probe` mode does **not** construct Supabase/delivery-store dependencies.
-- lifecycle mode still validates `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TRADING_WORKSPACE_ID`, builds persistent destination idempotency, and remains behind explicit demo-order gates.
-- no real-money behavior was enabled.
+Contract: default probe mode does not construct Supabase delivery dependencies; lifecycle mode still requires Supabase/workspace persistent idempotency and explicit demo-order opt-in.
+
+### cTrader real probe-path execution deny store — GREEN
+Runner decoupling exposed that `createCTraderRuntime` structurally requires a delivery store even when probe never executes an order. The probe now supplies a deny-execution store only when no persistent store is provided; `reserve`, `complete`, and `fail` all throw `cTrader probe execution disabled`. Lifecycle behavior is unchanged and still requires the real persistent store.
+
+RED:
+- head `383151a0ea760624afb7c19c6c218b7eb3dc3b34`
+- run `33731354031`, job `100571788514`
+- Node 525/526; only the fail-closed cTrader probe-store integration test failed; Cloudflare skipped.
+
+GREEN:
+- head `f02ebe449cc13157dadd0c7663e2fc1bee095ec3`
+- run `33731624548`, job `100572704852` — SUCCESS
+- Node/Worker, MT5 bridge, MTProto suites GREEN; Cloudflare skipped.
+
+### Gate 6 protected demo-probe bridge — GREEN
+Dedicated workflow: `.github/workflows/gate6-demo-probes.yml`.
+Dedicated trigger: `cloudflare-v2/docs/GATE6_DEMO_PROBE_TRIGGER.md`.
+
+Exact probe markers:
+- `demo: probe mt5 gate 6`
+- `demo: probe ctrader gate 6`
+
+Safety contract:
+- one platform probe at a time;
+- protected GitHub environment `staging`;
+- mandatory Node/Worker + MT5 + MTProto tests first;
+- probe mode forced;
+- demo-order flag forced false;
+- `BROKER_EXECUTION_ENABLED=false`;
+- no Supabase/workspace state;
+- no Cloudflare credentials or Wrangler;
+- no lifecycle/order action in the probe jobs.
+
+RED:
+- head `c588445f329981b940093e92f05a045524e6e7aa`
+- run `33731808116`, job `100573224493`
+- Node 526/528; exactly two missing Gate 6 job contracts failed; Cloudflare skipped.
+
+GREEN:
+- head `c24a97af7da92981cee37934718d1bde0b8d5778`
+- ordinary push run `33732167256`: mandatory Node/Worker, MT5 bridge, MTProto suites GREEN; Cloudflare jobs skipped.
+- dedicated Gate 6 run `33732167285`: mandatory test job GREEN; `mt5-demo-probe-gate6` SKIPPED; `ctrader-demo-probe-gate6` SKIPPED because implementation commit was not an exact marker.
+
+Required `staging` secrets for an MT5 probe:
+- `MT5_BRIDGE_URL`
+- `MT5_BRIDGE_SECRET`
+- `MT5_ACCOUNT_ID`
+- `MT5_EXPECTED_DEMO_SERVER`
+
+Required `staging` secrets for a cTrader probe:
+- `CTRADER_CLIENT_ID`
+- `CTRADER_CLIENT_SECRET`
+- `CTRADER_ACCESS_TOKEN`
+- `CTRADER_ACCOUNT_ID`
+
+Never paste these values in chat or commits.
 
 ## Exact next safe action
-Add one exact-marker, protected `staging` demo-probe bridge that can run MT5 or cTrader **probe-only** using platform-specific GitHub environment secrets. It must contain no lifecycle/order flag, no Supabase dependency, no Cloudflare deployment, and no real-money capability. After its regression contract is GREEN, real MT5/cTrader connectivity can be accepted as soon as the relevant demo credentials are added.
+Prepare Gate 7 protected **demo-order lifecycle** acceptance as a separate exact-marker workflow layer. It may place only demo orders, must retain persistent Supabase destination idempotency, require explicit platform demo-order opt-in, remain pinned to cTrader demo / MT5 expected demo server, and keep Worker-wide real-money execution disabled. Do not trigger a Gate 6 real platform probe or Gate 7 demo lifecycle until the relevant platform demo credentials have been added to the protected `staging` environment.
