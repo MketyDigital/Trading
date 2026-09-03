@@ -495,6 +495,12 @@ jobs:
           const fingerprints = genuine
             .flatMap((line) => line.toLowerCase().match(/[0-9a-f]{64}/g) || [])
             .filter((value, index, all) => all.indexOf(value) === index);
+          const probeLogCount = lines.length;
+          const certPresentedCount = genuine.length;
+          const fingerprintCount = fingerprints.length;
+          const expectedSpoofLogs = 1;
+          const additionalProbeLogs = Math.max(0, probeLogCount - expectedSpoofLogs);
+          console.log(`Gate 3 probe diagnostics: totalProbeLogs=${probeLogCount} expectedSpoofLogs=${expectedSpoofLogs} additionalProbeLogs=${additionalProbeLogs} certPresentedCount=${certPresentedCount} fingerprintCount=${fingerprintCount}`);
           if (fingerprints.length !== 1) {
             console.error(`Gate 3 genuine TradingView certificate observation requires exactly one stable SHA-256 fingerprint; observed ${fingerprints.length}.`);
             process.exit(1);
