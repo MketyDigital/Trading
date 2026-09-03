@@ -14,6 +14,7 @@ test('rejects non-POST methods and missing source authentication headers', async
 
 test('passes exact raw body and signed source headers into persistent ingest pipeline', async () => {
   let captured;
+  let aiFactoryCall;
   const rawBody = '{"external_event_id":"tv-1","text":"BUY GOLD NOW"}';
   const request = new Request('https://trade.test/api/v1/events', {
     method: 'POST', body: rawBody,
@@ -24,13 +25,20 @@ test('passes exact raw body and signed source headers into persistent ingest pip
       'X-Mkety-Signature': 'v1=abc',
     },
   });
+  const aiCircuitBreaker = { canAttempt() {}, recordFailure() {}, recordSuccess() {} };
+  const supabase = { from() {} };
 
   const response = await handleV1EventsRequest(request, { TRADING_MASTER_KEY: 'master' }, {
-    supabaseFactory: async () => ({ from() {} }),
+    supabaseFactory: async () => supabase,
     storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
-    workspaceAiFactory: async () => ({ processSignal() {} }),
+    aiCircuitBreaker,
+    workspaceAiFactory: async (...args) => {
+      aiFactoryCall = args;
+      return { processSignal() {} };
+    },
     ingestFn: async (input, dependencies) => {
       captured = { input, dependencies };
+      await dependencies.aiRouterFactory({ source: { workspace_id: 'ws-authenticated' } });
       return { ok: true, duplicate: false, eventId: 'evt-1', interpretation: { status: 'READY' } };
     },
   });
@@ -41,6 +49,10 @@ test('passes exact raw body and signed source headers into persistent ingest pip
   assert.equal(captured.input.timestamp, '1700000000000');
   assert.equal(captured.input.signature, 'v1=abc');
   assert.equal(typeof captured.dependencies.aiRouterFactory, 'function');
+  assert.equal(aiFactoryCall[0], supabase);
+  assert.equal(aiFactoryCall[1], 'ws-authenticated');
+  assert.equal(aiFactoryCall[2].masterKey, 'master');
+  assert.equal(aiFactoryCall[2].circuitBreaker, aiCircuitBreaker);
   const body = await response.json();
   assert.equal(body.eventId, 'evt-1');
   assert.equal(body.simulation, undefined);

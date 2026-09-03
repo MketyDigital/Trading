@@ -6,6 +6,9 @@ import { createProductionExecutionDependencies } from '../execution/production_e
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
+import { createProviderCircuitBreaker } from '../resilience/provider_circuit_breaker.js';
+
+const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -39,6 +42,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   storesFactory = createSupabaseIngestStores,
   workspaceAiFactory = createWorkspaceAIRouter,
+  aiCircuitBreaker = ambiguityAiCircuitBreaker,
   ingestFn = ingestTradingEvent,
   simulationDepsFactory = createV1SimulationDependencies,
   orchestrateFn = orchestrateTradingEventSimulation,
@@ -79,6 +83,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       aiRouterFactory: ({ source }) => workspaceAiFactory(supabase, source.workspace_id, {
         masterKey,
         env,
+        circuitBreaker: aiCircuitBreaker,
       }),
     });
 
