@@ -3,6 +3,7 @@ import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_st
 import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { createCTraderRuntime } from '../adapters/ctrader_runtime.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
+import { createContextualDeliveryStore } from './destination_retry_composition.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -144,15 +145,20 @@ async function defaultMt5ContextLoader({ bridgeUrl, accountId, serverName, fetch
   };
 }
 
-function deliveryStoreFor({ factory, supabase, workspaceId, account, tradingEventId }) {
+function deliveryStoreFor({ factory, supabase, workspaceId, account, tradingEventId, groupId }) {
   const platform = platformOf(account);
   const id = accountRef(account);
   if (!platform || !id) throw new Error('production trade account destination identity is incomplete');
-  return factory(supabase, {
+  const baseStore = factory(supabase, {
     workspaceId,
     destinationType: platform,
     destinationRef: `trade-account:${id}`,
     tradingEventId: tradingEventId || null,
+  });
+  return createContextualDeliveryStore(baseStore, {
+    accountId: id,
+    groupId: text(groupId) || null,
+    destinationType: platform,
   });
 }
 
@@ -198,7 +204,7 @@ export function createProductionExecutionDependencies({
     return data || null;
   }
 
-  async function dispatchMt5(account, action) {
+  async function dispatchMt5(account, action, groupId) {
     const bridgeUrl = required(env.MT5_BRIDGE_URL, 'MT5_BRIDGE_URL');
     const bridgeSecret = required(env.MT5_BRIDGE_SECRET, 'MT5_BRIDGE_SECRET');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
@@ -208,6 +214,7 @@ export function createProductionExecutionDependencies({
       workspaceId: boundWorkspaceId,
       account,
       tradingEventId,
+      groupId,
     });
 
     const context = await mt5ContextLoader({
@@ -230,7 +237,7 @@ export function createProductionExecutionDependencies({
     });
   }
 
-  async function dispatchCTrader(account, action) {
+  async function dispatchCTrader(account, action, groupId) {
     const masterKey = required(env.TRADING_MASTER_KEY, 'TRADING_MASTER_KEY');
     const clientId = required(env.CTRADER_CLIENT_ID, 'CTRADER_CLIENT_ID');
     const clientSecret = required(env.CTRADER_CLIENT_SECRET, 'CTRADER_CLIENT_SECRET');
@@ -255,6 +262,7 @@ export function createProductionExecutionDependencies({
       workspaceId: boundWorkspaceId,
       account,
       tradingEventId,
+      groupId,
     });
 
     let runtime;
@@ -275,7 +283,7 @@ export function createProductionExecutionDependencies({
     }
   }
 
-  async function dispatchAction({ workspaceId: requestedWorkspaceId, account, action } = {}) {
+  async function dispatchAction({ workspaceId: requestedWorkspaceId, groupId, account, action } = {}) {
     if (text(requestedWorkspaceId) !== boundWorkspaceId) {
       throw new Error('production execution workspace mismatch');
     }
@@ -283,8 +291,8 @@ export function createProductionExecutionDependencies({
     if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
 
     const platform = platformOf(account);
-    if (platform === 'mt5') return dispatchMt5(account, action);
-    if (platform === 'ctrader') return dispatchCTrader(account, action);
+    if (platform === 'mt5') return dispatchMt5(account, action, groupId);
+    if (platform === 'ctrader') return dispatchCTrader(account, action, groupId);
     throw new Error(`unsupported production broker platform: ${platform || 'unknown'}`);
   }
 

@@ -7,6 +7,7 @@ import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
+import { createProductionDestinationRetryRuntime } from './execution/destination_retry_production.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
@@ -146,6 +147,7 @@ export function createTradingV1Entrypoint({
   tradingViewHandler = handleTradingViewWebhookRequest,
   queueRuntime = null,
   recoveryRuntime = null,
+  destinationRetryRuntime = null,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -222,8 +224,16 @@ export function createTradingV1Entrypoint({
 
     async scheduled(event, env, ctx) {
       if (event?.cron === MTPROTO_RECOVERY_CRON) {
-        const runtime = recoveryRuntime || createMtprotoRecoveryRuntime();
-        return runtime(env, { ctx });
+        const mtprotoRuntime = recoveryRuntime || createMtprotoRecoveryRuntime();
+        const retryRuntime = destinationRetryRuntime || createProductionDestinationRetryRuntime();
+        const [mtprotoResult, retryResult] = await Promise.allSettled([
+          mtprotoRuntime(env, { ctx }),
+          retryRuntime(env, { ctx }),
+        ]);
+        return {
+          mtprotoRecovery: mtprotoResult.status,
+          destinationRetryRecovery: retryResult.status,
+        };
       }
       if (typeof legacy.scheduled === 'function') {
         return legacy.scheduled(event, env, ctx);
