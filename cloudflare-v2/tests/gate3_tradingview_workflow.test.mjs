@@ -28,3 +28,42 @@ test('Gate 3 zone inventory is exact-marker-only, protected, and read-only', asy
   assert.doesNotMatch(block, /TRADINGVIEW_CERT_PROBE_ENABLED:\s*['"]true['"]/);
   assert.doesNotMatch(block, /TRADINGVIEW_DIRECT_INGRESS_ENABLED:\s*['"]true['"]/);
 });
+
+test('Gate 3 certificate probe is exact-marker-only, protected, fail-closed, and always rolls back', async () => {
+  const workflow = await readCi();
+  const start = workflow.indexOf('cloudflare-probe-gate3-tradingview:');
+  assert.ok(start >= 0, 'cloudflare-probe-gate3-tradingview job must exist');
+  const block = workflow.slice(start);
+  assert.match(block, /needs:\s*test/);
+  assert.match(block, /github\.event\.head_commit\.message == 'cloudflare: probe tradingview gate 3'/);
+  assert.match(block, /environment:\s*staging/);
+  assert.match(block, /tradingview\.mkety\.app/);
+  assert.match(block, /api\.cloudflare\.com\/client\/v4\/accounts\/\$\{CLOUDFLARE_ACCOUNT_ID\}\/workers\/domains/);
+  assert.match(block, /api\.cloudflare\.com\/client\/v4\/zones\/111e5cbffce119ece633c104a76a9a15\/dns_records/);
+  assert.match(block, /wrangler deploy[\s\S]*--domain tradingview\.mkety\.app/);
+  assert.match(block, /--containers-rollout none/);
+  assert.match(block, /--var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false/);
+  assert.match(block, /--var TRADINGVIEW_CERT_PROBE_ENABLED:true/);
+  assert.match(block, /--var TRADING_ACCESS_ENABLED:false/);
+  assert.match(block, /--var BROKER_EXECUTION_ENABLED:false/);
+  assert.match(block, /wrangler tail/);
+  assert.match(block, /TRADINGVIEW_CERT_PROBE/);
+  assert.match(block, /wrangler rollback c25e85d5-bfe2-4d17-9ab4-5133d88ecec8/);
+  assert.match(block, /always\(\).*probe_deploy\.outcome == 'success'/);
+  assert.doesNotMatch(block, /TRADINGVIEW_DIRECT_INGRESS_ENABLED:true/);
+  assert.doesNotMatch(block, /BROKER_EXECUTION_ENABLED:true/);
+});
+
+test('Gate 3 probe checks hostname conflicts before mutation and proves spoof rejection', async () => {
+  const workflow = await readCi();
+  const start = workflow.indexOf('cloudflare-probe-gate3-tradingview:');
+  const block = workflow.slice(start);
+  const conflict = block.indexOf('Check dedicated TradingView hostname conflicts read-only');
+  const deploy = block.indexOf('Deploy temporary certificate-probe Worker');
+  assert.ok(conflict >= 0, 'hostname conflict check must exist');
+  assert.ok(deploy > conflict, 'probe deployment must happen only after conflict checks');
+  assert.match(block, /hostname=tradingview\.mkety\.app/);
+  assert.match(block, /name=tradingview\.mkety\.app/);
+  assert.match(block, /HTTP[^\n]*403|status[^\n]*403|\[ "\$status" = "403" \]/);
+  assert.match(block, /x-tradingview-client-cert/i);
+});
