@@ -69,20 +69,7 @@ Core safety:
 
 ## Implemented foundation
 
-PR #2 already contains and has CI evidence for:
-- signed `/api/v1/events` and source HMAC authentication;
-- persistent canonical event reservation/idempotency and cross-provider native identity;
-- deterministic parser plus bounded AI ambiguity path;
-- encrypted source/provider credentials;
-- account safety/risk/kill switches;
-- arbitrary-TP Position Groups and durable Trade State;
-- simulation and isolated destination fan-out/retry;
-- MT5/cTrader/Deriv symbol/account normalization;
-- Container Telethon, DO+mtcute, and external MTProto providers;
-- shared-Zitadel Trading memberships/roles;
-- Supabase privilege hardening;
-- isolated MT5/cTrader/custom source capture/delivery;
-- lightweight direct TradingView queue ingress in code, still disabled in real environment.
+PR #2 already contains and has CI evidence for signed V1 ingest/HMAC, persistent canonical idempotency, deterministic+bounded-AI interpretation, encrypted credentials, account safety/risk/kill switches, arbitrary-TP Position Groups, durable Trade State, simulation, isolated destination fan-out, MT5/cTrader/Deriv normalization, Container/DO/external MTProto providers, shared-Zitadel Trading memberships, Supabase privilege hardening, isolated MT5/cTrader/custom source capture, and disabled-by-default direct TradingView queue ingress.
 
 Historical detailed RED/GREEN evidence remains preserved in prior `AGENTS.md` revisions and git history. Current governing documents are:
 - `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
@@ -93,36 +80,22 @@ Historical detailed RED/GREEN evidence remains preserved in prior `AGENTS.md` re
 ## Deployment profiles
 
 Paid profile `cloudflare-v2/wrangler.toml`:
-- Worker: `mkety-copier-engine`
-- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`
-- source queue: `mkety-trading-source-events`
-- DLQ: `mkety-trading-source-events-dlq`
-- optional Container app/image contract: `mkety-copier-engine-mtprotocontainerruntime`
-- crons: 15-minute legacy scheduler + one-minute Container recovery supervisor.
+- Worker `mkety-copier-engine`;
+- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`;
+- source queue `mkety-trading-source-events`, DLQ `mkety-trading-source-events-dlq`;
+- optional Container image contract `mkety-copier-engine-mtprotocontainerruntime`;
+- 15-minute scheduler + one-minute Container recovery supervisor.
 
 Free profile `cloudflare-v2/wrangler.free.toml`:
-- Worker: `mkety-copier-engine-free`
-- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`
-- source queue: `mkety-trading-source-events-free`
-- DLQ: `mkety-trading-source-events-free-dlq`
-- **no Container declaration/binding/migration/recovery cron**
+- Worker `mkety-copier-engine-free`;
+- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`;
+- source queue `mkety-trading-source-events-free`, DLQ `mkety-trading-source-events-free-dlq`;
+- **no Container declaration/binding/migration/recovery cron**;
 - ordinary 15-minute scheduler only.
 
-Paid and Free queues are intentionally isolated; do not make both Workers consume the same queue.
+Paid and Free queues are intentionally isolated.
 
-## GitHub → Cloudflare staging bridge
-
-There is no direct Cloudflare connector in the current ChatGPT environment. GitHub Actions is the approved controlled Cloudflare capability.
-
-- GitHub environment: `staging`
-- environment secrets referenced by name only: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
-- values must remain masked and must never be copied into chat/docs/issues/PR comments.
-- `.github/workflows/cloudflare-staging-gate.yml` is a manual workflow on the PR branch, but GitHub does not surface branch-only `workflow_dispatch` workflows until the workflow exists on the default branch. Do **not** copy/merge it to `main` solely for UI visibility.
-- Active PR #2 therefore uses the push-only `cloudflare-inspect` job in `.github/workflows/trading-v1-ci.yml` for account inspection.
-- PR-triggered copies skip `cloudflare-inspect`; only direct pushes to `design/enterprise-trading-event-core` may consume the protected staging environment secrets.
-- `cloudflare-inspect` has no real deployment command. It authenticates, dry-runs both profiles, inventories queues/containers, inspects both Worker histories, classifies Cloudflare Worker-not-found `10007` as a valid pre-deploy state, and fails closed on other API failures.
-
-Safety environment for Gate 2 remains:
+Both profiles now pin these Worker-runtime vars explicitly fail-closed:
 
 ```text
 TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
@@ -130,6 +103,19 @@ TRADINGVIEW_CERT_PROBE_ENABLED=false
 TRADING_ACCESS_ENABLED=false
 BROKER_EXECUTION_ENABLED=false
 ```
+
+This is defense-in-depth at the actual Worker deployment configuration, not merely GitHub process environment state.
+
+## GitHub → Cloudflare staging bridge
+
+There is no direct Cloudflare connector in the current ChatGPT environment. GitHub Actions is the approved controlled Cloudflare capability.
+
+- GitHub environment `staging` contains `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` by name only; values stay masked.
+- branch-only manual workflow `.github/workflows/cloudflare-staging-gate.yml` is not surfaced by GitHub until present on the default branch; do not merge/copy it to `main` merely for UI visibility.
+- active PR #2 uses push-only `cloudflare-inspect` in `.github/workflows/trading-v1-ci.yml`.
+- PR-triggered copies skip Cloudflare account access; only direct pushes to `design/enterprise-trading-event-core` may consume the protected staging environment.
+- inspector authenticates, dry-runs both profiles, inventories queues/containers, inspects Worker histories, treats only Cloudflare code `10007` as valid undeployed state, and fails closed on other API errors.
+- inspect job contains no real deployment command.
 
 ## CI rule
 
@@ -141,61 +127,41 @@ Every meaningful branch head must pass:
 
 Always inspect the exact newest branch-head run before calling the branch GREEN.
 
-Key recent evidence:
-- Gate 1 scope freeze: GREEN `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
-- manual staging bridge contract RED: `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f`.
-- manual staging bridge implementation GREEN: `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`.
-- PR-branch inspect fallback RED: `33718333743` @ `d9a1920f168ff338e83512215d2d6067ece2b3be` — 506/507 Node tests passed; sole failure was the intentionally absent inspect job.
-- authenticated account preflight GREEN: `33718622191` @ `aa05a902006001845826dd9a70c9374350350000` — Cloudflare auth, both profile dry-runs, and both absent Worker classifications passed.
-- resource-inventory RED: `33718839137` @ `0c2aad135ce961cb0385c9d769fcbef5898fafc7` — new read-only Queue/Container inventory contract was intentionally absent.
-- resource-inventory GREEN: push run `33718900390` @ `31281abd511e80c9b37cf2dc1c4d75f38f5637ee` — mandatory CI and real Cloudflare inspect both passed.
+Key current evidence:
+- Gate 1 scope freeze GREEN `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
+- staging bridge RED `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f`; implementation GREEN `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`.
+- PR-branch inspect RED `33718333743` @ `d9a1920f168ff338e83512215d2d6067ece2b3be`; authenticated account preflight GREEN `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`.
+- resource inventory RED `33718839137` @ `0c2aad135ce961cb0385c9d769fcbef5898fafc7`; resource inventory GREEN `33718900390` @ `31281abd511e80c9b37cf2dc1c4d75f38f5637ee`.
+- Worker-runtime safety-var RED `33719360745` @ `6499d6ce8bf88a18d9326de72e332fccd5c1142e`: 509/510 Node tests passed; sole failure was absent explicit runtime safety vars.
+- Paid safety vars added `92cd40b6a6fe68daccadbacafde299f69f7f8625`; Free safety vars added `475ac52f24d4db80892bbc48b1f296f9cd462a0b`.
+- exact-head safety-var GREEN `33719452508` @ `475ac52f24d4db80892bbc48b1f296f9cd462a0b`: full test job GREEN and authenticated `cloudflare-inspect` GREEN, including both real-account dry-runs and clean inventory.
 
 ## Gate 2 — Real Cloudflare Staging Infrastructure Acceptance
 
 Governing plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
 
-Current status: **ACCOUNT AUTH + COLLISION INVENTORY GREEN; FIRST STAGING DEPLOYMENT NOT YET PERFORMED.**
+Current status: **ACCOUNT AUTH + COLLISION INVENTORY + RUNTIME SAFETY CONFIG GREEN; FIRST PAID STAGING DEPLOYMENT PENDING.**
 
-Real account evidence from `33718900390`:
-- `wrangler whoami`: authenticated successfully through the dedicated Account API Token;
-- Paid Wrangler dry-run: GREEN;
-- Free Wrangler dry-run: GREEN;
-- `wrangler queues list`: completed successfully and returned no existing Queues;
-- `wrangler containers list`: completed successfully and returned `No containers found.`;
-- Paid Worker `mkety-copier-engine`: Cloudflare code `10007`, correctly classified as **not deployed yet**;
-- Free Worker `mkety-copier-engine-free`: Cloudflare code `10007`, correctly classified as **not deployed yet**;
-- therefore there are no account-side naming collisions with the planned Paid/Free Workers, source queues/DLQs, or optional Container application at this point;
-- no Worker, Queue, DLQ, DO namespace, Container app, route, hostname, source, or broker execution state was created by the inspection batch.
+Real Cloudflare account state most recently confirmed:
+- authenticated dedicated Account API Token works;
+- Paid/Free dry-runs work against the account;
+- no existing Queues;
+- no Container applications;
+- neither planned Worker exists (`10007` undeployed state);
+- no naming collisions found;
+- no real Worker/Queue/DLQ/DO/Container infrastructure has yet been created by Gate 2.
 
-Authenticated dry-run confirmed expected capability shape:
-- Paid exposes `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`, queue `mkety-trading-source-events`, and the Container build contract;
-- Free exposes `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, queue `mkety-trading-source-events-free`, and no Container binding.
+`cloudflare-v2/src/config/staging_readiness.js` reports full application readiness using Supabase, Zitadel and optional simulation/runtime config names. **Do not confuse full application readiness with Gate 2 infrastructure deployment readiness:** Zitadel acceptance belongs to Gate 4. The first Gate 2 deployment may intentionally expose missing readiness names through health while authentication/TradingView/broker execution remain disabled.
 
-## First staging deployment prerequisite
-
-Do **not** deploy a half-configured Worker merely because Cloudflare resource names are free.
-
-`cloudflare-v2/docs/STAGING_V1_RUNBOOK.md` requires server-side runtime configuration before meaningful non-live health/identity acceptance, including capability names such as:
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE` (or supported service-role alias)
-- `TRADING_MASTER_KEY`
-- `TRADE_STATE_INTERNAL_TOKEN`
-- later Zitadel values: `ZITADEL_ISSUER`, `ZITADEL_AUDIENCE`, `ZITADEL_JWKS_URL`, `ZITADEL_PROJECT_ID`
-- simulation context later requires `TRADING_V1_SIMULATION_INSTRUMENTS` and `TRADING_V1_SIMULATION_PRICES`.
-
-Never commit these secret values. Cloudflare account authentication secrets are not substitutes for Worker runtime secrets.
-
-Before the first real Gate 2 deploy, verify the exact runtime secrets/vars already present vs missing by **name only**, choose the intended staging profile (Paid is the profile needed to prove optional Container semantics), and provision only the minimum non-live runtime configuration required for health/infrastructure acceptance. TradingView, Trading entitlement, simulation, and broker execution must remain disabled unless the relevant later acceptance step explicitly enables them.
+Never commit runtime secret values. Cloudflare account API credentials are not Worker runtime secrets.
 
 ## Exact next safe starting point
 
-1. Inspect/prove required Worker runtime configuration presence by **name only** through the GitHub→Cloudflare bridge; never output values.
-2. Determine which required Gate 2 core settings are missing. Do not create source rows or broker destinations yet.
-3. Provision missing staging runtime secrets/vars through the controlled Cloudflare/GitHub secret-management path, keeping all four safety gates false.
-4. Deploy the exact reviewed **Paid staging profile** only after core runtime readiness is sufficient for `/api/v1/health` infrastructure acceptance.
-5. Verify Worker, queue/DLQ, DO bindings, crons, and optional Container capability after deployment.
-6. Prove DO/external traffic does not start Containers; only a deliberately configured active Container source may touch Container bootstrap.
-7. Send only non-broker/simulation acceptance traffic when the runbook reaches that step.
-8. Prove rollback to the prior known-good deployment before closing Gate 2.
-9. Do not begin Gate 3 TradingView certificate acceptance, Gate 4 Zitadel acceptance, or any broker demo/live work early.
-10. Do not merge `main` without explicit user instruction.
+1. TDD a one-shot **Paid-only staging deployment gate** in the active branch CI. It must require the exact PR branch, protected `staging` environment, successful mandatory tests, an explicit one-shot trigger marker, and a final pre-deploy Paid dry-run.
+2. The deployment job may run real `wrangler deploy --config wrangler.toml` only for the Paid profile; it must contain no real Free deployment command.
+3. Keep all four Worker runtime safety vars pinned `false`; do not create source rows, destinations, TradingView handles, or broker execution state.
+4. Use a separate harmless trigger commit only after the deployment-job contract is GREEN, so implementation commits cannot accidentally deploy.
+5. Observe the first real deployment result rather than guessing whether Cloudflare requires queue/DLQ pre-creation or additional write permissions. If it fails, treat the exact Cloudflare error as Gate 2 evidence and fix minimally.
+6. After deployment succeeds, verify Worker, queue/DLQ, DO bindings, crons, optional Container application/capability, and that no Container instance starts merely because the binding exists.
+7. Only then perform non-broker health/simulation infrastructure acceptance and prove rollback.
+8. Gate 3 TradingView certificate acceptance, Gate 4 Zitadel, broker demos/live, and `main` merge remain out of scope until their explicit gates/approval.
