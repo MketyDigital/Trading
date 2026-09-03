@@ -40,10 +40,11 @@ test('Gate 3 certificate probe is exact-marker-only, protected, fail-closed, and
   assert.match(block, /needs:\s*test/);
   assert.match(block, /github\.event\.head_commit\.message == 'cloudflare: probe tradingview gate 3'/);
   assert.match(block, /environment:\s*staging/);
-  assert.match(block, /GATE3_HOSTNAME:\s*tradingview\.mkety\.app/);
+  assert.match(block, /GATE3_HOSTNAME:\s*trade\.mkety\.com/);
+  assert.match(block, /GATE3_ZONE_ID:\s*98c7228a0457b1f454881c149e2df6ce/);
   assert.match(block, /api\.cloudflare\.com\/client\/v4\/accounts\/\$\{CLOUDFLARE_ACCOUNT_ID\}\/workers\/domains/);
-  assert.match(block, /api\.cloudflare\.com\/client\/v4\/zones\/111e5cbffce119ece633c104a76a9a15\/dns_records/);
-  assert.match(block, /wrangler deploy[\s\S]*--domain (?:tradingview\.mkety\.app|\$\{?GATE3_HOSTNAME\}?)/);
+  assert.match(block, /api\.cloudflare\.com\/client\/v4\/zones\/\$\{GATE3_ZONE_ID\}\/dns_records/);
+  assert.match(block, /wrangler deploy[\s\S]*--domain (?:trade\.mkety\.com|\$\{?GATE3_HOSTNAME\}?)/);
   assert.match(block, /--containers-rollout none/);
   assert.match(block, /--var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false/);
   assert.match(block, /--var TRADINGVIEW_CERT_PROBE_ENABLED:true/);
@@ -57,15 +58,16 @@ test('Gate 3 certificate probe is exact-marker-only, protected, fail-closed, and
   assert.doesNotMatch(block, /BROKER_EXECUTION_ENABLED:true/);
 });
 
-test('Gate 3 probe checks hostname conflicts before mutation and proves spoof rejection', async () => {
+test('Gate 3 probe checks Trading hostname conflicts before mutation and proves spoof rejection', async () => {
   const workflow = await readCi();
   const block = jobBlock(workflow, 'cloudflare-probe-gate3-tradingview');
   const conflict = block.indexOf('Check dedicated TradingView hostname conflicts read-only');
   const deploy = block.indexOf('Deploy temporary certificate-probe Worker');
   assert.ok(conflict >= 0, 'hostname conflict check must exist');
   assert.ok(deploy > conflict, 'probe deployment must happen only after conflict checks');
-  assert.match(block, /hostname=\$\{GATE3_HOSTNAME\}|hostname=tradingview\.mkety\.app/);
-  assert.match(block, /name=tradingview\.mkety\.app/);
+  assert.match(block, /hostname=\$\{GATE3_HOSTNAME\}|hostname=trade\.mkety\.com/);
+  assert.match(block, /name=\$\{GATE3_HOSTNAME\}|name=trade\.mkety\.com/);
   assert.match(block, /HTTP[^\n]*403|status[^\n]*403|\[ "\$status" != "403" \]/);
   assert.match(block, /x-tradingview-client-cert/i);
+  assert.doesNotMatch(block, /tradingview\.mkety\.app/);
 });
