@@ -104,7 +104,9 @@ export function createAdminOperationsStore(supabase, {
         .in('status', FAILURE_STATUSES)
         .order('updated_at', { ascending: false })
         .limit(boundedRecentLimit), 'recent delivery failures');
-      const recentFailures = exactWorkspaceRows(recentResult.data, boundWorkspaceId).map(safeRecentFailure);
+      const recentFailures = exactWorkspaceRows(recentResult.data, boundWorkspaceId)
+        .filter((row) => Boolean(text(row?.error_code) || text(row?.failure_class)))
+        .map(safeRecentFailure);
 
       const accountsResult = assertQuery(await supabase
         .from('trade_accounts')
