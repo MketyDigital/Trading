@@ -106,7 +106,22 @@ Gate 2 Cloudflare operations are exact-marker only:
 - `cloudflare: deploy paid staging gate 2`
 - `cloudflare: accept staging gate 2`
 
+Gate 3 Cloudflare operations are also exact-marker only:
+- `cloudflare: inspect tradingview gate 3` — read-only active-zone inventory only;
+- `cloudflare: probe tradingview gate 3` — controlled certificate-probe deployment only after ordinary tests pass.
+
 The Gate 2 acceptance job uses protected GitHub environment `staging`; it never exposes secret values, passes `--containers-rollout none`, keeps all four safety switches false, creates disposable simulation-only fixtures, cleans them in `finally`, and rolls back the Worker after acceptance.
+
+The Gate 3 certificate-probe job is designed to:
+- require ordinary CI first and protected GitHub environment `staging`;
+- target only `tradingview.mkety.app`;
+- perform read-only Worker-domain and DNS conflict checks before any mutation;
+- temporarily deploy with `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=true`, `TRADING_ACCESS_ENABLED=false`, `BROKER_EXECUTION_ENABLED=false`;
+- pass `--containers-rollout none`;
+- prove a caller-spoofed certificate header still gets HTTP 403;
+- observe only sanitized `TRADINGVIEW_CERT_PROBE` metadata through bounded real-time `wrangler tail`;
+- require exactly one stable normalized SHA-256 certificate fingerprint from genuine TradingView certificate evidence;
+- always roll back to known-good version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` after a successful probe deployment.
 
 ## Gate 1 — Scope freeze
 
@@ -212,30 +227,93 @@ Gate 2 exit criteria are satisfied: real staging Worker/bindings accepted, Queue
 
 Real-money execution requires separate explicit user approval after all prior gates are GREEN.
 
-## Gate 3 — exact next safe starting point
+## Gate 3 — TradingView real certificate and source acceptance
 
-TradingView certificate/direct-ingress acceptance is next.
+**CURRENT / CERTIFICATE PROBE BRIDGE PREPARED, REAL CERTIFICATE NOT YET OBSERVED.**
 
-Rules:
-- broker execution remains OFF;
-- Trading access remains OFF;
-- begin with `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`;
-- enable `TRADINGVIEW_CERT_PROBE_ENABLED=true` only temporarily for certificate observation;
-- use a dedicated webhook hostname/path as designed;
-- do not use BYOCA or Enterprise-only mTLS trust;
-- a genuine TradingView webhook must expose sanitized `request.cf.tlsClientAuth` with `certPresented=true` and a stable normalized 64-hex SHA-256 certificate fingerprint;
-- spoof attempts must fail closed;
-- if fingerprint is absent or unstable, STOP and redesign; never weaken to IP-only, client header, body secret, or URL-secret trust;
-- after observation, disable probe and pin only the exact observed fingerprint;
-- controlled direct ingress remains non-execution only;
-- prove duplicate `event_id` collapse and second-source isolation;
-- disable direct ingress again after acceptance unless separately reviewed.
+Governing plan:
+`docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
 
-Relevant existing docs/code:
-- `docs/superpowers/plans/2026-09-02-lightweight-tradingview-direct-ingress-v2.md`
-- `docs/superpowers/specs/2026-09-02-lightweight-tradingview-direct-ingress-design.md`
-- `cloudflare-v2/src/http/tradingview_webhook.js`
-- `cloudflare-v2/src/security/tradingview_transport.js`
-- existing TradingView transport/webhook/ingress acceptance tests.
+Existing transport/security behavior remains:
+- direct ingress requires an exact configured SHA-256 certificate fingerprint;
+- only Cloudflare-provided `request.cf.tlsClientAuth` is authoritative;
+- ordinary caller headers cannot self-assert certificate verification;
+- certificate probe logs only `certPresented`, `fingerprintAvailable`, and normalized SHA-256 fingerprint;
+- probe mode returns HTTP 403 before source lookup/queueing;
+- no broker authority is present in TradingView ingress.
 
-Before changing Gate 3 configuration, inspect the existing plan/code and build one explicit low-consumption acceptance bridge rather than enabling direct ingress ad hoc.
+### Read-only Cloudflare zone discovery — verified
+
+Contract RED:
+- commit `2f5b1eef74c08c22070662772f2473a3290c4971`
+- run `33726404506`
+- 519/520 Node tests passed; only the new missing Gate 3 zone-job contract failed;
+- no Cloudflare Gate 3 action ran.
+
+Implementation GREEN:
+- commit `f64e6d8659058f9b1f6c3dc94cbe77ecb4f8cba2`
+- run `33726560705` — mandatory suites GREEN; all Cloudflare jobs skipped.
+
+Exact marker zone inventory:
+- trigger commit `58235313e78afd5626eb6026567b09deda63a3e6`
+- run `33726675933`
+- protected `cloudflare-inspect-gate3-zones` succeeded;
+- mandatory CI also succeeded;
+- direct ingress remained OFF;
+- cert probe remained OFF;
+- no deployment or DNS/custom-domain mutation occurred.
+
+Active zones discovered on the configured Cloudflare account:
+- `mkety.app`
+- `mkety.com`
+
+Selected dedicated Gate 3 hostname:
+`tradingview.mkety.app`
+
+Pinned zone ID for exact conflict checks:
+`111e5cbffce119ece633c104a76a9a15`
+
+Reason: TradingView ingress is application infrastructure; use `.app` and keep `.com` cleaner for public/marketing surfaces.
+
+### Certificate-probe bridge — TDD verified, not yet triggered
+
+Probe contract RED:
+- commit `ca48048e86fb751778923ca3e56a23c60e6b2c9c`
+- run `33726830159`
+- new probe contract failed because the job was absent;
+- Cloudflare jobs remained skipped.
+
+Probe implementation:
+- commit `8d800be21755001dc58590da1beb91f836c47a4c`
+- added `cloudflare-probe-gate3-tradingview` exact-marker job.
+
+First ordinary implementation CI:
+- run `33727030013` failed only because the test file over-scoped one job block and required a literal hostname where the workflow used fixed `GATE3_HOSTNAME`;
+- the probe job and all other Cloudflare jobs were skipped, so no Cloudflare mutation occurred.
+
+Contract-test correction:
+- commit `29ca26ec70e0bc7e3d17afb1431ff37a786a5cba`
+- run `33727215432` — **SUCCESS**;
+- Node Worker/trading-core GREEN;
+- pure MT5 bridge GREEN;
+- both MTProto Python suites GREEN;
+- all Cloudflare jobs, including Gate 3 probe, skipped on this non-marker head.
+
+### Exact next safe action
+
+Use the dedicated trigger document `cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md` and one exact marker commit:
+
+```text
+cloudflare: probe tradingview gate 3
+```
+
+Then inspect that single run. When the step `Start bounded real-time certificate probe and prove spoof rejection` is actively running:
+1. trigger exactly one genuine TradingView HTTPS webhook to `https://tradingview.mkety.app/api/v1/webhooks/tradingview/probe`;
+2. expect the HTTP response to remain 403 because direct ingress is still disabled/probe-only;
+3. require Cloudflare-observed `certPresented=true`, `fingerprintAvailable=true`, and exactly one stable normalized 64-hex SHA-256 fingerprint;
+4. allow the workflow to roll back automatically to known-good Worker version;
+5. if fingerprint is missing/malformed/unstable, STOP Gate 3 and do not weaken transport authentication.
+
+Only after a genuine stable certificate fingerprint is proven may the next controlled batch pin that fingerprint, disable probe, create a non-execution TradingView source, and temporarily enable direct ingress for dedupe/authority-stripping/source-isolation acceptance.
+
+Do not enable broker execution, Trading access, or real-money behavior as part of Gate 3.
