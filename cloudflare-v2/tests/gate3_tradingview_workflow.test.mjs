@@ -5,11 +5,16 @@ import { readFile } from 'node:fs/promises';
 const ciPath = new URL('../../.github/workflows/trading-v1-ci.yml', import.meta.url);
 const readCi = () => readFile(ciPath, 'utf8');
 
+function jobBlock(workflow, jobName, nextJobName = null) {
+  const start = workflow.indexOf(`  ${jobName}:`);
+  assert.ok(start >= 0, `${jobName} job must exist`);
+  const end = nextJobName ? workflow.indexOf(`  ${nextJobName}:`, start + 1) : -1;
+  return workflow.slice(start, end >= 0 ? end : undefined);
+}
+
 test('Gate 3 zone inventory is exact-marker-only, protected, and read-only', async () => {
   const workflow = await readCi();
-  const start = workflow.indexOf('cloudflare-inspect-gate3-zones:');
-  assert.ok(start >= 0, 'cloudflare-inspect-gate3-zones job must exist');
-  const block = workflow.slice(start);
+  const block = jobBlock(workflow, 'cloudflare-inspect-gate3-zones', 'cloudflare-probe-gate3-tradingview');
   assert.match(block, /github\.event\.head_commit\.message == 'cloudflare: inspect tradingview gate 3'/);
   assert.match(block, /environment:\s*staging/);
   assert.match(block, /CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
@@ -31,16 +36,14 @@ test('Gate 3 zone inventory is exact-marker-only, protected, and read-only', asy
 
 test('Gate 3 certificate probe is exact-marker-only, protected, fail-closed, and always rolls back', async () => {
   const workflow = await readCi();
-  const start = workflow.indexOf('cloudflare-probe-gate3-tradingview:');
-  assert.ok(start >= 0, 'cloudflare-probe-gate3-tradingview job must exist');
-  const block = workflow.slice(start);
+  const block = jobBlock(workflow, 'cloudflare-probe-gate3-tradingview');
   assert.match(block, /needs:\s*test/);
   assert.match(block, /github\.event\.head_commit\.message == 'cloudflare: probe tradingview gate 3'/);
   assert.match(block, /environment:\s*staging/);
-  assert.match(block, /tradingview\.mkety\.app/);
+  assert.match(block, /GATE3_HOSTNAME:\s*tradingview\.mkety\.app/);
   assert.match(block, /api\.cloudflare\.com\/client\/v4\/accounts\/\$\{CLOUDFLARE_ACCOUNT_ID\}\/workers\/domains/);
   assert.match(block, /api\.cloudflare\.com\/client\/v4\/zones\/111e5cbffce119ece633c104a76a9a15\/dns_records/);
-  assert.match(block, /wrangler deploy[\s\S]*--domain tradingview\.mkety\.app/);
+  assert.match(block, /wrangler deploy[\s\S]*--domain (?:tradingview\.mkety\.app|\$\{?GATE3_HOSTNAME\}?)/);
   assert.match(block, /--containers-rollout none/);
   assert.match(block, /--var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false/);
   assert.match(block, /--var TRADINGVIEW_CERT_PROBE_ENABLED:true/);
@@ -56,14 +59,13 @@ test('Gate 3 certificate probe is exact-marker-only, protected, fail-closed, and
 
 test('Gate 3 probe checks hostname conflicts before mutation and proves spoof rejection', async () => {
   const workflow = await readCi();
-  const start = workflow.indexOf('cloudflare-probe-gate3-tradingview:');
-  const block = workflow.slice(start);
+  const block = jobBlock(workflow, 'cloudflare-probe-gate3-tradingview');
   const conflict = block.indexOf('Check dedicated TradingView hostname conflicts read-only');
   const deploy = block.indexOf('Deploy temporary certificate-probe Worker');
   assert.ok(conflict >= 0, 'hostname conflict check must exist');
   assert.ok(deploy > conflict, 'probe deployment must happen only after conflict checks');
-  assert.match(block, /hostname=tradingview\.mkety\.app/);
+  assert.match(block, /hostname=\$\{GATE3_HOSTNAME\}|hostname=tradingview\.mkety\.app/);
   assert.match(block, /name=tradingview\.mkety\.app/);
-  assert.match(block, /HTTP[^\n]*403|status[^\n]*403|\[ "\$status" = "403" \]/);
+  assert.match(block, /HTTP[^\n]*403|status[^\n]*403|\[ "\$status" != "403" \]/);
   assert.match(block, /x-tradingview-client-cert/i);
 });
