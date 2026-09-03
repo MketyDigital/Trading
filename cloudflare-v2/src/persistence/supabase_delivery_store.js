@@ -68,3 +68,7 @@ export class SupabaseDeliveryStore {
     if (error) throw new Error(`delivery failure persistence failed: ${error.message}`);
   }
 }
+
+export function createSupabaseDeliveryStore(supabase, options = {}) {
+  return new SupabaseDeliveryStore(supabase, options);
+}
