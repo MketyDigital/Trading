@@ -14,15 +14,20 @@ export async function runMT5DemoCommand({
   dependencyBuilder = buildMT5DemoCommandDependencies,
   acceptanceRunner = runMT5DemoAcceptanceFromEnv,
 } = {}) {
-  const readiness = validateMT5DemoCommandEnvironment(env);
-  if (!readiness.ok) {
-    const message = `Missing MT5 demo command configuration: ${readiness.missing.join(', ')}`;
-    logger?.error?.(message);
-    return { ok: false, exitCode: 1, error: message };
-  }
+  const mode = String(env.MT5_DEMO_ACCEPTANCE_MODE || 'probe').trim().toLowerCase();
 
   try {
-    const dependencies = dependencyBuilder({ env });
+    let dependencies = {};
+    if (mode === 'lifecycle') {
+      const readiness = validateMT5DemoCommandEnvironment(env);
+      if (!readiness.ok) {
+        const message = `Missing MT5 demo command configuration: ${readiness.missing.join(', ')}`;
+        logger?.error?.(message);
+        return { ok: false, exitCode: 1, error: message };
+      }
+      dependencies = dependencyBuilder({ env });
+    }
+
     const output = await acceptanceRunner({ env, ...dependencies });
     logger?.log?.(JSON.stringify(output));
     return { ok: true, exitCode: 0, output };

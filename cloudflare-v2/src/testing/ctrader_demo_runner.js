@@ -14,15 +14,20 @@ export async function runCTraderDemoCommand({
   dependencyBuilder = buildCTraderDemoCommandDependencies,
   acceptanceRunner = runCTraderDemoAcceptanceFromEnv,
 } = {}) {
-  const readiness = validateCTraderDemoCommandEnvironment(env);
-  if (!readiness.ok) {
-    const message = `Missing cTrader demo command configuration: ${readiness.missing.join(', ')}`;
-    logger?.error?.(message);
-    return { ok: false, exitCode: 1, error: message };
-  }
+  const mode = String(env.CTRADER_DEMO_ACCEPTANCE_MODE || 'probe').trim().toLowerCase();
 
   try {
-    const dependencies = dependencyBuilder({ env });
+    let dependencies = {};
+    if (mode === 'lifecycle') {
+      const readiness = validateCTraderDemoCommandEnvironment(env);
+      if (!readiness.ok) {
+        const message = `Missing cTrader demo command configuration: ${readiness.missing.join(', ')}`;
+        logger?.error?.(message);
+        return { ok: false, exitCode: 1, error: message };
+      }
+      dependencies = dependencyBuilder({ env });
+    }
+
     const output = await acceptanceRunner({ env, ...dependencies });
     logger?.log?.(JSON.stringify(output));
     return { ok: true, exitCode: 0, output };
