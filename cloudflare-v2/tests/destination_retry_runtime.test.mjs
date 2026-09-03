@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 import { createDestinationRetryRuntime } from '../src/execution/destination_retry_runtime.js';
 
 function row(overrides = {}) {
+  const idempotencyKey = overrides.idempotency_key ?? 'group:g1:leg:l1:open';
+  const requestPayload = overrides.request_payload === undefined ? {
+    destinationType: 'mt5', accountId: 'acc-1', groupId: 'g1',
+    action: { type: 'OPEN_POSITION', legId: 'l1', idempotencyKey },
+  } : overrides.request_payload;
   return {
     id: 'd-1', workspace_id: 'ws-1', destination_type: 'mt5', destination_ref: 'trade-account:acc-1',
-    idempotency_key: 'group:g1:leg:l1:open', status: 'RETRYABLE', attempt_count: 1,
-    next_attempt_at: '2026-09-03T10:00:00.000Z', request_payload: {
-      destinationType: 'mt5', accountId: 'acc-1', groupId: 'g1',
-      action: { type: 'OPEN_POSITION', legId: 'l1', idempotencyKey: 'group:g1:leg:l1:open' },
-    },
+    idempotency_key: idempotencyKey, status: 'RETRYABLE', attempt_count: 1,
+    next_attempt_at: '2026-09-03T10:00:00.000Z', request_payload: requestPayload,
     ...overrides,
+    idempotency_key: idempotencyKey,
+    request_payload: requestPayload,
   };
 }
 
