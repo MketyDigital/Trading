@@ -67,7 +67,7 @@ Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-cor
 6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
 7. Broker demo destinations — **LIFECYCLE BRIDGE GREEN / REAL DEMO LIFECYCLES PENDING**
 8. End-to-end staging
-9. Production operations
+9. Production operations — **ADMIN ACCOUNT CONTROL LAYER GREEN; REMAINING OPS ACCEPTANCE PENDING**
 10. Tiny controlled cutover
 
 Independent gates may proceed out of number order. Final production still requires every mandatory in-scope gate GREEN or an explicit reviewed V1 scope change. Real-money cutover additionally requires separate user approval.
@@ -226,5 +226,26 @@ Optional protected environment variables:
 
 Never paste any protected values in chat or commits.
 
+## Production admin execution controls — GREEN
+Existing durable account fields are reused; no schema migration was required. `trade_accounts.execution_enabled` remains default `FALSE`, and `safety_policy.killSwitch` remains an independent account safety control.
+
+Admin API:
+- `GET /api/v1/admin/accounts` — owner/admin only, exact-workspace list, credential-free response.
+- `POST /api/v1/admin/accounts/:id/execution` with boolean `enabled` — owner/admin only; mutates only exact-workspace `execution_enabled`.
+- `POST /api/v1/admin/accounts/:id/kill-switch` with boolean `enabled` — owner/admin only; preserves all other safety-policy fields.
+- operator/viewer receive no account-control permission.
+- no role has `broker.master.enable` and there is **no API route capable of mutating `BROKER_EXECUTION_ENABLED`**.
+- account/source enablement can therefore prepare production configuration without granting the Worker-wide live-execution fuse.
+
+RED:
+- head `b0f32834dd897dd3f2c322f1575be32b88eb1e15`
+- run `33734418406`, job `100581520858`
+- Node 530/534; exactly four account-control contracts failed; Cloudflare inspection jobs skipped.
+
+GREEN:
+- head `76ff17ff00584b6d01deb033917daa4b6526a86f`
+- run `33734775292`, job `100582660782` — SUCCESS
+- Node **534/534**; MT5 bridge 14/14; Container MTProto 11/11; external MTProto 22/22; all Cloudflare/deploy/probe jobs skipped.
+
 ## Exact next safe action
-Continue production-completion work without spending external credentials prematurely: verify and harden admin/runtime feature controls for Trading access, TradingView ingress/probe, provider activation, and broker execution so every integration is deployable but fail-closed by default. Then prepare real Gate 4/5/6/7 acceptance to run only when their protected external credentials are available. Do not trigger Gate 6 real probes or Gate 7 demo lifecycle markers merely to discover missing credentials.
+Continue Gate 9 production operations and Gate 8 staging completion without spending external broker credentials prematurely. Audit the deployed runtime-control semantics so `TRADING_ACCESS_ENABLED`, TradingView source state, per-account execution, account kill switch, and Worker-wide `BROKER_EXECUTION_ENABLED` form an explicit fail-closed activation chain. Then prepare/run real Gate 4/5/6/7 acceptance only when the relevant protected external credentials or genuine external provider event are available. Do not enable `BROKER_EXECUTION_ENABLED` and do not merge `main` without explicit user instruction.
