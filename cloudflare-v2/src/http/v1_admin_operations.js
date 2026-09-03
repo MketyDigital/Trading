@@ -1,6 +1,7 @@
 const DELIVERY_STATUSES = Object.freeze(['PENDING', 'SUCCEEDED', 'RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const FAILURE_STATUSES = Object.freeze(['RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const SECRET_KEY_PATTERN = /(secret|token|password|credential|authorization|api[_-]?key|private[_-]?key|cipher)/i;
+const RESILIENCE_SCOPE_MISMATCH = 'OPERATIONS_RESILIENCE_WORKSPACE_SCOPE_MISMATCH';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -50,6 +51,57 @@ function sanitizePersistedValue(value) {
     safe[key] = sanitizePersistedValue(nested);
   }
   return safe;
+}
+
+function boundedNumber(value, { min = 0, max = Number.POSITIVE_INFINITY, integer = false } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  const bounded = Math.min(max, Math.max(min, numeric));
+  return integer ? Math.trunc(bounded) : bounded;
+}
+
+function safePercentiles(value = {}) {
+  return {
+    p50: boundedNumber(value?.p50),
+    p95: boundedNumber(value?.p95),
+    p99: boundedNumber(value?.p99),
+  };
+}
+
+function safeResilienceSummary(raw, workspaceId) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { available: false };
+  }
+  if (text(raw.workspaceId) !== workspaceId) {
+    const error = new Error('operations resilience workspace scope mismatch');
+    error.code = RESILIENCE_SCOPE_MISMATCH;
+    throw error;
+  }
+
+  return {
+    available: true,
+    fallbackCounts: {
+      ambiguityAiReview: boundedNumber(raw.fallbackCounts?.ambiguityAiReview, { integer: true }),
+      destinationAiFallback: boundedNumber(raw.fallbackCounts?.destinationAiFallback, { integer: true }),
+    },
+    retryRate: boundedNumber(raw.retryRate, { max: 1 }),
+    uncertainRate: boundedNumber(raw.uncertainRate, { max: 1 }),
+    latencyMs: {
+      sourceToBrokerSend: safePercentiles(raw.latencyMs?.sourceToBrokerSend),
+      brokerRoundTrip: safePercentiles(raw.latencyMs?.brokerRoundTrip),
+      sourceToDestinationAck: safePercentiles(raw.latencyMs?.sourceToDestinationAck),
+    },
+  };
+}
+
+async function loadResilienceSummary(resilienceMetricsSource, workspaceId) {
+  if (typeof resilienceMetricsSource?.snapshot !== 'function') return { available: false };
+  try {
+    return safeResilienceSummary(await resilienceMetricsSource.snapshot(workspaceId), workspaceId);
+  } catch (error) {
+    if (error?.code === RESILIENCE_SCOPE_MISMATCH) throw error;
+    return { available: false };
+  }
 }
 
 function safeRecentFailure(row = {}) {
@@ -176,6 +228,7 @@ function safeAuditDelivery(row = {}) {
 export function createAdminOperationsStore(supabase, {
   nowFn = () => new Date(),
   recentLimit = 10,
+  resilienceMetricsSource = null,
 } = {}) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (typeof nowFn !== 'function') throw new TypeError('nowFn is required');
@@ -222,6 +275,7 @@ export function createAdminOperationsStore(supabase, {
       const blocked = exactWorkspaceRows(accountsResult.data, boundWorkspaceId)
         .map(accountSafetyBlock)
         .filter(Boolean);
+      const resilience = await loadResilienceSummary(resilienceMetricsSource, boundWorkspaceId);
 
       return {
         workspaceId: boundWorkspaceId,
@@ -235,6 +289,7 @@ export function createAdminOperationsStore(supabase, {
           blocked,
           blockedCount: blocked.length,
         },
+        resilience,
       };
     },
 
