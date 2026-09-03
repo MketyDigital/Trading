@@ -68,14 +68,15 @@ export async function runV1ProductionExecutionStage({
   }
 
   const workspaceId = String(result?.event?.workspace_hint || '').trim();
-  if (!workspaceId) {
+  const tradingEventId = String(result?.eventId || '').trim();
+  if (!workspaceId || !tradingEventId) {
     return summary('NOT_EXECUTABLE');
   }
 
-  const dependencies = await executionDepsFactory({ env, supabase, workspaceId });
+  const dependencies = await executionDepsFactory({ env, supabase, workspaceId, tradingEventId });
   return executeProductionFn({
     workspaceId,
-    eventId: result?.eventId ?? null,
+    eventId: tradingEventId,
     accountPlans,
     brokerExecutionEnabled: true,
   }, dependencies);
