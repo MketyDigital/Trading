@@ -71,7 +71,10 @@ async function setupFixture() {
     is_default: false,
     priority: 100,
     external_identity: 'gate2-account',
-    config: {},
+    config: {
+      chat_acceptance_mode: 'allowlist',
+      allowed_chat_ids: ['-1000000000001'],
+    },
     health_status: 'HEALTHY',
   }), 'create temporary source');
 
