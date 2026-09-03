@@ -33,6 +33,22 @@ function brokerAccountIdOf(account = {}) {
   return text(account.account_id ?? account.brokerAccountId);
 }
 
+function stateBindingPayload(binding = {}) {
+  const payload = {};
+  if (binding.brokerPositionId != null && text(binding.brokerPositionId)) {
+    payload.brokerPositionId = String(binding.brokerPositionId);
+  }
+  if (binding.brokerOrderId != null && text(binding.brokerOrderId)) {
+    payload.brokerOrderId = String(binding.brokerOrderId);
+  }
+  if (binding.brokerDealId != null && text(binding.brokerDealId)) {
+    payload.brokerDealId = String(binding.brokerDealId);
+  }
+  const fillPrice = Number(binding.fillPrice);
+  if (Number.isFinite(fillPrice)) payload.fillPrice = fillPrice;
+  return payload;
+}
+
 function normalizedBaseUrl(value) {
   const raw = text(value).replace(/\/+$/, '');
   if (!raw) throw new Error('MT5_BRIDGE_URL is not configured');
@@ -272,9 +288,54 @@ export function createProductionExecutionDependencies({
     throw new Error(`unsupported production broker platform: ${platform || 'unknown'}`);
   }
 
+  async function stateBinder(binding = {}) {
+    if (text(binding.workspaceId) !== boundWorkspaceId) {
+      throw new Error('production execution workspace mismatch');
+    }
+    const groupId = text(binding.groupId);
+    const legId = text(binding.legId);
+    if (!groupId) throw new TypeError('groupId is required');
+    if (!legId) throw new TypeError('legId is required');
+
+    const token = text(env.TRADE_STATE_INTERNAL_TOKEN);
+    if (!token) throw new Error('TRADE_STATE_INTERNAL_TOKEN is not configured');
+    const namespace = env.TRADE_STATE_NAMESPACE;
+    if (!namespace?.idFromName || !namespace?.get) {
+      throw new Error('TRADE_STATE_NAMESPACE is not configured');
+    }
+
+    const payload = stateBindingPayload(binding);
+    if (Object.keys(payload).length === 0) {
+      throw new Error('broker execution identifiers are required for Trade State binding');
+    }
+
+    const stub = namespace.get(namespace.idFromName(boundWorkspaceId));
+    const response = await stub.fetch(
+      `https://trade-state.internal/groups/${encodeURIComponent(groupId)}/legs/${encodeURIComponent(legId)}/execution`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mkety-internal-token': token,
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+
+    let responseBody = {};
+    try {
+      responseBody = await response.json();
+    } catch {}
+    if (!response.ok) {
+      throw new Error(`Trade State binding failed (${response.status})`);
+    }
+    return responseBody;
+  }
+
   return {
     accountLoader,
     dispatchAction,
+    stateBinder,
   };
 }
 
