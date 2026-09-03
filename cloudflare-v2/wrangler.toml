@@ -3,6 +3,12 @@ main = "src/v1_entry.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"
+TRADINGVIEW_CERT_PROBE_ENABLED = "false"
+TRADING_ACCESS_ENABLED = "false"
+BROKER_EXECUTION_ENABLED = "false"
+
 [[containers]]
 class_name = "MtprotoContainerRuntime"
 image = "./containers/mtproto-listener/Dockerfile"
