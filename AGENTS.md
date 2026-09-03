@@ -14,6 +14,7 @@ Operational source of truth for `MketyDigital/Trading`.
 - `mkety.app` is reserved for customer-owned apps/builds under Mkety/MKSaaS.
 - Cloudflare security/core remains Free-plan-compatible; no Enterprise-only trust dependency.
 - Containers are optional Paid MTProto capacity only and may be selected only by an exact active `cloudflare_container_mtproto` source.
+- External systems such as Zitadel, broker credentials, TradingView certificate/domain, Telegram sessions, and environment secrets are integration/configuration boundaries. Core Trading code must be built against stable contracts so real service setup later is configuration plus acceptance evidence, not a product-logic rewrite unless a real-environment incompatibility is discovered.
 
 ## Product / tenancy contract
 Mkety Trading is multi-tenant. Isolation is mandatory across workspace, user, source, provider runtime, Telegram session/chat, event, account, destination, AI, retries, queue, idempotency, Position Group, health/control state, and credentials.
@@ -45,6 +46,7 @@ Safety invariants:
 - roles owner/admin/operator/viewer; unknown fails closed; no role grants broker execution.
 - keep `TRADING_ACCESS_ENABLED=false` until Gate 4 real acceptance.
 - Trading Supabase migrations through `trading_0010_tradingview_public_source_handle` are applied/verified; ledger `20260902184215`.
+- additive destination retry migration `0011_destination_delivery_retry_state.sql` is code/test GREEN; real environment application remains an acceptance/deployment step.
 
 ## Default runtime safety
 ```text
@@ -66,8 +68,8 @@ Ordinary `.github/workflows/trading-v1-ci.yml` test runs Node Worker/trading-cor
 5. Telegram runtime soak — **STATIC GREEN / REAL SOAK PENDING**
 6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
 7. Broker demo destinations — **LIFECYCLE BRIDGE GREEN / REAL DEMO LIFECYCLES PENDING**
-8. End-to-end staging — **PRODUCTION EXECUTION BRIDGE STATIC TASKS 1–5 GREEN; RETRY/OUTBOX + REAL ACCEPTANCE PENDING**
-9. Production operations — **ADMIN ACCOUNT CONTROL + FAIL-CLOSED EXECUTION BRIDGE GREEN; REMAINING OPS ACCEPTANCE PENDING**
+8. End-to-end staging — **PRODUCTION EXECUTION BRIDGE STATIC TASKS 1–6 GREEN; REAL ACCEPTANCE PENDING**
+9. Production operations — **ADMIN ACCOUNT CONTROL + FAIL-CLOSED EXECUTION/RECOVERY BRIDGE GREEN; REMAINING OPS ACCEPTANCE PENDING**
 10. Tiny controlled cutover
 
 Independent gates may proceed out of number order. Final production still requires every mandatory in-scope gate GREEN or an explicit reviewed V1 scope change. Real-money cutover additionally requires separate user approval.
@@ -98,7 +100,7 @@ Do not redo Gate 2.
 
 ## Gate 4 — Zitadel
 **NOT YET REAL-ACCEPTED; MAY PROCEED IN PARALLEL.**
-Static tests already cover signed JWT verification, issuer/audience/exp/nbf, exact project role claim, organization/workspace binding, membership, roles, disabled entitlement/member, second-workspace isolation, and no MKSaaS DB dependency. Real managed-Zitadel positive/negative acceptance remains required.
+Static tests already cover signed JWT verification, issuer/audience/exp/nbf, exact project role claim, organization/workspace binding, membership, roles, disabled entitlement/member, second-workspace isolation, and no MKSaaS DB dependency. Real managed-Zitadel positive/negative acceptance remains required. Expected integration is configuration plus acceptance against the managed Mkety Zitadel project/app/org once the main Mkety/MKSaaS identity upgrade is complete; do not rewrite Trading authorization merely to wire real identifiers/secrets.
 
 ## Gate 5 — Telegram MTProto
 **STATIC HARNESS GREEN / REAL ACCOUNT SOAK PENDING.**
@@ -247,7 +249,7 @@ GREEN:
 - run `33734775292`, job `100582660782` — SUCCESS
 - Node **534/534**; MT5 bridge 14/14; Container MTProto 11/11; external MTProto 22/22; all Cloudflare/deploy/probe jobs skipped.
 
-## Production execution bridge — STATIC TASKS 1–5 GREEN
+## Production execution bridge — STATIC TASKS 1–6 GREEN
 Approved design/plan:
 - `docs/superpowers/plans/2026-09-03-production-execution-bridge-design.md`
 - `docs/superpowers/plans/2026-09-03-production-execution-bridge-implementation-plan.md`
@@ -297,5 +299,37 @@ Contract:
 ### Low-consumption CI de-duplication
 Observed Task 5 source commit launched duplicate ordinary push + PR regression jobs. Workflow changed at `c09da32dea20a6355aa56914de2ba7aa8f9bb032` so ordinary active-feature pushes skip `test`; the PR run remains the single regression authority. Push-side test remains allowed only for the three exact marker jobs that require `needs: test`. Permanent static contract added at `a78eaddd4cafa021bc0129c1d210d303d3caeca3`; its push workflow `33740185164` was SKIPPED as intended and its PR regression run is the exact-head verification authority.
 
+### Task 6 — durable destination retry / exactly-once recovery — GREEN
+Destination recovery is independent from source-event replay. A transient broker delivery does not require re-orchestrating a deduplicated source event.
+
+Reliability contract now enforced:
+- additive migration `0011_destination_delivery_retry_state.sql` adds durable retry/lease/error state without replacing workspace-scoped destination idempotency;
+- MT5 OPEN_POSITION transport ambiguity is retryable only because the bridge first reconciles the same deterministic command marker against broker state; reconciliation ambiguity/uncertainty and management post-send ambiguity become `UNCERTAIN` and are never blind-retried;
+- cTrader failure before socket send is retryable; timeout/connection loss after send, or any ambiguity after broker acceptance, becomes `UNCERTAIN`; deterministic broker rejection remains terminal;
+- due retry scanning is bounded and only `RETRYABLE` rows can be atomically claimed;
+- `BROKER_EXECUTION_ENABLED=false` returns before Supabase construction or retry scanning;
+- each claim receives a single exact-key retry reservation wrapper; there is no global idempotency bypass;
+- persisted retry payload receives trusted `accountId`, `groupId`, and destination type from the server-authoritative account plan rather than caller hints;
+- exact workspace/account/destination/event context is revalidated for recovery;
+- account active/execution/safety state is reloaded immediately before retry; an account disabled or kill-switched after scheduling is terminally stopped before broker dispatch;
+- one-minute destination recovery runs independently beside MTProto recovery; either recovery failure cannot suppress the sibling; the existing 15-minute legacy scheduled path remains unchanged.
+
+Important evidence:
+- durable store GREEN candidate `bd4ddc28...`, run `33741529509`;
+- MT5 crash-gap reconciliation GREEN `6ce1185f...`, run `33742180188`;
+- combined MT5/cTrader failure classification GREEN `e45bd037...`;
+- pure bounded retry runtime GREEN `f17a02c27c58a979970ca0f3df75f13bf11c5102`, run `33743803244`;
+- production composition RED `63f89eda1d4e5a250d7bcb02c5470d59c0ee0dec`, run `33745023346`: Node **580/584**, exactly four new recovery contracts failed; all external jobs skipped;
+- production composition GREEN `ea498097e865a7bb911906acfddbe888a0e2b956`, run `33745498467`: full Node/Worker, MT5 bridge, Container MTProto, and external MTProto regression passed; all Cloudflare inspection/deploy/probe/acceptance jobs skipped.
+
+Safety state after Task 6 remains:
+```text
+TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
+TRADINGVIEW_CERT_PROBE_ENABLED=false
+TRADING_ACCESS_ENABLED=false
+BROKER_EXECUTION_ENABLED=false
+```
+No broker demo/live action, Cloudflare deploy, Zitadel mutation, or real-money execution was performed by this batch.
+
 ## Exact next safe action
-Implement Task 6 persistent destination retry/exactly-once semantics before any full Telegram-to-broker demo/live activation. The critical failure mode to eliminate is: a source event can already be durably reserved before a transient broker dispatch fails, so replaying the source event must not be the only retry mechanism because source dedupe correctly treats the replay as a duplicate. Destination execution therefore needs its own durable recovery/outbox semantics, keyed by persistent destination idempotency, so broker failures can retry independently without duplicate orders. Keep `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false`, do not deploy or spend broker credentials during this implementation, and do not merge `main` without explicit user instruction.
+Gate 9 static operations/readiness can continue without waiting for external services. The next bounded candidate is a secret-free operator observability/audit slice for destination retry state, broker execution failures, risk/kill blocks, and recovery health, integrated through existing health/admin patterns. Before implementation, present the bounded design and obtain explicit approval under the Superpowers brainstorming gate. Real Gate 3/4/5/6/7/8 acceptance remains configuration/environment work to resume when the corresponding TradingView subscription, managed Zitadel setup, Telegram test account, and broker demo credentials are available. Keep all four runtime safety flags OFF, do not deploy, and do not merge `main` without explicit user instruction.
