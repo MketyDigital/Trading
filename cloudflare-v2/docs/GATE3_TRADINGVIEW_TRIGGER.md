@@ -30,10 +30,12 @@ First real probe evidence:
 - zero usable certificate fingerprints were observed;
 - rollback succeeded to the known-safe Worker at 100% traffic.
 
-The first run could not distinguish a missing genuine TradingView request from a genuine request with no Cloudflare-exposed client certificate. The next controlled probe therefore reports only sanitized counts: `totalProbeLogs`, `expectedSpoofLogs`, `additionalProbeLogs`, `certPresentedCount`, and `fingerprintCount`.
+The first run could not distinguish a missing genuine TradingView request from a genuine request with no Cloudflare-exposed client certificate. This controlled rerun reports only sanitized counts: `totalProbeLogs`, `expectedSpoofLogs`, `additionalProbeLogs`, `certPresentedCount`, and `fingerprintCount`.
 
-A genuine TradingView webhook must be fired from TradingView itself during the bounded real-time tail window to:
+During the active bounded tail window, fire exactly one genuine TradingView webhook from TradingView itself to:
 
 `https://trade.mkety.com/api/v1/webhooks/tradingview/probe`
 
 Browser, curl, or Postman requests do not count as genuine TradingView evidence. If Cloudflare does not expose exactly one stable normalized SHA-256 client-certificate fingerprint, Gate 3 stops without weakening transport authentication.
+
+Diagnostic rerun triggered only after exact-head run `33729980857` passed all mandatory suites with every Cloudflare action skipped.
