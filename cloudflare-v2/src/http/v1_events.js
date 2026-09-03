@@ -1,6 +1,9 @@
 import { ingestTradingEvent } from '../pipeline/ingest.js';
 import { orchestrateTradingEventSimulation } from '../pipeline/v1_orchestrator.js';
 import { createV1SimulationDependencies } from '../pipeline/v1_simulation_deps.js';
+import { runV1ProductionExecutionStage } from '../pipeline/v1_execution_stage.js';
+import { createProductionExecutionDependencies } from '../execution/production_execution_deps.js';
+import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
 
@@ -39,6 +42,9 @@ export async function handleV1EventsRequest(request, env = {}, {
   ingestFn = ingestTradingEvent,
   simulationDepsFactory = createV1SimulationDependencies,
   orchestrateFn = orchestrateTradingEventSimulation,
+  executionStageFn = runV1ProductionExecutionStage,
+  executionDepsFactory = createProductionExecutionDependencies,
+  executeProductionFn = executeProductionPlan,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -99,7 +105,16 @@ export async function handleV1EventsRequest(request, env = {}, {
       simulation = blockedSimulation(error);
     }
 
-    return json({ ...result, simulation }, 200);
+    const execution = await executionStageFn({
+      env,
+      supabase,
+      result,
+      simulation,
+      executionDepsFactory,
+      executeProductionFn,
+    });
+
+    return json({ ...result, simulation, ...(execution ? { execution } : {}) }, 200);
   } catch (error) {
     console.error('V1 event ingress failed:', error);
     return json({ ok: false, reason: 'V1_INGRESS_INTERNAL_ERROR' }, 500);
