@@ -136,7 +136,7 @@ test('ambiguity AI outage degrades to review and cannot construct broker depende
   let dependencyCalls = 0;
   let brokerCalls = 0;
   const execution = await runV1ProductionExecutionStage({
-    env: { BROKER_EXECUTION_ENABLED: 'true' },
+    env: { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
     supabase: {},
     result: successfulIngest({ interpretation }),
     simulation: { status: 'NEEDS_REVIEW', executionEnabled: false, accounts: [], actions: [] },
@@ -182,6 +182,7 @@ test('database/config planning outage fails closed before broker dependency cons
   const response = await handleV1EventsRequest(signedRequest(), {
     TRADING_MASTER_KEY: 'master',
     TRADING_V1_SIMULATION: 'true',
+    TRADING_ACCESS_ENABLED: 'true',
     BROKER_EXECUTION_ENABLED: 'true',
   }, {
     supabaseFactory: async () => ({ from() {} }),
@@ -318,6 +319,7 @@ test('duplicate replay and front-door rejection cannot reach planning or broker 
   const duplicate = await handleV1EventsRequest(signedRequest(), {
     TRADING_MASTER_KEY: 'master',
     TRADING_V1_SIMULATION: 'true',
+    TRADING_ACCESS_ENABLED: 'true',
     BROKER_EXECUTION_ENABLED: 'true',
   }, {
     supabaseFactory: async () => ({ from() {} }),
