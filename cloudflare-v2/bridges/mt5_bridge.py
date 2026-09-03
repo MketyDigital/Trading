@@ -4,8 +4,19 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+
+MT5_COMMENT_MAX_LENGTH = 31
+MT5_RECONCILIATION_LOOKBACK_DAYS = 7
+
+
+def command_marker(command_id):
+    """Return a deterministic broker-visible command marker that fits MT5 comments."""
+    digest = hashlib.sha256(str(command_id).encode('utf-8')).hexdigest()
+    return f'mkety:{digest[:MT5_COMMENT_MAX_LENGTH - len("mkety:")]}'
 
 
 class ReplayLedger:
@@ -89,7 +100,12 @@ class MT5Engine:
         raise RuntimeError(f'order_check failed: retcode={getattr(last_check,"retcode",None)} {getattr(last_check,"comment","")}')
 
     def _base(self, command_id):
-        return {'deviation': self.deviation, 'magic': self.magic, 'comment': f'mkety:{command_id}'[:31], 'type_time': self.mt5.ORDER_TIME_GTC}
+        return {
+            'deviation': self.deviation,
+            'magic': self.magic,
+            'comment': command_marker(command_id),
+            'type_time': self.mt5.ORDER_TIME_GTC,
+        }
 
     def _open(self, command, command_id):
         symbol = command['symbol']
@@ -168,6 +184,124 @@ class MT5Engine:
             'comment': getattr(result, 'comment', None),
         }
 
+    def _matching_records(self, records, marker):
+        matches = []
+        for record in records:
+            if str(getattr(record, 'comment', '')) != marker:
+                continue
+            if int(getattr(record, 'magic', -1)) != self.magic:
+                continue
+            matches.append(record)
+        return matches
+
+    def _query_reconciliation_records(self):
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=MT5_RECONCILIATION_LOOKBACK_DAYS)
+        queries = (
+            ('orders', lambda: self.mt5.orders_get()),
+            ('positions', lambda: self.mt5.positions_get()),
+            ('history_orders', lambda: self.mt5.history_orders_get(start, now)),
+            ('history_deals', lambda: self.mt5.history_deals_get(start, now)),
+        )
+        results = {}
+        for name, query in queries:
+            try:
+                records = query()
+            except Exception as exc:
+                raise RuntimeError(f'MT5_RECONCILIATION_UNCERTAIN:{name}') from exc
+            if records is None:
+                raise RuntimeError(f'MT5_RECONCILIATION_UNCERTAIN:{name}')
+            results[name] = tuple(records)
+        return results
+
+    def _normalized_recovered_deal(self, deal):
+        return {
+            'ok': True,
+            'ticket': getattr(deal, 'order', None) or getattr(deal, 'ticket', None),
+            'position_id': getattr(deal, 'position_id', None),
+            'order_id': getattr(deal, 'order', None),
+            'deal_id': getattr(deal, 'ticket', None),
+            'fill_price': getattr(deal, 'price', None),
+            'retcode': None,
+            'comment': 'recovered from broker history',
+            'recovered': True,
+        }
+
+    def _normalized_recovered_order(self, order):
+        order_id = getattr(order, 'ticket', None) or getattr(order, 'order', None)
+        position_id = getattr(order, 'position_id', None) or None
+        price = getattr(order, 'price_open', None)
+        if price is None:
+            price = getattr(order, 'price_current', None)
+        return {
+            'ok': True,
+            'ticket': order_id,
+            'position_id': position_id,
+            'order_id': order_id,
+            'deal_id': None,
+            'fill_price': price,
+            'retcode': None,
+            'comment': 'recovered from broker order state',
+            'recovered': True,
+        }
+
+    def _normalized_recovered_position(self, position):
+        position_id = getattr(position, 'ticket', None) or getattr(position, 'position_id', None)
+        return {
+            'ok': True,
+            'ticket': position_id,
+            'position_id': position_id,
+            'order_id': None,
+            'deal_id': None,
+            'fill_price': getattr(position, 'price_open', None),
+            'retcode': None,
+            'comment': 'recovered from broker position state',
+            'recovered': True,
+        }
+
+    def _unique_recovery(self, normalized):
+        if not normalized:
+            return None
+        identities = {
+            (
+                str(item.get('position_id')) if item.get('position_id') is not None else None,
+                str(item.get('order_id')) if item.get('order_id') is not None else None,
+                str(item.get('deal_id')) if item.get('deal_id') is not None else None,
+            )
+            for item in normalized
+        }
+        if len(identities) != 1:
+            raise RuntimeError('MT5_RECONCILIATION_AMBIGUOUS')
+        return normalized[0]
+
+    def reconcile_open(self, command_id):
+        marker = command_marker(command_id)
+        records = self._query_reconciliation_records()
+
+        # A matching deal is the strongest proof of an executed market action.
+        deals = [self._normalized_recovered_deal(item) for item in self._matching_records(records['history_deals'], marker)]
+        recovered = self._unique_recovery(deals)
+        if recovered is not None:
+            return recovered
+
+        # Pending/open orders are next-best proof when no deal exists yet.
+        order_records = self._matching_records(records['orders'], marker) + self._matching_records(records['history_orders'], marker)
+        orders = [self._normalized_recovered_order(item) for item in order_records]
+        recovered = self._unique_recovery(orders)
+        if recovered is not None:
+            return recovered
+
+        positions = [self._normalized_recovered_position(item) for item in self._matching_records(records['positions'], marker)]
+        return self._unique_recovery(positions)
+
+    def execute_reconciled(self, command, command_id):
+        action = command.get('action')
+        if action == 'OPEN_POSITION':
+            recovered = self.reconcile_open(command_id)
+            if recovered is not None:
+                return recovered
+        return self.execute(command, command_id)
+
     def execute(self, command, command_id):
         action = command.get('action')
         if action == 'OPEN_POSITION':
@@ -235,7 +369,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             cached = self.ledger.get(command_id)
             if cached is not None:
                 return self._json(200, {**cached, 'duplicate': True})
-            result = self.engine.execute(envelope['command'], command_id)
+            result = self.engine.execute_reconciled(envelope['command'], command_id)
             self.ledger.put(command_id, result)
             return self._json(200, result)
         except Exception as exc:
