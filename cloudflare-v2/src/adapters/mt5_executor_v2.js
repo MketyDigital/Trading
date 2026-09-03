@@ -17,6 +17,56 @@ async function reserve(deliveryStore, action) {
   return { duplicate: false };
 }
 
+function classifiedError(message, { code, failureClass, cause } = {}) {
+  const error = new Error(String(message || code || 'MT5 execution failed'), cause ? { cause } : undefined);
+  if (code) error.code = code;
+  if (failureClass) error.failureClass = failureClass;
+  return error;
+}
+
+function bridgeError(message) {
+  const text = String(message || 'MT5 bridge rejected request');
+  if (text.includes('MT5_RECONCILIATION_AMBIGUOUS')) {
+    return classifiedError(text, { code: 'MT5_RECONCILIATION_AMBIGUOUS', failureClass: 'UNCERTAIN' });
+  }
+  if (text.includes('MT5_RECONCILIATION_UNCERTAIN')) {
+    return classifiedError(text, { code: 'MT5_RECONCILIATION_UNCERTAIN', failureClass: 'UNCERTAIN' });
+  }
+  return classifiedError(text, { code: 'MT5_BRIDGE_REJECTED', failureClass: 'TERMINAL' });
+}
+
+function transportError(error, action) {
+  if (action.type === 'OPEN_POSITION') {
+    return classifiedError(error?.message || 'MT5 transport failed', {
+      code: 'MT5_TRANSPORT_AMBIGUOUS',
+      failureClass: 'RETRYABLE',
+      cause: error,
+    });
+  }
+  return classifiedError(error?.message || 'MT5 management transport outcome uncertain', {
+    code: 'MT5_MANAGEMENT_OUTCOME_UNCERTAIN',
+    failureClass: 'UNCERTAIN',
+    cause: error,
+  });
+}
+
+async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, retryDelayMs }) {
+  const failure = { code: error.code || 'MT5_EXECUTION_FAILED', error: error.message };
+  if (error.failureClass === 'RETRYABLE') {
+    if (!deliveryStore?.markRetryable) throw new Error('deliveryStore markRetryable required for retryable MT5 outcome');
+    await deliveryStore.markRetryable(idempotencyKey, failure, {
+      nextAttemptAt: new Date(Number(nowMs) + Number(retryDelayMs)).toISOString(),
+    });
+    return;
+  }
+  if (error.failureClass === 'UNCERTAIN') {
+    if (!deliveryStore?.markUncertain) throw new Error('deliveryStore markUncertain required for uncertain MT5 outcome');
+    await deliveryStore.markUncertain(idempotencyKey, failure);
+    return;
+  }
+  await deliveryStore.fail(idempotencyKey, failure);
+}
+
 export async function executeMT5Action(action, {
   workspaceId,
   accountId,
@@ -27,6 +77,7 @@ export async function executeMT5Action(action, {
   fetchFn = fetch,
   nowMs = Date.now(),
   ttlMs = 15000,
+  retryDelayMs = 15000,
 } = {}) {
   if (!workspaceId || !accountId || !bridgeUrl || !bridgeSecret) throw new TypeError('workspace/account/bridge configuration required');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) throw new TypeError('deliveryStore reserve/complete/fail required');
@@ -55,21 +106,33 @@ export async function executeMT5Action(action, {
   const signature = await signMT5BridgeBody(rawBody, bridgeSecret);
 
   try {
-    const response = await fetchFn(bridgeUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Mkety-Signature': signature,
-        'X-Mkety-Command-Id': action.idempotencyKey,
-      },
-      body: rawBody,
-      signal: AbortSignal.timeout(8000),
-    });
-    let data = {};
-    try { data = await response.json(); } catch {}
-    if (!response.ok || data?.ok === false) {
-      throw new Error(data?.error || `MT5 bridge HTTP ${response.status}`);
+    let response;
+    try {
+      response = await fetchFn(bridgeUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Mkety-Signature': signature,
+          'X-Mkety-Command-Id': action.idempotencyKey,
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (error) {
+      throw transportError(error, action);
     }
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw transportError(classifiedError(`MT5 bridge response unreadable: ${error?.message || 'invalid response'}`), action);
+    }
+
+    if (!response.ok || data?.ok === false) {
+      throw bridgeError(data?.error || `MT5 bridge HTTP ${response.status}`);
+    }
+
     const fillPrice = Number(data.fill_price ?? data.fillPrice ?? data.price);
     const result = {
       duplicate: false,
@@ -82,7 +145,8 @@ export async function executeMT5Action(action, {
     await deliveryStore.complete(action.idempotencyKey, result);
     return result;
   } catch (error) {
-    await deliveryStore.fail(action.idempotencyKey, { error: error.message });
-    throw error;
+    const classified = error?.failureClass ? error : transportError(error, action);
+    await persistFailure(deliveryStore, action.idempotencyKey, classified, { nowMs, retryDelayMs });
+    throw classified;
   }
 }
