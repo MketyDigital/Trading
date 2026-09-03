@@ -118,3 +118,61 @@ test('caller payload cannot enable broker execution when server master fuse is a
     assert.equal(executionDepsCalls, 0);
   }
 });
+
+test('real production stage uses broker-authoritative canonical policy inputs before dispatch', async () => {
+  const cases = [
+    {
+      name: 'max lots',
+      safety: { enabled: true, killSwitch: false, maxLotsPerTrade: 0.005 },
+      policyRequest: { totalLots: 0.01, riskPercent: 0.25, currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 },
+      expectedReason: 'MAX_LOTS_EXCEEDED',
+    },
+    {
+      name: 'max risk percent',
+      safety: { enabled: true, killSwitch: false, maxRiskPercent: 0.5 },
+      policyRequest: { totalLots: 0.01, riskPercent: 1, currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 },
+      expectedReason: 'MAX_RISK_EXCEEDED',
+    },
+    {
+      name: 'daily loss',
+      safety: { enabled: true, killSwitch: false, maxDailyLossPercent: 3 },
+      policyRequest: { totalLots: 0.01, riskPercent: 0.25, currentDailyPnlPercent: -4, currentOpenRiskPercent: 0 },
+      expectedReason: 'DAILY_LOSS_LIMIT',
+    },
+    {
+      name: 'open risk',
+      safety: { enabled: true, killSwitch: false, maxOpenRiskPercent: 1.5 },
+      policyRequest: { totalLots: 0.01, riskPercent: 0.75, currentDailyPnlPercent: 0, currentOpenRiskPercent: 1 },
+      expectedReason: 'OPEN_RISK_LIMIT',
+    },
+  ];
+
+  for (const item of cases) {
+    let dispatchCalls = 0;
+    let materializerCalls = 0;
+    const account = {
+      id: 'acct-1', workspace_id: 'ws-trusted', platform: 'mt5', is_active: true, execution_enabled: true,
+      safety_policy: item.safety,
+    };
+    const response = await handleV1EventsRequest(request(), {
+      TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true',
+      TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true',
+    }, baseDeps({
+      executionDepsFactory: async () => ({
+        accountLoader: async () => account,
+        authorityLoader: async () => ({ account }),
+        riskMaterializer: async ({ action }) => {
+          materializerCalls += 1;
+          return { allowed: true, action, policyRequest: item.policyRequest };
+        },
+        dispatchAction: async () => { dispatchCalls += 1; return { ok: true }; },
+        stateBinder: async () => {},
+      }),
+    }));
+    const body = await response.json();
+    assert.equal(materializerCalls, 1, item.name);
+    assert.equal(dispatchCalls, 0, item.name);
+    assert.equal(body.execution.status, 'BLOCKED', item.name);
+    assert.ok(body.execution.accounts[0].policy.reasons.includes(item.expectedReason), item.name);
+  }
+});
