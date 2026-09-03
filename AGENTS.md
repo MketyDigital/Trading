@@ -15,8 +15,10 @@ Build and launch an enterprise, multi-tenant trading automation platform with st
 - Trusted pre-audit content tree: `89944d3b6aa4b03f6bb1a1107594e9acfa424fb3`.
 - Last exact trusted PR CI on that tree: run `33766769463` SUCCESS.
 - The temporary audit-plan add/remove pair advanced history without changing the tree; compare from `89944d3...` to `44a524bd...` reported zero file differences.
-- Detailed latest-approved production audit checkpoint: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Audit checkpoint document commit: `9a2b1e05437da8bfb7beacab190092eb5905b649`.
+- Detailed latest-approved production audit: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
+- Audit checkpoint 1 document commit: `9a2b1e05437da8bfb7beacab190092eb5905b649`.
+- Audit-reopen AGENTS synchronization: `265684933aede9ffca230457bc9a02ad90f950cd`.
+- Audit checkpoint 2 document commit: `af53fe94bd985843eb47916564642449e94fd4c5`.
 - Current stage: **LATEST-APPROVED STATIC PRODUCTION AUDIT / REMEDIATION REQUIRED BEFORE REMAINING REAL ACCEPTANCE**.
 - No Cloudflare mutation, protected external probe, broker order, `main` merge, or live-money action is authorized by this state.
 
@@ -35,6 +37,13 @@ When wording conflicts, use this order:
    - `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
 4. Sept 2 source/identity/TradingView documents only where the Sept 3 launch program still references them.
 5. Sept 1 foundation docs are historical context, not the definition of final production readiness.
+
+Later Sept 3 cross-cutting resilience/cutover contracts control where they tighten an earlier component plan. Relevant chronology:
+- execution bridge design `d5075cc...` 08:51 UTC;
+- destination retry plan `f124b5e...` 09:50 UTC;
+- hot-path resilience design `1a01ae5...` 12:28 UTC;
+- hot-path implementation plan `cd35b5f...` 12:32 UTC;
+- cutover runbook `119c603...` 14:15 UTC.
 
 ## Critical runtime safety defaults
 These remain fail closed by default and must not be changed casually:
@@ -150,11 +159,11 @@ Do not call Trading production-ready until applicable master-plan requirements a
 - Worker `BROKER_EXECUTION_ENABLED=false` remains pinned during dedicated demo workflow.
 
 ## Production execution bridge — approved locks
-Approved design: `docs/superpowers/specs/2026-09-03-production-execution-bridge-design.md`.
+Approved design: `docs/superpowers/specs/2026-09-03-production-execution-bridge-design.md` plus later Sept 3 resilience/cutover tightening.
 A broker adapter may be reached only when all applicable locks pass:
 1. Worker `TRADING_ACCESS_ENABLED=true`.
 2. Worker `BROKER_EXECUTION_ENABLED=true`.
-3. authenticated source is active and workspace-authoritative.
+3. authenticated originating source remains active and workspace-authoritative.
 4. `trading_workspace_access.trading_access_enabled=true` for the exact workspace.
 5. exact account/destination belongs to the workspace and is active.
 6. `trade_accounts.execution_enabled=true`.
@@ -172,9 +181,10 @@ CONFIRMED STATIC GAP.
 - Queue processing calls `handleV1EventsRequest()` below that fetch guard.
 - `runV1ProductionExecutionStage()` checks `BROKER_EXECUTION_ENABLED` but not `TRADING_ACCESS_ENABLED`.
 - scheduled destination retry checks the broker fuse but not the Trading access fuse.
+- later Sept 3 resilience/cutover contracts post-date the retry plan and require production-wide revocation authority.
 - Current deployment defaults still keep both false; this finding is a static contract issue, not evidence of live execution.
 
-### F2 — workspace entitlement is not yet proven as a final production execution lock
+### F2 — workspace entitlement is not yet a final production execution lock
 CONFIRMED STATIC GAP.
 - ingest rebinds caller workspace hints to authenticated `source.workspace_id`.
 - production account loader is exact workspace/account scoped.
@@ -186,6 +196,13 @@ CONFIRMED STATIC GAP.
 - coordinator loads account state before the action loop and reuses its safety policy for all actions.
 - latest resilience/cutover contract requires critical revocation to win immediately before broker dispatch.
 - a disable/kill change after action N is therefore not yet proven to block action N+1 immediately.
+
+### F4 — source disablement is not revalidated as final execution authority
+CONFIRMED STATIC GAP.
+- ingest authenticates an active source and persists the event under exact `source_connection_id`/workspace authority.
+- broker execution does not reload that source immediately before dispatch.
+- latest resilience design explicitly names source disablement as a critical revocation and exact source ownership as mandatory hot-path security.
+- durable authority already exists: `trading_events.source_connection_id` and `destination_deliveries.trading_event_id` allow first dispatch/retry to re-resolve the originating source from server-owned records without trusting caller hints.
 
 ### I1 — runtime execution snapshot production integration incomplete
 - `runtime_execution_snapshot.js` and isolated tests are GREEN.
@@ -199,11 +216,20 @@ CONFIRMED STATIC GAP.
 - latest resilience design calls for warm sessions and bounded metadata reuse.
 - classify as performance/resilience integration incomplete pending final audit; do not weaken safety to optimize it.
 
+### U1 — MT5 metadata GET transport boundary unresolved
+NOT YET A CONFIRMED VULNERABILITY.
+- POST `/v1/command` is HMAC-authenticated.
+- bridge GET `/v1/account`, `/v1/symbols`, `/v1/tick` are unauthenticated.
+- production/demo code consumes them through an HTTPS `MT5_BRIDGE_URL`; Gate 7 stores that URL as a protected secret.
+- bridge defaults to `127.0.0.1`, but repository docs do not yet prove whether the externally consumed HTTPS endpoint is guaranteed private behind a trusted tunnel/proxy/network boundary.
+- before production, either prove/document/test private-only reachability or add authenticated metadata requests.
+
 ## Important contracts re-confirmed during the audit
 - Signed source ingest loads an active source, verifies HMAC and replaces caller `workspace_hint` with `source.workspace_id`.
 - Broker master fuse remains the first structural guard inside `executeProductionPlan()` before account lookup/dispatch/state/latency work.
 - Coordinator validates loaded account workspace/id, active state and `execution_enabled`.
 - Persistent destination idempotency/retry remains the execution ledger; uncertain broker outcomes are not intended for blind retry.
+- Retry claim uses bounded due scanning and optimistic-concurrency predicates to prevent two workers claiming the same attempt.
 - cTrader live environment still requires a separate server-side live opt-in.
 - all Wrangler launch controls remain false by default.
 - no real external environment action was performed by the latest static audit.
@@ -237,10 +263,12 @@ CLOSED / not started.
 - Never invent/default live financial thresholds.
 
 ## Exact pickup / immediate safe next actions
-1. Continue the read-only/latest-approved runtime audit from `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`; finish tracing execution locks, source/workspace revocation, retry recovery, MT5 metadata boundary and warm broker-context requirements.
-2. Do not propose/implement fixes until root causes are complete. Then write one focused remediation plan based only on confirmed Sept 3 requirements.
-3. Implement each safety fix with Superpowers TDD: failing regression first, verify RED, minimal production change, focused GREEN, then ordinary PR CI exact-head GREEN.
-4. Synchronize this `AGENTS.md` and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` after every meaningful verified milestone with exact SHA/run/test counts and next pickup point.
-5. Keep all four launch controls OFF throughout static remediation.
-6. Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static audit/remediation.
-7. Only after latest-approved static audit/remediation is GREEN return to separately authorized real Gates 4–9.
+1. Continue the latest-approved root-cause audit from `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`: finish the clean durable composition for source + workspace entitlement + account/safety final authority on initial dispatch and retry.
+2. Finish MT5 metadata topology decision and cTrader/MT5 warm-context lifecycle audit.
+3. Compare F1–F4 against the current failure-injection/integration tests and identify exact missing RED cases.
+4. Do not modify production code until root-cause audit is complete. Then write one focused remediation implementation plan based only on confirmed Sept 3 requirements.
+5. Implement each safety fix with Superpowers TDD: failing regression first, verify RED, minimal production change, focused GREEN, then ordinary PR CI exact-head GREEN.
+6. Synchronize this `AGENTS.md` and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` after every meaningful verified milestone with exact SHA/run/test counts and next pickup point.
+7. Keep all four launch controls OFF throughout static remediation.
+8. Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static audit/remediation.
+9. Only after latest-approved static audit/remediation is GREEN return to separately authorized real Gates 4–9.
