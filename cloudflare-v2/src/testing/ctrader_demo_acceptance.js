@@ -55,6 +55,13 @@ async function loadDemoQuote(runtime, symbol, quoteTimeoutMs) {
   return quote;
 }
 
+function createCTraderProbeExecutionDenyStore() {
+  const deny = () => {
+    throw new Error('cTrader probe execution disabled');
+  };
+  return Object.freeze({ reserve: deny, complete: deny, fail: deny });
+}
+
 export function validateCTraderDemoEnvironment(env = {}) {
   const missing = REQUIRED_ENV.filter((name) => String(env[name] ?? '').trim() === '');
   const accountId = Number(env.CTRADER_ACCOUNT_ID);
@@ -76,9 +83,9 @@ export async function probeCTraderDemo({
 } = {}) {
   const readiness = validateCTraderDemoEnvironment(env);
   if (!readiness.ok) return { ready: false, reason: 'MISSING_CTRADER_DEMO_ENV', missing: readiness.missing };
-  if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) {
-    throw new TypeError('deliveryStore reserve/complete/fail required');
-  }
+  const probeDeliveryStore = deliveryStore?.reserve && deliveryStore?.complete && deliveryStore?.fail
+    ? deliveryStore
+    : createCTraderProbeExecutionDenyStore();
 
   const runtime = await runtimeFactory({
     environment: 'demo',
@@ -87,7 +94,7 @@ export async function probeCTraderDemo({
     clientSecret: env.CTRADER_CLIENT_SECRET,
     accessToken: env.CTRADER_ACCESS_TOKEN,
     accountId: Number(env.CTRADER_ACCOUNT_ID),
-    deliveryStore,
+    deliveryStore: probeDeliveryStore,
     requestTimeoutMs: Number(env.CTRADER_DEMO_REQUEST_TIMEOUT_MS || quoteTimeoutMs),
   });
 
