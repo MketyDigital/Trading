@@ -34,6 +34,8 @@ Use the following precedence whenever documents appear to disagree:
 - Last verified PR CI on the trusted tree: run `33766769463` SUCCESS; Node/trading-core 649/649, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; Cloudflare inspect/probe/deploy/accept jobs skipped.
 - Detailed audit checkpoint 1 commit: `9a2b1e05437da8bfb7beacab190092eb5905b649`.
 - `AGENTS.md` audit-reopen synchronization commit: `265684933aede9ffca230457bc9a02ad90f950cd`.
+- Detailed audit checkpoint 2 commit: `af53fe94bd985843eb47916564642449e94fd4c5`.
+- `AGENTS.md` checkpoint 2 synchronization commit: `13dc1d4861c106a7c65bbdf2c60f3b2c91a3a9c0`.
 - PR remains draft; no merge or live activation is authorized.
 
 ## Latest master-plan production definition
@@ -132,6 +134,25 @@ Impact: source A can be disabled after initial authenticated ingest, but current
 
 Status: CONFIRMED STATIC GAP. No fix applied yet.
 
+### F5 — successful broker delivery can become permanently unbound from Trade State after a post-broker state-write failure
+
+Latest execution/cutover contracts require successful broker outcomes to bind exact broker identifiers to the intended Trade State leg and require broker truth/persistent Trade State to be reconciled after failure or restart without duplicating execution.
+
+Current runtime trace:
+
+- MT5 and cTrader executors reserve persistent destination idempotency, send/reconcile the broker action, then persist `destination_deliveries.status='SUCCEEDED'` with normalized broker IDs before returning to the coordinator;
+- coordinator calls `stateBinder()` only after that successful executor return;
+- if `stateBinder()` fails, the coordinator records the action outcome as `STATE_BIND_FAILED`;
+- the already successful delivery remains terminal `SUCCEEDED`;
+- scheduled destination recovery scans only `RETRYABLE` deliveries and therefore does not revisit this state;
+- source-event replay is terminal duplicate and exits before planning/execution;
+- if the identical action somehow reaches the executor again, the delivery store returns a duplicate result, but the coordinator explicitly skips state binding for `result.duplicate === true`;
+- Trade State binding itself is durable when it succeeds, but no current production repair scheduler/outbox was found for `SUCCEEDED delivery + missing Trade State binding`.
+
+Impact: a broker position/order can exist and its broker result can be durably persisted while the Position Group/leg remains missing its execution identifiers. Normal replay/retry correctly avoids a second broker order, but it also does not repair the missing state binding. This creates an explainability/management/recovery hole for the already-real broker state.
+
+Status: CONFIRMED STATIC RECOVERY GAP. No fix applied yet. Remediation must repair/bind from already-persisted successful broker result and must never resend the broker action merely to obtain the identifiers again.
+
 ## Confirmed integration incompletions
 
 ### I1 — Runtime execution snapshot helper exists but is not integrated into production execution composition
@@ -184,6 +205,7 @@ Status: UNRESOLVED BOUNDARY / NEEDS TOPOLOGY PROOF OR STATIC HARDENING DECISION.
 - Exact account workspace/id matching, active state and `execution_enabled` are checked by the coordinator on its loaded account record.
 - Persistent destination idempotency/retry state remains the broker execution ledger; uncertain outcomes are not intended for blind retry.
 - Retry claims are bounded and optimistic-concurrency guarded by workspace/idempotency/status/attempt/next-attempt predicates.
+- Trade State execution binding targets the exact workspace Durable Object shard and exact group/leg when called successfully.
 - cTrader live runtime still requires separate server-side live opt-in.
 - default Wrangler profiles keep all four launch controls false.
 - no real external environment action has been performed during this audit.
@@ -203,14 +225,15 @@ The active development stage is now:
 Resume in this order:
 
 1. Finish the remaining root-cause audit around final execution authority: determine the clean existing-data composition for source + workspace entitlement + account/safety revalidation on first dispatch and scheduled retry; do not invent caller authority.
-2. Finish the MT5 metadata topology decision and inspect cTrader/MT5 warm-context lifecycle constraints under Cloudflare/bridge deployment.
-3. Reconcile the latest failure-injection tests against F1–F4 so the remediation plan specifies exact missing RED cases rather than generic tests.
-4. Write one focused remediation implementation plan based only on confirmed latest-approved gaps.
-5. Implement safety gaps one at a time with TDD RED -> minimal GREEN -> exact-head PR CI.
-6. Then implement/verify the approved snapshot/warm-context integration without weakening final authority.
-7. Re-audit the complete execution call graph and failure-injection matrix.
-8. Synchronize this document and `AGENTS.md` with exact RED/GREEN heads/run IDs/test counts after every meaningful verified milestone.
-9. Only after static audit/remediation is GREEN return to separately authorized real Gates 4–9.
+2. Include F5 in the recovery design: repair Trade State from the already-persisted successful delivery/broker result; never resend solely to repair state.
+3. Finish the MT5 metadata topology decision and inspect cTrader/MT5 warm-context lifecycle constraints under Cloudflare/bridge deployment.
+4. Reconcile the latest failure-injection tests against F1–F5 so the remediation plan specifies exact missing RED cases rather than generic tests.
+5. Write one focused remediation implementation plan based only on confirmed latest-approved gaps.
+6. Implement safety/recovery gaps one at a time with TDD RED -> minimal GREEN -> exact-head PR CI.
+7. Then implement/verify the approved snapshot/warm-context integration without weakening final authority.
+8. Re-audit the complete execution call graph and failure-injection matrix.
+9. Synchronize this document and `AGENTS.md` with exact RED/GREEN heads/run IDs/test counts after every meaningful verified milestone.
+10. Only after static audit/remediation is GREEN return to separately authorized real Gates 4–9.
 
 ## Safety state while audit/remediation is active
 
