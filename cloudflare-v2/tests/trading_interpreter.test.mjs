@@ -12,6 +12,18 @@ test('does not call AI for deterministic straightforward signal', async () => {
   assert.equal(called, false);
 });
 
+test('does not call AI for deterministic management commands', async () => {
+  const aiRouter = {
+    processSignal: async () => {
+      throw new Error('AI must not be on deterministic management hot path');
+    },
+  };
+  const result = await interpretTradingEvent({ text: 'MOVE SL TO BE' }, { aiRouter });
+  assert.equal(result.status, 'MANAGEMENT');
+  assert.equal(result.source, 'deterministic');
+  assert.deepEqual(result.management, { type: 'MOVE_SL_TO_BE' });
+});
+
 test('uses AI only for ambiguous natural language and validates structured result', async () => {
   const result = await interpretTradingEvent({ text: 'Gold is good here, buy around 2526 and protect under 2518, aim 2530 then 2535' }, {
     aiRouter: {
@@ -30,6 +42,22 @@ test('uses AI only for ambiguous natural language and validates structured resul
   assert.equal(result.source, 'ai');
   assert.equal(result.intent.symbol.canonical, 'XAUUSD');
   assert.deepEqual(result.intent.takeProfits, [2530, 2535]);
+});
+
+test('AI outage on an ambiguous signal fails to review instead of guessing execution', async () => {
+  let calls = 0;
+  const result = await interpretTradingEvent({ text: 'gold looks good maybe buy around here' }, {
+    aiRouter: {
+      processSignal: async () => {
+        calls += 1;
+        return { success: false, error: 'AI_PROVIDER_UNAVAILABLE' };
+      },
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'NEEDS_REVIEW');
+  assert.equal(result.source, 'ai');
+  assert.equal(result.reason, 'AI_PROVIDER_UNAVAILABLE');
 });
 
 test('rejects AI result with impossible BUY stop/target geometry instead of executing it', async () => {
