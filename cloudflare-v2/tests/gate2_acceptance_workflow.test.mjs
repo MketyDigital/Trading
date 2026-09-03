@@ -37,6 +37,22 @@ test('Gate 2 acceptance avoids Container rollout, compares concrete instance sta
   assert.doesNotMatch(block, /TRADINGVIEW_DIRECT_INGRESS_ENABLED:\s*['"]true['"]/);
 });
 
+test('Gate 2 waits for the newly deployed internal transport token before queue acceptance', async () => {
+  const workflow = await readCi();
+  const start = workflow.indexOf('cloudflare-accept-gate2:');
+  const block = workflow.slice(start);
+  const deploy = block.indexOf('Deploy temporary simulation-enabled Worker version without Container rollout');
+  const readiness = block.indexOf('Wait for deployed internal transport secret to become active');
+  const acceptance = block.indexOf('Exercise real Queue path, deduplication, and non-broker simulation');
+  assert.ok(deploy >= 0, 'acceptance deploy step must exist');
+  assert.ok(readiness > deploy, 'secret-readiness probe must follow deploy');
+  assert.ok(acceptance > readiness, 'real queue acceptance must follow secret-readiness probe');
+  assert.match(block, /INVALID_SOURCE_EVENT/);
+  assert.match(block, /400/);
+  assert.match(block, /401/);
+  assert.match(block, /x-mkety-internal-source-token/i);
+});
+
 test('Gate 2 temporary external MTProto source explicitly authorizes only its synthetic chat', async () => {
   const harness = await readHarness();
   assert.match(harness, /provider_type:\s*'external_mtproto'/);
