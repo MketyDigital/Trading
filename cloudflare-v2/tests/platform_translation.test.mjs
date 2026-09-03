@@ -70,3 +70,39 @@ test('cTrader MARKET request omits absolute protection until position id is retu
   assert.equal(translated.payload.takeProfit, undefined);
   assert.equal(translated.payload.clientOrderId, 'market-leg-1');
 });
+
+test('MT5 OPEN_POSITION refuses planned lots below broker minimum instead of increasing live risk', () => {
+  assert.throws(() => buildMT5OrderCommand({ ...action, lots: 0.01 }, {
+    platformSymbol: 'XAUUSD.a', digits: 2, tickSize: 0.01,
+    minLots: 0.10, maxLots: 50, stepLots: 0.01,
+  }), /volume|minimum|lots/i);
+});
+
+test('MT5 OPEN_POSITION refuses non-step planned lots instead of rounding them upward', () => {
+  assert.throws(() => buildMT5OrderCommand({ ...action, lots: 0.037 }, {
+    platformSymbol: 'XAUUSD.a', digits: 2, tickSize: 0.01,
+    minLots: 0.01, maxLots: 50, stepLots: 0.01,
+  }), /volume|step|lots/i);
+});
+
+test('cTrader OPEN_POSITION refuses canonical lots below broker minimum instead of clamp-up', () => {
+  assert.throws(() => buildCTraderOrderCommand({ ...action, lots: 0.01, idempotencyKey: 'below-min' }, {
+    accountId: 77,
+    clientMsgId: 'below-min',
+    symbol: {
+      platformId: 41, platformSymbol: 'XAU/USD', digits: 2, tickSize: 0.01,
+      protocolLotSize: 10000000, minVolume: 1000000, maxVolume: 100000000, stepVolume: 100000,
+    },
+  }), /volume|minimum|lots/i);
+});
+
+test('cTrader OPEN_POSITION preserves protocol-cent lot semantics but refuses non-step volume', () => {
+  assert.throws(() => buildCTraderOrderCommand({ ...action, lots: 0.015, idempotencyKey: 'non-step' }, {
+    accountId: 77,
+    clientMsgId: 'non-step',
+    symbol: {
+      platformId: 41, platformSymbol: 'XAU/USD', digits: 2, tickSize: 0.01,
+      protocolLotSize: 10000000, minVolume: 100000, maxVolume: 100000000, stepVolume: 100000,
+    },
+  }), /volume|step|lots/i);
+});
