@@ -1,0 +1,146 @@
+name: Gate 7 Demo Destinations
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE7_DEMO_DESTINATION_TRIGGER.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout exact lifecycle head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  mt5-demo-lifecycle-gate7:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: lifecycle mt5 gate 7' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      MT5_BRIDGE_URL: ${{ secrets.MT5_BRIDGE_URL }}
+      MT5_BRIDGE_SECRET: ${{ secrets.MT5_BRIDGE_SECRET }}
+      MT5_ACCOUNT_ID: ${{ secrets.MT5_ACCOUNT_ID }}
+      MT5_DEMO_SERVER: ${{ secrets.MT5_EXPECTED_DEMO_SERVER }}
+      MT5_DEMO_SYMBOL: ${{ vars.MT5_DEMO_SYMBOL || 'XAUUSD' }}
+      MT5_DEMO_TEST_LOTS: ${{ vars.MT5_DEMO_TEST_LOTS || '0.01' }}
+      MT5_DEMO_ACCEPTANCE_MODE: 'lifecycle'
+      MT5_DEMO_ORDER_TEST: 'true'
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TRADING_WORKSPACE_ID: ${{ secrets.TRADING_WORKSPACE_ID }}
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact MT5 lifecycle head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require MT5 demo lifecycle configuration by name only
+        shell: bash
+        run: |
+          test -n "${MT5_BRIDGE_URL:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_URL'; exit 1; }
+          test -n "${MT5_BRIDGE_SECRET:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_SECRET'; exit 1; }
+          test -n "${MT5_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: MT5_ACCOUNT_ID'; exit 1; }
+          test -n "${MT5_DEMO_SERVER:-}" || { echo 'Missing GitHub staging secret: MT5_EXPECTED_DEMO_SERVER'; exit 1; }
+          test -n "${SUPABASE_URL:-}" || { echo 'Missing GitHub staging secret: SUPABASE_URL'; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE_KEY'; exit 1; }
+          test -n "${TRADING_WORKSPACE_ID:-}" || { echo 'Missing GitHub staging secret: TRADING_WORKSPACE_ID'; exit 1; }
+          test -n "${MT5_DEMO_TEST_LOTS:-}" || { echo 'Missing Gate 7 MT5 demo lot configuration'; exit 1; }
+
+      - name: Run MT5 demo destination lifecycle
+        run: npm run accept:mt5:demo
+
+  ctrader-demo-lifecycle-gate7:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: lifecycle ctrader gate 7' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CTRADER_CLIENT_ID: ${{ secrets.CTRADER_CLIENT_ID }}
+      CTRADER_CLIENT_SECRET: ${{ secrets.CTRADER_CLIENT_SECRET }}
+      CTRADER_ACCESS_TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
+      CTRADER_ACCOUNT_ID: ${{ secrets.CTRADER_ACCOUNT_ID }}
+      CTRADER_DEMO_SYMBOL: ${{ vars.CTRADER_DEMO_SYMBOL || 'XAUUSD' }}
+      CTRADER_DEMO_TEST_LOTS: ${{ vars.CTRADER_DEMO_TEST_LOTS || '0.01' }}
+      CTRADER_DEMO_ACCEPTANCE_MODE: 'lifecycle'
+      CTRADER_DEMO_ORDER_TEST: 'true'
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TRADING_WORKSPACE_ID: ${{ secrets.TRADING_WORKSPACE_ID }}
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact cTrader lifecycle head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require cTrader demo lifecycle configuration by name only
+        shell: bash
+        run: |
+          test -n "${CTRADER_CLIENT_ID:-}" || { echo 'Missing GitHub staging secret: CTRADER_CLIENT_ID'; exit 1; }
+          test -n "${CTRADER_CLIENT_SECRET:-}" || { echo 'Missing GitHub staging secret: CTRADER_CLIENT_SECRET'; exit 1; }
+          test -n "${CTRADER_ACCESS_TOKEN:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCESS_TOKEN'; exit 1; }
+          test -n "${CTRADER_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCOUNT_ID'; exit 1; }
+          test -n "${SUPABASE_URL:-}" || { echo 'Missing GitHub staging secret: SUPABASE_URL'; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE_KEY'; exit 1; }
+          test -n "${TRADING_WORKSPACE_ID:-}" || { echo 'Missing GitHub staging secret: TRADING_WORKSPACE_ID'; exit 1; }
+          test -n "${CTRADER_DEMO_TEST_LOTS:-}" || { echo 'Missing Gate 7 cTrader demo lot configuration'; exit 1; }
+
+      - name: Run cTrader demo destination lifecycle
+        run: npm run accept:ctrader:demo
