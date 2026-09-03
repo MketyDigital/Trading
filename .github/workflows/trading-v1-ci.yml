@@ -88,7 +88,35 @@ jobs:
           npx wrangler deploy --dry-run --config wrangler.free.toml
 
       - name: Inspect Paid Worker deployment history
-        run: npx wrangler deployments list --config wrangler.toml
+        id: paid_deployments
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx wrangler deployments list --config wrangler.toml 2>&1 | tee paid-deployments.log
 
       - name: Inspect Free Worker deployment history
-        run: npx wrangler deployments list --config wrangler.free.toml
+        id: free_deployments
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx wrangler deployments list --config wrangler.free.toml 2>&1 | tee free-deployments.log
+
+      - name: Classify Worker deployment state
+        run: |
+          classify() {
+            local outcome="$1"
+            local log_file="$2"
+            local label="$3"
+            if [ "$outcome" = "success" ]; then
+              echo "$label Worker state: deployment history available"
+              return 0
+            fi
+            if grep -Eq 'Worker does not exist on your account|code: 10007' "$log_file"; then
+              echo "$label Worker state: not deployed yet"
+              return 0
+            fi
+            echo "$label Worker inspection failed for an unexpected Cloudflare API reason" >&2
+            exit 1
+          }
+          classify "${{ steps.paid_deployments.outcome }}" paid-deployments.log Paid
+          classify "${{ steps.free_deployments.outcome }}" free-deployments.log Free
