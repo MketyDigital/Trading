@@ -95,7 +95,7 @@ Free profile `cloudflare-v2/wrangler.free.toml`:
 
 Paid and Free queues are intentionally isolated.
 
-Both profiles now pin these Worker-runtime vars explicitly fail-closed:
+Both profiles pin these Worker-runtime vars explicitly fail-closed:
 
 ```text
 TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
@@ -103,8 +103,6 @@ TRADINGVIEW_CERT_PROBE_ENABLED=false
 TRADING_ACCESS_ENABLED=false
 BROKER_EXECUTION_ENABLED=false
 ```
-
-This is defense-in-depth at the actual Worker deployment configuration, not merely GitHub process environment state.
 
 ## GitHub → Cloudflare staging bridge
 
@@ -116,6 +114,22 @@ There is no direct Cloudflare connector in the current ChatGPT environment. GitH
 - PR-triggered copies skip Cloudflare account access; only direct pushes to `design/enterprise-trading-event-core` may consume the protected staging environment.
 - inspector authenticates, dry-runs both profiles, inventories queues/containers, inspects Worker histories, treats only Cloudflare code `10007` as valid undeployed state, and fails closed on other API errors.
 - inspect job contains no real deployment command.
+
+### One-shot Paid deployment gate
+
+`cloudflare-deploy-paid` now exists in `.github/workflows/trading-v1-ci.yml` with these restrictions:
+- `needs: test` — real deployment cannot run until mandatory CI passes;
+- direct push only;
+- exact branch `refs/heads/design/enterprise-trading-event-core` only;
+- protected GitHub `staging` environment;
+- exact commit-message trigger only: `cloudflare: deploy paid staging gate 2`;
+- re-verifies Cloudflare auth and all four fail-closed Worker runtime vars;
+- performs a final Paid dry-run before real deployment;
+- real deployment command is Paid only: `npx wrangler deploy --config wrangler.toml`;
+- no real Free deployment command exists in this job;
+- post-deploy inspection lists Paid deployment history, Queues and Container applications.
+
+The first implementation at `e0c957e5723ea9ac0620f09a542bc296d6573a17` produced workflow run `33719736778` with **zero jobs** because the exact commit-message expression contained `: ` inside an unquoted YAML plain scalar. This was a workflow-parse RED, not a product/test failure. The condition was changed to a folded YAML scalar at `380f799c00df4d48d7dccc823726399cf2466976` without changing the trigger string or safety conditions.
 
 ## CI rule
 
@@ -130,17 +144,18 @@ Always inspect the exact newest branch-head run before calling the branch GREEN.
 Key current evidence:
 - Gate 1 scope freeze GREEN `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
 - staging bridge RED `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f`; implementation GREEN `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`.
-- PR-branch inspect RED `33718333743` @ `d9a1920f168ff338e83512215d2d6067ece2b3be`; authenticated account preflight GREEN `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`.
-- resource inventory RED `33718839137` @ `0c2aad135ce961cb0385c9d769fcbef5898fafc7`; resource inventory GREEN `33718900390` @ `31281abd511e80c9b37cf2dc1c4d75f38f5637ee`.
-- Worker-runtime safety-var RED `33719360745` @ `6499d6ce8bf88a18d9326de72e332fccd5c1142e`: 509/510 Node tests passed; sole failure was absent explicit runtime safety vars.
-- Paid safety vars added `92cd40b6a6fe68daccadbacafde299f69f7f8625`; Free safety vars added `475ac52f24d4db80892bbc48b1f296f9cd462a0b`.
-- exact-head safety-var GREEN `33719452508` @ `475ac52f24d4db80892bbc48b1f296f9cd462a0b`: full test job GREEN and authenticated `cloudflare-inspect` GREEN, including both real-account dry-runs and clean inventory.
+- authenticated account preflight GREEN `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`.
+- resource inventory RED `33718839137` @ `0c2aad135ce961cb0385c9d769fcbef5898fafc7`; GREEN `33718900390` @ `31281abd511e80c9b37cf2dc1c4d75f38f5637ee`.
+- Worker-runtime safety-var RED `33719360745` @ `6499d6ce8bf88a18d9326de72e332fccd5c1142e`; exact-head GREEN `33719452508` @ `475ac52f24d4db80892bbc48b1f296f9cd462a0b`.
+- one-shot Paid deploy contract RED `33719629855` @ `4415b7b81bf7d717727f449a2d5f7789d5ab8e3c`: 510/512 tests passed; only the two absent deploy-job contract tests failed.
+- initial deploy-job implementation `e0c957e5723ea9ac0620f09a542bc296d6573a17` produced workflow-parse RED `33719736778` with zero jobs.
+- corrected one-shot deploy-gate GREEN `33719868426` @ `380f799c00df4d48d7dccc823726399cf2466976`: workflow parsed, mandatory test job GREEN, authenticated Cloudflare inspector GREEN, and the real deploy job remained safely inactive because the commit message did not equal the exact trigger marker.
 
 ## Gate 2 — Real Cloudflare Staging Infrastructure Acceptance
 
 Governing plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
 
-Current status: **ACCOUNT AUTH + COLLISION INVENTORY + RUNTIME SAFETY CONFIG GREEN; FIRST PAID STAGING DEPLOYMENT PENDING.**
+Current status: **ACCOUNT AUTH + COLLISION INVENTORY + RUNTIME SAFETY + ONE-SHOT DEPLOY GATE GREEN; FIRST PAID STAGING DEPLOYMENT PENDING.**
 
 Real Cloudflare account state most recently confirmed:
 - authenticated dedicated Account API Token works;
@@ -151,17 +166,16 @@ Real Cloudflare account state most recently confirmed:
 - no naming collisions found;
 - no real Worker/Queue/DLQ/DO/Container infrastructure has yet been created by Gate 2.
 
-`cloudflare-v2/src/config/staging_readiness.js` reports full application readiness using Supabase, Zitadel and optional simulation/runtime config names. **Do not confuse full application readiness with Gate 2 infrastructure deployment readiness:** Zitadel acceptance belongs to Gate 4. The first Gate 2 deployment may intentionally expose missing readiness names through health while authentication/TradingView/broker execution remain disabled.
+`cloudflare-v2/src/config/staging_readiness.js` reports full application readiness using Supabase, Zitadel and optional simulation/runtime config names. Do not confuse full application readiness with Gate 2 infrastructure deployment readiness: Zitadel acceptance belongs to Gate 4. The first Gate 2 deployment may intentionally expose missing readiness names through health while authentication/TradingView/broker execution remain disabled.
 
 Never commit runtime secret values. Cloudflare account API credentials are not Worker runtime secrets.
 
 ## Exact next safe starting point
 
-1. TDD a one-shot **Paid-only staging deployment gate** in the active branch CI. It must require the exact PR branch, protected `staging` environment, successful mandatory tests, an explicit one-shot trigger marker, and a final pre-deploy Paid dry-run.
-2. The deployment job may run real `wrangler deploy --config wrangler.toml` only for the Paid profile; it must contain no real Free deployment command.
-3. Keep all four Worker runtime safety vars pinned `false`; do not create source rows, destinations, TradingView handles, or broker execution state.
-4. Use a separate harmless trigger commit only after the deployment-job contract is GREEN, so implementation commits cannot accidentally deploy.
-5. Observe the first real deployment result rather than guessing whether Cloudflare requires queue/DLQ pre-creation or additional write permissions. If it fails, treat the exact Cloudflare error as Gate 2 evidence and fix minimally.
-6. After deployment succeeds, verify Worker, queue/DLQ, DO bindings, crons, optional Container application/capability, and that no Container instance starts merely because the binding exists.
-7. Only then perform non-broker health/simulation infrastructure acceptance and prove rollback.
-8. Gate 3 TradingView certificate acceptance, Gate 4 Zitadel, broker demos/live, and `main` merge remain out of scope until their explicit gates/approval.
+1. Let this `AGENTS.md` synchronization commit pass exact-head mandatory CI and authenticated Cloudflare inspection; it must not trigger deployment because its commit message is not the marker.
+2. After that exact head is GREEN, create one harmless trigger commit on `design/enterprise-trading-event-core` with the **exact** commit message `cloudflare: deploy paid staging gate 2` and no production behavior change.
+3. Observe the one-shot Paid deployment job. Do not assume success: Cloudflare may require Queue/DLQ pre-creation, additional API-token write permissions, or Workers Paid/Container capability. Treat the exact response as Gate 2 evidence.
+4. If deployment fails, fix only the proven account/config issue; preserve all four safety gates false and TDD any code/config behavior change.
+5. If deployment succeeds, verify Worker, queue/DLQ, DO bindings, crons, optional Container application/capability, and prove no Container instance starts merely because the binding exists.
+6. Only then perform non-broker health/simulation infrastructure acceptance and rollback proof.
+7. Gate 3 TradingView certificate acceptance, Gate 4 Zitadel, broker demos/live, and `main` merge remain out of scope until their explicit gates/approval.
