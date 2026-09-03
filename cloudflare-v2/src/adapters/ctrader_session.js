@@ -3,6 +3,13 @@ import { buildApplicationAuthMessage, buildAccountAuthMessage } from './ctrader_
 const OPEN = 1;
 const ERROR_PAYLOAD_TYPES = new Set([2132, 2142]);
 
+function deliveryError(message, deliveryFailureClass, code, cause = null) {
+  const error = new Error(String(message || code || 'cTrader request failed'), cause ? { cause } : undefined);
+  error.deliveryFailureClass = deliveryFailureClass;
+  error.code = code;
+  return error;
+}
+
 export class CTraderJsonSession {
   constructor({
     endpoint,
@@ -81,33 +88,45 @@ export class CTraderJsonSession {
 
   request(message, { successPayloadTypes = [], timeoutMs = this.requestTimeoutMs } = {}) {
     if (!message?.clientMsgId) throw new TypeError('clientMsgId is required');
-    if (!this.socket || this.socket.readyState !== OPEN) return Promise.reject(new Error('cTrader connection is not open'));
-    if (this.pending.has(message.clientMsgId)) return Promise.reject(new Error(`duplicate clientMsgId: ${message.clientMsgId}`));
+    if (!this.socket || this.socket.readyState !== OPEN) {
+      return Promise.reject(deliveryError('cTrader connection is not open', 'RETRYABLE', 'CTRADER_NOT_SENT'));
+    }
+    if (this.pending.has(message.clientMsgId)) {
+      return Promise.reject(deliveryError(`duplicate clientMsgId: ${message.clientMsgId}`, 'TERMINAL', 'CTRADER_DUPLICATE_CLIENT_MSG_ID'));
+    }
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      const pending = {
+        sent: false,
+        successPayloadTypes: new Set(successPayloadTypes),
+        resolve: null,
+        reject: null,
+        timeout: null,
+      };
+      pending.resolve = (value) => {
+        clearTimeout(pending.timeout);
+        resolve(value);
+      };
+      pending.reject = (error) => {
+        clearTimeout(pending.timeout);
+        reject(error);
+      };
+      pending.timeout = setTimeout(() => {
         this.pending.delete(message.clientMsgId);
-        reject(new Error(`cTrader request timed out: ${message.clientMsgId}`));
+        const failure = pending.sent
+          ? deliveryError(`cTrader request timed out: ${message.clientMsgId}`, 'UNCERTAIN', 'CTRADER_POST_SEND_TIMEOUT')
+          : deliveryError(`cTrader request was not sent: ${message.clientMsgId}`, 'RETRYABLE', 'CTRADER_NOT_SENT');
+        pending.reject(failure);
       }, timeoutMs);
 
-      this.pending.set(message.clientMsgId, {
-        successPayloadTypes: new Set(successPayloadTypes),
-        resolve: (value) => {
-          clearTimeout(timeout);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      });
+      this.pending.set(message.clientMsgId, pending);
 
       try {
         this.socket.send(JSON.stringify(message));
+        pending.sent = true;
       } catch (error) {
         this.pending.delete(message.clientMsgId);
-        clearTimeout(timeout);
-        reject(error);
+        pending.reject(deliveryError(error?.message || 'cTrader send failed before transmission', 'RETRYABLE', 'CTRADER_NOT_SENT', error));
       }
     });
   }
@@ -214,9 +233,6 @@ export class CTraderJsonSession {
       return;
     }
 
-    // Preserve every broker/server event independently of request correlation.
-    // cTrader fills can arrive without clientMsgId, and may race the accepted
-    // response, so execution consumers need a bounded event stream as well.
     this.dispatchEvent(message);
 
     const clientMsgId = message?.clientMsgId;
@@ -225,9 +241,9 @@ export class CTraderJsonSession {
 
     if (ERROR_PAYLOAD_TYPES.has(Number(message.payloadType)) || message?.payload?.errorCode) {
       this.pending.delete(clientMsgId);
-      const code = message?.payload?.errorCode || 'CTRADER_ERROR';
+      const code = String(message?.payload?.errorCode || 'CTRADER_ERROR');
       const description = message?.payload?.description || 'cTrader request failed';
-      pending.reject(new Error(`${code}: ${description}`));
+      pending.reject(deliveryError(`${code}: ${description}`, 'TERMINAL', code));
       return;
     }
 
@@ -255,7 +271,9 @@ export class CTraderJsonSession {
     this.authenticatedAccounts.clear();
     for (const [clientMsgId, pending] of this.pending) {
       this.pending.delete(clientMsgId);
-      pending.reject(new Error(reason));
+      pending.reject(pending.sent
+        ? deliveryError(reason, 'UNCERTAIN', 'CTRADER_POST_SEND_CONNECTION_LOST')
+        : deliveryError(reason, 'RETRYABLE', 'CTRADER_NOT_SENT'));
     }
     for (const waiter of [...this.eventWaiters]) {
       waiter.reject(new Error(reason));

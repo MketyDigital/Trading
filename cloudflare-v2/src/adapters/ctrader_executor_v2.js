@@ -27,9 +27,7 @@ async function reserveAction(deliveryStore, action) {
     destinationType: 'ctrader',
     action,
   });
-  if (reservation?.duplicate) {
-    return { duplicate: true, previous: reservation.result ?? null };
-  }
+  if (reservation?.duplicate) return { duplicate: true, previous: reservation.result ?? null };
   if (!reservation?.ok) throw new Error('failed to reserve cTrader delivery idempotency');
   return { duplicate: false, reservation };
 }
@@ -60,27 +58,56 @@ function sameBrokerOrder(message, { brokerOrderId, clientOrderId }) {
   return false;
 }
 
+function classifiedError(message, deliveryFailureClass, code, cause = null) {
+  const error = new Error(String(message || code || 'cTrader execution failed'), cause ? { cause } : undefined);
+  error.deliveryFailureClass = deliveryFailureClass;
+  error.code = code;
+  return error;
+}
+
 async function resolveMarketFill(session, acceptedResponse, action) {
   if (isFilledExecution(acceptedResponse)) return acceptedResponse;
   if (!session?.waitForEvent) {
-    throw new Error('cTrader session cannot wait for market fill event');
+    throw classifiedError('cTrader session cannot wait for market fill event', 'UNCERTAIN', 'CTRADER_FILL_STATUS_UNCERTAIN');
   }
 
   const acceptedIds = extractBrokerIds(acceptedResponse);
   const clientOrderId = String(action.idempotencyKey);
   const type = executionType(acceptedResponse);
   if (type !== ORDER_ACCEPTED && !acceptedIds.brokerOrderId) {
-    throw new Error('cTrader market order response did not provide an accepted order or fill');
+    throw classifiedError('cTrader market order response did not provide an accepted order or fill', 'UNCERTAIN', 'CTRADER_FILL_STATUS_UNCERTAIN');
   }
 
-  return session.waitForEvent((message) => {
-    if (Number(message?.payloadType) !== 2126) return false;
-    if (!isFilledExecution(message)) return false;
-    return sameBrokerOrder(message, {
-      brokerOrderId: acceptedIds.brokerOrderId,
-      clientOrderId,
+  try {
+    return await session.waitForEvent((message) => {
+      if (Number(message?.payloadType) !== 2126) return false;
+      if (!isFilledExecution(message)) return false;
+      return sameBrokerOrder(message, {
+        brokerOrderId: acceptedIds.brokerOrderId,
+        clientOrderId,
+      });
     });
-  });
+  } catch (error) {
+    if (error?.deliveryFailureClass) throw error;
+    throw classifiedError(error?.message || 'cTrader fill status is uncertain', 'UNCERTAIN', 'CTRADER_FILL_STATUS_UNCERTAIN', error);
+  }
+}
+
+async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, retryDelayMs }) {
+  const failure = { code: error?.code || 'CTRADER_EXECUTION_FAILED', error: error?.message || 'cTrader execution failed' };
+  if (error?.deliveryFailureClass === 'RETRYABLE') {
+    if (!deliveryStore?.markRetryable) throw new Error('deliveryStore markRetryable required for retryable cTrader outcome');
+    await deliveryStore.markRetryable(idempotencyKey, failure, {
+      nextAttemptAt: new Date(Number(nowMs) + Number(retryDelayMs)).toISOString(),
+    });
+    return;
+  }
+  if (error?.deliveryFailureClass === 'UNCERTAIN') {
+    if (!deliveryStore?.markUncertain) throw new Error('deliveryStore markUncertain required for uncertain cTrader outcome');
+    await deliveryStore.markUncertain(idempotencyKey, failure);
+    return;
+  }
+  await deliveryStore.fail(idempotencyKey, failure);
 }
 
 export async function executeCTraderAction(action, {
@@ -89,6 +116,8 @@ export async function executeCTraderAction(action, {
   catalog = [],
   deliveryStore,
   label = 'Mkety Trading',
+  nowMs = Date.now(),
+  retryDelayMs = 15000,
 } = {}) {
   if (!session?.request) throw new TypeError('cTrader session required');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) {
@@ -96,12 +125,11 @@ export async function executeCTraderAction(action, {
   }
 
   const reserved = await reserveAction(deliveryStore, action);
-  if (reserved.duplicate) {
-    return { duplicate: true, ...(reserved.previous || {}) };
-  }
+  if (reserved.duplicate) return { duplicate: true, ...(reserved.previous || {}) };
 
   const clientMsgId = String(action.idempotencyKey);
   const symbol = resolveCTraderSymbol(action, catalog);
+  let brokerAccepted = false;
 
   try {
     let response;
@@ -112,22 +140,20 @@ export async function executeCTraderAction(action, {
         symbol,
       });
       response = await session.request(message, { successPayloadTypes: [2126] });
+      brokerAccepted = true;
 
       let executionResponse = response;
-      if (action.orderType === 'MARKET') {
-        executionResponse = await resolveMarketFill(session, response, action);
-      }
+      if (action.orderType === 'MARKET') executionResponse = await resolveMarketFill(session, response, action);
 
       const ids = extractBrokerIds(executionResponse);
       const acceptedIds = extractBrokerIds(response);
       if (!ids.brokerOrderId && acceptedIds.brokerOrderId) ids.brokerOrderId = acceptedIds.brokerOrderId;
       const fillPrice = extractFillPrice(executionResponse);
 
-      // cTrader MARKET orders do not accept absolute SL/TP in ProtoOANewOrderReq.
-      // Never report a protected market trade as successful until a fill has
-      // produced a real position ID and the protection amend has completed.
       if (action.orderType === 'MARKET' && (action.stopLoss != null || action.takeProfit != null)) {
-        if (!ids.brokerPositionId) throw new Error('cTrader market fill did not provide a position ID');
+        if (!ids.brokerPositionId) {
+          throw classifiedError('cTrader market fill did not provide a position ID', 'UNCERTAIN', 'CTRADER_FILL_STATUS_UNCERTAIN');
+        }
         const amend = buildCTraderManagementCommand({
           type: 'MODIFY_POSITION',
           brokerPositionId: ids.brokerPositionId,
@@ -138,7 +164,12 @@ export async function executeCTraderAction(action, {
           clientMsgId: `${clientMsgId}:protect`,
           symbol,
         });
-        await session.request(amend, { successPayloadTypes: [2126] });
+        try {
+          await session.request(amend, { successPayloadTypes: [2126] });
+        } catch (error) {
+          if (error?.deliveryFailureClass === 'TERMINAL') throw error;
+          throw classifiedError(error?.message || 'cTrader protection status uncertain', 'UNCERTAIN', 'CTRADER_PROTECTION_STATUS_UNCERTAIN', error);
+        }
       }
 
       const result = { duplicate: false, ...ids, fillPrice, response: executionResponse };
@@ -152,13 +183,18 @@ export async function executeCTraderAction(action, {
       symbol: symbol || catalog.find((item) => item.platform === 'ctrader') || {},
     });
     response = await session.request(managementMessage, { successPayloadTypes: [2126] });
+    brokerAccepted = true;
     const result = { duplicate: false, ...extractBrokerIds(response), response };
     await deliveryStore.complete(action.idempotencyKey, result);
     return result;
   } catch (error) {
-    await deliveryStore.fail(action.idempotencyKey, {
-      error: error.message,
-    });
-    throw error;
+    let classified = error;
+    if (!classified?.deliveryFailureClass) {
+      classified = brokerAccepted
+        ? classifiedError(error?.message, 'UNCERTAIN', 'CTRADER_POST_ACCEPT_OUTCOME_UNCERTAIN', error)
+        : classifiedError(error?.message, 'TERMINAL', error?.code || 'CTRADER_EXECUTION_REJECTED', error);
+    }
+    await persistFailure(deliveryStore, action.idempotencyKey, classified, { nowMs, retryDelayMs });
+    throw classified;
   }
 }
