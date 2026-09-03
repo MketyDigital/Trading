@@ -276,6 +276,32 @@ jobs:
         id: acceptance_deploy
         run: npx wrangler deploy --config wrangler.toml --secrets-file "$RUNNER_TEMP/gate2-secrets.env" --containers-rollout none
 
+      - name: Wait for deployed internal transport secret to become active
+        shell: bash
+        run: |
+          deadline=$((SECONDS + 30))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            body_file="$RUNNER_TEMP/gate2-readiness-body.json"
+            status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+              -X POST "$TRADING_V1_WORKER_BASE_URL/api/v1/internal/source-event" \
+              -H 'content-type: application/json' \
+              -H "x-mkety-internal-source-token: $INTERNAL_SOURCE_TRANSPORT_TOKEN" \
+              --data '{}')"
+            if [ "$status" = "400" ] && grep -q 'INVALID_SOURCE_EVENT' "$body_file"; then
+              echo 'New internal transport secret is active at the Worker edge.'
+              exit 0
+            fi
+            if [ "$status" = "401" ]; then
+              sleep 1
+              continue
+            fi
+            echo "Unexpected readiness response: HTTP $status" >&2
+            cat "$body_file" >&2
+            exit 1
+          done
+          echo 'Timed out waiting for newly deployed internal transport secret to become active.' >&2
+          exit 1
+
       - name: Exercise real Queue path, deduplication, and non-broker simulation
         run: node scripts/gate2_queue_acceptance.mjs
 
