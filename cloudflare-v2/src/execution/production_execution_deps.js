@@ -4,6 +4,7 @@ import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { createCTraderRuntime } from '../adapters/ctrader_runtime.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
+import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -182,9 +183,27 @@ export function createProductionExecutionDependencies({
   fetchFn = fetch,
 } = {}) {
   const boundWorkspaceId = text(workspaceId);
+  const boundTradingEventId = text(tradingEventId);
   if (!boundWorkspaceId) throw new TypeError('workspaceId is required');
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
+
+  let authorityLoaderImpl = null;
+  async function authorityLoader(input = {}) {
+    if (!boundTradingEventId) {
+      const error = new Error('production execution trading event authority unavailable');
+      error.code = 'EXECUTION_AUTHORITY_REVOKED';
+      throw error;
+    }
+    if (!authorityLoaderImpl) {
+      authorityLoaderImpl = createProductionExecutionAuthorityLoader({
+        supabase,
+        workspaceId: boundWorkspaceId,
+        tradingEventId: boundTradingEventId,
+      });
+    }
+    return authorityLoaderImpl(input);
+  }
 
   async function accountLoader(requestedWorkspaceId, accountId) {
     if (text(requestedWorkspaceId) !== boundWorkspaceId) {
@@ -213,7 +232,7 @@ export function createProductionExecutionDependencies({
       supabase,
       workspaceId: boundWorkspaceId,
       account,
-      tradingEventId,
+      tradingEventId: boundTradingEventId || null,
       groupId,
     });
 
@@ -261,7 +280,7 @@ export function createProductionExecutionDependencies({
       supabase,
       workspaceId: boundWorkspaceId,
       account,
-      tradingEventId,
+      tradingEventId: boundTradingEventId || null,
       groupId,
     });
 
@@ -342,6 +361,7 @@ export function createProductionExecutionDependencies({
 
   return {
     accountLoader,
+    authorityLoader,
     dispatchAction,
     stateBinder,
   };
