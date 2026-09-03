@@ -213,6 +213,7 @@ jobs:
       SUPABASE_URL: https://vdblajgxrfndjesoyayy.supabase.co
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       TRADING_V1_WORKER_BASE_URL: https://mkety-copier-engine.dry-glitter-7e16.workers.dev
+      GATE2_CONTAINER_APPLICATION_ID: a03c0bd0-3dab-4578-bab2-88bf5d0d7c1f
       TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
       TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
       TRADING_ACCESS_ENABLED: 'false'
@@ -238,6 +239,9 @@ jobs:
 
       - name: Verify exact known-good rollback version exists
         run: npx wrangler deployments list --config wrangler.toml | grep 'c25e85d5-bfe2-4d17-9ab4-5133d88ecec8'
+
+      - name: Snapshot Container instances before non-Container acceptance
+        run: npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-before.json"
 
       - name: Generate ephemeral acceptance secrets
         shell: bash
@@ -275,12 +279,22 @@ jobs:
       - name: Exercise real Queue path, deduplication, and non-broker simulation
         run: node scripts/gate2_queue_acceptance.mjs
 
-      - name: Prove Container application remained Ready with zero live instances
+      - name: Prove non-Container simulation created no Container instances
         shell: bash
         run: |
-          npx wrangler containers list | tee "$RUNNER_TEMP/gate2-containers.txt"
-          grep -E 'mkety-copier-engine-mtprotocontainerruntime.*[Rr]eady.*0' "$RUNNER_TEMP/gate2-containers.txt"
-          echo 'Gate 2 Container non-selection verified: Ready, 0 live instances.'
+          npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-after.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const before = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-before.json', 'utf8'));
+          const after = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-after.json', 'utf8'));
+          const beforeIds = new Set(before.map((item) => String(item.id)));
+          const created = after.filter((item) => !beforeIds.has(String(item.id)));
+          if (created.length) {
+            console.error(`Gate 2 Container non-selection failed: ${created.length} new instance(s) appeared.`);
+            process.exit(1);
+          }
+          console.log(`Gate 2 Container non-selection verified: ${before.length} instance record(s) before, ${after.length} after, 0 new instance IDs.`);
+          NODE
 
       - name: Roll back to first known-good Paid staging version
         if: ${{ always() && steps.acceptance_deploy.outcome == 'success' }}
@@ -291,5 +305,16 @@ jobs:
         shell: bash
         run: |
           npx wrangler deployments list --config wrangler.toml | head -40
-          npx wrangler containers list | tee "$RUNNER_TEMP/gate2-containers-final.txt"
-          grep -E 'mkety-copier-engine-mtprotocontainerruntime.*[Rr]eady.*0' "$RUNNER_TEMP/gate2-containers-final.txt"
+          npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-final.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const before = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-before.json', 'utf8'));
+          const final = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-final.json', 'utf8'));
+          const beforeIds = new Set(before.map((item) => String(item.id)));
+          const created = final.filter((item) => !beforeIds.has(String(item.id)));
+          if (created.length) {
+            console.error(`Rollback verification found ${created.length} new Container instance(s).`);
+            process.exit(1);
+          }
+          console.log(`Rollback verified with no new Container instance IDs; final instance records: ${final.length}.`);
+          NODE
