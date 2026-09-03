@@ -107,31 +107,22 @@ Gate 3 markers:
 - `cloudflare: inspect tradingview gate 3` — read-only zone inventory
 - `cloudflare: probe tradingview gate 3` — controlled certificate-probe deployment only after mandatory tests pass
 
-The Gate 3 probe job:
-- uses protected environment `staging`;
-- targets only `trade.mkety.com` in the owned `mkety.com` zone;
-- checks Worker-domain and DNS conflicts read-only before mutation;
-- temporarily enables only `TRADINGVIEW_CERT_PROBE_ENABLED=true` while direct ingress, Trading access, and broker execution remain false;
-- passes `--containers-rollout none`;
-- requires a spoofed client-certificate header to receive HTTP 403;
-- observes only sanitized `TRADINGVIEW_CERT_PROBE` metadata through bounded `wrangler tail`;
-- requires exactly one stable normalized SHA-256 fingerprint from genuine TradingView certificate evidence;
-- rolls back to known-good Worker version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` after any successful temporary probe deployment.
-
 ## Production launch gates
 
 1. Scope freeze — **GREEN**
 2. Real Cloudflare staging infrastructure — **GREEN**
-3. TradingView certificate probe/direct ingress acceptance — **CURRENT**
-4. Zitadel real non-live identity acceptance
-5. Telegram runtime soak
-6. MT5/cTrader source acceptance
-7. Broker demo destinations
+3. TradingView certificate probe/direct ingress acceptance — **DEFERRED / FAIL-CLOSED**
+4. Zitadel real non-live identity acceptance — **AVAILABLE IN PARALLEL**
+5. Telegram runtime soak — **CURRENT PRIORITY**
+6. MT5/cTrader source acceptance — **NEXT**
+7. Broker demo destinations — **NEXT**
 8. End-to-end staging
 9. Production operations
 10. Tiny controlled cutover
 
-Real-money execution requires separate explicit user approval after all prior gates are GREEN.
+Gate execution may proceed out of numerical order where dependencies are independent, but **final production launch still requires every mandatory gate to be GREEN or explicitly removed from V1 scope through a reviewed scope change.** TradingView remains in V1 scope and therefore its deferred real certificate/direct-ingress acceptance must be completed before final production launch if TradingView ships in V1.
+
+Real-money execution requires separate explicit user approval after all prior mandatory gates are GREEN.
 
 ## Gate 1 — Scope freeze
 
@@ -167,75 +158,58 @@ Gate 2 is complete; do not redo it.
 
 ## Gate 3 — TradingView real certificate and source acceptance
 
-**CURRENT / FIRST REAL PROBE FAILED CLOSED; DIAGNOSTIC RERUN READY, GENUINE CERTIFICATE NOT YET PROVEN.**
+**DEFERRED / FAIL-CLOSED. STATIC SECURITY IMPLEMENTATION REMAINS ACCEPTED; GENUINE TRADINGVIEW CERTIFICATE ACCEPTANCE IS EXTERNALLY BLOCKED FOR NOW.**
 
-### Domain and zone evidence
+Domain:
+- Trading hostname `trade.mkety.com`
+- Cloudflare zone `mkety.com`
+- `mkety.app` remains reserved for MKSaaS/customer builds.
 
-Read-only inventory proved the configured Cloudflare account owns both `mkety.app` and `mkety.com`. Trading uses only `mkety.com`; `mkety.app` remains reserved for MKSaaS/customer builds.
+Static/TDD security behavior already proven:
+- direct ingress requires the exact configured SHA-256 certificate fingerprint;
+- only Cloudflare-provided `request.cf.tlsClientAuth` is authoritative;
+- caller headers cannot self-assert certificate verification;
+- probe mode is fail-closed and returns 403 before source lookup/queueing;
+- sanitized probe diagnostics never log source body/credential authority;
+- direct ingress, Trading access, and broker execution remain disabled by default.
 
-Current Gate 3 target:
-- hostname `trade.mkety.com`
-- zone ID `98c7228a0457b1f454881c149e2df6ce`
-
-Trading-hostname correction TDD:
-- RED `e0945a97f3d756cfba46e10787b2e289cdd0e613`, run `33727975091`: 520/522 Node tests; only stale old-host references failed; no Cloudflare action ran
-- GREEN `26e2e7e789319a5ef81f7b8870bd36c53c7a77f1`, run `33728255826`: mandatory suites GREEN; all Cloudflare jobs skipped
-- documentation boundary head `cbc00eaf01c5352e95d5b140f1e83040fa7bbcaa`, run `33728466285`: exact-head GREEN
-
-### First real certificate probe — fail-closed, rollback proven
-
-Trigger:
-- commit `983bf36732a37a787cc253fec391a6a18d6c4517`
-- exact message `cloudflare: probe tradingview gate 3`
+Real probe evidence:
+- trigger `983bf36732a37a787cc253fec391a6a18d6c4517`
 - run `33728657084`
 - probe job `100563529178`
-
-Observed behavior:
-- mandatory CI GREEN before probe
 - `trade.mkety.com` temporary probe deployment succeeded
-- spoofed caller certificate header received expected HTTP 403
-- bounded five-minute tail found **0 usable SHA-256 fingerprints**
-- certificate requirement failed closed; direct ingress was never enabled
-- rollback and rollback verification both succeeded to `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` at 100% traffic
-- Trading access and broker execution stayed disabled
-- no secret value was exposed
+- spoof request was rejected with HTTP 403
+- 0 usable genuine SHA-256 fingerprints were observed
+- rollback succeeded to known-good version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
+- no direct ingress, Trading access, broker execution, or real-money path was enabled.
 
-The first probe cannot distinguish whether no genuine TradingView request reached the Worker or a request reached it without Cloudflare exposing a client certificate. Do not infer either case without new evidence.
+The request used for the attempted observation was sent from user-operated `curl`, not from TradingView itself. Therefore the 0-fingerprint result is **not evidence that genuine TradingView certificate presentation fails**. Genuine TradingView webhook execution is currently unavailable to the user due to the required TradingView subscription tier, so real certificate observation is deferred.
 
-### Sanitized arrival diagnostics — TDD verified
+Deferred safety contract:
+- keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`;
+- keep `TRADINGVIEW_CERT_PROBE_ENABLED=false` outside a future controlled probe;
+- do not create a TradingView production source or broker destination;
+- do not weaken authentication to IP/header/body/URL-secret trust;
+- resume Gate 3 later with a genuine TradingView-originated HTTPS webhook before declaring TradingView production-ready.
 
-Purpose: distinguish request-arrival failure from missing client-certificate evidence without logging body data, credentials, raw certificate material, or weakening authentication.
+## Gate 4 — Zitadel real identity acceptance
 
-Diagnostic output fields:
-- `totalProbeLogs`
-- `expectedSpoofLogs=1`
-- `additionalProbeLogs`
-- `certPresentedCount`
-- `fingerprintCount`
+**NOT YET EXECUTED; MAY PROCEED WHILE GATE 3 IS DEFERRED.**
 
-Interpretation:
-- `totalProbeLogs=1`, `additionalProbeLogs=0` => only the workflow spoof probe was observed; no additional probe request reached the instrumented path
-- `additionalProbeLogs>0`, `certPresentedCount=0` => at least one additional request reached the probe path but Cloudflare exposed no presented client certificate
-- `certPresentedCount>0` with `fingerprintCount!=1` => certificate evidence is malformed, missing a stable fingerprint, or unstable; STOP and redesign rather than weaken auth
-- success remains exactly one stable normalized SHA-256 fingerprint
+Keep `TRADING_ACCESS_ENABLED=false` until real non-live Zitadel positive/negative acceptance succeeds. Login alone never grants Trading access and no workspace role may grant broker execution.
 
-TDD evidence:
-- RED `73ae4b62148bceeac54aa7c7df9be111b3e389a1`, run `33729322404`: 522/523 Node tests; only the missing diagnostic contract failed; all Cloudflare jobs skipped
-- implementation `dc69600b3a768da50b5fed607d54edee9537d389`: added sanitized diagnostic counts; first GREEN candidate exposed only an over-strict source-text assertion
-- corrected test `8b06a3b3379e4cb44c583848906f31298e9f42ec`, run `33729772610`: **SUCCESS**; 523/523 Node tests, MT5 GREEN, both MTProto suites GREEN, all Cloudflare jobs skipped
+## Gate 5 — Telegram real soak and recovery acceptance
 
-### Next safe action
+**CURRENT PRIORITY.**
 
-Coordinate one more exact-marker Gate 3 probe. During the active bounded probe step, trigger exactly one genuine TradingView HTTPS webhook from TradingView itself to:
+Proceed with all acceptance work that does not require unavailable external credentials first: static soak harness, provider selection/non-selection contracts, canonical identity/replay tests, failure isolation, and recovery behavior. Real Telegram-account/channel soak evidence remains separately required before final Gate 5 GREEN.
 
-```text
-https://trade.mkety.com/api/v1/webhooks/tradingview/probe
-```
+## Gates 6–7 — MT5/cTrader sources and broker demo destinations
 
-Browser/Postman/curl requests do not satisfy the genuine-source observation. Probe mode should still return HTTP 403. After the run, use only the sanitized diagnostic counts and Cloudflare-observed certificate metadata to decide whether certificate pinning is viable.
+**HIGH PRIORITY AFTER/ALONGSIDE GATE 5.**
 
-If Cloudflare does not expose exactly one stable normalized SHA-256 fingerprint from a genuine TradingView request, **STOP Gate 3 and redesign transport authentication; never weaken to IP-only, header-only, body-secret-only, or URL-secret-only trust.**
+Proceed with real/demo acceptance wherever credentials/accounts are available, while broker real-money execution remains disabled. Demo destination work must preserve separate execution enablement, risk controls, destination idempotency, and authoritative broker metadata.
 
-Only after a genuine stable certificate fingerprint is proven may a later controlled batch pin it, disable probe mode, create a non-execution TradingView source, and temporarily enable direct ingress for dedupe/authority-stripping/source-isolation acceptance.
+## Exact next safe action
 
-Do not start Gate 4, broker execution, or real-money work while Gate 3 remains unresolved.
+Run the existing static Telegram MTProto soak harness and reconcile its output against Gate 5 acceptance criteria. Then inspect which real Telegram, MT5, cTrader, and broker-demo prerequisites are already available before introducing any new code or credentials.
