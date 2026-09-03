@@ -33,6 +33,7 @@ test('Gate 6 MT5 demo probe is exact-marker, staging-protected, probe-only and n
   assert.match(block, /secrets\.MT5_BRIDGE_SECRET/);
   assert.match(block, /secrets\.MT5_ACCOUNT_ID/);
   assert.match(block, /MT5_DEMO_SERVER:\s*\$\{\{\s*secrets\.MT5_EXPECTED_DEMO_SERVER\s*\}\}/);
+  assert.doesNotMatch(block, /^\s*MT5_EXPECTED_DEMO_SERVER:/m);
   assert.match(block, /npm run accept:mt5:demo/);
   assert.doesNotMatch(block, /SUPABASE_|TRADING_WORKSPACE_ID|\bwrangler\b|CLOUDFLARE_|lifecycle/i);
 });

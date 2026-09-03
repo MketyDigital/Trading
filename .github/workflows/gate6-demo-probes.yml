@@ -58,7 +58,7 @@ jobs:
       MT5_BRIDGE_URL: ${{ secrets.MT5_BRIDGE_URL }}
       MT5_BRIDGE_SECRET: ${{ secrets.MT5_BRIDGE_SECRET }}
       MT5_ACCOUNT_ID: ${{ secrets.MT5_ACCOUNT_ID }}
-      MT5_EXPECTED_DEMO_SERVER: ${{ secrets.MT5_EXPECTED_DEMO_SERVER }}
+      MT5_DEMO_SERVER: ${{ secrets.MT5_EXPECTED_DEMO_SERVER }}
       MT5_DEMO_SYMBOL: XAUUSD
       MT5_DEMO_ACCEPTANCE_MODE: 'probe'
       MT5_DEMO_ORDER_TEST: 'false'
@@ -81,7 +81,7 @@ jobs:
           test -n "${MT5_BRIDGE_URL:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_URL'; exit 1; }
           test -n "${MT5_BRIDGE_SECRET:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_SECRET'; exit 1; }
           test -n "${MT5_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: MT5_ACCOUNT_ID'; exit 1; }
-          test -n "${MT5_EXPECTED_DEMO_SERVER:-}" || { echo 'Missing GitHub staging secret: MT5_EXPECTED_DEMO_SERVER'; exit 1; }
+          test -n "${MT5_DEMO_SERVER:-}" || { echo 'Missing GitHub staging secret: MT5_EXPECTED_DEMO_SERVER'; exit 1; }
 
       - name: Run MT5 demo connectivity probe
         run: npm run accept:mt5:demo
