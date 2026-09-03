@@ -36,7 +36,7 @@ function plan(overrides = {}) {
   };
 }
 
-test('broker master fuse fails before account, dispatch, or state dependencies are touched', async () => {
+test('broker master fuse fails before account, authority, dispatch, or state dependencies are touched', async () => {
   const touched = [];
   const summary = await executeProductionPlan({
     workspaceId: 'ws-a',
@@ -45,6 +45,7 @@ test('broker master fuse fails before account, dispatch, or state dependencies a
     brokerExecutionEnabled: false,
   }, {
     accountLoader: async () => { touched.push('account'); throw new Error('must not load'); },
+    authorityLoader: async () => { touched.push('authority'); throw new Error('must not load authority'); },
     dispatchAction: async () => { touched.push('dispatch'); throw new Error('must not dispatch'); },
     stateBinder: async () => { touched.push('state'); throw new Error('must not bind'); },
   });
@@ -176,4 +177,42 @@ test('one account dispatch failure cannot block a successful sibling account', a
   assert.equal(bound[0].groupId, 'group-b');
   assert.equal(bound[0].legId, 'leg-b');
   assert.equal(bound[0].brokerPositionId, 'position-b');
+});
+
+test('final durable authority is reloaded before every action so revocation after action one blocks action two', async () => {
+  let authorityCalls = 0;
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a',
+    eventId: 'evt-db-1',
+    brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      actions: [
+        openAction({ idempotencyKey: 'evt-db-1:acct-a:leg:1', legId: 'leg-1' }),
+        openAction({ idempotencyKey: 'evt-db-1:acct-a:leg:2', legId: 'leg-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account(),
+    authorityLoader: async ({ workspaceId, tradingEventId, accountId }) => {
+      authorityCalls += 1;
+      assert.equal(workspaceId, 'ws-a');
+      assert.equal(tradingEventId, 'evt-db-1');
+      assert.equal(accountId, 'acct-a');
+      return {
+        event: { id: 'evt-db-1', workspace_id: 'ws-a', source_connection_id: 'src-1' },
+        source: { id: 'src-1', workspace_id: 'ws-a', is_active: true },
+        workspace: { id: 'ws-a', trading_access_enabled: true },
+        account: authorityCalls === 1
+          ? account()
+          : account({ safety_policy: { enabled: true, killSwitch: true } }),
+      };
+    },
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(authorityCalls, 2);
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'BLOCKED');
 });
