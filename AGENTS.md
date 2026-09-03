@@ -17,6 +17,8 @@ Operational source of truth for `MketyDigital/Trading`. Read this file before ch
 - Cloudflare core/security must remain Free-plan-compatible. Workers Paid may add optional capacity, but no trust boundary may depend on Enterprise-only BYOCA or Enterprise-only mTLS trust.
 - Cloudflare Containers are optional Paid MTProto capacity only. A Container binding must never itself select/start `cloudflare_container_mtproto`; only an exact active source configured with that provider may reach Container bootstrap/runtime.
 - `cloudflare-v2/wrangler.toml` is Paid. `cloudflare-v2/wrangler.free.toml` is the isolated no-Container Free-compatible profile.
+- Trading product infrastructure uses the `mkety.com` domain family; the current Trading application hostname is `trade.mkety.com`.
+- `mkety.app` is reserved for customer-owned apps/builds under the main Mkety/MKSaaS product and must not be used for Trading infrastructure.
 
 ## Product / tenancy contract
 
@@ -114,7 +116,7 @@ The Gate 2 acceptance job uses protected GitHub environment `staging`; it never 
 
 The Gate 3 certificate-probe job is designed to:
 - require ordinary CI first and protected GitHub environment `staging`;
-- target only `tradingview.mkety.app`;
+- target only `trade.mkety.com` in the owned `mkety.com` Cloudflare zone;
 - perform read-only Worker-domain and DNS conflict checks before any mutation;
 - temporarily deploy with `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=true`, `TRADING_ACCESS_ENABLED=false`, `BROKER_EXECUTION_ENABLED=false`;
 - pass `--containers-rollout none`;
@@ -254,26 +256,24 @@ Implementation GREEN:
 - commit `f64e6d8659058f9b1f6c3dc94cbe77ecb4f8cba2`
 - run `33726560705` — mandatory suites GREEN; all Cloudflare jobs skipped.
 
-Exact marker zone inventory:
-- trigger commit `58235313e78afd5626eb6026567b09deda63a3e6`
-- run `33726675933`
-- protected `cloudflare-inspect-gate3-zones` succeeded;
-- mandatory CI also succeeded;
+Exact-marker zone inventories proved the configured Cloudflare account owns both zones; the latest read-only run was:
+- trigger commit `04934bfb5234ab62e16f6d7911522d6da6cbffec`
+- run `33727420447`
+- `cloudflare-inspect-gate3-zones` SUCCESS;
+- mandatory CI SUCCESS;
 - direct ingress remained OFF;
 - cert probe remained OFF;
 - no deployment or DNS/custom-domain mutation occurred.
 
 Active zones discovered on the configured Cloudflare account:
-- `mkety.app`
-- `mkety.com`
+- `mkety.app` — reserved for MKSaaS/customer-owned apps/builds, not Trading;
+- `mkety.com` — Trading product domain family.
 
-Selected dedicated Gate 3 hostname:
-`tradingview.mkety.app`
+Selected Trading/Gate 3 hostname:
+`trade.mkety.com`
 
-Pinned zone ID for exact conflict checks:
-`111e5cbffce119ece633c104a76a9a15`
-
-Reason: TradingView ingress is application infrastructure; use `.app` and keep `.com` cleaner for public/marketing surfaces.
+Pinned `mkety.com` zone ID for exact conflict checks:
+`98c7228a0457b1f454881c149e2df6ce`
 
 ### Certificate-probe bridge — TDD verified, not yet triggered
 
@@ -287,17 +287,33 @@ Probe implementation:
 - commit `8d800be21755001dc58590da1beb91f836c47a4c`
 - added `cloudflare-probe-gate3-tradingview` exact-marker job.
 
-First ordinary implementation CI:
-- run `33727030013` failed only because the test file over-scoped one job block and required a literal hostname where the workflow used fixed `GATE3_HOSTNAME`;
-- the probe job and all other Cloudflare jobs were skipped, so no Cloudflare mutation occurred.
-
-Contract-test correction:
+Initial contract-test correction:
 - commit `29ca26ec70e0bc7e3d17afb1431ff37a786a5cba`
 - run `33727215432` — **SUCCESS**;
 - Node Worker/trading-core GREEN;
 - pure MT5 bridge GREEN;
 - both MTProto Python suites GREEN;
 - all Cloudflare jobs, including Gate 3 probe, skipped on this non-marker head.
+
+### Trading hostname boundary correction — TDD verified
+
+User product-domain correction: this Trading system lives at `trade.mkety.com`; `mkety.app` belongs to customer-owned apps/builds under Mkety/MKSaaS.
+
+RED contract:
+- commit `e0945a97f3d756cfba46e10787b2e289cdd0e613`
+- run `33727975091`
+- 520/522 Node tests passed;
+- the only two failures were the intentionally stale `tradingview.mkety.app` Gate 3 workflow references;
+- no Cloudflare action ran.
+
+GREEN implementation:
+- commit `26e2e7e789319a5ef81f7b8870bd36c53c7a77f1`
+- run `33728255826` — **SUCCESS**;
+- Node Worker/trading-core GREEN;
+- pure MT5 bridge GREEN;
+- both MTProto Python suites GREEN;
+- `cloudflare-inspect`, Gate 2 deploy/acceptance, Gate 3 zone inventory, and Gate 3 certificate probe all skipped;
+- workflow now targets `trade.mkety.com`, exact `mkety.com` zone ID `98c7228a0457b1f454881c149e2df6ce`, and variable-based hostname/DNS checks.
 
 ### Exact next safe action
 
@@ -308,7 +324,7 @@ cloudflare: probe tradingview gate 3
 ```
 
 Then inspect that single run. When the step `Start bounded real-time certificate probe and prove spoof rejection` is actively running:
-1. trigger exactly one genuine TradingView HTTPS webhook to `https://tradingview.mkety.app/api/v1/webhooks/tradingview/probe`;
+1. trigger exactly one genuine TradingView HTTPS webhook to `https://trade.mkety.com/api/v1/webhooks/tradingview/probe`;
 2. expect the HTTP response to remain 403 because direct ingress is still disabled/probe-only;
 3. require Cloudflare-observed `certPresented=true`, `fingerprintAvailable=true`, and exactly one stable normalized 64-hex SHA-256 fingerprint;
 4. allow the workflow to roll back automatically to known-good Worker version;
