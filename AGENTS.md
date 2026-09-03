@@ -89,8 +89,8 @@ Master plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan
 6. MT5/cTrader source acceptance — probe bridge GREEN / real demo probes pending
 7. Broker demo destinations — lifecycle bridge GREEN / real demo lifecycles pending
 8. End-to-end staging — static execution + retry bridge GREEN / real acceptance pending
-9. Production operations — static observability + account controls + fail-closed execution/recovery GREEN; resilience hardening active
-10. Tiny controlled cutover — not started
+9. Production operations — static observability + account controls + fail-closed execution/recovery + resilience hardening GREEN; real staging monitoring/kill/rollback/recovery acceptance pending
+10. Tiny controlled cutover — CLOSED / not started
 
 Final production requires mandatory in-scope gates GREEN or explicit reviewed scope removal. Real-money cutover additionally requires separate explicit approval.
 
@@ -347,11 +347,38 @@ GREEN at implementation head `f3f9a3d11d76beeb4e916970fb544c6ee26327cd`.
 - production contract 11/11
 - pure MT5 and pure MTProto mandatory suites SUCCESS
 - every Cloudflare inspect/probe/deploy/accept job skipped
+- documentation synchronization head `070d10740aa46f2760c3b808aae14e406f7ba35c`, run `33765193083`: Node/trading-core 649/649, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; every Cloudflare inspect/probe/deploy/accept job skipped
 
 Operations readiness metrics are read-only and additive. The optional metrics source is queried only for the exact authorized workspace and can expose only an allowlisted secret-free summary: ambiguity-AI review count, destination-AI fallback count, retry rate, uncertain rate, and p50/p95/p99 latency summaries for source-to-broker-send, broker round trip, and source-to-destination-ack. Numeric fields are bounded; cross-workspace metrics fail closed; ordinary metrics-source failure degrades to `{available:false}` and cannot block the durable operations snapshot or trading execution. No execution path consumes readiness metrics.
 
+### Resilience Task 9 — operational handoff and launch gates
+STATIC GREEN. Production Gate 9 remains real-acceptance pending.
+- runbook: `cloudflare-v2/docs/PRODUCTION_V1_CUTOVER_RUNBOOK.md`
+- implementation/documentation head `119c603094f98a33fb4b401675ed38a34236c329`
+- exact-head run `33765780100`
+- Node/trading-core 649/649
+- MT5 14/14
+- Container MTProto 11/11
+- external MTProto 22/22
+- every Cloudflare inspect/probe/deploy/accept job skipped
+
+The production runbook locks the hard hot-path rules, four-fuse default-off state, secret-free readiness signals, narrow-to-global kill hierarchy, deployment rollback procedure, restart/replay recovery authority, staged shadow/demo/tiny-live/beta rollout, and immediate stop conditions. It explicitly forbids inventing universal financial/risk thresholds: tiny-live limits must be owner-reviewed and recorded only at the separately authorized Gate 10 phase.
+
+Static resilience Tasks 1–9 are complete. This does not substitute for real acceptance. Production Gate 9 still requires authorized real staging monitoring, kill-control, rollback, recovery, security, and sustained latency/failure measurements.
+
+Remaining external acceptance blockers include:
+- Managed Zitadel real non-live identity acceptance.
+- Real Telegram account/channel soak with protected credentials.
+- MT5/cTrader real demo source probes and broker lifecycle acceptance with protected staging credentials and explicit workflow markers.
+- End-to-end real staging acceptance and sustained failure/latency measurements.
+- Gate 9 kill/rollback/recovery/security drills in the authorized staging environment.
+- Genuine TradingView-originated acceptance remains deferred while a paid TradingView webhook tier is unavailable; direct ingress stays fail-closed.
+
+Gate 10 is CLOSED / not started. Real-money cutover is forbidden until all applicable mandatory gates are GREEN (or an explicit reviewed scope removal is recorded) and the user separately gives explicit final tiny-live approval.
+
 ## Immediate safe next actions
-1. Run fresh exact-head ordinary CI after this `AGENTS.md` synchronization commit and record the resulting head/run only after all mandatory suites are GREEN.
-2. Complete Resilience Task 9 static documentation/runbook: hard hot-path rules, rollback procedure per fuse, readiness alerts/metrics, staged rollout, and the separate manual tiny-account approval gate.
+1. Review external acceptance prerequisites for Gates 4–9 and prepare the exact evidence/checklists required for each; do not trigger a real environment gate merely because static CI is GREEN.
+2. If credentials/protected environment prerequisites are available and the user separately authorizes the corresponding gate, execute only that gate's bounded acceptance procedure and record exact non-secret evidence here.
 3. Keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` unless a separately authorized acceptance gate explicitly requires otherwise.
 4. Do not deploy, mutate Cloudflare, run live probes, merge `main`, place broker orders, or enable real-money execution without the corresponding explicit gate/approval.
+5. Keep this `AGENTS.md` synchronized after every verified milestone so repository handoff state remains authoritative.
