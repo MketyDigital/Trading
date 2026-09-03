@@ -1,3 +1,5 @@
+import { renderTelegramDestination } from './telegram_presentation.js';
+
 function text(value) {
   return String(value ?? '').trim();
 }
@@ -8,6 +10,10 @@ function workspaceOf(destination = {}) {
 
 function destinationIdOf(destination = {}) {
   return text(destination.id ?? destination.destinationId ?? destination.destination_id);
+}
+
+function destinationTypeOf(destination = {}) {
+  return text(destination.type ?? destination.destinationType ?? destination.destination_type).toLowerCase();
 }
 
 function safeSuccessResult(result = {}) {
@@ -26,15 +32,26 @@ function rejectedOutcome(destinationId, reason) {
   };
 }
 
-async function dispatchOne({ workspaceId, destination, event, dispatch }) {
+async function dispatchOne({ workspaceId, destination, event, dispatch, aiFormatter }) {
   const destinationId = destinationIdOf(destination);
 
   try {
-    const result = await dispatch({
+    const input = {
       workspaceId,
       destination,
       event,
-    });
+    };
+
+    if (destinationTypeOf(destination) === 'telegram') {
+      input.presentation = await renderTelegramDestination({
+        canonicalEvent: event,
+        destination,
+        aiFormatter,
+        timeoutMs: destination?.presentation?.aiTimeoutMs,
+      });
+    }
+
+    const result = await dispatch(input);
 
     if (result?.success === false || result?.ok === false) {
       return {
@@ -63,6 +80,7 @@ export async function dispatchDestinationFanout({
   destinations = [],
   event,
   dispatch,
+  aiFormatter,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
   if (!trustedWorkspaceId) throw new TypeError('workspaceId is required');
@@ -92,6 +110,7 @@ export async function dispatchDestinationFanout({
       destination,
       event,
       dispatch,
+      aiFormatter,
     });
   });
 
