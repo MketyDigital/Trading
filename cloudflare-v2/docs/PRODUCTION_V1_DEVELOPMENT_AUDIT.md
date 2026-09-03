@@ -28,10 +28,12 @@ Later Sept 3 resilience/cutover rules control where they tighten earlier compone
 - Frozen audit-scope commit: `7b175a548c9134b0e88ba4fa5977de51142b6cd3`.
 - Matching pre-remediation `AGENTS.md` synchronization: `a9eecb4b9f843dbdbfc36c81961c7efa76c255af`.
 - Static remediation implementation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md`, commit `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
+- Task 1 detailed evidence sync: `905ec9ba10a35a7fb0ea6e6337da2364c73b049b`.
+- Task 1 AGENTS sync: `531c96fc469fdb9944ba1afce6d81988bc16cda3`.
 
 ## Current development stage
 
-`STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 1 GREEN / TASK 2 NEXT`
+`STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 2 GREEN / TASK 3 NEXT`
 
 The Production V1 Launch Master Plan remains controlling. General production still requires applicable real Gates 4–9, shadow production, production-infrastructure demo, separate tiny-live approval, tiny-live acceptance, controlled beta, and no unresolved severity-1/2 safety issue.
 
@@ -56,127 +58,161 @@ For every remediation task:
 
 ## Task 1 — enforce both Worker master fuses on every broker-capable path
 
-**Finding addressed:** F1.
-
+**Finding addressed:** F1.  
 **Status:** STATIC GREEN / F1 RESOLVED.
 
 ### RED
-
 - integration-test commit: `3bc54e60b85c065dfade8039fe0c9e0303aabacd`;
 - retry-test RED head: `7961849db8355c67801db5f68c3d5357f0768f99`;
-- exact PR run: `33782879644`;
+- PR run: `33782879644`;
 - mandatory test job: `100740562007`;
-- `Run Worker and trading-core tests` failed after the new missing-access-fuse assertions were introduced;
-- protected Cloudflare inspect jobs were skipped.
+- Worker/trading-core failed on the intended new missing-access-fuse regressions;
+- protected Cloudflare jobs skipped.
 
-The new regressions prove the intended contract:
+### Implementation / debugging / GREEN
+- execution-stage guard: `fc69dafa78803429c49028a31457a75746faf187`;
+- production retry guard: `11a143abc7c71e55beb5b2505048a1e3963d16f0`;
+- first GREEN attempt run `33783066190`, job `100741166130` exposed older positive test-fixture drift; production behavior was not weakened;
+- fixture-correction/final head: `1632889c6b26e88451ece25ba13c649b43357c5a`;
+- final PR run: `33783267187`;
+- test job: `100741828652` SUCCESS;
+- Worker/trading-core, pure MT5 bridge, Container/external MTProto Python all SUCCESS;
+- all Cloudflare inspect/probe/deploy/accept jobs SKIPPED.
 
-- normal execution with `TRADING_ACCESS_ENABLED=false` and broker fuse true must return `TRADING_ACCESS_DISABLED` and construct zero production dependencies;
-- production scheduled retry with Trading access disabled must perform zero Supabase construction, due scan, claim, dependency construction, or broker execution.
+**Resolved contract:** every production broker-capable entry/recovery path requires Trading access plus the broker master fuse before broker-capable work can begin.
+
+---
+
+## Task 2 — final durable execution authority and exact persisted event linkage
+
+**Findings addressed:** F2, F3, F4, F9.  
+**Status:** STATIC GREEN / F2, F3, F4, F9 RESOLVED.
+
+### RED
+
+Tests were added before production authority code:
+
+- final authority module contract: `85ba2c9352bc81b209227bd98d8d5e97a06dda84`;
+- persisted-event propagation test: `d94e98a1fa79bb0f557e8561676985146b41225b`;
+- per-action authority reload/revocation test: `903e53e6db4a22b9fbe40ee7b98d775595898644`;
+- durable retry source-revocation RED head: `71be214f260adf9800bee362ede92ebe62888d5e`.
+
+Exact RED verification:
+
+- feature head: `71be214f260adf9800bee362ede92ebe62888d5e`;
+- PR run: `33783879937`;
+- mandatory test job: `100743853586`;
+- Worker/trading-core failed on the intended missing final-authority contracts;
+- protected Cloudflare inspect/probe/deploy/accept jobs were skipped.
+
+The RED regressions require:
+
+- `result.eventId` to become server-owned `tradingEventId` for production dependency/delivery context;
+- exact persisted event/workspace/source/workspace-entitlement/account authority;
+- inactive/missing/cross-workspace source or account, disabled workspace entitlement, and account execution revocation to fail closed;
+- authority reload inside each action loop so a revocation after action 1 blocks action 2;
+- scheduled retry to use durable delivery `workspace_id`, `trading_event_id`, and exact destination/account identity rather than request-payload source/workspace hints.
 
 ### Minimal implementation
 
-- normal execution-stage guard commit: `fc69dafa78803429c49028a31457a75746faf187`;
-- production retry guard commit: `11a143abc7c71e55beb5b2505048a1e3963d16f0`.
+- created final authority loader: `543830329988630d7aef1e63cd292a93b568a76c`;
+- propagated persisted event ID through execution stage: `2b3bcba4a6cc8b84830f471eecd783ece7be1b2f`;
+- composed authority loader and durable event identity into production dependencies/delivery store: `de30aec9263d4000a204abe83952018294de9f0a`;
+- per-action coordinator authority reload final implementation head: `9ba95eea33748aea1ab641e2aab4e0aec67068dc`.
 
-The normal execution stage now checks Trading access before constructing account plans/dependencies. Production scheduled retry now checks Trading access before creating the retry runtime/Supabase/due scan. Existing broker-fuse behavior remains independently fail-closed.
+The new `createProductionExecutionAuthorityLoader()` is bound to server-owned `(workspaceId, tradingEventId)` and resolves only durable records:
 
-### First GREEN attempt / debugging
+1. exact `trading_events` row;
+2. exact originating `source_connections` row and active/workspace authority;
+3. exact `trading_workspace_access` entitlement;
+4. exact `trade_accounts` row and current active/execution state.
 
-- head: `11a143abc7c71e55beb5b2505048a1e3963d16f0`;
-- run: `33783066190`;
-- job: `100741166130`;
-- Node/trading-core failed; protected Cloudflare jobs remained skipped.
+The coordinator reloads this authority **inside every action loop** and dispatches using the current account row. Retry receives the same loader from the durable destination-delivery event/account context. Caller source/workspace/event hints do not become authority.
 
-Systematic debugging found test-fixture drift: older positive hot-path tests enabled only `BROKER_EXECUTION_ENABLED` because they predated the explicit two-fuse production contract. Production behavior was **not** weakened.
+### Verification nuance
 
-- fixture-correction head: `1632889c6b26e88451ece25ba13c649b43357c5a`.
+A normal branch push workflow for `9ba95eea...` was skipped by workflow design and is not counted as GREEN evidence:
 
-### Exact-head GREEN
+- push run: `33784443633` — SKIPPED.
 
-- exact head: `1632889c6b26e88451ece25ba13c649b43357c5a`;
-- PR run: `33783267187`;
-- mandatory test job: `100741828652` SUCCESS;
-- Worker/trading-core step SUCCESS;
-- pure MT5 bridge step SUCCESS;
-- Container/external MTProto Python step SUCCESS;
-- `cloudflare-inspect`, `cloudflare-inspect-gate3-zones`, `cloudflare-probe-gate3-tradingview`, `cloudflare-deploy-paid`, and `cloudflare-accept-gate2` all SKIPPED.
+The correct ordinary verification is the PR workflow:
 
-No Cloudflare mutation, probe, deploy, broker order, or live action occurred.
+- exact feature head: `9ba95eea33748aea1ab641e2aab4e0aec67068dc`;
+- PR merge-ref SHA contained that head: `4648138510fc4d97e07817d05d3cae72d91ae4fe`;
+- PR run: `33784508546`;
+- mandatory test job: `100745907350` SUCCESS;
+- Worker/trading-core SUCCESS;
+- pure MT5 bridge SUCCESS;
+- Container/external MTProto Python SUCCESS;
+- all Cloudflare inspect/probe/deploy/accept jobs SKIPPED.
 
-**Resolved contract:** every production broker-capable entry/recovery path now requires the Trading-access master fuse as well as the broker master fuse before broker-capable work can begin.
+No Cloudflare mutation, protected external probe, deployment, broker order, or live action occurred.
+
+**Resolved contracts:**
+
+- workspace entitlement is now a final server-side execution authority;
+- originating source active/workspace authority is revalidated before dispatch/retry;
+- account active/execution/safety authority can change between two actions and is reloaded before the next action;
+- normal production destination delivery now retains the exact persisted `tradingEventId`, enabling durable event→source recovery/audit traversal.
 
 ---
 
 # Frozen audit findings / current status
 
 ## F1 — Worker Trading access fuse missing on non-HTTP broker-capable paths
+**Status: RESOLVED STATIC GREEN in Task 1.**
 
-**Status: RESOLVED STATIC GREEN in Task 1.** See exact RED/GREEN evidence above.
+## F2 — workspace entitlement not final broker-dispatch authority
+**Status: RESOLVED STATIC GREEN in Task 2.**
 
-## F2 — workspace entitlement is not a final broker-dispatch authority check
+## F3 — account/safety authority loaded once per multi-action plan
+**Status: RESOLVED STATIC GREEN in Task 2.**
 
-**Status: OPEN / Task 2.** Admin authorization checks entitlement, but the live source-to-broker path does not yet revalidate exact `trading_workspace_access.trading_access_enabled` immediately before each broker action.
-
-## F3 — account active/execution/safety authority is loaded once per multi-action plan
-
-**Status: OPEN / Task 2.** A revocation after action N is not yet proven to block action N+1 immediately.
-
-## F4 — source disablement is not revalidated before dispatch/retry
-
-**Status: OPEN / Task 2.** Ingest authority is correct, but final execution/retry does not yet reload originating source authority.
+## F4 — source disablement not revalidated before dispatch/retry
+**Status: RESOLVED STATIC GREEN in Task 2.**
 
 ## F5 — successful broker delivery can remain durably unbound from Trade State after state-write failure
-
-**Status: OPEN / Task 4.** Repair must use persisted successful delivery/broker truth and must never resend solely to repair Trade State.
+**Status: OPEN / Task 4.** Repair must use persisted successful delivery/broker truth and never resend solely to repair Trade State.
 
 ## F6 — legacy `trade_accounts` workspace FK reintroduces MKSaaS/Trading coupling
+**Status: OPEN / Task 5.** Static migration contract required; real schema must be inspected read-only before later application.
 
-**Status: OPEN / Task 5.** Checked-in schema references shared `public.workspaces(id) ON DELETE CASCADE`. Static migration contract will be authored, but real schema must be inspected read-only before later application.
-
-## F7 — production risk-to-volume sizing is not broker-authoritative at send time
-
-**Status: OPEN / Task 3.** Simulation planning currently performs the monetary risk-to-lots calculation; live adapters only translate the precomputed lots.
+## F7 — production risk-to-volume sizing not broker-authoritative at send time
+**Status: OPEN / Task 3.** Simulation planning calculates monetary risk-to-lots; live adapters currently translate precomputed lots without a final broker-authoritative risk assertion.
 
 ## F8 — live MT5/cTrader volume normalization can increase planned volume
-
 **Status: OPEN / Task 3.** Production translation must fail closed rather than round/clamp a risk-increasing quantity upward.
 
-## F9 — normal production stage drops `tradingEventId` before destination-delivery persistence
+## F9 — normal production stage drops `tradingEventId`
+**Status: RESOLVED STATIC GREEN in Task 2.** Exact persisted event ID now reaches execution dependencies and destination delivery context.
 
-**Status: OPEN / Task 2.** Exact persisted event ID must reach production dependencies/delivery store.
-
-## F10 — final dispatch policy recheck lacks reliable current lots/risk/daily/open-risk inputs
-
-**Status: OPEN / Task 3.** Final policy/risk materialization must use exact canonical field names and fresh server/broker authority.
+## F10 — final dispatch policy recheck lacks reliable total-lots/risk/daily/open-risk inputs
+**Status: OPEN / Task 3.** Final policy/risk materialization must use the exact canonical fields plus fresh server/broker authority.
 
 ## I1 — runtime execution snapshot helper not integrated
-
-**Status: OPEN / Task 6.** Snapshot may optimize non-secret configuration only; final authority remains fresh.
+**Status: OPEN / Task 6.** Non-authoritative optimization only.
 
 ## I2 — warm broker context/session reuse incomplete
-
-**Status: OPEN / Task 7.** MT5 metadata is reloaded per action; cTrader runtime is authenticated/closed per action.
+**Status: OPEN / Task 7.**
 
 ## U1 — MT5 metadata GET transport boundary
-
-**Status: OPEN / Task 7.** Static remediation plan chooses authenticated metadata GET hardening rather than relying on undocumented private-only topology.
+**Status: OPEN / Task 7.** Static plan chooses authenticated metadata GET hardening rather than relying on undocumented private-only topology.
 
 ---
 
-# Root-cause boundaries retained for implementation
+# Root-cause boundaries retained for remaining implementation
 
-### A. Final server-authoritative execution check
+### A. Broker-authoritative risk materialization
 
-Immediately before every broker action, keyed by server-owned `(workspaceId, tradingEventId, accountId)`, revalidate persisted event/source identity, source active/workspace match, workspace entitlement, exact account active/execution/safety/kill state, and current risk inputs. Caller hints are never authority.
+Simulation remains planning/audit authority, but immediately before risk-increasing broker send the final executable volume and policy must be validated against current server-loaded account configuration plus broker-authoritative account/symbol economics. If reliable monetary loss-at-stop cannot be established, fail closed.
 
-### B. Broker-authoritative risk materialization
+### B. Strict production volume validation
 
-Simulation remains planning/audit. Final risk-increasing lots must be verified/materialized from current broker/account truth before send. Live normalization may not raise intended risk.
+Production execution must never increase planned/risk-approved volume merely to satisfy broker minimum/step. Below-minimum, above-maximum, or invalid-step execution quantity must block rather than clamp upward.
 
 ### C. Successful-delivery state-binding repair
 
-Repair exact Trade State from already-persisted delivery success + trusted group/leg/broker identifiers. No broker resend.
+Repair exact Trade State from persisted delivery success + trusted group/leg/broker identifiers. No broker resend.
 
 ### D. Trading-owned trade-account tenancy
 
@@ -199,16 +235,20 @@ Use snapshot/session reuse only for non-authoritative metadata/performance. Fres
 
 ## Exact pickup point
 
-1. Task 1 is complete and F1 is static GREEN at `1632889c...` / run `33783267187`.
-2. Start **Task 2 RED only** from `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md`.
-3. First Task 2 regressions must prove:
-   - `result.eventId` becomes `tradingEventId` in production dependency/delivery context;
-   - exact event/workspace/source/workspace-entitlement/account authority fails closed on mismatch/revocation;
-   - authority is reloaded inside the action loop so revocation after action 1 blocks action 2;
-   - retry uses durable delivery `workspace_id` + `trading_event_id` + exact account destination context and never request-payload source/workspace hints.
-4. Verify Task 2 RED through ordinary PR CI before production implementation.
-5. Continue Tasks 3–8 only after their own RED/GREEN cycles.
-6. Only after static remediation is exact-head GREEN return to separately authorized real Gates 4–9.
+1. Task 1 is static GREEN at `1632889c...` / run `33783267187`.
+2. Task 2 is static GREEN at feature head `9ba95eea...` / PR run `33784508546`, job `100745907350`.
+3. Start **Task 3 RED only** from `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md`.
+4. Task 3 tests must first prove, through real production composition where applicable:
+   - `maxLotsPerTrade` blocks when the final action total exceeds it;
+   - `maxRiskPercent` blocks with the real execution-stage/coordinator data shape;
+   - current daily loss and current open-risk limits block before broker send;
+   - MT5 requested lots below live broker minimum or off-step THROW rather than clamp/round upward;
+   - cTrader canonical lots producing below-minimum/off-step protocol volume THROW rather than clamp/round upward;
+   - a risk-percent OPEN is blocked when current broker-authoritative account/symbol economics make the planned lots exceed configured risk;
+   - missing reliable loss-at-stop model fails closed.
+5. Verify Task 3 RED through ordinary PR CI before modifying production risk/volume code.
+6. Continue Tasks 4–8 only after their own RED/GREEN cycles.
+7. Only after static remediation is exact-head GREEN return to separately authorized real Gates 4–9.
 
 ## Safety state during static remediation
 
