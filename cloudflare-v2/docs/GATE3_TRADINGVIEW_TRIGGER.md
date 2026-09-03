@@ -11,6 +11,7 @@ Trading hostname:
 Product-domain boundary:
 - Trading infrastructure and this Gate 3 probe use `trade.mkety.com`.
 - `mkety.app` is reserved for customer-owned apps/builds under the main Mkety/MKSaaS product and must not be used for Trading infrastructure.
+- The Gate 3 workflow contract is pinned to this boundary and rejects the former `tradingview.mkety.app` target.
 
 Safety posture for this probe:
 - TradingView direct ingress remains disabled.
