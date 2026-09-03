@@ -74,6 +74,23 @@ test('ordinary CI stays lightweight and docs-only edits do not trigger branch or
   assert.match(triggerBlock, /pull_request:[\s\S]*?paths:/);
 });
 
+test('feature branch regression runs once via PR while exact push gates still retain test dependency', async () => {
+  const workflow = await readCiWorkflow();
+  const testStart = workflow.indexOf('  test:');
+  const inspectStart = workflow.indexOf('  cloudflare-inspect:');
+  const testBlock = workflow.slice(testStart, inspectStart);
+
+  assert.match(testBlock, /github\.event_name == 'pull_request'/);
+  assert.match(testBlock, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(testBlock, /github\.event_name == 'push'/);
+  assert.match(testBlock, /github\.ref == 'refs\/heads\/design\/enterprise-trading-event-core'/);
+  assert.match(testBlock, /github\.event\.head_commit\.message == 'cloudflare: deploy paid staging gate 2'/);
+  assert.match(testBlock, /github\.event\.head_commit\.message == 'cloudflare: accept staging gate 2'/);
+  assert.match(testBlock, /github\.event\.head_commit\.message == 'cloudflare: probe tradingview gate 3'/);
+  assert.doesNotMatch(testBlock, /cloudflare: inspect staging gate 2/);
+  assert.doesNotMatch(testBlock, /cloudflare: inspect tradingview gate 3/);
+});
+
 test('Cloudflare inspection is explicit marker-only and remains read-only', async () => {
   const workflow = await readCiWorkflow();
   const start = workflow.indexOf('cloudflare-inspect:');
