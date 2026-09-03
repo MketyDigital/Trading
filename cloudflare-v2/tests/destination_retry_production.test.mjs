@@ -48,7 +48,7 @@ test('production retry claims through existing persistent store and dispatches o
       assert.equal(context.workspaceId, 'ws-1');
       assert.equal(context.tradingEventId, 'evt-db-1');
       claimedStoreFactory = overrides.deliveryStoreFactory;
-      return { accountLoader: async () => null, dispatchAction: async () => null, stateBinder: async () => null };
+      return { accountLoader: async () => null, authorityLoader: async () => null, dispatchAction: async () => null, stateBinder: async () => null };
     },
     executeProductionFn: async ({ workspaceId, accountPlans, brokerExecutionEnabled }, deps) => {
       assert.equal(workspaceId, 'ws-1');
@@ -137,6 +137,61 @@ test('revoked account authority after retry scheduling becomes terminal without 
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'fail');
   assert.equal(calls[0][1], row.idempotency_key);
+});
+
+test('source revocation is re-resolved from durable retry event authority and blocks broker dispatch', async () => {
+  const row = retryRow({
+    request_payload: {
+      destinationType: 'mt5',
+      accountId: 'acc-1',
+      groupId: 'g1',
+      sourceId: 'attacker-source-hint',
+      workspaceId: 'attacker-workspace-hint',
+      action: { type: 'OPEN_POSITION', legId: 'l1', idempotencyKey: 'group:g1:leg:l1:open' },
+    },
+  });
+  const calls = [];
+  let brokerDispatches = 0;
+  const baseStore = {
+    async claimRetry() { return { claimed: true, row: { ...row, status: 'PENDING', attempt_count: 2 } }; },
+    async reserve() { throw new Error('must not reserve when authority is revoked'); },
+    async complete() {},
+    async markRetryable() {},
+    async markUncertain() {},
+    async fail(key, metadata) { calls.push(['fail', key, metadata]); },
+  };
+
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    listDueFn: async () => [row],
+    deliveryStoreFactory: () => baseStore,
+    executionDepsFactory: async (context) => {
+      assert.equal(context.workspaceId, 'ws-1');
+      assert.equal(context.tradingEventId, 'evt-db-1');
+      assert.notEqual(context.workspaceId, row.request_payload.workspaceId);
+      return {
+        accountLoader: async () => ({
+          id: 'acc-1', workspace_id: 'ws-1', is_active: true, execution_enabled: true,
+          safety_policy: { enabled: true, killSwitch: false },
+        }),
+        authorityLoader: async ({ workspaceId, tradingEventId, accountId }) => {
+          assert.equal(workspaceId, 'ws-1');
+          assert.equal(tradingEventId, 'evt-db-1');
+          assert.equal(accountId, 'acc-1');
+          const error = new Error('originating source is inactive');
+          error.code = 'EXECUTION_AUTHORITY_REVOKED';
+          throw error;
+        },
+        dispatchAction: async () => { brokerDispatches += 1; return { ok: true }; },
+        stateBinder: async () => {},
+      };
+    },
+  });
+
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  assert.equal(brokerDispatches, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(calls.some(([method]) => method === 'fail'), true);
 });
 
 test('destination/account mismatch fails closed before constructing execution dependencies', async () => {
