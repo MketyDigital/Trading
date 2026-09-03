@@ -78,3 +78,14 @@ test('PR branch CI provides an inspect-only Cloudflare staging fallback without 
   assert.doesNotMatch(workflow, /cloudflare-inspect:[\s\S]*?npx wrangler deploy --config wrangler\.toml(?! --dry-run)/);
   assert.doesNotMatch(workflow, /cloudflare-inspect:[\s\S]*?npx wrangler deploy --config wrangler\.free\.toml(?! --dry-run)/);
 });
+
+test('Cloudflare inspect records undeployed Workers without hiding real API failures and still checks both profiles', async () => {
+  const workflow = await readCiWorkflow();
+
+  assert.match(workflow, /Inspect Paid Worker deployment history[\s\S]*?continue-on-error:\s*true/);
+  assert.match(workflow, /Inspect Free Worker deployment history[\s\S]*?continue-on-error:\s*true/);
+  assert.match(workflow, /paid_deployments\.outcome/);
+  assert.match(workflow, /free_deployments\.outcome/);
+  assert.match(workflow, /Worker does not exist on your account|code:\s*10007/);
+  assert.match(workflow, /exit 1/);
+});
