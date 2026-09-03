@@ -74,7 +74,7 @@ No identity role, admin API, source enablement, account enablement, database mig
 6. MT5/cTrader source acceptance — **PROBE BRIDGE GREEN / REAL DEMO PROBES PENDING**
 7. Broker demo destinations — **LIFECYCLE BRIDGE GREEN / REAL DEMO LIFECYCLES PENDING**
 8. End-to-end staging — **STATIC EXECUTION + DURABLE RETRY BRIDGE GREEN / REAL ACCEPTANCE PENDING**
-9. Production operations — **STATIC OBSERVABILITY + ACCOUNT CONTROL + FAIL-CLOSED EXECUTION/RECOVERY GREEN; FURTHER OPS READINESS PENDING**
+9. Production operations — **STATIC OBSERVABILITY + EVENT CORRELATION + ACCOUNT CONTROL + FAIL-CLOSED EXECUTION/RECOVERY GREEN; FURTHER OPS READINESS PENDING**
 10. Tiny controlled cutover — **NOT STARTED**
 
 Independent gates may proceed out of number order. Production still requires every mandatory in-scope gate GREEN or an explicit reviewed V1 scope change. Real-money cutover additionally requires separate explicit user approval.
@@ -200,6 +200,24 @@ TDD evidence:
 - first GREEN candidate `07296de6bb996279c770c818b5e7d803f4785619`, run `33746788084`: one semantic mismatch exposed—future RETRYABLE row without persisted failure metadata was incorrectly classified as a recent failure.
 - root-cause fix `d7db5f6fa7bbe6707c6d24deeeda4c8e801c3558`, run `33747023882`: **Node 589/589, MT5 14/14, Container MTProto 11/11, external MTProto 22/22**; all Cloudflare deploy/probe/inspection/acceptance jobs skipped.
 
+### Event audit/correlation — STATIC GREEN
+Read-only endpoint: `GET /api/v1/admin/events/:eventId/audit`.
+
+Contract:
+- owner/admin only via existing `operations.read`; operator/viewer denied;
+- exact authenticated workspace scope on Trading Event, source, Position Groups, legs, and destination deliveries;
+- correlates both the originating `source_event_id` and later `source_event_ids` membership so follow-up/management events resolve the same durable trade group;
+- returns selected safe source/event/group/leg/delivery identifiers and state, including broker position/order IDs only as non-secret correlation identifiers;
+- canonical intent is recursively stripped of secret/token/password/credential/authorization/API-key/private-key/cipher keys before return;
+- DB projections never read raw event text, structured payload/metadata, source ciphertext/config, delivery idempotency keys, delivery request payloads, or delivery response/raw broker payloads;
+- missing exact-workspace event returns 404; non-GET methods are rejected;
+- existing persistence does not record complete historical operator actors for this chain, so the endpoint explicitly reports `historyCoverage.actorHistoryRecorded=false` rather than inventing attribution;
+- no migration and no execution-state mutation.
+
+TDD evidence:
+- RED `487bce9f69e54412f5f06ad752f1b64c93e277f9`, run `33747958370`: **589/591 Node passed**; exactly the two new absent-route contracts failed with 404; Cloudflare jobs skipped.
+- GREEN `d7ce1dcc2af970d87df295222b8f2c688a07760d`, run `33748401905`, job `100626110498`: **Node 591/591, MT5 14/14, Container MTProto 11/11, external MTProto 22/22**; every Cloudflare deploy/probe/inspection/acceptance job skipped.
+
 Safety state after this batch:
 ```text
 TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
@@ -207,7 +225,7 @@ TRADINGVIEW_CERT_PROBE_ENABLED=false
 TRADING_ACCESS_ENABLED=false
 BROKER_EXECUTION_ENABLED=false
 ```
-No Cloudflare deployment, broker/demo action, Zitadel mutation, or real-money execution was performed.
+No Cloudflare deployment, broker/demo action, Zitadel mutation, Telegram external action, or real-money execution was performed.
 
 ## Current production blockers / deferred real acceptance
 These are integration/environment acceptance items, not reasons to rewrite proven core contracts:
@@ -219,6 +237,6 @@ These are integration/environment acceptance items, not reasons to rewrite prove
 - Gate 10 real-money cutover remains forbidden without separate explicit user approval.
 
 ## Exact next safe action
-Continue **Gate 9 static operations/readiness** without waiting for external services. Inspect the existing durable correlation/audit trail across authenticated actor/workspace, native source event, canonical Trading Event, interpretation/intent, Position Group/legs, destination delivery/retry and broker result. Do not invent a parallel audit database if existing durable IDs already provide the correlation chain. Present the next bounded design under the Superpowers brainstorming approval gate before implementation.
+Continue **Gate 9 static operations/readiness** by first inspecting whether any existing Trading-owned table already records historical admin/operator mutations with actor subject, workspace, action, target, and timestamp. If no adequate durable actor audit exists, the next likely production slice is an append-only admin action audit trail for sensitive control-plane mutations (membership, source control/defaults, account execution toggle, account kill switch). That change would add persistence/migration behavior and must receive a separate bounded design approval before implementation; do not infer historical actors retroactively.
 
 Keep all four runtime safety flags OFF, do not deploy or call real broker services for the static batch, and do not merge `main` without explicit user instruction.
