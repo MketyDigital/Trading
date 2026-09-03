@@ -366,6 +366,16 @@ The production runbook locks the hard hot-path rules, four-fuse default-off stat
 
 Static resilience Tasks 1–9 are complete. This does not substitute for real acceptance. Production Gate 9 still requires authorized real staging monitoring, kill-control, rollback, recovery, security, and sustained latency/failure measurements.
 
+### External acceptance readiness matrix
+STATIC GREEN / operator handoff prepared. No external gate was executed.
+- matrix: `cloudflare-v2/docs/PRODUCTION_V1_ACCEPTANCE_READINESS.md`
+- matrix head `dc08f12c43493f2049793efc5b629382cfccb613`
+- exact-head run `33766482011` SUCCESS
+- mandatory Worker/trading-core + pure MT5 + pure MTProto job SUCCESS
+- every Cloudflare inspect/deploy/accept and TradingView probe job in the run skipped
+
+The matrix consolidates Gates 3–10 into one operator-facing contract: per-gate prerequisites, separate authorization boundary, protected environment/workflow markers, master-fuse requirements, required evidence, rollback/cleanup expectations, and mandatory exit state. It records the Gate 6 source-probe and Gate 7 dedicated-demo lifecycle distinctions explicitly and keeps Gate 10 CLOSED. The matrix is documentation only and grants no deployment, Cloudflare mutation, live probe, broker-order, `main` merge, or real-money authority.
+
 Remaining external acceptance blockers include:
 - Managed Zitadel real non-live identity acceptance.
 - Real Telegram account/channel soak with protected credentials.
@@ -377,8 +387,8 @@ Remaining external acceptance blockers include:
 Gate 10 is CLOSED / not started. Real-money cutover is forbidden until all applicable mandatory gates are GREEN (or an explicit reviewed scope removal is recorded) and the user separately gives explicit final tiny-live approval.
 
 ## Immediate safe next actions
-1. Review external acceptance prerequisites for Gates 4–9 and prepare the exact evidence/checklists required for each; do not trigger a real environment gate merely because static CI is GREEN.
-2. If credentials/protected environment prerequisites are available and the user separately authorizes the corresponding gate, execute only that gate's bounded acceptance procedure and record exact non-secret evidence here.
-3. Keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` unless a separately authorized acceptance gate explicitly requires otherwise.
+1. Static resilience and external-acceptance preparation are complete. The next meaningful milestone requires a separately authorized real/non-live acceptance Gate 4, 5, 6, 7, 8, or 9 whose protected prerequisites are available.
+2. Before any such gate, use `cloudflare-v2/docs/PRODUCTION_V1_ACCEPTANCE_READINESS.md` to verify prerequisites, exact markers, required fuse state, evidence, rollback/cleanup, and exit state; record the candidate SHA here before environment work.
+3. Keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` unless that separately authorized acceptance gate explicitly requires a bounded exception.
 4. Do not deploy, mutate Cloudflare, run live probes, merge `main`, place broker orders, or enable real-money execution without the corresponding explicit gate/approval.
 5. Keep this `AGENTS.md` synchronized after every verified milestone so repository handoff state remains authoritative.
