@@ -140,6 +140,29 @@ It:
 - deploys Paid only;
 - never deploys Free in that job.
 
+### Explicit Gate 2 acceptance
+Real Gate 2 non-broker acceptance is opt-in only with exact commit message:
+
+```text
+cloudflare: accept staging gate 2
+```
+
+The `cloudflare-accept-gate2` job:
+- requires ordinary tests first;
+- runs only on the exact active branch using protected environment `staging`;
+- requires GitHub staging secret `SUPABASE_SERVICE_ROLE` in addition to the existing Cloudflare credentials;
+- generates `TRADING_MASTER_KEY`, source-signing secret, internal transport token, and Trade State token ephemerally inside the runner and masks them;
+- temporarily deploys the reviewed Worker with simulation enabled using a runner-only secrets file;
+- passes `--containers-rollout none`, so this acceptance run does not update/build/roll out the Container application;
+- uses a temporary isolated `external_mtproto` source, never `cloudflare_container_mtproto`;
+- sends the same native source event twice through `/api/v1/internal/source-event` and proves the real Queue/consumer path persists exactly one canonical Trading Event;
+- runs a separate signed simulation probe against the same temporary source and proves one READY simulation account with three `simulated=true` actions while top-level `executionEnabled=false`;
+- uses only a random placeholder broker ciphertext for the disposable simulation account; no live broker credential is present;
+- keeps Worker-wide `BROKER_EXECUTION_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, TradingView direct ingress false, and cert probe false;
+- proves the Container application remains `Ready` with `0` live instances;
+- deletes temporary acceptance database fixtures in `finally`;
+- always rolls the Worker back to known-good version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` if the temporary acceptance deployment succeeded.
+
 `cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md` is the dedicated trigger-document path for explicit Gate 2 marker commits. Do not use random docs edits as trigger commits.
 
 ## Gate 2 — Real Cloudflare staging infrastructure
@@ -161,7 +184,7 @@ Results:
 - `cloudflare-deploy-paid`: SUCCESS
 - Worker deployed: `mkety-copier-engine`
 - Worker version: `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
-- Worker URL created on workers.dev
+- Worker URL: `https://mkety-copier-engine.dry-glitter-7e16.workers.dev`
 - Queue created: `mkety-trading-source-events`
 - DLQ created: `mkety-trading-source-events-dlq`
 - Container application created: `mkety-copier-engine-mtprotocontainerruntime`
@@ -177,17 +200,31 @@ User subsequently verified Cloudflare dashboard state:
 
 Therefore the earlier 7-instance reading is recorded as transient deployment/provisioning activity, not persistent application MTProto selection. Code-side Container start remains fail-closed: bootstrap requires an active Telegram source with provider type exactly `cloudflare_container_mtproto`, and the runtime only calls `ctx.container.start()` through explicit start/restart paths after valid bootstrap.
 
+### Gate 2 acceptance harness/gate — ready, not yet run
+
+Acceptance harness commit:
+`9eb3e26e69d308070515583f0f98e54a1fb19342`
+
+Workflow/contract implementation commit:
+`b4512415fe4809df54ee0db9827a049197adae12`
+
+Files:
+- `cloudflare-v2/scripts/gate2_queue_acceptance.mjs`
+- `cloudflare-v2/tests/gate2_acceptance_workflow.test.mjs`
+- `.github/workflows/trading-v1-ci.yml`
+
+Local RED before implementation proved the new acceptance contract was absent without consuming GitHub Actions or Cloudflare resources. The implementation is intentionally marker-gated so ordinary pushes cannot run the Cloudflare acceptance job.
+
 ## Gate 2 current status
 
-**PAID STAGING INFRASTRUCTURE DEPLOYED; CONTAINER SETTLED READY/0; REMAINING NON-BROKER ACCEPTANCE + ROLLBACK EVIDENCE PENDING.**
+**PAID STAGING INFRASTRUCTURE DEPLOYED; CONTAINER SETTLED READY/0; ACCEPTANCE HARNESS/GATE IMPLEMENTED; WAITING ONLY FOR `SUPABASE_SERVICE_ROLE` IN GITHUB `staging` BEFORE ONE EXPLICIT ACCEPTANCE RUN.**
 
 Still required before Gate 2 exit:
-1. check deployed Worker health/readiness without enabling Trading access, TradingView ingress, cert probe, or broker execution;
-2. perform one non-broker simulation event and verify single canonical acceptance/delivery behavior;
-3. prove Container non-selection during that non-Container simulation;
-4. record prior known-good Worker version and prove rollback path;
-5. batch resulting evidence and any necessary implementation changes;
-6. update this file after that meaningful batch.
+1. add GitHub environment `staging` secret `SUPABASE_SERVICE_ROLE` without exposing it in chat;
+2. create one harmless exact-marker commit `cloudflare: accept staging gate 2`;
+3. inspect one acceptance run for Queue dedupe, non-broker simulation, Container Ready/0, cleanup, and rollback;
+4. read-only query Supabase after run to prove temporary fixtures were removed;
+5. update this file with exact evidence and mark Gate 2 GREEN only if all checks pass.
 
 Do not start Gate 3 TradingView certificate acceptance, Gate 4 Zitadel acceptance, broker demos/live execution, or `main` merge until their explicit gates/approval.
 
@@ -201,14 +238,14 @@ Do not start Gate 3 TradingView certificate acceptance, Gate 4 Zitadel acceptanc
 - one-shot deploy-gate GREEN `33719868426`
 - first Paid deployment SUCCESS `33720102208` @ `bbba25091eb88778fa7243760b704b0b85ab5c6a`
 - post-deploy Container state manually verified by user: `Ready`, `0` live instances
+- low-consumption CI GREEN `33721886584` @ `3b6f427760cca72325c1603399f130e7897a8013`
 
 ## Exact next safe starting point
 
-Do **not** trigger another deploy or Cloudflare inspect just to gather routine evidence.
+Do not run Cloudflare acceptance until GitHub environment `staging` contains `SUPABASE_SERVICE_ROLE`.
 
-Next:
-- use read-only/direct Worker health probing where possible;
-- determine the minimum non-broker simulation prerequisites;
-- batch any required code/config/test/runbook/AGENTS changes;
-- only when account-side verification is actually needed, trigger the exact explicit inspect marker once;
-- only deploy again if a proven code/config change requires it.
+After that secret exists:
+- use one exact marker commit `cloudflare: accept staging gate 2`;
+- inspect the single acceptance run rather than issuing separate deploy/inspect runs;
+- if GREEN, prove Supabase cleanup read-only and mark Gate 2 complete;
+- if it fails, use existing logs/read-only SQL first and fix only the proven issue, avoiding repeated builds/deployments.
