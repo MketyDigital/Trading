@@ -7,6 +7,7 @@ import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
+import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
@@ -150,13 +151,11 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
 
-      // Versioned enterprise APIs live outside the legacy Telegram-oriented
-      // Worker so new contracts can be secured and tenant-scoped independently.
+      // Health and exact internal service routes stay available independently
+      // so operators and first-party source handoff can function while tenant
+      // Trading access is globally disabled.
       if (url.pathname === '/api/v1/health') {
         return healthResponse(request, env);
-      }
-      if (url.pathname === '/api/v1/events') {
-        return eventsHandler(request, env, { ctx });
       }
       if (url.pathname === '/api/v1/internal/source-event') {
         return internalSourceHandler(request, env, { ctx });
@@ -164,10 +163,19 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/v1/internal/')) {
         return notFoundResponse();
       }
+
+      // Externally reachable V1 Trading application APIs require an explicit
+      // Worker-wide access opt-in. Missing configuration fails closed.
+      if (url.pathname === '/api/v1/events') {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return eventsHandler(request, env, { ctx });
+      }
       if (url.pathname.startsWith('/api/v1/admin/')) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return adminHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/tradingview/')) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return tradingViewHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/')) {
