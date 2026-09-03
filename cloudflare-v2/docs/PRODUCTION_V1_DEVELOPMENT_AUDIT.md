@@ -2,242 +2,368 @@
 
 ## Purpose
 
-This document is the detailed continuation record for the development-to-production audit of draft PR #2 on `design/enterprise-trading-event-core`. It exists so a new session can resume from the latest approved architecture and verified evidence without treating older milestone language as the current production-ready definition.
+This is the detailed continuation record for the development-to-production audit of draft PR #2 on `design/enterprise-trading-event-core`. It is the technical pickup document behind `AGENTS.md`.
 
-This document does not authorize Cloudflare mutation, deployment, external probes, broker demo orders, `main` merge, real-money execution, or Gate 10.
+It does **not** authorize Cloudflare mutation, deployment, external probes, broker demo orders, `main` merge, real-money execution, or Gate 10.
 
 ## Authority order
 
-Use the following precedence whenever documents appear to disagree:
+When documents conflict, use this precedence:
 
-1. `AGENTS.md` plus `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md` for current operational/launch truth.
-2. Latest approved Sept 3 technical specs/plans, especially:
+1. `AGENTS.md` + `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
+2. Latest approved Sept 3 technical specs/plans:
    - `docs/superpowers/specs/2026-09-03-production-execution-bridge-design.md`
    - `docs/superpowers/plans/2026-09-03-production-execution-bridge-implementation-plan.md`
    - `docs/superpowers/specs/2026-09-03-hot-path-isolation-and-resilience-design.md`
    - `docs/superpowers/plans/2026-09-03-hot-path-isolation-and-resilience.md`
    - `docs/superpowers/plans/2026-09-03-destination-retry-outbox.md`
-3. Current production acceptance/cutover runbooks:
+3. Current acceptance/cutover runbooks:
    - `cloudflare-v2/docs/PRODUCTION_V1_ACCEPTANCE_READINESS.md`
    - `cloudflare-v2/docs/PRODUCTION_V1_CUTOVER_RUNBOOK.md`
    - `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
-4. Sept 2 identity/source/TradingView documents only where still referenced by the Sept 3 launch program.
-5. Sept 1 foundation documents are historical context and do not define final production readiness.
+4. Sept 2 identity/source/TradingView documents where still referenced by the Sept 3 launch program.
+5. Sept 1 foundation docs are historical context, not the definition of final production readiness.
 
-## Repository state at audit restart
+Later Sept 3 cross-cutting resilience/cutover contracts control where they tighten an earlier component plan. Relevant chronology:
+
+- execution bridge design: `d5075cc...` ~08:51 UTC;
+- destination retry plan: `f124b5e8ad23fcb313da9a38627d520838a5d462` 09:50 UTC;
+- hot-path resilience design: `1a01ae503f6d504e4d3d12747ea1f2b7139162af` 12:28 UTC;
+- hot-path resilience plan: `cd35b5f8f13f603e3b2f2f68186fe0b365a3df53` 12:32 UTC;
+- production cutover runbook: `119c603094f98a33fb4b401675ed38a34236c329` 14:15 UTC.
+
+## Repository / verification baseline
 
 - Repository: `MketyDigital/Trading`
 - Branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 -> `main`
-- Previously trusted content tree: `89944d3b6aa4b03f6bb1a1107594e9acfa424fb3`
-- Audit add/remove history advanced the branch to `44a524bd9a61c35f5e0e4d0c8a2287b6db2e952f` with zero file differences versus `89944d3...` before this document was added.
-- Last verified PR CI on the trusted tree: run `33766769463` SUCCESS; Node/trading-core 649/649, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; Cloudflare inspect/probe/deploy/accept jobs skipped.
-- Detailed audit checkpoint 1 commit: `9a2b1e05437da8bfb7beacab190092eb5905b649`.
-- `AGENTS.md` audit-reopen synchronization commit: `265684933aede9ffca230457bc9a02ad90f950cd`.
-- Detailed audit checkpoint 2 commit: `af53fe94bd985843eb47916564642449e94fd4c5`.
-- `AGENTS.md` checkpoint 2 synchronization commit: `13dc1d4861c106a7c65bbdf2c60f3b2c91a3a9c0`.
-- PR remains draft; no merge or live activation is authorized.
+- Trusted pre-audit runtime/content tree: `89944d3b6aa4b03f6bb1a1107594e9acfa424fb3`
+- Last exact trusted PR CI for that tree: run `33766769463` SUCCESS.
+- Test evidence at that run: Node/trading-core 649/649, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; Cloudflare inspect/probe/deploy/accept jobs skipped.
+- Audit add/delete history advanced the branch with no runtime tree difference before the audit docs were added.
+- Audit checkpoints already recorded:
+  - `9a2b1e05437da8bfb7beacab190092eb5905b649`
+  - `af53fe94bd985843eb47916564642449e94fd4c5`
+  - `e5d83c663afc8e00bb8ba7441d831ac7f6fa0f7d`
+- Matching AGENTS synchronizations already recorded:
+  - `265684933aede9ffca230457bc9a02ad90f950cd`
+  - `13dc1d4861c106a7c65bbdf2c60f3b2c91a3a9c0`
+  - `c5f58123518d9dd03489b0437e422c97e1817366`
 
-## Latest master-plan production definition
+No current documentation-only audit head is to be called exact-head GREEN until an applicable workflow actually verifies it.
 
-The Sept 3 Production V1 Launch Master Plan remains controlling. Production-ready/general launch still requires real evidence for applicable gates including real identity/source/demo-broker acceptance, end-to-end staging/failure soak, operations/rollback/security drills, shadow production, production-infrastructure demo, separate tiny-live approval, tiny-live acceptance, and controlled beta.
+## Current development stage
 
-Therefore this branch is still under development toward real production. It is not at branch-finishing/merge stage.
+`LATEST-APPROVED STATIC PRODUCTION AUDIT COMPLETE ENOUGH TO PLAN REMEDIATION / REMEDIATION REQUIRED BEFORE REMAINING REAL ACCEPTANCE`
 
-## Root-cause audit method
+The Sept 3 Production V1 Launch Master Plan remains controlling. General production still requires applicable real identity/source/demo-broker acceptance, end-to-end staging/failure soak, operations/rollback/security drills, shadow production, production-infrastructure demo, separate tiny-live approval, tiny-live acceptance, and controlled beta.
 
-For each claimed GREEN contract:
+This PR is not at branch-finishing/merge stage.
+
+## Audit method
+
+For every prior GREEN claim:
 
 1. read the latest approved requirement;
-2. trace the real runtime call chain, including HTTP, Queue, scheduled retry, database authority, coordinator and broker dependencies;
-3. distinguish a standalone helper/test from actual production composition;
-4. identify the exact missing boundary before proposing a fix;
-5. use TDD RED before production-code modification;
-6. verify exact implementation head through ordinary PR CI;
-7. keep protected Cloudflare/demo/live workflows skipped unless separately authorized;
-8. synchronize this document and `AGENTS.md` after each verified batch.
+2. trace the actual HTTP, Queue, scheduled retry, persistence, coordinator and adapter call chain;
+3. distinguish standalone helper/unit success from production composition;
+4. identify exact root cause before proposing code;
+5. production changes must use TDD RED first;
+6. exact implementation head must receive ordinary PR CI GREEN before a GREEN claim;
+7. protected Cloudflare/demo/live workflows remain skipped unless separately authorized;
+8. synchronize this file and `AGENTS.md` after every meaningful verified batch.
 
-## Document chronology used to resolve Sept 3 ambiguity
+---
 
-The durable destination-retry plan was committed at `f124b5e8ad23fcb313da9a38627d520838a5d462` at 09:50 UTC. It explicitly made the broker fuse the first retry-runtime lock.
+# Confirmed audit findings
 
-Later approved production-completion documents tightened the cross-cutting runtime contract:
+## F1 — Worker Trading access fuse is not structurally enforced on all broker-capable paths
 
-- hot-path isolation/resilience design: `1a01ae503f6d504e4d3d12747ea1f2b7139162af`, 12:28 UTC;
-- hot-path implementation plan: `cd35b5f8f13f603e3b2f2f68186fe0b365a3df53`, 12:32 UTC;
-- production cutover/rollback runbook: `119c603094f98a33fb4b401675ed38a34236c329`, 14:15 UTC.
+**Status:** CONFIRMED STATIC SAFETY GAP.
 
-The later resilience/cutover contract requires critical revocations to win before dispatch and final account/workspace/safety authority to be revalidated. The older retry plan remains authoritative for retry ownership/idempotency semantics, but it cannot be read as permission to bypass later production-wide revocation requirements.
+- `v1_entry.fetch()` correctly protects externally reachable Trading business routes with `TRADING_ACCESS_ENABLED`.
+- `v1_entry.queue()` runs source queue processing below that fetch guard.
+- source queue runtime invokes `handleV1EventsRequest()` directly.
+- `runV1ProductionExecutionStage()` checks `BROKER_EXECUTION_ENABLED` but not `TRADING_ACCESS_ENABLED`.
+- scheduled destination recovery checks the broker fuse but not the Trading access fuse.
 
-## Confirmed audit findings
+Impact: if broker execution were later enabled while Trading access was disabled, non-HTTP execution/recovery paths are not structurally denied by the Trading-access master fuse. Current deployed defaults remain fail-closed, so this is not evidence that live execution occurred.
 
-### F1 — Worker Trading access fuse is not structurally enforced on all broker-capable paths
+## F2 — workspace entitlement is not a final broker-dispatch authority check
 
-Latest approved execution design requires both Worker fuses before a broker adapter can be reached and states that `TRADING_ACCESS_ENABLED=false` makes broker execution impossible regardless of account configuration.
+**Status:** CONFIRMED STATIC SAFETY GAP.
 
-Current runtime trace:
+- admin authorization checks `trading_workspace_access.trading_access_enabled`.
+- production broker execution loads exact trade account but does not re-query exact workspace entitlement immediately before dispatch.
+- latest execution/resilience/cutover contracts require workspace entitlement revocation to win before dispatch.
 
-- `v1_entry.fetch()` correctly blocks externally reachable `/api/v1/events`, `/api/v1/admin/*`, and TradingView webhook routes when `TRADING_ACCESS_ENABLED=false`.
-- `v1_entry.queue()` delegates directly to `createSourceQueueRuntime()`.
-- `createSourceQueueRuntime()` calls `handleV1EventsRequest()` directly below the external fetch guard.
-- `runV1ProductionExecutionStage()` checks `BROKER_EXECUTION_ENABLED` but does not check `TRADING_ACCESS_ENABLED`.
-- scheduled destination retry checks the broker fuse but not the Trading access fuse.
+## F3 — account active/execution/safety authority is loaded once per multi-action account plan
 
-Impact: with broker fuse true while Trading access is false, a non-HTTP Queue/recovery execution path is not structurally denied by the Trading access fuse. Deployment defaults currently keep both false, so this is a static contract gap, not evidence that live execution occurred.
+**Status:** CONFIRMED STATIC SAFETY GAP.
 
-Status: CONFIRMED STATIC GAP. No fix applied yet.
+- coordinator loads the account before the action loop.
+- multiple legs/actions then use the same loaded active/execution/safety state.
+- a kill/execution-disable change after action N is not proven to block action N+1 immediately.
 
-### F2 — Exact workspace entitlement is not revalidated in the production broker execution path
+Required direction: current account authority must be reloaded/revalidated immediately before every broker action.
 
-Latest approved execution lock requires `trading_workspace_access.trading_access_enabled=true` for the exact workspace. The cutover runbook also requires final account/workspace/safety state to be revalidated server-side immediately before broker dispatch.
+## F4 — source disablement is authenticated at ingest but not revalidated before broker dispatch/retry
 
-Current runtime trace:
+**Status:** CONFIRMED STATIC SAFETY GAP.
 
-- signed source ingest loads an active source and correctly overwrites caller workspace hints with `source.workspace_id`;
-- `createProductionExecutionDependencies().accountLoader()` queries `trade_accounts` by exact workspace/account;
-- the production dependency/coordinator path inspected so far does not query `trading_workspace_access.trading_access_enabled` before broker dispatch;
-- workspace entitlement is enforced on the admin authorization path, but that is not the live source-to-broker path.
+- ingest loads an active source, verifies HMAC, and binds caller-independent server workspace/source identity.
+- broker execution does not reload source state before dispatch.
+- later resilience design explicitly identifies source disablement as a critical revocation.
+- durable data can support a safe final check: `trading_events` records source/workspace identity and destination deliveries are designed to link to the trading event.
 
-Impact: a workspace entitlement revocation is not yet an execution lock immediately before dispatch.
+Do not reintroduce caller source/workspace hints as authority.
 
-Status: CONFIRMED STATIC GAP. No fix applied yet.
+## F5 — successful broker delivery can remain durably unbound from Trade State after state-write failure
 
-### F3 — Mutable account safety/kill authority is loaded once per multi-action account plan, not immediately before every broker action
+**Status:** CONFIRMED STATIC RECOVERY GAP.
 
-Latest resilience architecture requires critical safety revocation to override cached/previous state immediately or force authoritative revalidation before dispatch. The cutover runbook requires final account/workspace/safety revalidation immediately before broker dispatch.
+- MT5/cTrader executor persists successful destination delivery and broker IDs before returning.
+- coordinator then binds those IDs to the exact Trade State leg.
+- if binding fails, coordinator reports `STATE_BIND_FAILED` but delivery remains `SUCCEEDED`.
+- retry scanner only processes `RETRYABLE` rows.
+- canonical source replay is a terminal duplicate.
+- duplicate executor result is currently skipped by state binding.
 
-Current coordinator trace:
+Impact: real broker state can be safely deduplicated yet remain missing from the Position Group leg, preventing complete management/audit/recovery.
 
-- `runAccountPlan()` calls `accountLoader()` once before iterating `plan.actions`;
-- active/execution-enabled/safety policy are derived from that one loaded row;
-- all actions in that account plan then use the same account/safety snapshot.
+Required direction: repair Trade State from already-persisted successful delivery/broker truth. Never resend the broker order merely to repair state.
 
-Impact: in a multi-leg/multi-action plan, an account disable/execution-disable/kill switch changed after action N is not proven to stop action N+1 immediately.
+## F6 — legacy `trade_accounts` workspace FK reintroduces MKSaaS/Trading coupling
 
-Status: CONFIRMED STATIC GAP. No fix applied yet.
+**Status:** CONFIRMED CHECKED-IN SCHEMA GAP; live constraint must later be verified read-only before migration.
 
-### F4 — Source disablement is authenticated at ingest but not revalidated as final execution authority
+Checked-in legacy schema defines:
 
-The later approved resilience design explicitly names source disablement as a critical safety revocation and requires source/account disabled state to block immediately. It also lists authenticated source identity and exact workspace/source ownership among mandatory hot-path security.
+`trade_accounts.workspace_id REFERENCES public.workspaces(id) ON DELETE CASCADE`.
 
-Current runtime trace:
+But the approved shared-Zitadel/Trading architecture requires:
 
-- ingest loads `source_connections` with `is_active=true`, verifies its HMAC and binds the event to `source.workspace_id`;
-- after event reservation/planning, the broker execution coordinator does not reload source state before dispatch;
-- production execution dependencies currently receive `tradingEventId`, but use it for destination-delivery persistence rather than a source-authority recheck;
-- `trading_events` durably stores `source_connection_id` and `workspace_id`;
-- `destination_deliveries` durably stores `trading_event_id`;
-- therefore both first dispatch and scheduled retry can re-resolve the originating source from server-owned durable identity without trusting request hints;
-- `createSourceConnectionStore()` already has exact source lookup/disable primitives, although production execution does not currently compose them into final dispatch authority.
+- Trading workspaces to be Trading-owned;
+- Trading-only customers to require no MKSaaS DB profile/workspace;
+- removal of one product’s access not to implicitly remove the other product’s data;
+- `trading_workspace_access` deliberately has no FK to `public.workspaces`.
 
-Impact: source A can be disabled after initial authenticated ingest, but current broker composition is not proven to stop an already-planned later dispatch/retry solely from that revocation.
+Migrations 0001–0011 add Trading execution columns/privileges but do not remove/repoint the legacy `trade_accounts` FK.
 
-Status: CONFIRMED STATIC GAP. No fix applied yet.
+Impact:
 
-### F5 — successful broker delivery can become permanently unbound from Trade State after a post-broker state-write failure
+- a Trading-only workspace cannot cleanly own a broker account without a corresponding legacy/shared workspace row under the checked-in constraint;
+- `ON DELETE CASCADE` can couple deletion of a shared/MKSaaS workspace to deletion of Trading broker-account rows.
 
-Latest execution/cutover contracts require successful broker outcomes to bind exact broker identifiers to the intended Trade State leg and require broker truth/persistent Trade State to be reconciled after failure or restart without duplicating execution.
+Before designing/applying an additive migration, inspect the real constraint read-only in an explicitly authorized environment. Do not mutate shared schema blindly.
 
-Current runtime trace:
+## F7 — production risk-to-volume sizing is not based on broker-authoritative live economics
 
-- MT5 and cTrader executors reserve persistent destination idempotency, send/reconcile the broker action, then persist `destination_deliveries.status='SUCCEEDED'` with normalized broker IDs before returning to the coordinator;
-- coordinator calls `stateBinder()` only after that successful executor return;
-- if `stateBinder()` fails, the coordinator records the action outcome as `STATE_BIND_FAILED`;
-- the already successful delivery remains terminal `SUCCEEDED`;
-- scheduled destination recovery scans only `RETRYABLE` deliveries and therefore does not revisit this state;
-- source-event replay is terminal duplicate and exits before planning/execution;
-- if the identical action somehow reaches the executor again, the delivery store returns a duplicate result, but the coordinator explicitly skips state binding for `result.duplicate === true`;
-- Trade State binding itself is durable when it succeeds, but no current production repair scheduler/outbox was found for `SUCCEEDED delivery + missing Trade State binding`.
+**Status:** CONFIRMED PRODUCTION SAFETY GAP.
 
-Impact: a broker position/order can exist and its broker result can be durably persisted while the Position Group/leg remains missing its execution identifiers. Normal replay/retry correctly avoids a second broker order, but it also does not repair the missing state binding. This creates an explainability/management/recovery hole for the already-real broker state.
+Current production composition:
 
-Status: CONFIRMED STATIC RECOVERY GAP. No fix applied yet. Remediation must repair/bind from already-persisted successful broker result and must never resend the broker action merely to obtain the identifiers again.
+1. `handleV1EventsRequest()` requires `TRADING_V1_SIMULATION` planning before production execution.
+2. `createV1SimulationDependencies()` supplies instrument/prices/exposure from static `TRADING_V1_SIMULATION_*` environment JSON and DB trade-account rows.
+3. `buildExecutionPlan()` performs the actual risk-to-lots calculation from those planning inputs.
+4. `runV1ProductionExecutionStage()` forwards the resulting planned actions/lots.
+5. MT5/cTrader production adapters later load live broker catalog metadata but only translate/normalize already-computed lots.
 
-## Confirmed integration incompletions
+The master launch plan requires risk-to-volume assertion against broker-reported metadata before broker send. The foundation risk contract requires balance/equity, broker tick economics, volume constraints, current exposure and daily loss.
 
-### I1 — Runtime execution snapshot helper exists but is not integrated into production execution composition
+Additional structural evidence:
 
-The latest approved resilience Task 5 requires a versioned runtime execution snapshot to reduce repeated non-critical configuration hydration while retaining fresh final safety authority.
+- checked-in `trade_accounts` does not provide a complete broker-authoritative balance/equity/risk snapshot;
+- `normalizeAccount()` expects `risk_percent` / `risk_amount` fields for risk modes, while checked-in schema exposes `lot_sizing_type` + `lot_value`; migrations do not add the expected risk fields;
+- MT5 bridge symbol snapshots expose tick-value data, but current `fromMT5Symbols()` does not map tick value into the canonical live catalog used by production;
+- cTrader live catalog currently normalizes symbol/volume metadata but does not provide a production loss-per-lot/profit-calculation authority to the risk engine.
 
-Current state:
+Required direction: before any risk-increasing broker action, derive/verify permitted lots from current exact account state + live broker-authoritative symbol/economics/price data. Simulation/planning may remain useful for intent/audit, but cannot be the final monetary-risk authority.
 
-- `runtime_execution_snapshot.js` exists and has strong isolated tests for scope, TTL/version, bounds, secret stripping, invalidation and immutability;
-- production execution composition inspected so far does not instantiate/use this cache;
-- existing failure-injection test proves a stale standalone cache cannot override a separately fresh account load, but does not prove production cache integration.
+## F8 — live platform volume normalization can silently increase planned volume
 
-Status: IMPLEMENTATION HELPER GREEN / APPROVED TASK INTEGRATION INCOMPLETE.
+**Status:** CONFIRMED PRODUCTION SAFETY GAP.
 
-### I2 — Approved warm broker-context performance architecture is not yet fully composed
+The risk engine intentionally floors volume and rejects when the smallest broker-valid volume would exceed configured risk.
 
-The latest resilience design calls for warm broker adapters/sessions and bounded metadata reuse.
+However live translation currently uses normalization helpers that round/clamp:
 
-Current state:
+- MT5 `normalizeVolumeForMT5()` rounds to step and clamps to broker min/max;
+- cTrader `normalizeVolumeForCTrader()` rounds protocol volume and clamps to min/max.
 
-- MT5 uses a persistent external bridge process, but production dispatch reloads bridge health/account/symbol metadata for each action;
-- cTrader production dispatch creates/authenticates a runtime and closes it for each action;
-- therefore warm session/metadata reuse required by the latest performance architecture is not yet demonstrated in production composition.
+Existing tests explicitly expect MT5 `0.001` with broker minimum `0.01` to become `0.01`.
 
-Status: PERFORMANCE/RESILIENCE INTEGRATION INCOMPLETE; not a safety defect by itself.
+Impact: a planned/risk-sized amount can be increased by live translation. This can bypass the risk engine’s explicit “do not raise to broker minimum” safety rule.
 
-## Unresolved deployment/security boundary
+Required direction: execution translation must fail closed when a risk-increasing volume is below live minimum, above maximum, or requires a step change that increases allowed risk. Safe downward normalization may be permitted only under an explicit deterministic rule.
 
-### U1 — MT5 metadata GET authentication/private-network boundary is not documented strongly enough to classify
+## F9 — normal production execution drops `tradingEventId` before delivery persistence
 
-Current bridge behavior:
+**Status:** CONFIRMED DURABILITY/AUTHORITY GAP.
 
-- POST `/v1/command` is HMAC-authenticated and replay/reconciliation protected;
-- GET `/v1/account`, `/v1/symbols`, and `/v1/tick` are not authenticated by the bridge handler;
-- `/v1/account` can expose broker account metadata and the production/demo context loader consumes these GETs;
-- production/deployment configuration requires an HTTPS `MT5_BRIDGE_URL` and Gate 7 stores the URL as a protected staging secret;
-- the bridge process binds to `127.0.0.1` by default, but the repository does not yet document whether the externally consumed HTTPS URL is guaranteed to terminate only inside a private authenticated network/tunnel/proxy boundary.
+- execution coordinator receives `eventId`.
+- `createProductionExecutionDependencies()` accepts `tradingEventId` and passes it to the destination-delivery store.
+- `runV1ProductionExecutionStage()` currently constructs production dependencies with `{ env, supabase, workspaceId }` only; it does not pass `result.eventId` as `tradingEventId`.
+- integration tests assert `eventId` reaches the coordinator but do not assert the dependency layer receives it.
 
-Do not call this a vulnerability without the deployment topology. Before production acceptance, prove one of:
+Impact: normal production destination-delivery rows may persist `trading_event_id=null`, weakening event→source→delivery audit/recovery authority and making F4/F5 repair harder.
 
-1. the metadata endpoints are unreachable outside an explicitly private trusted transport boundary; or
-2. add an authenticated metadata-request contract and test it.
+Required direction: propagate exact server-owned persisted event ID into the production dependency/delivery context and test it end-to-end.
 
-Status: UNRESOLVED BOUNDARY / NEEDS TOPOLOGY PROOF OR STATIC HARDENING DECISION.
+## F10 — final dispatch-time account policy recheck does not receive reliable live risk/exposure inputs
 
-## Important contracts already confirmed during this audit
+**Status:** CONFIRMED PRODUCTION SAFETY GAP.
 
-- Authenticated source authority is server-owned: ingest loads active source, verifies HMAC, and rebinds `workspace_hint` to `source.workspace_id`; caller workspace hints do not become authority.
-- Broker master fuse remains a first structural guard inside `executeProductionPlan()` before account loader/dispatch/state/latency work.
-- Exact account workspace/id matching, active state and `execution_enabled` are checked by the coordinator on its loaded account record.
-- Persistent destination idempotency/retry state remains the broker execution ledger; uncertain outcomes are not intended for blind retry.
-- Retry claims are bounded and optimistic-concurrency guarded by workspace/idempotency/status/attempt/next-attempt predicates.
-- Trade State execution binding targets the exact workspace Durable Object shard and exact group/leg when called successfully.
-- cTrader live runtime still requires separate server-side live opt-in.
-- default Wrangler profiles keep all four launch controls false.
-- no real external environment action has been performed during this audit.
+`evaluateAccountPolicy()` expects, for new risk:
 
-## Current gate interpretation
+- `totalLots`;
+- `riskPercent`;
+- `currentDailyPnlPercent`;
+- `currentOpenRiskPercent`;
+- symbol and safety policy.
 
-Do not treat the previous broad statement “Static resilience Tasks 1–9 are complete” as sufficient to advance into real Gates 4–9 until the confirmed static gaps above are resolved and exact-head verified.
+Current final coordinator composition does not reliably provide those values:
 
-Gate 2 remains historically GREEN/exited and does not need repeating solely because of this audit. Gate 3 remains deferred/fail-closed. Gate 10 remains CLOSED.
+- coordinator policy request passes `lots` rather than `totalLots`;
+- its risk percent depends on `action.riskPercent` / plan risk fields, but normal planned open actions do not carry that field;
+- execution stage forwards differently named optional fields (`dailyPnlPct`, `currentRiskUsd`, `openExposureLots`) that the coordinator does not consume;
+- ordinary orchestrator READY output does not populate those final-policy fields anyway;
+- planning exposure is currently static simulation configuration, not a fresh dispatch-time broker/account exposure snapshot.
 
-The active development stage is now:
+Direct coordinator unit tests pass because fixtures manually provide `riskPercent` and `currentDailyPnlPercent`; that does not prove real production composition.
 
-`LATEST-APPROVED STATIC PRODUCTION AUDIT / REMEDIATION REQUIRED BEFORE REMAINING REAL ACCEPTANCE`
+Impact: kill switch and some simple controls are rechecked, but max lots, max risk, daily-loss and open-risk limits are not reliably re-evaluated from fresh authoritative data immediately before broker send.
 
-## Exact pickup point
+Required direction: final authority/risk loader must provide current policy inputs using canonical names and broker/server-authoritative state for each risk-increasing action.
 
-Resume in this order:
+---
 
-1. Finish the remaining root-cause audit around final execution authority: determine the clean existing-data composition for source + workspace entitlement + account/safety revalidation on first dispatch and scheduled retry; do not invent caller authority.
-2. Include F5 in the recovery design: repair Trade State from the already-persisted successful delivery/broker result; never resend solely to repair state.
-3. Finish the MT5 metadata topology decision and inspect cTrader/MT5 warm-context lifecycle constraints under Cloudflare/bridge deployment.
-4. Reconcile the latest failure-injection tests against F1–F5 so the remediation plan specifies exact missing RED cases rather than generic tests.
-5. Write one focused remediation implementation plan based only on confirmed latest-approved gaps.
-6. Implement safety/recovery gaps one at a time with TDD RED -> minimal GREEN -> exact-head PR CI.
-7. Then implement/verify the approved snapshot/warm-context integration without weakening final authority.
-8. Re-audit the complete execution call graph and failure-injection matrix.
-9. Synchronize this document and `AGENTS.md` with exact RED/GREEN heads/run IDs/test counts after every meaningful verified milestone.
-10. Only after static audit/remediation is GREEN return to separately authorized real Gates 4–9.
+# Integration incompletions
 
-## Safety state while audit/remediation is active
+## I1 — runtime execution snapshot helper is unit-GREEN but not integrated in production
 
-Keep:
+Latest resilience Task 5 requires bounded non-secret snapshot reuse while final safety authority remains fresh. `runtime_execution_snapshot.js` exists and has good isolated tests, but current production composition does not instantiate/use it.
+
+Treat previous “Task 5 GREEN as a pure cache” as helper-level GREEN, not full latest-approved Task 5 completion.
+
+## I2 — warm broker-context architecture is not fully composed
+
+- MT5 persistent bridge process exists, but production dependency creation reloads bridge health/account/symbol metadata per action.
+- cTrader production dispatch creates/authenticates/closes a runtime per action.
+- later resilience design calls for warm sessions and bounded metadata reuse.
+
+This is primarily performance/resilience work; safety authority must stay fresh and must not be cached away.
+
+---
+
+# Unresolved environment boundary
+
+## U1 — MT5 metadata GET authentication/private-network boundary
+
+**Status:** NOT YET CLASSIFIED AS A VULNERABILITY.
+
+- POST `/v1/command` is HMAC-authenticated.
+- bridge GET `/v1/account`, `/v1/symbols`, `/v1/tick` are unauthenticated.
+- production/demo code consumes them via HTTPS `MT5_BRIDGE_URL`.
+- bridge defaults to localhost, but repo docs do not prove whether the externally consumed HTTPS endpoint is guaranteed private behind a trusted tunnel/proxy/network boundary.
+
+Before production, either:
+
+1. prove/document/test private-only reachability in an authorized staging topology; or
+2. add authenticated metadata requests.
+
+Static remediation planning should choose the safer option without assuming an undocumented private network.
+
+---
+
+# Contracts re-confirmed during audit
+
+- signed source ingest loads an active source, verifies HMAC, and overwrites caller workspace hints with server `source.workspace_id`;
+- broker master fuse is a structural first guard inside `executeProductionPlan()`;
+- exact account workspace/id/active/execution flags are checked on the row that coordinator loads;
+- persistent destination idempotency and retry state are real durable execution authority;
+- retry claims are bounded and optimistic-concurrency guarded;
+- uncertain broker outcomes are not intended for blind retry;
+- Trade State binding targets exact workspace shard/group/leg when it succeeds;
+- cTrader live environment requires separate server-side live opt-in;
+- Wrangler defaults keep all four launch controls false;
+- no real external environment action was performed in this static audit.
+
+---
+
+# Root-cause consolidation / proposed remediation boundaries
+
+The confirmed findings can be fixed without inventing caller authority or redesigning the entire platform.
+
+### Boundary A — one final server-authoritative execution check
+
+A focused final authority/risk loader should be keyed by server-owned:
+
+`(workspaceId, tradingEventId, accountId)`
+
+and immediately before **every** broker action resolve/revalidate:
+
+- both Worker master fuses before dependency work where applicable;
+- exact persisted event/workspace/source identity;
+- source remains active and workspace-bound;
+- workspace entitlement remains enabled;
+- exact account remains active/execution-enabled;
+- latest safety policy/kill switch;
+- current broker/account risk state needed for daily/open-risk limits;
+- current broker-authoritative symbol/risk/volume metadata for new risk.
+
+Cached runtime snapshots may accelerate non-authoritative configuration only. They may never override this check.
+
+### Boundary B — broker-authoritative risk materialization
+
+For risk-increasing actions, planning intent should be materialized to final executable lots only after current broker/account metadata is available. Final live normalization must never raise risk above the permitted result.
+
+### Boundary C — successful-delivery state-binding repair
+
+Persist enough trusted group/leg/account/event context with the delivery to repair a missing Trade State execution binding from an already-successful delivery response. Repair must never resend a broker action.
+
+### Boundary D — Trading-owned trade-account tenancy
+
+Design an additive migration only after read-only live-schema confirmation. Trading broker accounts must no longer require or cascade from an MKSaaS workspace row.
+
+### Boundary E — bounded warm context
+
+After safety correctness is fixed, reuse non-secret broker metadata and bounded cTrader/MT5 execution context where safe. Final authority remains fresh.
+
+---
+
+# Current gate interpretation
+
+Do not treat previous blanket “Static resilience Tasks 1–9 complete” wording as sufficient to advance into real Gates 4–9.
+
+- Gate 1: historical GREEN.
+- Gate 2: historical GREEN/exited; do not repeat without reason.
+- Gate 3: deferred/fail-closed.
+- Gates 4–7: static foundations/bridges remain useful but real acceptance still pending.
+- Gates 8–9: static audit reopened; remediation required first.
+- Gate 10: CLOSED / not started.
+
+---
+
+# Exact pickup point
+
+1. Treat F1–F10, I1–I2 and U1 as the frozen current audit scope unless remediation TDD exposes a new directly related defect.
+2. Write one focused Superpowers implementation plan for static production remediation before changing runtime code.
+3. Prioritize safety/durability first:
+   - dual-fuse/non-HTTP gating;
+   - final source/workspace/account/safety/risk authority;
+   - exact `tradingEventId` propagation;
+   - fail-closed live volume/risk materialization;
+   - successful-delivery Trade State repair;
+   - Trading-owned trade-account tenancy migration contract.
+4. Then integrate bounded runtime snapshots/warm broker context without weakening final authority.
+5. Handle MT5 metadata GET boundary through authenticated metadata requests unless a separately authorized environment proves an equally strong private transport contract before that task is implemented.
+6. Every production-code task: TDD RED -> verify intended failure -> minimal implementation -> focused GREEN -> ordinary full PR CI exact-head GREEN.
+7. Keep Cloudflare/probe/demo/live exact-marker jobs skipped for static remediation.
+8. Synchronize this document and `AGENTS.md` with exact heads/run IDs/test counts after every meaningful verified milestone.
+9. Only after the static remediation audit is GREEN return to separately authorized real Gates 4–9.
+
+## Safety state during static remediation
 
 ```text
 TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
