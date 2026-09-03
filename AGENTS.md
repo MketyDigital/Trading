@@ -339,8 +339,19 @@ Static launch contracts cover:
 
 No Task 7 production-runtime modification was required: the existing Task 1–6 isolation primitives already satisfy the matrix, so Task 7 adds composed launch-contract coverage only.
 
+### Resilience Task 8 — secret-free readiness metrics summary
+GREEN at implementation head `f3f9a3d11d76beeb4e916970fb544c6ee26327cd`.
+- RED `16c9562a7602dbbd2343310bdefc5d0d68a4d647`, run `33764326768`: exactly four intended resilience-summary failures and no unrelated regression
+- GREEN run `33764766376`
+- Node/trading-core 633/633
+- production contract 11/11
+- pure MT5 and pure MTProto mandatory suites SUCCESS
+- every Cloudflare inspect/probe/deploy/accept job skipped
+
+Operations readiness metrics are read-only and additive. The optional metrics source is queried only for the exact authorized workspace and can expose only an allowlisted secret-free summary: ambiguity-AI review count, destination-AI fallback count, retry rate, uncertain rate, and p50/p95/p99 latency summaries for source-to-broker-send, broker round trip, and source-to-destination-ack. Numeric fields are bounded; cross-workspace metrics fail closed; ordinary metrics-source failure degrades to `{available:false}` and cannot block the durable operations snapshot or trading execution. No execution path consumes readiness metrics.
+
 ## Immediate safe next actions
 1. Run fresh exact-head ordinary CI after this `AGENTS.md` synchronization commit and record the resulting head/run only after all mandatory suites are GREEN.
-2. Review the remaining static/non-live resilience plan items and launch-readiness evidence; do not enter a real environment gate merely because static CI is GREEN.
+2. Complete Resilience Task 9 static documentation/runbook: hard hot-path rules, rollback procedure per fuse, readiness alerts/metrics, staged rollout, and the separate manual tiny-account approval gate.
 3. Keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` unless a separately authorized acceptance gate explicitly requires otherwise.
 4. Do not deploy, mutate Cloudflare, run live probes, merge `main`, place broker orders, or enable real-money execution without the corresponding explicit gate/approval.
