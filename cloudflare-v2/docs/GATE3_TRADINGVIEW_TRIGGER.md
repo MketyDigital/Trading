@@ -25,3 +25,5 @@ Safety posture for this probe:
 - The Worker must roll back to the known-safe Paid version after the probe window.
 
 The active-zone inventory already verified that the connected Cloudflare account owns `mkety.com`. A genuine TradingView webhook is required during the bounded real-time tail window. If Cloudflare does not expose one stable normalized SHA-256 client-certificate fingerprint, Gate 3 stops without weakening transport authentication.
+
+Probe batch triggered from the reviewed PR branch after exact-head CI success on the corrected `trade.mkety.com` contract.
