@@ -11,6 +11,21 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(text(value).toLowerCase());
+}
+
+function accessDisabledSummary() {
+  return {
+    status: 'TRADING_ACCESS_DISABLED',
+    scanned: 0,
+    claimed: 0,
+    dispatched: 0,
+    succeeded: 0,
+    failed: 0,
+  };
+}
+
 async function defaultSupabaseFactory(env = {}) {
   const url = text(env.SUPABASE_URL);
   const key = text(
@@ -92,6 +107,8 @@ export function createProductionDestinationRetryRuntime({
   if (typeof executeProductionFn !== 'function') throw new TypeError('executeProductionFn is required');
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
+    if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
+
     // Per-invocation store map prevents claims from leaking between scheduled runs.
     const stores = new Map();
 
