@@ -11,13 +11,12 @@ Operational source of truth for `MketyDigital/Trading`. Read this file before ch
 - **Never enable real-money execution without a separate explicit final cutover approval.**
 - Never paste, log, or commit broker, database, auth, Telegram-session, provider, Cloudflare, Zitadel, AI, signing, destination, or transport secret values.
 - Update this file after every meaningful implementation/testing/environment batch.
-- Batch related edits and avoid unnecessary CI, Wrangler, Container, deployment, or account/API consumption.
-- Prefer read-only evidence and local tests where sufficient.
-- TDD is mandatory for production feature/bugfix behavior; configuration changes require a regression contract and evidence.
-- Cloudflare core/security must remain Free-plan-compatible. Workers Paid may add optional capacity, but no trust boundary may depend on Enterprise-only BYOCA or Enterprise-only mTLS trust.
-- Cloudflare Containers are optional Paid MTProto capacity only. A Container binding must never itself select/start `cloudflare_container_mtproto`; only an exact active source configured with that provider may reach Container bootstrap/runtime.
-- `cloudflare-v2/wrangler.toml` is Paid. `cloudflare-v2/wrangler.free.toml` is the isolated no-Container Free-compatible profile.
-- Trading product infrastructure uses the `mkety.com` domain family; the current Trading application hostname is `trade.mkety.com`.
+- TDD is mandatory for production/config behavior: prove RED first, then exact GREEN.
+- Do not claim a branch head GREEN without exact-head verification.
+- Cloudflare core/security must remain Free-plan-compatible. No trust boundary may depend on Enterprise-only BYOCA or Enterprise-only mTLS trust.
+- Cloudflare Containers are optional Paid MTProto capacity only and may be reached only by an exact active `cloudflare_container_mtproto` source.
+- `cloudflare-v2/wrangler.toml` is Paid; `cloudflare-v2/wrangler.free.toml` is the isolated no-Container Free-compatible profile.
+- Trading infrastructure uses the `mkety.com` domain family. The Trading application hostname is **`trade.mkety.com`**.
 - `mkety.app` is reserved for customer-owned apps/builds under the main Mkety/MKSaaS product and must not be used for Trading infrastructure.
 
 ## Product / tenancy contract
@@ -69,11 +68,11 @@ Core safety:
 - Supabase Trading migrations through `trading_0010_tradingview_public_source_handle` are applied/verified; ledger `20260902184215`.
 - `anon` and `authenticated` retain no direct internal Trading table authority.
 
-## Deployment profiles
+## Deployment profiles and default safety
 
 Paid `cloudflare-v2/wrangler.toml`:
 - Worker `mkety-copier-engine`
-- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`
+- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`
 - Queue `mkety-trading-source-events`
 - DLQ `mkety-trading-source-events-dlq`
 - Container application `mkety-copier-engine-mtprotocontainerruntime`
@@ -81,7 +80,7 @@ Paid `cloudflare-v2/wrangler.toml`:
 
 Free `cloudflare-v2/wrangler.free.toml`:
 - Worker `mkety-copier-engine-free`
-- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`
+- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`
 - isolated Free queue/DLQ
 - no Container declaration/binding/migration/recovery cron
 - ordinary 15-minute scheduler only
@@ -95,124 +94,29 @@ TRADING_ACCESS_ENABLED=false
 BROKER_EXECUTION_ENABLED=false
 ```
 
-## GitHub Actions consumption policy
+## GitHub Actions policy
 
-`.github/workflows/trading-v1-ci.yml` keeps ordinary CI lightweight:
-- automatic only for meaningful code/config/test paths;
-- docs-only `AGENTS.md` / `docs/superpowers/**` edits do not trigger branch/PR CI;
-- ordinary `test` runs Node Worker/trading-core, pure MT5 bridge, and both MTProto Python suites;
-- ordinary `test` contains no Wrangler command, Cloudflare credential use, or Container build.
+`.github/workflows/trading-v1-ci.yml` keeps ordinary CI lightweight. Ordinary `test` runs Node Worker/trading-core, pure MT5 bridge, and both MTProto Python suites. Ordinary test runs contain no Cloudflare mutation.
 
-Gate 2 Cloudflare operations are exact-marker only:
+Gate 2 markers:
 - `cloudflare: inspect staging gate 2`
 - `cloudflare: deploy paid staging gate 2`
 - `cloudflare: accept staging gate 2`
 
-Gate 3 Cloudflare operations are also exact-marker only:
-- `cloudflare: inspect tradingview gate 3` — read-only active-zone inventory only;
-- `cloudflare: probe tradingview gate 3` — controlled certificate-probe deployment only after ordinary tests pass.
+Gate 3 markers:
+- `cloudflare: inspect tradingview gate 3` — read-only zone inventory
+- `cloudflare: probe tradingview gate 3` — controlled certificate-probe deployment only after mandatory tests pass
 
-The Gate 2 acceptance job uses protected GitHub environment `staging`; it never exposes secret values, passes `--containers-rollout none`, keeps all four safety switches false, creates disposable simulation-only fixtures, cleans them in `finally`, and rolls back the Worker after acceptance.
-
-The Gate 3 certificate-probe job is designed to:
-- require ordinary CI first and protected GitHub environment `staging`;
-- target only `trade.mkety.com` in the owned `mkety.com` Cloudflare zone;
-- perform read-only Worker-domain and DNS conflict checks before any mutation;
-- temporarily deploy with `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`, `TRADINGVIEW_CERT_PROBE_ENABLED=true`, `TRADING_ACCESS_ENABLED=false`, `BROKER_EXECUTION_ENABLED=false`;
-- pass `--containers-rollout none`;
-- prove a caller-spoofed certificate header still gets HTTP 403;
-- observe only sanitized `TRADINGVIEW_CERT_PROBE` metadata through bounded real-time `wrangler tail`;
-- require exactly one stable normalized SHA-256 certificate fingerprint from genuine TradingView certificate evidence;
-- always roll back to known-good version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` after a successful probe deployment.
-
-## Gate 1 — Scope freeze
-
-**GREEN.**
-
-Evidence:
-- `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`
-
-## Gate 2 — Real Cloudflare staging infrastructure
-
-**GREEN / EXITED on 2026-09-03.**
-
-Governing plan:
-`docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
-
-### First real Paid staging deployment
-
-Run `33720102208`
-Deployment commit `bbba25091eb88778fa7243760b704b0b85ab5c6a`
-Known-good Worker version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
-Worker URL `https://mkety-copier-engine.dry-glitter-7e16.workers.dev`
-
-Verified resources:
-- Worker `mkety-copier-engine`
-- Queue `mkety-trading-source-events`
-- DLQ `mkety-trading-source-events-dlq`
-- Container application `mkety-copier-engine-mtprotocontainerruntime`
-- producer + consumer attached
-- schedules `*/15 * * * *` and `* * * * *`
-- safety flags remained false
-
-### Final real Gate 2 acceptance
-
-Trigger/head:
-`e2e93aaa131ec2149966e8ca2f480d4fdccc300a`
-
-GitHub Actions run:
-`33725547513`
-
-Acceptance job:
-`100553745522` — **SUCCESS**
-
-Temporary acceptance Worker version:
-`2608756e-2096-409d-9a2c-8e678503a4dd`
-
-Exact accepted behavior:
-- newly deployed internal transport secret became active before the test proceeded;
-- real `/api/v1/internal/source-event` -> Queue -> consumer path accepted the same source event twice;
-- exactly one persistent Trading Event remained;
-- persisted event reached `processingStatus=READY`;
-- direct non-broker simulation reached `SIMULATED`;
-- exactly one READY simulation account;
-- exactly three actions, all simulated;
-- top-level `executionEnabled=false`;
-- `brokerExecution=false`;
-- Worker-wide `BROKER_EXECUTION_ENABLED=false` throughout;
-- TradingView direct ingress false;
-- TradingView cert probe false;
-- Trading access false.
-
-Acceptance output:
-
-```json
-{"ok":true,"gate":2,"queue":{"acceptedTwice":true,"persistentCount":1,"processingStatus":"READY"},"simulation":{"status":"SIMULATED","executionEnabled":false,"readyAccounts":1,"simulatedActions":3},"brokerExecution":false}
-```
-
-Container non-selection proof used concrete instance records, not the coarse application summary:
-- before: `0` instance records;
-- after external-MTProto Queue/simulation acceptance: `0` instance records;
-- new instance IDs: `0`;
-- final after rollback: `0` instance records.
-
-Rollback proof:
-- SUCCESS to `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` at 100% traffic.
-
-Post-run Supabase cleanup verification:
-- temporary `workspaces`: 0
-- temporary `trading_workspace_access`: 0
-- temporary `source_connections`: 0
-- temporary `trade_accounts`: 0
-- Gate 2 temporary `trading_events`: 0
-
-Resolved during real acceptance and protected by regression tests:
-1. external MTProto fixture now explicitly allowlists its synthetic Telegram chat;
-2. workflow waits for new Worker internal transport secret propagation before Queue acceptance;
-3. direct external-MTProto simulation includes a valid allowed Telegram `native_identity`;
-4. Container non-selection is verified by concrete instance IDs using `wrangler containers instances`, not by a misleading coarse application count.
-
-Gate 2 exit criteria are satisfied: real staging Worker/bindings accepted, Queue/consumer and canonical dedupe accepted, non-broker simulation accepted, Container non-selection proven, cleanup proven, and rollback proven.
+The Gate 3 probe job:
+- uses protected environment `staging`;
+- targets only `trade.mkety.com` in the owned `mkety.com` zone;
+- checks Worker-domain and DNS conflicts read-only before mutation;
+- temporarily enables only `TRADINGVIEW_CERT_PROBE_ENABLED=true` while direct ingress, Trading access, and broker execution remain false;
+- passes `--containers-rollout none`;
+- requires a spoofed client-certificate header to receive HTTP 403;
+- observes only sanitized `TRADINGVIEW_CERT_PROBE` metadata through bounded `wrangler tail`;
+- requires exactly one stable normalized SHA-256 fingerprint from genuine TradingView certificate evidence;
+- rolls back to known-good Worker version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` after any successful temporary probe deployment.
 
 ## Production launch gates
 
@@ -229,107 +133,109 @@ Gate 2 exit criteria are satisfied: real staging Worker/bindings accepted, Queue
 
 Real-money execution requires separate explicit user approval after all prior gates are GREEN.
 
+## Gate 1 — Scope freeze
+
+**GREEN.** Evidence: run `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
+
+## Gate 2 — Real Cloudflare staging infrastructure
+
+**GREEN / EXITED on 2026-09-03.**
+
+Governing plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
+
+First Paid staging deployment:
+- run `33720102208`
+- deployment commit `bbba25091eb88778fa7243760b704b0b85ab5c6a`
+- known-good Worker version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
+- Worker URL `https://mkety-copier-engine.dry-glitter-7e16.workers.dev`
+
+Final Gate 2 acceptance:
+- trigger/head `e2e93aaa131ec2149966e8ca2f480d4fdccc300a`
+- run `33725547513`
+- job `100553745522` — **SUCCESS**
+- temporary acceptance Worker version `2608756e-2096-409d-9a2c-8e678503a4dd`
+- real internal handoff -> Queue -> consumer accepted same event twice with exactly one persistent Trading Event
+- event reached `READY`; non-broker simulation reached `SIMULATED`
+- exactly one READY simulation account and three simulated actions
+- `executionEnabled=false`, `brokerExecution=false`
+- all four launch safety gates remained false
+- Container instance records before/after/final: 0/0/0
+- rollback to known-good Worker succeeded at 100% traffic
+- temporary Supabase fixtures were cleaned to zero
+
+Gate 2 is complete; do not redo it.
+
 ## Gate 3 — TradingView real certificate and source acceptance
 
-**CURRENT / CERTIFICATE PROBE BRIDGE PREPARED, REAL CERTIFICATE NOT YET OBSERVED.**
+**CURRENT / FIRST REAL PROBE FAILED CLOSED; DIAGNOSTIC RERUN READY, GENUINE CERTIFICATE NOT YET PROVEN.**
 
-Governing plan:
-`docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
+### Domain and zone evidence
 
-Existing transport/security behavior remains:
-- direct ingress requires an exact configured SHA-256 certificate fingerprint;
-- only Cloudflare-provided `request.cf.tlsClientAuth` is authoritative;
-- ordinary caller headers cannot self-assert certificate verification;
-- certificate probe logs only `certPresented`, `fingerprintAvailable`, and normalized SHA-256 fingerprint;
-- probe mode returns HTTP 403 before source lookup/queueing;
-- no broker authority is present in TradingView ingress.
+Read-only inventory proved the configured Cloudflare account owns both `mkety.app` and `mkety.com`. Trading uses only `mkety.com`; `mkety.app` remains reserved for MKSaaS/customer builds.
 
-### Read-only Cloudflare zone discovery — verified
+Current Gate 3 target:
+- hostname `trade.mkety.com`
+- zone ID `98c7228a0457b1f454881c149e2df6ce`
 
-Contract RED:
-- commit `2f5b1eef74c08c22070662772f2473a3290c4971`
-- run `33726404506`
-- 519/520 Node tests passed; only the new missing Gate 3 zone-job contract failed;
-- no Cloudflare Gate 3 action ran.
+Trading-hostname correction TDD:
+- RED `e0945a97f3d756cfba46e10787b2e289cdd0e613`, run `33727975091`: 520/522 Node tests; only stale old-host references failed; no Cloudflare action ran
+- GREEN `26e2e7e789319a5ef81f7b8870bd36c53c7a77f1`, run `33728255826`: mandatory suites GREEN; all Cloudflare jobs skipped
+- documentation boundary head `cbc00eaf01c5352e95d5b140f1e83040fa7bbcaa`, run `33728466285`: exact-head GREEN
 
-Implementation GREEN:
-- commit `f64e6d8659058f9b1f6c3dc94cbe77ecb4f8cba2`
-- run `33726560705` — mandatory suites GREEN; all Cloudflare jobs skipped.
+### First real certificate probe — fail-closed, rollback proven
 
-Exact-marker zone inventories proved the configured Cloudflare account owns both zones; the latest read-only run was:
-- trigger commit `04934bfb5234ab62e16f6d7911522d6da6cbffec`
-- run `33727420447`
-- `cloudflare-inspect-gate3-zones` SUCCESS;
-- mandatory CI SUCCESS;
-- direct ingress remained OFF;
-- cert probe remained OFF;
-- no deployment or DNS/custom-domain mutation occurred.
+Trigger:
+- commit `983bf36732a37a787cc253fec391a6a18d6c4517`
+- exact message `cloudflare: probe tradingview gate 3`
+- run `33728657084`
+- probe job `100563529178`
 
-Active zones discovered on the configured Cloudflare account:
-- `mkety.app` — reserved for MKSaaS/customer-owned apps/builds, not Trading;
-- `mkety.com` — Trading product domain family.
+Observed behavior:
+- mandatory CI GREEN before probe
+- `trade.mkety.com` temporary probe deployment succeeded
+- spoofed caller certificate header received expected HTTP 403
+- bounded five-minute tail found **0 usable SHA-256 fingerprints**
+- certificate requirement failed closed; direct ingress was never enabled
+- rollback and rollback verification both succeeded to `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8` at 100% traffic
+- Trading access and broker execution stayed disabled
+- no secret value was exposed
 
-Selected Trading/Gate 3 hostname:
-`trade.mkety.com`
+The first probe cannot distinguish whether no genuine TradingView request reached the Worker or a request reached it without Cloudflare exposing a client certificate. Do not infer either case without new evidence.
 
-Pinned `mkety.com` zone ID for exact conflict checks:
-`98c7228a0457b1f454881c149e2df6ce`
+### Sanitized arrival diagnostics — TDD verified
 
-### Certificate-probe bridge — TDD verified, not yet triggered
+Purpose: distinguish request-arrival failure from missing client-certificate evidence without logging body data, credentials, raw certificate material, or weakening authentication.
 
-Probe contract RED:
-- commit `ca48048e86fb751778923ca3e56a23c60e6b2c9c`
-- run `33726830159`
-- new probe contract failed because the job was absent;
-- Cloudflare jobs remained skipped.
+Diagnostic output fields:
+- `totalProbeLogs`
+- `expectedSpoofLogs=1`
+- `additionalProbeLogs`
+- `certPresentedCount`
+- `fingerprintCount`
 
-Probe implementation:
-- commit `8d800be21755001dc58590da1beb91f836c47a4c`
-- added `cloudflare-probe-gate3-tradingview` exact-marker job.
+Interpretation:
+- `totalProbeLogs=1`, `additionalProbeLogs=0` => only the workflow spoof probe was observed; no additional probe request reached the instrumented path
+- `additionalProbeLogs>0`, `certPresentedCount=0` => at least one additional request reached the probe path but Cloudflare exposed no presented client certificate
+- `certPresentedCount>0` with `fingerprintCount!=1` => certificate evidence is malformed, missing a stable fingerprint, or unstable; STOP and redesign rather than weaken auth
+- success remains exactly one stable normalized SHA-256 fingerprint
 
-Initial contract-test correction:
-- commit `29ca26ec70e0bc7e3d17afb1431ff37a786a5cba`
-- run `33727215432` — **SUCCESS**;
-- Node Worker/trading-core GREEN;
-- pure MT5 bridge GREEN;
-- both MTProto Python suites GREEN;
-- all Cloudflare jobs, including Gate 3 probe, skipped on this non-marker head.
+TDD evidence:
+- RED `73ae4b62148bceeac54aa7c7df9be111b3e389a1`, run `33729322404`: 522/523 Node tests; only the missing diagnostic contract failed; all Cloudflare jobs skipped
+- implementation `dc69600b3a768da50b5fed607d54edee9537d389`: added sanitized diagnostic counts; first GREEN candidate exposed only an over-strict source-text assertion
+- corrected test `8b06a3b3379e4cb44c583848906f31298e9f42ec`, run `33729772610`: **SUCCESS**; 523/523 Node tests, MT5 GREEN, both MTProto suites GREEN, all Cloudflare jobs skipped
 
-### Trading hostname boundary correction — TDD verified
+### Next safe action
 
-User product-domain correction: this Trading system lives at `trade.mkety.com`; `mkety.app` belongs to customer-owned apps/builds under Mkety/MKSaaS.
-
-RED contract:
-- commit `e0945a97f3d756cfba46e10787b2e289cdd0e613`
-- run `33727975091`
-- 520/522 Node tests passed;
-- the only two failures were the intentionally stale `tradingview.mkety.app` Gate 3 workflow references;
-- no Cloudflare action ran.
-
-GREEN implementation:
-- commit `26e2e7e789319a5ef81f7b8870bd36c53c7a77f1`
-- run `33728255826` — **SUCCESS**;
-- Node Worker/trading-core GREEN;
-- pure MT5 bridge GREEN;
-- both MTProto Python suites GREEN;
-- `cloudflare-inspect`, Gate 2 deploy/acceptance, Gate 3 zone inventory, and Gate 3 certificate probe all skipped;
-- workflow now targets `trade.mkety.com`, exact `mkety.com` zone ID `98c7228a0457b1f454881c149e2df6ce`, and variable-based hostname/DNS checks.
-
-### Exact next safe action
-
-Use the dedicated trigger document `cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md` and one exact marker commit:
+Coordinate one more exact-marker Gate 3 probe. During the active bounded probe step, trigger exactly one genuine TradingView HTTPS webhook from TradingView itself to:
 
 ```text
-cloudflare: probe tradingview gate 3
+https://trade.mkety.com/api/v1/webhooks/tradingview/probe
 ```
 
-Then inspect that single run. When the step `Start bounded real-time certificate probe and prove spoof rejection` is actively running:
-1. trigger exactly one genuine TradingView HTTPS webhook to `https://trade.mkety.com/api/v1/webhooks/tradingview/probe`;
-2. expect the HTTP response to remain 403 because direct ingress is still disabled/probe-only;
-3. require Cloudflare-observed `certPresented=true`, `fingerprintAvailable=true`, and exactly one stable normalized 64-hex SHA-256 fingerprint;
-4. allow the workflow to roll back automatically to known-good Worker version;
-5. if fingerprint is missing/malformed/unstable, STOP Gate 3 and do not weaken transport authentication.
+Browser/Postman/curl requests do not satisfy the genuine-source observation. Probe mode should still return HTTP 403. After the run, use only the sanitized diagnostic counts and Cloudflare-observed certificate metadata to decide whether certificate pinning is viable.
 
-Only after a genuine stable certificate fingerprint is proven may the next controlled batch pin that fingerprint, disable probe, create a non-execution TradingView source, and temporarily enable direct ingress for dedupe/authority-stripping/source-isolation acceptance.
+If Cloudflare does not expose exactly one stable normalized SHA-256 fingerprint from a genuine TradingView request, **STOP Gate 3 and redesign transport authentication; never weaken to IP-only, header-only, body-secret-only, or URL-secret-only trust.**
 
-Do not enable broker execution, Trading access, or real-money behavior as part of Gate 3.
+Only after a genuine stable certificate fingerprint is proven may a later controlled batch pin it, disable probe mode, create a non-execution TradingView source, and temporarily enable direct ingress for dedupe/authority-stripping/source-isolation acceptance.
+
+Do not start Gate 4, broker execution, or real-money work while Gate 3 remains unresolved.
