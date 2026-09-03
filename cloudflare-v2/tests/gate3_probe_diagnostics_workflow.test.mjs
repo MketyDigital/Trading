@@ -14,7 +14,8 @@ test('Gate 3 certificate probe reports sanitized arrival diagnostics before fail
   assert.match(block, /certPresentedCount/);
   assert.match(block, /fingerprintCount/);
   assert.match(block, /Gate 3 probe diagnostics: totalProbeLogs=/);
-  assert.match(block, /expectedSpoofLogs=1/);
+  assert.match(block, /const expectedSpoofLogs = 1;/);
+  assert.match(block, /expectedSpoofLogs=\$\{expectedSpoofLogs\}/);
   assert.match(block, /additionalProbeLogs=/);
   assert.doesNotMatch(block, /console\.log\([^\n]*(body|workspace|source_id|token|password|api_key|private_key)/i);
 });
