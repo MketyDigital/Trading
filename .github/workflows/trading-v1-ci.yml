@@ -126,3 +126,57 @@ jobs:
           }
           classify "${{ steps.paid_deployments.outcome }}" paid-deployments.log Paid
           classify "${{ steps.free_deployments.outcome }}" free-deployments.log Free
+
+  cloudflare-deploy-paid:
+    needs: test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact deployment head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify Cloudflare authentication
+        run: npx wrangler whoami
+
+      - name: Verify fail-closed Paid Worker runtime gates
+        run: |
+          grep -Eq '^TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^TRADINGVIEW_CERT_PROBE_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^TRADING_ACCESS_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^BROKER_EXECUTION_ENABLED = "false"$' wrangler.toml
+
+      - name: Final Paid pre-deploy dry run
+        run: npx wrangler deploy --dry-run --config wrangler.toml
+
+      - name: Deploy reviewed Paid staging profile
+        run: npx wrangler deploy --config wrangler.toml
+
+      - name: Inspect Paid deployment history after deployment
+        run: npx wrangler deployments list --config wrangler.toml
+
+      - name: Inspect queues after deployment
+        run: npx wrangler queues list
+
+      - name: Inspect Container applications after deployment
+        run: npx wrangler containers list
