@@ -6,17 +6,20 @@ export async function createWorkspaceAIRouter(supabase, workspaceId, {
   decryptFn = decryptSecret,
   fetchFn,
   env = {},
+  circuitBreaker,
 } = {}) {
-  if (!supabase?.from || !workspaceId) return new UniversalAIRouter([], { env, fetchFn });
+  const trustedWorkspaceId = String(workspaceId ?? '').trim() || null;
+  const routerOptions = { env, fetchFn, workspaceId: trustedWorkspaceId, circuitBreaker };
+  if (!supabase?.from || !trustedWorkspaceId) return new UniversalAIRouter([], routerOptions);
 
   const { data, error } = await supabase
     .from('ai_providers')
     .select('*')
-    .eq('workspace_id', String(workspaceId))
+    .eq('workspace_id', trustedWorkspaceId)
     .eq('is_active', true);
 
   if (error || !Array.isArray(data)) {
-    return new UniversalAIRouter([], { env, fetchFn });
+    return new UniversalAIRouter([], routerOptions);
   }
 
   const credentialResolver = async (provider) => {
@@ -37,8 +40,7 @@ export async function createWorkspaceAIRouter(supabase, workspaceId, {
   };
 
   return new UniversalAIRouter(data, {
-    env,
-    fetchFn,
+    ...routerOptions,
     credentialResolver,
   });
 }

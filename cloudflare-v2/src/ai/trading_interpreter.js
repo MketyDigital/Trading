@@ -70,39 +70,10 @@ function normalizeAiSignal(payload) {
   return intent;
 }
 
-function breakerKey(workspaceId, aiProviderId) {
-  const workspace = String(workspaceId ?? '').trim();
-  const provider = String(aiProviderId ?? '').trim();
-  if (!workspace || !provider) return null;
-  return { purpose: 'ambiguity_ai', provider, workspaceId: workspace };
-}
-
-function canAttempt(circuitBreaker, key) {
-  if (!key || typeof circuitBreaker?.canAttempt !== 'function') return true;
-  try {
-    return circuitBreaker.canAttempt(key)?.allowed !== false;
-  } catch {
-    return true;
-  }
-}
-
-function recordFailure(circuitBreaker, key) {
-  if (!key || typeof circuitBreaker?.recordFailure !== 'function') return;
-  try { circuitBreaker.recordFailure(key); } catch {}
-}
-
-function recordSuccess(circuitBreaker, key) {
-  if (!key || typeof circuitBreaker?.recordSuccess !== 'function') return;
-  try { circuitBreaker.recordSuccess(key); } catch {}
-}
-
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
   timeoutMs = 1200,
   systemPrompt = INTERPRETER_PROMPT,
-  workspaceId,
-  aiProviderId,
-  circuitBreaker,
 } = {}) {
   const deterministic = buildMachinePlan(event);
   if (deterministic.status !== 'NEEDS_INTERPRETATION') {
@@ -113,24 +84,19 @@ export async function interpretTradingEvent(event = {}, {
     return { status: 'NEEDS_REVIEW', source: 'none', reason: 'AI interpreter unavailable' };
   }
 
-  const circuitKey = breakerKey(workspaceId, aiProviderId);
-  if (!canAttempt(circuitBreaker, circuitKey)) {
-    return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'AI_CIRCUIT_OPEN' };
-  }
-
   let ai;
   try {
-    ai = await aiRouter.processSignal(String(event.text ?? ''), systemPrompt, { timeoutMs });
-  } catch (error) {
-    recordFailure(circuitBreaker, circuitKey);
-    return { status: 'NEEDS_REVIEW', source: 'ai', reason: error?.message || 'AI interpretation failed' };
+    ai = await aiRouter.processSignal(String(event.text ?? ''), systemPrompt, {
+      timeoutMs,
+      purpose: 'ambiguity_ai',
+    });
+  } catch {
+    return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'AI interpretation failed' };
   }
 
   if (!ai?.success) {
-    recordFailure(circuitBreaker, circuitKey);
     return { status: 'NEEDS_REVIEW', source: 'ai', reason: ai?.error || 'AI interpretation failed' };
   }
-  recordSuccess(circuitBreaker, circuitKey);
 
   try {
     const payload = parseJson(ai.text);

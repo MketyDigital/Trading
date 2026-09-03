@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { UniversalAIRouter } from '../src/ai/universal_ai.js';
 import { interpretTradingEvent } from '../src/ai/trading_interpreter.js';
 import { renderTelegramDestination } from '../src/destinations/telegram_presentation.js';
 import { createProviderCircuitBreaker } from '../src/resilience/provider_circuit_breaker.js';
@@ -21,17 +22,34 @@ function openCircuit(breaker, key) {
   breaker.recordFailure(key);
 }
 
+function ambiguityRouter({ breaker, workspaceId = 'ws-a', fetchFn } = {}) {
+  return new UniversalAIRouter([{
+    id: 'fast-ai',
+    provider_name: 'openai',
+    model_name: 'gpt-test',
+    api_key: 'test-key',
+    priority_rank: 1,
+    is_active: true,
+  }], {
+    workspaceId,
+    circuitBreaker: breaker,
+    fetchFn,
+  });
+}
+
 test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
   openCircuit(breaker, { purpose: 'ambiguity_ai', provider: 'fast-ai', workspaceId: 'ws-a' });
   let calls = 0;
-
-  const result = await interpretTradingEvent(AMBIGUOUS, {
-    workspaceId: 'ws-a',
-    aiProviderId: 'fast-ai',
-    circuitBreaker: breaker,
-    aiRouter: { processSignal: async () => { calls += 1; return { success: false }; } },
+  const aiRouter = ambiguityRouter({
+    breaker,
+    fetchFn: async () => {
+      calls += 1;
+      throw new Error('provider must not be called');
+    },
   });
+
+  const result = await interpretTradingEvent(AMBIGUOUS, { aiRouter });
 
   assert.equal(calls, 0);
   assert.equal(result.status, 'NEEDS_REVIEW');
@@ -41,11 +59,12 @@ test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', 
 
 test('ambiguity-AI failure records only its trusted workspace/provider circuit', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
-  const aiRouter = { processSignal: async () => ({ success: false, error: 'AI_PROVIDER_UNAVAILABLE' }) };
-
-  await interpretTradingEvent(AMBIGUOUS, {
-    workspaceId: 'ws-a', aiProviderId: 'fast-ai', circuitBreaker: breaker, aiRouter,
+  const aiRouter = ambiguityRouter({
+    breaker,
+    fetchFn: async () => { throw new Error('provider unavailable'); },
   });
+
+  await interpretTradingEvent(AMBIGUOUS, { aiRouter });
 
   assert.equal(breaker.canAttempt({ purpose: 'ambiguity_ai', provider: 'fast-ai', workspaceId: 'ws-a' }).allowed, false);
   assert.equal(breaker.canAttempt({ purpose: 'ambiguity_ai', provider: 'fast-ai', workspaceId: 'ws-b' }).allowed, true);
@@ -59,11 +78,12 @@ test('deterministic execution never consults an open ambiguity-AI circuit', asyn
     recordFailure() { throw new Error('breaker must not be on deterministic hot path'); },
     recordSuccess() { throw new Error('breaker must not be on deterministic hot path'); },
   };
-
-  const result = await interpretTradingEvent({ text: 'BUY XAUUSD 2526 SL 2518 TP 2530 2535' }, {
-    workspaceId: 'ws-a', aiProviderId: 'fast-ai', circuitBreaker: breaker,
-    aiRouter: { processSignal: async () => { throw new Error('AI must not run'); } },
+  const aiRouter = ambiguityRouter({
+    breaker,
+    fetchFn: async () => { throw new Error('AI must not run'); },
   });
+
+  const result = await interpretTradingEvent({ text: 'BUY XAUUSD 2526 SL 2518 TP 2530 2535' }, { aiRouter });
 
   assert.equal(result.status, 'READY');
   assert.equal(result.source, 'deterministic');
@@ -125,10 +145,11 @@ test('breaker internal failure is fail-open to existing AI fallback semantics', 
   assert.equal(destination.mode, 'DETERMINISTIC');
   assert.equal(destination.fallbackReason, 'AI_FAILED');
 
-  const ambiguity = await interpretTradingEvent(AMBIGUOUS, {
-    workspaceId: 'ws-a', aiProviderId: 'fast-ai', circuitBreaker: brokenBreaker,
-    aiRouter: { processSignal: async () => ({ success: false, error: 'AI_PROVIDER_UNAVAILABLE' }) },
+  const aiRouter = ambiguityRouter({
+    breaker: brokenBreaker,
+    fetchFn: async () => { throw new Error('provider unavailable'); },
   });
+  const ambiguity = await interpretTradingEvent(AMBIGUOUS, { aiRouter });
   assert.equal(ambiguity.status, 'NEEDS_REVIEW');
-  assert.equal(ambiguity.reason, 'AI_PROVIDER_UNAVAILABLE');
+  assert.equal(ambiguity.reason, 'All AI providers failed in cascade.');
 });

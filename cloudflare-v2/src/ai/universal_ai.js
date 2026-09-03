@@ -12,10 +12,38 @@ export class UniversalAIRouter {
         this.env = options.env || {};
         this.fetchFn = options.fetchFn || fetch;
         this.credentialResolver = options.credentialResolver || null;
+        this.workspaceId = String(options.workspaceId ?? '').trim() || null;
+        this.circuitBreaker = options.circuitBreaker || null;
     }
 
     priorityOf(provider) {
         return Number(provider?.priority_rank ?? provider?.priority ?? 1);
+    }
+
+    circuitKey(provider, purpose) {
+        const providerId = String(provider?.id ?? '').trim();
+        const purposeName = String(purpose ?? '').trim();
+        if (!this.workspaceId || !providerId || !purposeName) return null;
+        return { purpose: purposeName, provider: providerId, workspaceId: this.workspaceId };
+    }
+
+    canAttemptCircuit(key) {
+        if (!key || typeof this.circuitBreaker?.canAttempt !== 'function') return true;
+        try {
+            return this.circuitBreaker.canAttempt(key)?.allowed !== false;
+        } catch {
+            return true;
+        }
+    }
+
+    recordCircuitFailure(key) {
+        if (!key || typeof this.circuitBreaker?.recordFailure !== 'function') return;
+        try { this.circuitBreaker.recordFailure(key); } catch {}
+    }
+
+    recordCircuitSuccess(key) {
+        if (!key || typeof this.circuitBreaker?.recordSuccess !== 'function') return;
+        try { this.circuitBreaker.recordSuccess(key); } catch {}
     }
 
     async resolveCredential(provider) {
@@ -31,23 +59,43 @@ export class UniversalAIRouter {
     /**
      * Attempts formatting/interpretation using providers in configured order.
      * `timeoutMs` is per provider, allowing Telegram formatting to use a much
-     * smaller latency budget than non-urgent interpretation work.
+     * smaller latency budget than non-urgent interpretation work. Circuit
+     * identity is derived only from this router's trusted workspace binding
+     * and the exact database provider row currently being attempted.
      */
-    async processSignal(rawText, systemPrompt, { timeoutMs = 12000 } = {}) {
+    async processSignal(rawText, systemPrompt, { timeoutMs = 12000, purpose = 'ai' } = {}) {
         if (!this.providers.length) {
             return { success: false, error: 'No AI providers configured in database.' };
         }
 
-        let lastError = null;
+        let attempted = 0;
+        let blocked = 0;
         for (const provider of this.providers) {
             if (provider?.is_active === false) continue;
-            const apiKey = await this.resolveCredential(provider);
-            if (!apiKey && !provider?.uses_binding) continue;
-            const resolvedProvider = { ...provider, resolved_api_key: apiKey };
 
+            const circuitKey = this.circuitKey(provider, purpose);
+            if (!this.canAttemptCircuit(circuitKey)) {
+                blocked += 1;
+                continue;
+            }
+
+            let apiKey;
+            try {
+                apiKey = await this.resolveCredential(provider);
+            } catch {
+                attempted += 1;
+                this.recordCircuitFailure(circuitKey);
+                console.warn('AI provider credential resolution failed');
+                continue;
+            }
+            if (!apiKey && !provider?.uses_binding) continue;
+
+            attempted += 1;
+            const resolvedProvider = { ...provider, resolved_api_key: apiKey };
             try {
                 const result = await this.callProviderWithTimeout(resolvedProvider, rawText, systemPrompt, timeoutMs);
                 if (result?.success && result.text) {
+                    this.recordCircuitSuccess(circuitKey);
                     return {
                         success: true,
                         text: this.cleanOutput(result.text),
@@ -55,13 +103,17 @@ export class UniversalAIRouter {
                         model: provider.model_name,
                     };
                 }
-            } catch (err) {
-                console.warn(`AI provider ${provider.provider_name} failed: ${err.message}`);
-                lastError = err.message;
+                this.recordCircuitFailure(circuitKey);
+            } catch {
+                this.recordCircuitFailure(circuitKey);
+                console.warn('AI provider request failed');
             }
         }
 
-        return { success: false, error: lastError || 'All AI providers failed in cascade.' };
+        if (attempted === 0 && blocked > 0) {
+            return { success: false, error: 'AI_CIRCUIT_OPEN' };
+        }
+        return { success: false, error: 'All AI providers failed in cascade.' };
     }
 
     async callProviderWithTimeout(provider, rawText, systemPrompt, timeoutMs = 12000) {
