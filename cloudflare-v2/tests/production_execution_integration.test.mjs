@@ -24,7 +24,7 @@ function baseDeps(overrides = {}) {
 test('broker-disabled V1 planning returns disabled execution summary without constructing production dependencies', async () => {
   let executionDepsCalls = 0;
   let executeCalls = 0;
-  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', BROKER_EXECUTION_ENABLED: 'false' }, baseDeps({
+  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, baseDeps({
     executionDepsFactory: async () => { executionDepsCalls += 1; throw new Error('must not construct broker dependencies'); },
     executeProductionFn: async () => { executeCalls += 1; throw new Error('must not execute'); },
   }));
@@ -38,11 +38,31 @@ test('broker-disabled V1 planning returns disabled execution summary without con
   assert.equal(executeCalls, 0);
 });
 
+test('trading-access-disabled V1 planning cannot construct production dependencies even when broker fuse is enabled', async () => {
+  let executionDepsCalls = 0;
+  let executeCalls = 0;
+  const response = await handleV1EventsRequest(request(), {
+    TRADING_MASTER_KEY: 'master',
+    TRADING_V1_SIMULATION: 'true',
+    TRADING_ACCESS_ENABLED: 'false',
+    BROKER_EXECUTION_ENABLED: 'true',
+  }, baseDeps({
+    executionDepsFactory: async () => { executionDepsCalls += 1; return {}; },
+    executeProductionFn: async () => { executeCalls += 1; return {}; },
+  }));
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.execution.status, 'TRADING_ACCESS_DISABLED');
+  assert.equal(body.execution.executionEnabled, false);
+  assert.equal(executionDepsCalls, 0);
+  assert.equal(executeCalls, 0);
+});
+
 test('duplicates and NEEDS_REVIEW simulation never construct production execution dependencies', async () => {
   let executionDepsCalls = 0;
   let executeCalls = 0;
   for (const mode of ['duplicate', 'review']) {
-    const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
+    const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
       ingestFn: async () => mode === 'duplicate' ? baseResult({ duplicate: true }) : baseResult(),
       orchestrateFn: async () => ({ status: 'NEEDS_REVIEW', executionEnabled: false, actions: [], accounts: [] }),
       executionDepsFactory: async () => { executionDepsCalls += 1; return {}; },
@@ -65,7 +85,7 @@ test('broker-enabled stage forwards only trusted READY account actions and strip
     { accountId: 'acct-blocked', status: 'BLOCKED', actions: [{ type: 'OPEN_POSITION', idempotencyKey: 'must-not-forward', simulated: true }] },
     { accountId: 'acct-waiting', status: 'WAITING', actions: [] },
   ] };
-  const response = await handleV1EventsRequest(request(JSON.stringify({ workspace_id: 'ws-attacker', brokerExecutionEnabled: true, BROKER_EXECUTION_ENABLED: true, credentials: { token: 'caller-token' } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
+  const response = await handleV1EventsRequest(request(JSON.stringify({ workspace_id: 'ws-attacker', brokerExecutionEnabled: true, BROKER_EXECUTION_ENABLED: true, credentials: { token: 'caller-token' } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
     orchestrateFn: async () => trustedSimulation,
     executionDepsFactory: async (input) => { dependencyInput = input; return { accountLoader() {}, dispatchAction() {}, stateBinder() {} }; },
     executeProductionFn: async (input) => { executionInput = input; return { executionEnabled: true, status: 'SUCCEEDED', accounts: [], succeeded: 1, failed: 0, blocked: 0 }; },
@@ -89,7 +109,7 @@ test('broker-enabled stage forwards only trusted READY account actions and strip
 test('caller payload cannot enable broker execution when server master fuse is absent or false', async () => {
   for (const serverValue of [undefined, 'false']) {
     let executionDepsCalls = 0;
-    const response = await handleV1EventsRequest(request(JSON.stringify({ BROKER_EXECUTION_ENABLED: true, brokerExecutionEnabled: true, execution: { enabled: true } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', ...(serverValue === undefined ? {} : { BROKER_EXECUTION_ENABLED: serverValue }) }, baseDeps({ executionDepsFactory: async () => { executionDepsCalls += 1; return {}; } }));
+    const response = await handleV1EventsRequest(request(JSON.stringify({ BROKER_EXECUTION_ENABLED: true, brokerExecutionEnabled: true, execution: { enabled: true } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', ...(serverValue === undefined ? {} : { BROKER_EXECUTION_ENABLED: serverValue }) }, baseDeps({ executionDepsFactory: async () => { executionDepsCalls += 1; return {}; } }));
     const body = await response.json();
     assert.equal(body.execution.status, 'BROKER_EXECUTION_DISABLED');
     assert.equal(body.execution.executionEnabled, false);
