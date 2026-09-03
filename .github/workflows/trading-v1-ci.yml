@@ -129,7 +129,8 @@ jobs:
 
   cloudflare-deploy-paid:
     needs: test
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' }}
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' }}
     runs-on: ubuntu-latest
     environment: staging
     permissions:
