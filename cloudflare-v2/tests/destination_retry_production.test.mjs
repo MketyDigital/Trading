@@ -73,11 +73,35 @@ test('production retry claims through existing persistent store and dispatches o
     },
   });
 
-  const result = await runtime({ BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.succeeded, 1);
   assert.equal(calls[0][0], 'claim');
   assert.equal(calls[0][1], row.idempotency_key);
+});
+
+test('trading access disabled prevents due scan, claim, dependency construction, and broker retry', async () => {
+  const row = retryRow();
+  let supabaseCalls = 0;
+  let dueScans = 0;
+  let storeCalls = 0;
+  let depsCalls = 0;
+  let executeCalls = 0;
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => { supabaseCalls += 1; return { from() {} }; },
+    listDueFn: async () => { dueScans += 1; return [row]; },
+    deliveryStoreFactory: () => { storeCalls += 1; return {}; },
+    executionDepsFactory: async () => { depsCalls += 1; return {}; },
+    executeProductionFn: async () => { executeCalls += 1; return {}; },
+  });
+
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'false', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  assert.equal(result.status, 'TRADING_ACCESS_DISABLED');
+  assert.equal(supabaseCalls, 0);
+  assert.equal(dueScans, 0);
+  assert.equal(storeCalls, 0);
+  assert.equal(depsCalls, 0);
+  assert.equal(executeCalls, 0);
 });
 
 test('revoked account authority after retry scheduling becomes terminal without broker dispatch', async () => {
@@ -107,7 +131,7 @@ test('revoked account authority after retry scheduling becomes terminal without 
     }),
   });
 
-  const result = await runtime({ BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(brokerDispatches, 0);
   assert.equal(result.failed, 1);
   assert.equal(calls.length, 1);
@@ -129,7 +153,7 @@ test('destination/account mismatch fails closed before constructing execution de
     executionDepsFactory: async () => { depsCalls += 1; return {}; },
   });
 
-  const result = await runtime({ BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(depsCalls, 0);
   assert.equal(result.failed, 1);
 });
