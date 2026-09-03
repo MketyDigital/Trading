@@ -89,3 +89,15 @@ test('Cloudflare inspect records undeployed Workers without hiding real API fail
   assert.match(workflow, /Worker does not exist on your account|code:\s*10007/);
   assert.match(workflow, /exit 1/);
 });
+
+test('Cloudflare inspect inventories queues and container applications read-only before first deployment', async () => {
+  const workflow = await readCiWorkflow();
+  const inspectBlock = workflow.slice(workflow.indexOf('cloudflare-inspect:'));
+
+  assert.match(inspectBlock, /npx wrangler queues list/);
+  assert.match(inspectBlock, /npx wrangler containers list/);
+  assert.doesNotMatch(inspectBlock, /wrangler queues create/);
+  assert.doesNotMatch(inspectBlock, /wrangler queues delete/);
+  assert.doesNotMatch(inspectBlock, /wrangler containers delete/);
+  assert.doesNotMatch(inspectBlock, /wrangler containers push/);
+});
