@@ -53,6 +53,10 @@ export async function runV1ProductionExecutionStage({
     return null;
   }
 
+  if (!enabled(env.TRADING_ACCESS_ENABLED)) {
+    return summary('TRADING_ACCESS_DISABLED');
+  }
+
   const accountPlans = trustedReadyPlans(simulation);
 
   if (!enabled(env.BROKER_EXECUTION_ENABLED)) {
