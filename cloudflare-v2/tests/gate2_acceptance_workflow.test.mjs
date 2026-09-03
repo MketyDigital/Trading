@@ -60,6 +60,16 @@ test('Gate 2 temporary external MTProto source explicitly authorizes only its sy
   assert.match(harness, /allowed_chat_ids:\s*\[\s*'-1000000000001'\s*\]/);
 });
 
+test('Gate 2 direct simulation carries an authorized unique Telegram native identity', async () => {
+  const harness = await readHarness();
+  const directStart = harness.indexOf('async function proveDirectSimulation()');
+  assert.ok(directStart >= 0, 'direct simulation probe must exist');
+  const directBlock = harness.slice(directStart, harness.indexOf('async function verifyQueueDeduplication()', directStart));
+  assert.match(directBlock, /native_identity/);
+  assert.match(directBlock, /chat_id:\s*'-1000000000001'/);
+  assert.match(directBlock, /message_id:\s*'2'/);
+});
+
 test('Gate 2 harness uses real queue handoff, persistent dedupe, simulation-only actions, and cleanup', async () => {
   const harness = await readHarness();
   assert.match(harness, /\/api\/v1\/internal\/source-event/);
