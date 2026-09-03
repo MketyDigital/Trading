@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const workflowPath = new URL('../../.github/workflows/cloudflare-staging-gate.yml', import.meta.url);
+const ciWorkflowPath = new URL('../../.github/workflows/trading-v1-ci.yml', import.meta.url);
 
 async function readWorkflow() {
   return readFile(workflowPath, 'utf8');
+}
+
+async function readCiWorkflow() {
+  return readFile(ciWorkflowPath, 'utf8');
 }
 
 test('Cloudflare staging gate is manual-only and protected by the staging environment', async () => {
@@ -57,4 +62,19 @@ test('Cloudflare staging gate validates both Wrangler profiles before any deploy
   assert.ok(freeDeploy >= 0, 'free deployment command must exist');
   assert.ok(paidDryRun < paidDeploy, 'paid dry-run must precede paid deployment');
   assert.ok(freeDryRun < freeDeploy, 'free dry-run must precede free deployment');
+});
+
+test('PR branch CI provides an inspect-only Cloudflare staging fallback without deployment', async () => {
+  const workflow = await readCiWorkflow();
+
+  assert.match(workflow, /cloudflare-inspect:/);
+  assert.match(workflow, /environment:\s*staging/);
+  assert.match(workflow, /github\.event_name == 'push'/);
+  assert.match(workflow, /design\/enterprise-trading-event-core/);
+  assert.match(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);
+  assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /npx wrangler whoami/);
+  assert.match(workflow, /npx wrangler deployments list --config wrangler\.toml/);
+  assert.doesNotMatch(workflow, /cloudflare-inspect:[\s\S]*?npx wrangler deploy --config wrangler\.toml(?! --dry-run)/);
+  assert.doesNotMatch(workflow, /cloudflare-inspect:[\s\S]*?npx wrangler deploy --config wrangler\.free\.toml(?! --dry-run)/);
 });
