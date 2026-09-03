@@ -67,6 +67,43 @@ test('demo probe authenticates only demo runtime, resolves broker symbol and cap
   assert.doesNotMatch(JSON.stringify(result), /secret|token/i);
 });
 
+test('cTrader probe supplies a fail-closed execution store when no persistent store is configured', async () => {
+  let runtimeOptions;
+  const runtime = {
+    environment: 'demo',
+    account: { accountType: 'HEDGED', accessRights: 'FULL_ACCESS', canOpenTrades: true },
+    catalog: [{
+      platform: 'ctrader', platformId: 41, platformSymbol: 'XAU/USD', canonical: 'XAUUSD', aliases: ['GOLD'],
+      digits: 2, tickSize: 0.01, pipSize: 0.1, protocolLotSize: 10000, minVolume: 100, maxVolume: 100000, stepVolume: 100,
+    }],
+    marketData: {
+      subscribeQuotes: async () => {},
+      handleSpotEvent: () => {},
+      quoteFor: () => ({ bid: 2500.1, ask: 2500.2, timestamp: 1725180000000 }),
+    },
+    session: { waitForEvent: async () => ({ payloadType: 2131, payload: { symbolId: 41 } }) },
+    close() {},
+  };
+
+  const result = await probeCTraderDemo({
+    env: {
+      CTRADER_CLIENT_ID: 'id', CTRADER_CLIENT_SECRET: 'secret', CTRADER_ACCESS_TOKEN: 'token', CTRADER_ACCOUNT_ID: '77',
+      CTRADER_DEMO_SYMBOL: 'GOLD',
+    },
+    runtimeFactory: async (options) => { runtimeOptions = options; return runtime; },
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(runtimeOptions.environment, 'demo');
+  assert.equal(runtimeOptions.allowLiveTrading, false);
+  assert.equal(typeof runtimeOptions.deliveryStore?.reserve, 'function');
+  assert.equal(typeof runtimeOptions.deliveryStore?.complete, 'function');
+  assert.equal(typeof runtimeOptions.deliveryStore?.fail, 'function');
+  assert.throws(() => runtimeOptions.deliveryStore.reserve(), /probe.*execution.*disabled/i);
+  assert.throws(() => runtimeOptions.deliveryStore.complete(), /probe.*execution.*disabled/i);
+  assert.throws(() => runtimeOptions.deliveryStore.fail(), /probe.*execution.*disabled/i);
+});
+
 test('demo market action requires explicit order-test gate and refuses lots below broker minimum', () => {
   const symbol = {
     canonical: 'XAUUSD', platformSymbol: 'XAU/USD', platformId: 41,
