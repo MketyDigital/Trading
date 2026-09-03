@@ -192,27 +192,23 @@ Results:
 - schedules deployed: `*/15 * * * *` and `* * * * *`
 - all four runtime safety flags remained false
 
-Immediately after deployment Cloudflare reported the Container application as `provisioning` with 7 live instances even though the deployment configuration requested `instances = 0`. This was treated as a Gate 2 stop-condition until settled.
-
-User subsequently verified Cloudflare dashboard state:
+User subsequently verified Cloudflare Container dashboard state after provisioning settled:
 - application state: `Ready`
 - live instances: `0`
 
-Therefore the earlier 7-instance reading is recorded as transient deployment/provisioning activity, not persistent application MTProto selection. Code-side Container start remains fail-closed: bootstrap requires an active Telegram source with provider type exactly `cloudflare_container_mtproto`, and the runtime only calls `ctx.container.start()` through explicit start/restart paths after valid bootstrap.
+The earlier temporary 7-instance provisioning reading is therefore recorded as rollout/provisioning activity, not persistent application MTProto selection.
 
 ### Gate 2 acceptance harness/gate — ready, not yet run
 
 Acceptance harness commit:
 `9eb3e26e69d308070515583f0f98e54a1fb19342`
 
-Workflow/contract implementation was prepared and then folded forward from the current branch head; use the current branch history/run as authoritative rather than the earlier dangling implementation commit.
-
-Files:
+Files prepared for the explicit gate:
 - `cloudflare-v2/scripts/gate2_queue_acceptance.mjs`
 - `cloudflare-v2/tests/gate2_acceptance_workflow.test.mjs`
 - `.github/workflows/trading-v1-ci.yml`
 
-Local RED before implementation proved the new acceptance contract was absent without consuming GitHub Actions or Cloudflare resources. The implementation is intentionally marker-gated so ordinary pushes cannot run the Cloudflare acceptance job.
+Local RED before implementation proved the new acceptance contract was absent without consuming GitHub Actions or Cloudflare resources. The implementation is marker-gated so ordinary pushes cannot run the Cloudflare acceptance job.
 
 ## Gate 2 current status
 
