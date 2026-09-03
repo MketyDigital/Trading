@@ -408,8 +408,8 @@ jobs:
       TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
       TRADING_ACCESS_ENABLED: 'false'
       BROKER_EXECUTION_ENABLED: 'false'
-      GATE3_HOSTNAME: tradingview.mkety.app
-      GATE3_ZONE_ID: 111e5cbffce119ece633c104a76a9a15
+      GATE3_HOSTNAME: trade.mkety.com
+      GATE3_ZONE_ID: 98c7228a0457b1f454881c149e2df6ce
     steps:
       - name: Checkout exact probe head
         uses: actions/checkout@v4
@@ -440,7 +440,7 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/domains?hostname=${GATE3_HOSTNAME}" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$domains"
           curl -fsS -X GET \
-            "https://api.cloudflare.com/client/v4/zones/111e5cbffce119ece633c104a76a9a15/dns_records?name=tradingview.mkety.app" \
+            "https://api.cloudflare.com/client/v4/zones/${GATE3_ZONE_ID}/dns_records?name=${GATE3_HOSTNAME}" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$dns"
           node - "$domains" "$dns" <<'NODE'
           const fs = require('fs');
@@ -450,8 +450,8 @@ jobs:
           const workerDomains = Array.isArray(domains.result) ? domains.result : [];
           const dnsRecords = Array.isArray(dns.result) ? dns.result : [];
           const foreignDomain = workerDomains.find((item) => item?.service && item.service !== 'mkety-copier-engine');
-          if (foreignDomain) throw new Error('tradingview.mkety.app is already attached to another Worker');
-          if (dnsRecords.length && workerDomains.length === 0) throw new Error('tradingview.mkety.app already has a non-Worker DNS record');
+          if (foreignDomain) throw new Error('trade.mkety.com is already attached to another Worker');
+          if (dnsRecords.length && workerDomains.length === 0) throw new Error('trade.mkety.com already has a non-Worker DNS record');
           console.log(`Gate 3 hostname clear/reusable: workerDomains=${workerDomains.length}, dnsRecords=${dnsRecords.length}`);
           NODE
 
@@ -459,7 +459,7 @@ jobs:
         id: probe_deploy
         run: >-
           npx wrangler deploy --config wrangler.toml
-          --domain tradingview.mkety.app
+          --domain ${GATE3_HOSTNAME}
           --containers-rollout none
           --keep-vars
           --var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false
@@ -475,7 +475,7 @@ jobs:
           tail_pid=$!
           sleep 5
           status="$(curl -sS -o "$RUNNER_TEMP/gate3-spoof-body.json" -w '%{http_code}' \
-            -X POST "https://tradingview.mkety.app/api/v1/webhooks/tradingview/probe" \
+            -X POST "https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe" \
             -H 'content-type: application/json' \
             -H 'x-tradingview-client-cert: spoofed-caller-header' \
             --data '{"event_id":"spoof-only","text":"probe"}')"
@@ -485,7 +485,7 @@ jobs:
             exit 1
           fi
           echo 'Gate 3 spoof rejected with HTTP 403.'
-          echo 'TRADINGVIEW_CERT_PROBE is active on https://tradingview.mkety.app/api/v1/webhooks/tradingview/probe'
+          echo "TRADINGVIEW_CERT_PROBE is active on https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe"
           wait "$tail_pid" || true
           node - "$tail_log" <<'NODE'
           const fs = require('fs');
