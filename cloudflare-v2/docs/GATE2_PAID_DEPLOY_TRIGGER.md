@@ -10,3 +10,5 @@ Safety state for this trigger:
 - Free deployment not requested.
 
 The deployment workflow must still pass mandatory CI and its final Paid Wrangler dry-run before any real deployment command can run.
+
+Acceptance trigger: 2026-09-03 Gate 2 queue/simulation/rollback verification.
