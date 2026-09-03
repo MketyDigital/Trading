@@ -113,14 +113,14 @@ Gate 3 markers:
 2. Real Cloudflare staging infrastructure — **GREEN**
 3. TradingView certificate probe/direct ingress acceptance — **DEFERRED / FAIL-CLOSED**
 4. Zitadel real non-live identity acceptance — **AVAILABLE IN PARALLEL**
-5. Telegram runtime soak — **CURRENT PRIORITY**
-6. MT5/cTrader source acceptance — **NEXT**
-7. Broker demo destinations — **NEXT**
+5. Telegram runtime soak — **STATIC HARNESS GREEN / REAL SOAK PENDING**
+6. MT5/cTrader source acceptance — **CURRENT IMPLEMENTATION PRIORITY**
+7. Broker demo destinations — **CURRENT IMPLEMENTATION PRIORITY**
 8. End-to-end staging
 9. Production operations
 10. Tiny controlled cutover
 
-Gate execution may proceed out of numerical order where dependencies are independent, but **final production launch still requires every mandatory gate to be GREEN or explicitly removed from V1 scope through a reviewed scope change.** TradingView remains in V1 scope and therefore its deferred real certificate/direct-ingress acceptance must be completed before final production launch if TradingView ships in V1.
+Gate execution may proceed out of numerical order where dependencies are independent, but final production launch still requires every mandatory gate to be GREEN or explicitly removed from V1 scope through a reviewed scope change. TradingView remains in V1 scope and therefore its deferred real certificate/direct-ingress acceptance must be completed before final production launch if TradingView ships in V1.
 
 Real-money execution requires separate explicit user approval after all prior mandatory gates are GREEN.
 
@@ -160,37 +160,12 @@ Gate 2 is complete; do not redo it.
 
 **DEFERRED / FAIL-CLOSED. STATIC SECURITY IMPLEMENTATION REMAINS ACCEPTED; GENUINE TRADINGVIEW CERTIFICATE ACCEPTANCE IS EXTERNALLY BLOCKED FOR NOW.**
 
-Domain:
-- Trading hostname `trade.mkety.com`
-- Cloudflare zone `mkety.com`
-- `mkety.app` remains reserved for MKSaaS/customer builds.
-
-Static/TDD security behavior already proven:
-- direct ingress requires the exact configured SHA-256 certificate fingerprint;
-- only Cloudflare-provided `request.cf.tlsClientAuth` is authoritative;
-- caller headers cannot self-assert certificate verification;
-- probe mode is fail-closed and returns 403 before source lookup/queueing;
-- sanitized probe diagnostics never log source body/credential authority;
-- direct ingress, Trading access, and broker execution remain disabled by default.
-
-Real probe evidence:
-- trigger `983bf36732a37a787cc253fec391a6a18d6c4517`
-- run `33728657084`
-- probe job `100563529178`
-- `trade.mkety.com` temporary probe deployment succeeded
-- spoof request was rejected with HTTP 403
-- 0 usable genuine SHA-256 fingerprints were observed
-- rollback succeeded to known-good version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
-- no direct ingress, Trading access, broker execution, or real-money path was enabled.
-
-The request used for the attempted observation was sent from user-operated `curl`, not from TradingView itself. Therefore the 0-fingerprint result is **not evidence that genuine TradingView certificate presentation fails**. Genuine TradingView webhook execution is currently unavailable to the user due to the required TradingView subscription tier, so real certificate observation is deferred.
-
-Deferred safety contract:
-- keep `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`;
-- keep `TRADINGVIEW_CERT_PROBE_ENABLED=false` outside a future controlled probe;
-- do not create a TradingView production source or broker destination;
-- do not weaken authentication to IP/header/body/URL-secret trust;
-- resume Gate 3 later with a genuine TradingView-originated HTTPS webhook before declaring TradingView production-ready.
+- Trading hostname `trade.mkety.com`; `mkety.app` remains reserved for MKSaaS/customer builds.
+- Static security contract is GREEN: exact fingerprint trust, Cloudflare-only TLS metadata authority, spoof rejection, fail-closed probe, sanitized diagnostics.
+- Real probe trigger `983bf36732a37a787cc253fec391a6a18d6c4517`, run `33728657084`, job `100563529178` safely rolled back after observing 0 genuine fingerprints.
+- The attempted observation used user-operated curl rather than a TradingView-originated request, so it does not prove genuine TradingView certificate failure.
+- Genuine TradingView webhook execution is unavailable to the user at the current subscription tier; resume later without weakening authentication.
+- Keep both TradingView runtime flags false outside a future controlled probe.
 
 ## Gate 4 — Zitadel real identity acceptance
 
@@ -200,16 +175,36 @@ Keep `TRADING_ACCESS_ENABLED=false` until real non-live Zitadel positive/negativ
 
 ## Gate 5 — Telegram real soak and recovery acceptance
 
-**CURRENT PRIORITY.**
+**STATIC HARNESS GREEN / REAL TELEGRAM ACCOUNT SOAK PENDING EXTERNAL CREDENTIALS.**
 
-Proceed with all acceptance work that does not require unavailable external credentials first: static soak harness, provider selection/non-selection contracts, canonical identity/replay tests, failure isolation, and recovery behavior. Real Telegram-account/channel soak evidence remains separately required before final Gate 5 GREEN.
+Static harness evidence is covered by ordinary `tests/*.test.mjs`, including `tests/mtproto_container_soak.test.mjs`:
+- explicit opt-in and missing-name reporting without secret echo;
+- disconnect/reconnect health transitions;
+- canonical duplicate identity counting;
+- catch-up/replay metrics;
+- latency summary;
+- secret-free summary with no broker execution state;
+- soak command contains no live/broker execution command.
+
+Real account/channel receive/reconnect/restart/catch-up still requires dedicated Telegram test credentials before Gate 5 can be fully GREEN.
 
 ## Gates 6–7 — MT5/cTrader sources and broker demo destinations
 
-**HIGH PRIORITY AFTER/ALONGSIDE GATE 5.**
+**CURRENT PRIORITY.**
 
-Proceed with real/demo acceptance wherever credentials/accounts are available, while broker real-money execution remains disabled. Demo destination work must preserve separate execution enablement, risk controls, destination idempotency, and authoritative broker metadata.
+Existing acceptance surfaces:
+- `npm run accept:mt5:demo`
+- `npm run accept:ctrader:demo`
+- each supports safe probe mode and separately explicit order-lifecycle mode;
+- MT5 probe verifies exact demo login/server, broker symbol catalog, and live tick metadata;
+- cTrader runtime is pinned to `environment='demo'`, `allowLiveTrading=false`, authoritative account/symbol/quote metadata, and raw protocol `lotSize` semantics;
+- actual demo order lifecycle remains explicit opt-in and must preserve persistent delivery idempotency.
+
+Current improvement under TDD:
+- safe connectivity/source **probe** mode should not require Supabase delivery-store configuration because it places no order;
+- lifecycle/order mode must continue requiring persistent delivery-store configuration;
+- RED contract prepared as atomic test commit candidate `e1fcd4e373fcff0ba1c7838d6c90072537086242` for both MT5 and cTrader; branch attachment/CI evidence pending before implementation.
 
 ## Exact next safe action
 
-Run the existing static Telegram MTProto soak harness and reconcile its output against Gate 5 acceptance criteria. Then inspect which real Telegram, MT5, cTrader, and broker-demo prerequisites are already available before introducing any new code or credentials.
+Attach the batched RED contract commit for MT5+cTrader probe decoupling, verify the expected two failures with all Cloudflare jobs skipped, then implement the minimal runner changes and verify exact-head GREEN. After that, real demo probes will need only the platform-specific demo credentials/connectivity, while order lifecycle will remain separately gated behind persistent delivery idempotency and explicit demo-order opt-in.
