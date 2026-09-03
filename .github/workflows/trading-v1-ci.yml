@@ -5,12 +5,30 @@ on:
     branches:
       - main
       - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - 'cloudflare-v2/bridges/**'
+      - 'cloudflare-v2/containers/**'
+      - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/package.json'
+      - 'cloudflare-v2/package-lock.json'
+      - 'cloudflare-v2/wrangler.toml'
+      - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md'
+      - '.github/workflows/trading-v1-ci.yml'
   pull_request:
     paths:
-      - 'cloudflare-v2/**'
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - 'cloudflare-v2/bridges/**'
+      - 'cloudflare-v2/containers/**'
+      - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/package.json'
+      - 'cloudflare-v2/package-lock.json'
+      - 'cloudflare-v2/wrangler.toml'
+      - 'cloudflare-v2/wrangler.free.toml'
       - '.github/workflows/trading-v1-ci.yml'
-      - 'AGENTS.md'
-      - 'docs/superpowers/**'
 
 jobs:
   test:
@@ -46,13 +64,9 @@ jobs:
           PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
           PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
 
-      - name: Wrangler dry run
-        run: |
-          npx wrangler deploy --dry-run
-          npx wrangler deploy --dry-run --config wrangler.free.toml
-
   cloudflare-inspect:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' }}
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: inspect staging gate 2' }}
     runs-on: ubuntu-latest
     environment: staging
     permissions:

@@ -4,22 +4,23 @@ Operational source of truth for `MketyDigital/Trading`. Read this file before ch
 
 ## Hard rules
 
-- Active next-generation work stays in `cloudflare-v2/` unless a deliberate migration says otherwise.
-- Preserve the legacy root runtime and `cloudflare-v2/src/index.js` until V1 is independently proven.
+- Active next-generation work stays in `cloudflare-v2/`.
 - Active branch: `design/enterprise-trading-event-core`; draft PR #2 targets `main`.
 - Wrangler entrypoint: `cloudflare-v2/src/v1_entry.js`.
 - **Never merge `main` without explicit user instruction.**
 - Real-money execution remains disabled.
-- TDD is mandatory for feature/bugfix production changes: exact RED first, then exact-head GREEN.
-- Never paste, log, or commit broker, database, auth, source, Telegram-session, provider, transport, signing, destination, Cloudflare, Zitadel, or AI secret values.
-- Update this file after every meaningful implementation/testing/environment batch with current evidence and the exact next safe action.
+- Never paste, log, or commit broker, database, auth, Telegram-session, provider, Cloudflare, Zitadel, AI, signing, destination, or transport secret values.
+- Update this file after every meaningful implementation/testing/environment batch.
+- Batch related edits. Avoid unnecessary commits, GitHub Actions runs, Wrangler dry-runs, Container builds, deployments, or account/API calls.
+- Prefer read-only evidence and local tests where they are sufficient.
+- TDD remains mandatory for production feature/bugfix behavior; configuration changes should still have a regression contract and evidence before claiming success.
 - Cloudflare core/security must remain Free-plan-compatible. Workers Paid may add optional capacity, but no trust boundary may depend on Enterprise-only BYOCA or Enterprise-only mTLS trust.
-- Cloudflare Containers are optional Workers Paid MTProto capacity only. Merely having the Container binding must never select or start `cloudflare_container_mtproto`; only an exact active source configured with that provider may touch the Container runtime.
-- `cloudflare-v2/wrangler.toml` is the Paid profile. `cloudflare-v2/wrangler.free.toml` is the isolated no-Container Free-compatible profile.
+- Cloudflare Containers are optional Paid MTProto capacity only. Merely having the Container binding must never select/start `cloudflare_container_mtproto`; only an exact active source configured with that provider may reach Container bootstrap/runtime.
+- `cloudflare-v2/wrangler.toml` is Paid. `cloudflare-v2/wrangler.free.toml` is the isolated no-Container Free-compatible profile.
 
 ## Product / tenancy contract
 
-Mkety Trading is an enterprise multi-tenant trading automation product. Isolation is mandatory across workspace, user, source, provider runtime, Telegram session/chat, event, trade account, destination, AI provider, retry, queue, idempotency, Position Group, health, control state, and credentials. One integration failure must never receive, mutate, stall, disable, reorder, duplicate, roll back, or corrupt unrelated tenants/integrations.
+Mkety Trading is an enterprise multi-tenant trading automation product. Isolation is mandatory across workspace, user, source, provider runtime, Telegram session/chat, event, trade account, destination, AI provider, retry, queue, idempotency, Position Group, health, control state, and credentials.
 
 Canonical pipeline:
 
@@ -47,55 +48,43 @@ Provider scope:
 
 Core safety:
 - deterministic processing handles clear signals; bounded AI is ambiguity-only and must pass deterministic validation;
-- connected broker metadata is authoritative for symbols, precision, tick economics, volume/order/account-mode semantics;
+- connected broker metadata is authoritative;
 - persistent event/destination/order idempotency is mandatory;
 - Position Groups support arbitrary TP counts and hedged/netted behavior;
 - global kill switch blocks everything; protective management may bypass only ordinary drawdown/open-risk locks;
-- critical cTrader rule: preserve raw `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion;
+- preserve raw cTrader `ProtoOASymbol.lotSize` protocol-cent semantics; never add another x100 conversion;
 - identity/admin/database/source-adapter/infrastructure work never enables broker execution.
 
 ## Identity / database boundary
 
-- One managed Mkety Zitadel instance is the global identity authority; Trading and MKSaaS use separate projects/apps and separate product databases.
-- Immutable Zitadel `sub` is the Trading user identity key; never email.
+- Managed Mkety Zitadel is the global identity authority; Trading and MKSaaS remain separate projects/apps and product DBs.
+- Immutable Zitadel `sub` is the user key; never email.
 - Login alone never grants Trading access.
-- `trading_workspace_access` is the Trading entitlement switch; `trading_workspace_memberships` is exact `(workspace_id, zitadel_subject)` membership.
-- When `ZITADEL_PROJECT_ID` is configured, only its exact project-specific role claim may authorize.
-- Workspace roles are owner/admin/operator/viewer; unknown fails closed. No workspace role grants `broker.execute`.
-- Trading auth must never query/depend on the MKSaaS user DB or shared Mkety workspace table.
-- Keep `trading_access_enabled=false` / `TRADING_ACCESS_ENABLED=false` until real non-live Zitadel acceptance passes.
-- Live Supabase Trading migrations through `trading_0010_tradingview_public_source_handle` are already applied and verified. Ledger version for `0010` is `20260902184215`; do not re-run foundation migrations blindly.
-- `anon` and `authenticated` retain no direct internal Trading table authority; service-side access remains the intended model.
-
-## Implemented foundation
-
-PR #2 already contains and has CI evidence for signed V1 ingest/HMAC, persistent canonical idempotency, deterministic+bounded-AI interpretation, encrypted credentials, account safety/risk/kill switches, arbitrary-TP Position Groups, durable Trade State, simulation, isolated destination fan-out, MT5/cTrader/Deriv normalization, Container/DO/external MTProto providers, shared-Zitadel Trading memberships, Supabase privilege hardening, isolated MT5/cTrader/custom source capture, and disabled-by-default direct TradingView queue ingress.
-
-Historical detailed RED/GREEN evidence remains preserved in prior `AGENTS.md` revisions and git history. Current governing documents are:
-- `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
-- `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`
-- `cloudflare-v2/docs/NON_LIVE_MULTI_SOURCE_ACCEPTANCE.md`
-- TradingView / MTProto / Zitadel specs and plans under `docs/superpowers/`.
+- `trading_workspace_access` is the Trading entitlement switch.
+- `trading_workspace_memberships` is exact `(workspace_id, zitadel_subject)`.
+- Workspace roles owner/admin/operator/viewer; unknown fails closed. No workspace role grants broker execution.
+- Keep `TRADING_ACCESS_ENABLED=false` until Gate 4 real non-live Zitadel acceptance.
+- Supabase Trading migrations through `trading_0010_tradingview_public_source_handle` are already applied/verified; ledger `20260902184215`.
+- `anon` and `authenticated` retain no direct internal Trading table authority.
 
 ## Deployment profiles
 
-Paid profile `cloudflare-v2/wrangler.toml`:
-- Worker `mkety-copier-engine`;
-- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`;
-- source queue `mkety-trading-source-events`, DLQ `mkety-trading-source-events-dlq`;
-- optional Container image contract `mkety-copier-engine-mtprotocontainerruntime`;
-- 15-minute scheduler + one-minute Container recovery supervisor.
+Paid `cloudflare-v2/wrangler.toml`:
+- Worker `mkety-copier-engine`
+- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`, optional `MTPROTO_CONTAINER_NAMESPACE`
+- Queue `mkety-trading-source-events`
+- DLQ `mkety-trading-source-events-dlq`
+- Container application `mkety-copier-engine-mtprotocontainerruntime`
+- 15-minute scheduler + one-minute Container recovery supervisor
 
-Free profile `cloudflare-v2/wrangler.free.toml`:
-- Worker `mkety-copier-engine-free`;
-- DOs `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`;
-- source queue `mkety-trading-source-events-free`, DLQ `mkety-trading-source-events-free-dlq`;
-- **no Container declaration/binding/migration/recovery cron**;
-- ordinary 15-minute scheduler only.
+Free `cloudflare-v2/wrangler.free.toml`:
+- Worker `mkety-copier-engine-free`
+- DOs: `MTPROTO_LISTENER_NAMESPACE`, `TRADE_STATE_NAMESPACE`
+- isolated Free queue/DLQ
+- no Container declaration/binding/migration/recovery cron
+- ordinary 15-minute scheduler only
 
-Paid and Free queues are intentionally isolated.
-
-Both profiles pin these Worker-runtime vars explicitly fail-closed:
+Both profiles pin these runtime variables fail-closed:
 
 ```text
 TRADINGVIEW_DIRECT_INGRESS_ENABLED=false
@@ -104,78 +93,122 @@ TRADING_ACCESS_ENABLED=false
 BROKER_EXECUTION_ENABLED=false
 ```
 
-## GitHub → Cloudflare staging bridge
+## GitHub Actions consumption policy
 
-There is no direct Cloudflare connector in the current ChatGPT environment. GitHub Actions is the approved controlled Cloudflare capability.
+The user explicitly requested that tiny edits must not cause unnecessary builds, Cloudflare calls, Container builds, or quota/limit consumption.
 
-- GitHub environment `staging` contains `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` by name only; values stay masked.
-- branch-only manual workflow `.github/workflows/cloudflare-staging-gate.yml` is not surfaced by GitHub until present on the default branch; do not merge/copy it to `main` merely for UI visibility.
-- active PR #2 uses push-only `cloudflare-inspect` in `.github/workflows/trading-v1-ci.yml`.
-- PR-triggered copies skip Cloudflare account access; only direct pushes to `design/enterprise-trading-event-core` may consume the protected staging environment.
-- inspector authenticates, dry-runs both profiles, inventories queues/containers, inspects Worker histories, treats only Cloudflare code `10007` as valid undeployed state, and fails closed on other API errors.
-- inspect job contains no real deployment command.
+Current policy in `.github/workflows/trading-v1-ci.yml`:
 
-### One-shot Paid deployment gate
+### Ordinary CI
+- automatic only for meaningful code/config/test paths;
+- docs-only `AGENTS.md` / `docs/superpowers/**` edits do not trigger branch or PR CI;
+- ordinary `test` job runs Node Worker/trading-core, pure MT5 bridge, and both MTProto Python suites;
+- ordinary `test` job contains **no Wrangler command, no Cloudflare credential use, no Container image dry-run/build**.
 
-`cloudflare-deploy-paid` now exists in `.github/workflows/trading-v1-ci.yml` with these restrictions:
-- `needs: test` — real deployment cannot run until mandatory CI passes;
-- direct push only;
-- exact branch `refs/heads/design/enterprise-trading-event-core` only;
-- protected GitHub `staging` environment;
-- exact commit-message trigger only: `cloudflare: deploy paid staging gate 2`;
-- re-verifies Cloudflare auth and all four fail-closed Worker runtime vars;
-- performs a final Paid dry-run before real deployment;
-- real deployment command is Paid only: `npx wrangler deploy --config wrangler.toml`;
-- no real Free deployment command exists in this job;
-- post-deploy inspection lists Paid deployment history, Queues and Container applications.
+### Explicit Cloudflare inspect
+Cloudflare account inspection is opt-in only with exact commit message:
 
-The first implementation at `e0c957e5723ea9ac0620f09a542bc296d6573a17` produced workflow run `33719736778` with **zero jobs** because the exact commit-message expression contained `: ` inside an unquoted YAML plain scalar. This was a workflow-parse RED, not a product/test failure. The condition was changed to a folded YAML scalar at `380f799c00df4d48d7dccc823726399cf2466976` without changing the trigger string or safety conditions.
+```text
+cloudflare: inspect staging gate 2
+```
 
-## CI rule
+and only on:
+`design/enterprise-trading-event-core`
 
-Every meaningful branch head must pass:
-1. Node Worker/trading-core tests;
-2. pure MT5 bridge tests;
-3. both MTProto Python suites;
-4. Wrangler dry-run of Paid and Free configs.
+The inspect job:
+- uses protected GitHub environment `staging`;
+- uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` by name only;
+- authenticates;
+- dry-runs Paid and Free profiles;
+- inventories Queues and Container applications;
+- inspects Worker histories;
+- contains no real deployment command;
+- keeps all four safety switches false.
 
-Always inspect the exact newest branch-head run before calling the branch GREEN.
+### Explicit Paid deployment
+Real Paid staging deploy remains opt-in only with exact commit message:
 
-Key current evidence:
-- Gate 1 scope freeze GREEN `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`.
-- staging bridge RED `33698444759` @ `189f86c5cfb6e74e71323b7db081395e84cdb13f`; implementation GREEN `33698530495` @ `d8af226cc0ee1117cfd404d0f98aaaec6ffccff3`.
-- authenticated account preflight GREEN `33718622191` @ `aa05a902006001845826dd9a70c9374350350000`.
-- resource inventory RED `33718839137` @ `0c2aad135ce961cb0385c9d769fcbef5898fafc7`; GREEN `33718900390` @ `31281abd511e80c9b37cf2dc1c4d75f38f5637ee`.
-- Worker-runtime safety-var RED `33719360745` @ `6499d6ce8bf88a18d9326de72e332fccd5c1142e`; exact-head GREEN `33719452508` @ `475ac52f24d4db80892bbc48b1f296f9cd462a0b`.
-- one-shot Paid deploy contract RED `33719629855` @ `4415b7b81bf7d717727f449a2d5f7789d5ab8e3c`: 510/512 tests passed; only the two absent deploy-job contract tests failed.
-- initial deploy-job implementation `e0c957e5723ea9ac0620f09a542bc296d6573a17` produced workflow-parse RED `33719736778` with zero jobs.
-- corrected one-shot deploy-gate GREEN `33719868426` @ `380f799c00df4d48d7dccc823726399cf2466976`: workflow parsed, mandatory test job GREEN, authenticated Cloudflare inspector GREEN, and the real deploy job remained safely inactive because the commit message did not equal the exact trigger marker.
+```text
+cloudflare: deploy paid staging gate 2
+```
 
-## Gate 2 — Real Cloudflare Staging Infrastructure Acceptance
+It:
+- requires the ordinary test job first;
+- uses the exact active branch and protected `staging` environment;
+- re-verifies all four fail-closed runtime vars;
+- performs one final Paid dry-run;
+- deploys Paid only;
+- never deploys Free in that job.
 
-Governing plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`.
+`cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md` is the dedicated trigger-document path for explicit Gate 2 marker commits. Do not use random docs edits as trigger commits.
 
-Current status: **ACCOUNT AUTH + COLLISION INVENTORY + RUNTIME SAFETY + ONE-SHOT DEPLOY GATE GREEN; FIRST PAID STAGING DEPLOYMENT PENDING.**
+## Gate 2 — Real Cloudflare staging infrastructure
 
-Real Cloudflare account state most recently confirmed:
-- authenticated dedicated Account API Token works;
-- Paid/Free dry-runs work against the account;
-- no existing Queues;
-- no Container applications;
-- neither planned Worker exists (`10007` undeployed state);
-- no naming collisions found;
-- no real Worker/Queue/DLQ/DO/Container infrastructure has yet been created by Gate 2.
+Governing plan:
+`docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md`
 
-`cloudflare-v2/src/config/staging_readiness.js` reports full application readiness using Supabase, Zitadel and optional simulation/runtime config names. Do not confuse full application readiness with Gate 2 infrastructure deployment readiness: Zitadel acceptance belongs to Gate 4. The first Gate 2 deployment may intentionally expose missing readiness names through health while authentication/TradingView/broker execution remain disabled.
+### First real Paid deployment — verified
 
-Never commit runtime secret values. Cloudflare account API credentials are not Worker runtime secrets.
+GitHub Actions run:
+`33720102208`
+
+Deployment commit:
+`bbba25091eb88778fa7243760b704b0b85ab5c6a`
+
+Results:
+- mandatory test job: SUCCESS
+- authenticated Cloudflare inspection: SUCCESS
+- `cloudflare-deploy-paid`: SUCCESS
+- Worker deployed: `mkety-copier-engine`
+- Worker version: `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`
+- Worker URL created on workers.dev
+- Queue created: `mkety-trading-source-events`
+- DLQ created: `mkety-trading-source-events-dlq`
+- Container application created: `mkety-copier-engine-mtprotocontainerruntime`
+- Producer and consumer attached to the source queue
+- schedules deployed: `*/15 * * * *` and `* * * * *`
+- all four runtime safety flags remained false
+
+Immediately after deployment Cloudflare reported the Container application as `provisioning` with 7 live instances even though the deployment configuration requested `instances = 0`. This was treated as a Gate 2 stop-condition until settled.
+
+User subsequently verified Cloudflare dashboard state:
+- application state: `Ready`
+- live instances: `0`
+
+Therefore the earlier 7-instance reading is recorded as transient deployment/provisioning activity, not persistent application MTProto selection. Code-side Container start remains fail-closed: bootstrap requires an active Telegram source with provider type exactly `cloudflare_container_mtproto`, and the runtime only calls `ctx.container.start()` through explicit start/restart paths after valid bootstrap.
+
+## Gate 2 current status
+
+**PAID STAGING INFRASTRUCTURE DEPLOYED; CONTAINER SETTLED READY/0; REMAINING NON-BROKER ACCEPTANCE + ROLLBACK EVIDENCE PENDING.**
+
+Still required before Gate 2 exit:
+1. check deployed Worker health/readiness without enabling Trading access, TradingView ingress, cert probe, or broker execution;
+2. perform one non-broker simulation event and verify single canonical acceptance/delivery behavior;
+3. prove Container non-selection during that non-Container simulation;
+4. record prior known-good Worker version and prove rollback path;
+5. batch resulting evidence and any necessary implementation changes;
+6. update this file after that meaningful batch.
+
+Do not start Gate 3 TradingView certificate acceptance, Gate 4 Zitadel acceptance, broker demos/live execution, or `main` merge until their explicit gates/approval.
+
+## Key historical evidence
+
+- Gate 1 scope freeze GREEN `33695618717` @ `aebec4adf71a7f7299b3279d1b4c8b03803e25be`
+- staging bridge RED `33698444759`; implementation GREEN `33698530495`
+- authenticated Cloudflare preflight GREEN `33718622191`
+- resource inventory GREEN `33718900390`
+- Worker-runtime safety GREEN `33719452508`
+- one-shot deploy-gate GREEN `33719868426`
+- first Paid deployment SUCCESS `33720102208` @ `bbba25091eb88778fa7243760b704b0b85ab5c6a`
+- post-deploy Container state manually verified by user: `Ready`, `0` live instances
 
 ## Exact next safe starting point
 
-1. Let this `AGENTS.md` synchronization commit pass exact-head mandatory CI and authenticated Cloudflare inspection; it must not trigger deployment because its commit message is not the marker.
-2. After that exact head is GREEN, create one harmless trigger commit on `design/enterprise-trading-event-core` with the **exact** commit message `cloudflare: deploy paid staging gate 2` and no production behavior change.
-3. Observe the one-shot Paid deployment job. Do not assume success: Cloudflare may require Queue/DLQ pre-creation, additional API-token write permissions, or Workers Paid/Container capability. Treat the exact response as Gate 2 evidence.
-4. If deployment fails, fix only the proven account/config issue; preserve all four safety gates false and TDD any code/config behavior change.
-5. If deployment succeeds, verify Worker, queue/DLQ, DO bindings, crons, optional Container application/capability, and prove no Container instance starts merely because the binding exists.
-6. Only then perform non-broker health/simulation infrastructure acceptance and rollback proof.
-7. Gate 3 TradingView certificate acceptance, Gate 4 Zitadel, broker demos/live, and `main` merge remain out of scope until their explicit gates/approval.
+Do **not** trigger another deploy or Cloudflare inspect just to gather routine evidence.
+
+Next:
+- use read-only/direct Worker health probing where possible;
+- determine the minimum non-broker simulation prerequisites;
+- batch any required code/config/test/runbook/AGENTS changes;
+- only when account-side verification is actually needed, trigger the exact explicit inspect marker once;
+- only deploy again if a proven code/config change requires it.

@@ -59,17 +59,35 @@ test('Cloudflare staging gate validates both Wrangler profiles before any deploy
   assert.ok(freeDryRun < freeDeploy, 'free dry-run must precede free deployment');
 });
 
-test('PR branch CI provides an inspect-only Cloudflare staging fallback without deployment', async () => {
+test('ordinary CI stays lightweight and docs-only edits do not trigger branch or PR CI', async () => {
   const workflow = await readCiWorkflow();
-  assert.match(workflow, /cloudflare-inspect:/);
-  assert.match(workflow, /environment:\s*staging/);
-  assert.match(workflow, /github\.event_name == 'push'/);
-  assert.match(workflow, /design\/enterprise-trading-event-core/);
-  assert.match(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
-  assert.match(workflow, /npx wrangler whoami/);
-  assert.match(workflow, /npx wrangler deployments list --config wrangler\.toml/);
-  const inspectBlock = workflow.slice(workflow.indexOf('cloudflare-inspect:'), workflow.indexOf('cloudflare-deploy-paid:') > -1 ? workflow.indexOf('cloudflare-deploy-paid:') : undefined);
+  const testStart = workflow.indexOf('  test:');
+  const inspectStart = workflow.indexOf('  cloudflare-inspect:');
+  const testBlock = workflow.slice(testStart, inspectStart);
+  const triggerBlock = workflow.slice(0, workflow.indexOf('jobs:'));
+
+  assert.doesNotMatch(testBlock, /\bwrangler\b/i);
+  assert.doesNotMatch(testBlock, /CLOUDFLARE_/);
+  assert.doesNotMatch(triggerBlock, /AGENTS\.md/);
+  assert.doesNotMatch(triggerBlock, /docs\/superpowers/);
+  assert.match(triggerBlock, /push:[\s\S]*?paths:/);
+  assert.match(triggerBlock, /pull_request:[\s\S]*?paths:/);
+});
+
+test('Cloudflare inspection is explicit marker-only and remains read-only', async () => {
+  const workflow = await readCiWorkflow();
+  const start = workflow.indexOf('cloudflare-inspect:');
+  const end = workflow.indexOf('cloudflare-deploy-paid:');
+  const inspectBlock = workflow.slice(start, end > -1 ? end : undefined);
+
+  assert.match(inspectBlock, /environment:\s*staging/);
+  assert.match(inspectBlock, /github\.event_name == 'push'/);
+  assert.match(inspectBlock, /github\.ref == 'refs\/heads\/design\/enterprise-trading-event-core'/);
+  assert.match(inspectBlock, /github\.event\.head_commit\.message == 'cloudflare: inspect staging gate 2'/);
+  assert.match(inspectBlock, /secrets\.CLOUDFLARE_API_TOKEN/);
+  assert.match(inspectBlock, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(inspectBlock, /npx wrangler whoami/);
+  assert.match(inspectBlock, /npx wrangler deployments list --config wrangler\.toml/);
   assert.doesNotMatch(inspectBlock, /npx wrangler deploy --config wrangler\.toml(?! --dry-run)/);
   assert.doesNotMatch(inspectBlock, /npx wrangler deploy --config wrangler\.free\.toml(?! --dry-run)/);
 });
@@ -84,7 +102,7 @@ test('Cloudflare inspect records undeployed Workers without hiding real API fail
   assert.match(workflow, /exit 1/);
 });
 
-test('Cloudflare inspect inventories queues and container applications read-only before first deployment', async () => {
+test('Cloudflare inspect inventories queues and container applications read-only', async () => {
   const workflow = await readCiWorkflow();
   const start = workflow.indexOf('cloudflare-inspect:');
   const end = workflow.indexOf('cloudflare-deploy-paid:');
