@@ -103,11 +103,40 @@ async function runAiFormatter(aiFormatter, input, timeoutMs) {
   }
 }
 
+function breakerKey(workspaceId, aiProviderId) {
+  const workspace = String(workspaceId ?? '').trim();
+  const provider = String(aiProviderId ?? '').trim();
+  if (!workspace || !provider) return null;
+  return { purpose: 'destination_ai', provider, workspaceId: workspace };
+}
+
+function canAttempt(circuitBreaker, key) {
+  if (!key || typeof circuitBreaker?.canAttempt !== 'function') return true;
+  try {
+    return circuitBreaker.canAttempt(key)?.allowed !== false;
+  } catch {
+    return true;
+  }
+}
+
+function recordFailure(circuitBreaker, key) {
+  if (!key || typeof circuitBreaker?.recordFailure !== 'function') return;
+  try { circuitBreaker.recordFailure(key); } catch {}
+}
+
+function recordSuccess(circuitBreaker, key) {
+  if (!key || typeof circuitBreaker?.recordSuccess !== 'function') return;
+  try { circuitBreaker.recordSuccess(key); } catch {}
+}
+
 export async function renderTelegramDestination({
   canonicalEvent,
   destination = {},
   aiFormatter,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  workspaceId,
+  aiProviderId,
+  circuitBreaker,
 } = {}) {
   if (!canonicalEvent || typeof canonicalEvent !== 'object') {
     throw new TypeError('canonicalEvent is required');
@@ -126,6 +155,11 @@ export async function renderTelegramDestination({
     return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_UNAVAILABLE' };
   }
 
+  const circuitKey = breakerKey(workspaceId, aiProviderId);
+  if (!canAttempt(circuitBreaker, circuitKey)) {
+    return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_CIRCUIT_OPEN' };
+  }
+
   const canonical = canonicalProjection(canonicalEvent);
   try {
     const result = await runAiFormatter(aiFormatter, {
@@ -142,8 +176,11 @@ export async function renderTelegramDestination({
     }, boundedTimeout(timeoutMs));
 
     if (!result?.success) {
+      recordFailure(circuitBreaker, circuitKey);
       return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_FAILED' };
     }
+    recordSuccess(circuitBreaker, circuitKey);
+
     if (typeof result.text !== 'string' || !result.text.trim() || !result.canonicalEcho) {
       return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_INVALID_OUTPUT' };
     }
@@ -153,6 +190,7 @@ export async function renderTelegramDestination({
 
     return { text: result.text.trim(), mode: 'AI', fallbackReason: null };
   } catch (error) {
+    recordFailure(circuitBreaker, circuitKey);
     return {
       text: deterministicText,
       mode: 'DETERMINISTIC',
