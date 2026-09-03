@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const workflowPath = new URL('../../.github/workflows/trading-v1-ci.yml', import.meta.url);
+const workflowPath = new URL('../../.github/workflows/gate6-demo-probes.yml', import.meta.url);
 
 async function readWorkflow() {
   return readFile(workflowPath, 'utf8');
@@ -11,8 +11,10 @@ async function readWorkflow() {
 function jobBlock(workflow, name) {
   const start = workflow.indexOf(`  ${name}:`);
   assert.ok(start >= 0, `${name} job must exist`);
-  const next = workflow.indexOf('\n  ', start + 3);
-  return workflow.slice(start, next >= 0 ? next : undefined);
+  const tail = workflow.slice(start + 1);
+  const nextJob = tail.match(/\n  [A-Za-z0-9_-]+:\n/);
+  const end = nextJob ? start + 1 + nextJob.index : workflow.length;
+  return workflow.slice(start, end);
 }
 
 test('Gate 6 MT5 demo probe is exact-marker, staging-protected, probe-only and non-executing', async () => {
