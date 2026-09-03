@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 
+const ACCESS_ON = { TRADING_ACCESS_ENABLED: 'true' };
+
 test('feature flag off delegates process_signal to legacy Worker unchanged', async () => {
   let legacyCalls = 0;
   let shadowCalls = 0;
@@ -86,30 +88,67 @@ test('shadow interpretation failure never interrupts legacy delivery or executio
   assert.match(body.trace.v1_shadow.error, /shadow failed/i);
 });
 
-test('versioned universal event endpoint bypasses legacy Worker and uses V1 ingress handler', async () => {
+test('versioned universal event endpoint bypasses legacy Worker and uses V1 ingress handler when Trading access is enabled', async () => {
   let legacyCalls = 0;
   let v1Calls = 0;
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
     eventsHandler: async () => { v1Calls += 1; return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }); },
   });
-  const response = await entry.fetch(new Request('https://trade.test/api/v1/events', { method: 'POST', body: '{}' }), {});
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/events', { method: 'POST', body: '{}' }), ACCESS_ON);
   assert.equal(response.status, 200);
   assert.equal(v1Calls, 1);
   assert.equal(legacyCalls, 0);
 });
 
-test('workspace-scoped V1 admin endpoint bypasses legacy Worker', async () => {
+test('workspace-scoped V1 admin endpoint bypasses legacy Worker when Trading access is enabled', async () => {
   let legacyCalls = 0;
   let adminCalls = 0;
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
     adminHandler: async () => { adminCalls += 1; return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }); },
   });
-  const response = await entry.fetch(new Request('https://trade.test/api/v1/admin/workspace'), {});
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/admin/workspace'), ACCESS_ON);
   assert.equal(response.status, 200);
   assert.equal(adminCalls, 1);
   assert.equal(legacyCalls, 0);
+});
+
+test('Trading access fuse blocks external V1 events and admin before their handlers', async () => {
+  let legacyCalls = 0;
+  let eventCalls = 0;
+  let adminCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
+    eventsHandler: async () => { eventCalls += 1; return new Response('event'); },
+    adminHandler: async () => { adminCalls += 1; return new Response('admin'); },
+  });
+
+  for (const request of [
+    new Request('https://trade.test/api/v1/events', { method: 'POST', body: '{}' }),
+    new Request('https://trade.test/api/v1/admin/workspace'),
+  ]) {
+    const response = await entry.fetch(request, { TRADING_ACCESS_ENABLED: 'false' }, {});
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, reason: 'TRADING_ACCESS_DISABLED' });
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  }
+
+  assert.equal(eventCalls, 0);
+  assert.equal(adminCalls, 0);
+  assert.equal(legacyCalls, 0);
+});
+
+test('missing Trading access flag fails closed for external V1 application APIs', async () => {
+  let eventCalls = 0;
+  const entry = createTradingV1Entrypoint({
+    legacy: { fetch: async () => new Response('legacy') },
+    eventsHandler: async () => { eventCalls += 1; return new Response('event'); },
+  });
+  const response = await entry.fetch(new Request('https://trade.test/api/v1/events', { method: 'POST', body: '{}' }), {}, {});
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).reason, 'TRADING_ACCESS_DISABLED');
+  assert.equal(eventCalls, 0);
 });
 
 test('unsafe legacy admin API surface fails closed instead of reaching unscoped proxy', async () => {
@@ -124,7 +163,7 @@ test('unsafe legacy admin API surface fails closed instead of reaching unscoped 
   assert.equal(legacyCalls, 0);
 });
 
-test('V1 health bypasses legacy Worker and exposes readiness names/booleans without secret values', async () => {
+test('V1 health bypasses legacy Worker and remains readable while Trading access is disabled', async () => {
   let legacyCalls = 0;
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
@@ -137,6 +176,7 @@ test('V1 health bypasses legacy Worker and exposes readiness names/booleans with
     ZITADEL_AUDIENCE: 'trading-api',
     ZITADEL_JWKS_URL: 'https://auth.example.com/oauth/v2/keys',
     TRADING_V1_SIMULATION: 'true',
+    TRADING_ACCESS_ENABLED: 'false',
   };
   const response = await entry.fetch(new Request('https://trade.test/api/v1/health'), env);
   const body = await response.json();
