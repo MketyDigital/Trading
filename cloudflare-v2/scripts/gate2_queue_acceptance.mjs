@@ -153,7 +153,14 @@ async function proveDirectSimulation() {
     text: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
     structured_payload: {},
     thread: {},
-    metadata: { gate2_acceptance: true, direct_simulation_probe: true },
+    metadata: {
+      gate2_acceptance: true,
+      direct_simulation_probe: true,
+      native_identity: {
+        chat_id: '-1000000000001',
+        message_id: '2',
+      },
+    },
   };
 
   const { request } = await buildSignedV1Request({
