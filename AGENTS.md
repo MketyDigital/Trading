@@ -205,8 +205,7 @@ Therefore the earlier 7-instance reading is recorded as transient deployment/pro
 Acceptance harness commit:
 `9eb3e26e69d308070515583f0f98e54a1fb19342`
 
-Workflow/contract implementation commit:
-`b4512415fe4809df54ee0db9827a049197adae12`
+Workflow/contract implementation was prepared and then folded forward from the current branch head; use the current branch history/run as authoritative rather than the earlier dangling implementation commit.
 
 Files:
 - `cloudflare-v2/scripts/gate2_queue_acceptance.mjs`
