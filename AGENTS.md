@@ -20,9 +20,9 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 targeting `main`
-- Current verified implementation/static-acceptance head before this documentation sync: `a7da981a5daec426b5aad840739555edfbc68819`
-- Verified ordinary PR run: `33865341673`; test job `100998803951` SUCCESS.
-- Node/trading-core **685/685 PASS**; MT5 **14/14 PASS**; Container MTProto **11/11 PASS**; external MTProto **22/22 PASS**.
+- Current verified implementation/tooling head before this documentation sync: `e018ce79d2c7cc9018775b71281be033691f58b8`
+- Verified ordinary PR run: `33869550721`; test job `101012027592` SUCCESS.
+- Node/trading-core **687/687 PASS**; MT5 **14/14 PASS**; Container MTProto **11/11 PASS**; external MTProto **22/22 PASS**.
 - Protected Cloudflare inspect/probe/deploy/accept jobs all **SKIPPED**.
 - This remains development-to-real-production work. Do not merge/finish the branch yet.
 - Never merge `main` without explicit user instruction.
@@ -34,8 +34,8 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md` at `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 - Launch master plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md` at blob `48983550b3c33a7c3517c236370ffbc3d1d1788d`.
 - Detailed evidence record: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Current stage: **STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 REAL ZITADEL IDENTITY ACCEPTANCE READINESS NEXT**.
-- Gate 4 real environment actions are **not yet authorized in this handoff**. Static inspection/preparation is allowed; do not mutate Zitadel/Cloudflare/Supabase or enable Trading access merely from this status.
+- Current stage: **STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 PROTECTED TOOLING STATIC GREEN — REAL ZITADEL ACCEPTANCE PENDING**.
+- Gate 4 real environment acceptance has **not** been invoked. Do not mutate Zitadel/Cloudflare/Supabase, enable Trading access, or run the protected identity workflow merely from this status.
 
 ## Critical runtime safety defaults
 Keep fail closed until an exact later gate explicitly changes the corresponding control:
@@ -77,7 +77,7 @@ Before a broker adapter may be reached, all applicable locks must pass:
 1. Scope freeze — historical GREEN.
 2. Real Cloudflare staging — historical GREEN / exited; do not repeat without reason.
 3. TradingView direct ingress — DEFERRED / FAIL-CLOSED.
-4. Zitadel real non-live identity/workspace authorization — **NEXT; real acceptance pending**.
+4. Zitadel real non-live identity/workspace authorization — **protected tooling STATIC GREEN; real acceptance pending and not yet invoked**.
 5. Telegram MTProto soak/recovery — real acceptance pending.
 6. MT5/cTrader source acceptance — real demo source probes pending.
 7. MT5/cTrader broker demo destinations — real demo lifecycle pending.
@@ -124,7 +124,20 @@ Use immutable Zitadel `sub`, never email. Successful login proves identity only.
 - second-tenant source/account/destination/health/retry/idempotency/control isolation;
 - broker execution remains separately disabled.
 
-Current source/CI already proves these composition rules with deterministic test doubles, but that is not real Zitadel/deployed-environment evidence.
+## Gate 4 protected tooling — STATIC GREEN
+- TDD RED contract head: `a0759701` (full SHA available from Git history); ordinary CI proved exactly the two intended missing-tooling failures while the existing suite remained green.
+- Protected acceptance workflow and thin read-only identity runner were then implemented. The runner uses the production Zitadel JWT + Trading membership authorization composition, but the protected real-identity job is exact-marker/staging-protected and was **not invoked** during tooling implementation.
+- First GREEN attempt exposed only a test false positive: the contract banned the bare word `cloudflare`, unintentionally matching `working-directory: cloudflare-v2`. No workflow/production safety behavior was implicated.
+- False-positive assertion fix head: `e018ce79d2c7cc9018775b71281be033691f58b8` (`test: narrow Gate 4 mutation assertion`).
+- Exact-head ordinary PR run `33869550721`, test job `101012027592` SUCCESS:
+  - Node/trading-core **687/687 PASS**;
+  - MT5 **14/14 PASS**;
+  - Container MTProto **11/11 PASS**;
+  - external MTProto **22/22 PASS**;
+  - protected Cloudflare inspect/probe/deploy/accept jobs **SKIPPED**.
+- Static Gate 4 tests explicitly prove the workflow is exact-marker, `staging`-protected, non-broker, and the runner is secret-free with positive, negative, role, membership, project/org, and tenant-isolation case coverage.
+- The protected runner asserts both `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false`; it performs identity/membership acceptance read-only and does not use normal Trading application routes to bypass the closed access fuse.
+- No real Zitadel token/JWKS/database acceptance evidence has been produced yet. Static tooling GREEN is readiness only, not Gate 4 real acceptance.
 
 ## External acceptance blockers / later gates
 - managed Zitadel real non-live acceptance (Gate 4);
@@ -146,12 +159,12 @@ CLOSED / not started.
 ## Exact startup / pickup point for any future session
 1. Read this file first, then `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then the Sept 3 launch master plan and current acceptance runbooks.
 2. Confirm PR #2 still targets `main`, branch is `design/enterprise-trading-event-core`, and reconcile current branch head before any write.
-3. Trust static remediation completion only from Task 8 acceptance head `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`: 685/685 + 14/14 + 11/11 + 22/22 passing, protected jobs skipped.
-4. Current next work is **Gate 4 real Zitadel identity/workspace authorization readiness/acceptance**.
-5. Re-read `cloudflare-v2/docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`, `cloudflare-v2/docs/STAGING_V1_RUNBOOK.md`, current Zitadel/membership/admin tests, and the Gate 4 section of the launch master plan.
-6. Static preparation may continue. Do not invoke real/protected identity/environment mutation or enable `TRADING_ACCESS_ENABLED` without the exact Gate 4 authorization contract.
-7. If adding a new Gate 4 protected workflow/harness, use TDD and preserve marker-only, protected-environment, secret-free, broker-disabled semantics; obtain design approval before implementation.
-8. After any verified Gate 4 preparation/acceptance batch, synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` with exact head/run/evidence.
+3. Static remediation closure remains anchored at Task 8 head `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`.
+4. Gate 4 protected tooling static readiness is anchored at `e018ce79d2c7cc9018775b71281be033691f58b8`, run `33869550721`, job `101012027592`: **687/687 + 14/14 + 11/11 + 22/22**, protected jobs skipped.
+5. Current next work is **Gate 4 real non-live Zitadel identity/workspace authorization acceptance**, not more static remediation.
+6. Before any real Gate 4 invocation, re-read the Gate 4 trigger/runbook and verify its exact marker, protected `staging` environment, required server-side configuration names, read-only scope, secret-free output, and both master fuses pinned false.
+7. Do **not** trigger the protected Gate 4 identity workflow, mutate Zitadel/Cloudflare/Supabase, or enable `TRADING_ACCESS_ENABLED` without separate explicit real-environment authorization.
+8. After a separately authorized Gate 4 run, record exact workflow/run/job/case evidence and synchronize this file plus `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` before moving to Gate 5.
 
 ## Safety state
 Do not deploy, mutate Cloudflare/Zitadel/Supabase, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution unless the exact later gate/approval explicitly authorizes that action.
