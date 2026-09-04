@@ -1,0 +1,110 @@
+name: Gate 4 Zitadel Identity Acceptance
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE4_ZITADEL_ACCEPTANCE_TRIGGER.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout exact acceptance head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  zitadel-identity-gate4:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'identity: accept zitadel gate 4' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      GATE4_BASE_URL: ${{ secrets.GATE4_BASE_URL }}
+      GATE4_WORKSPACE_ID: ${{ secrets.GATE4_WORKSPACE_ID }}
+      GATE4_SECOND_WORKSPACE_ID: ${{ secrets.GATE4_SECOND_WORKSPACE_ID }}
+      GATE4_DISABLED_WORKSPACE_ID: ${{ secrets.GATE4_DISABLED_WORKSPACE_ID }}
+      GATE4_EXISTING_MKETY_TOKEN: ${{ secrets.GATE4_EXISTING_MKETY_TOKEN }}
+      GATE4_TRADING_ONLY_TOKEN: ${{ secrets.GATE4_TRADING_ONLY_TOKEN }}
+      GATE4_WRONG_PROJECT_TOKEN: ${{ secrets.GATE4_WRONG_PROJECT_TOKEN }}
+      GATE4_WRONG_ORG_TOKEN: ${{ secrets.GATE4_WRONG_ORG_TOKEN }}
+      GATE4_MISSING_MEMBERSHIP_TOKEN: ${{ secrets.GATE4_MISSING_MEMBERSHIP_TOKEN }}
+      GATE4_DISABLED_MEMBERSHIP_TOKEN: ${{ secrets.GATE4_DISABLED_MEMBERSHIP_TOKEN }}
+      GATE4_SECOND_TENANT_TOKEN: ${{ secrets.GATE4_SECOND_TENANT_TOKEN }}
+      GATE4_OWNER_TOKEN: ${{ secrets.GATE4_OWNER_TOKEN }}
+      GATE4_ADMIN_TOKEN: ${{ secrets.GATE4_ADMIN_TOKEN }}
+      GATE4_OPERATOR_TOKEN: ${{ secrets.GATE4_OPERATOR_TOKEN }}
+      GATE4_VIEWER_TOKEN: ${{ secrets.GATE4_VIEWER_TOKEN }}
+      GATE4_EXISTING_MKETY_ROLE: ${{ vars.GATE4_EXISTING_MKETY_ROLE }}
+      GATE4_TRADING_ONLY_ROLE: ${{ vars.GATE4_TRADING_ONLY_ROLE }}
+      GATE4_SECOND_TENANT_ROLE: ${{ vars.GATE4_SECOND_TENANT_ROLE }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      ZITADEL_ISSUER: ${{ secrets.ZITADEL_ISSUER }}
+      ZITADEL_AUDIENCE: ${{ secrets.ZITADEL_AUDIENCE }}
+      ZITADEL_JWKS_URL: ${{ secrets.ZITADEL_JWKS_URL }}
+      ZITADEL_PROJECT_ID: ${{ secrets.ZITADEL_PROJECT_ID }}
+      ZITADEL_TRADING_ROLE: ${{ vars.ZITADEL_TRADING_ROLE }}
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact Gate 4 head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require Gate 4 configuration by name only
+        shell: bash
+        run: |
+          for name in \
+            GATE4_BASE_URL GATE4_WORKSPACE_ID GATE4_SECOND_WORKSPACE_ID GATE4_DISABLED_WORKSPACE_ID \
+            GATE4_EXISTING_MKETY_TOKEN GATE4_TRADING_ONLY_TOKEN GATE4_WRONG_PROJECT_TOKEN GATE4_WRONG_ORG_TOKEN \
+            GATE4_MISSING_MEMBERSHIP_TOKEN GATE4_DISABLED_MEMBERSHIP_TOKEN GATE4_SECOND_TENANT_TOKEN \
+            GATE4_OWNER_TOKEN GATE4_ADMIN_TOKEN GATE4_OPERATOR_TOKEN GATE4_VIEWER_TOKEN \
+            SUPABASE_URL SUPABASE_SERVICE_ROLE ZITADEL_ISSUER ZITADEL_AUDIENCE ZITADEL_JWKS_URL ZITADEL_PROJECT_ID; do
+            test -n "${!name:-}" || { echo "Missing GitHub staging secret: ${name}"; exit 1; }
+          done
+
+      - name: Run read-only Gate 4 Zitadel acceptance
+        run: npm run accept:zitadel:gate4
