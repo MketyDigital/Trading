@@ -3,8 +3,10 @@ import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_st
 import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { createCTraderRuntime } from '../adapters/ctrader_runtime.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
+import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
 import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
+import { validateProductionRiskAction } from './production_risk_authority.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -33,6 +35,25 @@ function platformOf(account = {}) {
 
 function brokerAccountIdOf(account = {}) {
   return text(account.account_id ?? account.brokerAccountId);
+}
+
+function sizingModeOf(account = {}) {
+  return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
+}
+
+function safetyPolicyOf(account = {}) {
+  const policy = account.safety_policy ?? account.safetyPolicy;
+  return policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : {};
+}
+
+function configuredPositive(policy = {}, name) {
+  const value = Number(policy?.[name]);
+  return Number.isFinite(value) && value > 0;
+}
+
+function requiresDynamicExposure(account = {}) {
+  const policy = safetyPolicyOf(account);
+  return configuredPositive(policy, 'maxDailyLossPercent') || configuredPositive(policy, 'maxOpenRiskPercent');
 }
 
 function stateBindingPayload(binding = {}) {
@@ -104,6 +125,14 @@ function symbolRows(body) {
   return [];
 }
 
+function tickPrice(body = {}) {
+  for (const value of [body?.ask, body?.bid, body?.last, body?.tick?.ask, body?.tick?.bid, body?.tick?.last]) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return undefined;
+}
+
 async function defaultMt5ContextLoader({ bridgeUrl, accountId, serverName, fetchFn = fetch } = {}) {
   const baseUrl = normalizedBaseUrl(bridgeUrl);
   const request = async (path, label) => {
@@ -142,7 +171,16 @@ async function defaultMt5ContextLoader({ bridgeUrl, accountId, serverName, fetch
   return {
     baseUrl,
     commandUrl: `${baseUrl}/v1/command`,
+    brokerAccount: account,
     catalog,
+    async marketPriceFor(platformSymbol) {
+      const symbol = text(platformSymbol);
+      if (!symbol) throw new Error('MT5 market-price symbol is required');
+      const body = await request(`/v1/tick?symbol=${encodeURIComponent(symbol)}`, 'MT5 bridge tick');
+      const price = tickPrice(body);
+      if (!(price > 0)) throw new Error('MT5 bridge returned no reliable market price');
+      return price;
+    },
   };
 }
 
@@ -169,6 +207,15 @@ function assertBoundAccount(account, workspaceId) {
   if (!accountRef(account)) throw new Error('production trade account id is required');
 }
 
+function currentEntryPrice(action = {}) {
+  if (action?.entry?.kind === 'PRICE') {
+    const value = Number(action.entry.value);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  const value = Number(action.entryPrice);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export function createProductionExecutionDependencies({
   env = {},
   supabase,
@@ -180,6 +227,7 @@ export function createProductionExecutionDependencies({
   mt5ContextLoader = defaultMt5ContextLoader,
   mt5Executor = executeMT5Action,
   ctraderRuntimeFactory = createCTraderRuntime,
+  exposureLoader = null,
   fetchFn = fetch,
 } = {}) {
   const boundWorkspaceId = text(workspaceId);
@@ -221,6 +269,92 @@ export function createProductionExecutionDependencies({
 
     if (error) throw new Error('failed to load production trade account');
     return data || null;
+  }
+
+  async function loadExposure(account, action) {
+    if (typeof exposureLoader === 'function') {
+      const exposure = await exposureLoader({
+        workspaceId: boundWorkspaceId,
+        tradingEventId: boundTradingEventId || null,
+        account,
+        action,
+      });
+      const daily = Number(exposure?.currentDailyPnlPercent);
+      const open = Number(exposure?.currentOpenRiskPercent);
+      if (!Number.isFinite(daily) || !Number.isFinite(open)) {
+        const error = new Error('authoritative production exposure context is incomplete');
+        error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+        throw error;
+      }
+      return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
+    }
+    if (requiresDynamicExposure(account)) {
+      const error = new Error('authoritative production exposure context is required by account policy');
+      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+      throw error;
+    }
+    return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
+  }
+
+  async function riskMaterializer({ workspaceId: requestedWorkspaceId, account, action } = {}) {
+    if (text(requestedWorkspaceId) !== boundWorkspaceId) {
+      throw new Error('production execution workspace mismatch');
+    }
+    assertBoundAccount(account, boundWorkspaceId);
+    if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
+
+    const exposure = await loadExposure(account, action);
+    const platform = platformOf(account);
+    const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
+
+    if (platform === 'ctrader' && riskSized && String(action.type || '').toUpperCase() === 'OPEN_POSITION') {
+      const error = new Error('cTrader broker risk context unavailable: reliable monetary loss model required');
+      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+      throw error;
+    }
+
+    if (platform !== 'mt5' || !riskSized || String(action.type || '').toUpperCase() !== 'OPEN_POSITION') {
+      return validateProductionRiskAction({
+        account,
+        action,
+        brokerAccount: {},
+        instrument: {},
+        exposure,
+      });
+    }
+
+    const bridgeUrl = required(env.MT5_BRIDGE_URL, 'MT5_BRIDGE_URL');
+    const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
+    const context = await mt5ContextLoader({
+      bridgeUrl,
+      accountId: brokerAccountId,
+      serverName: text(account.server_name),
+      fetchFn,
+    });
+    const resolved = resolveSymbolAgainstCatalog(action.symbol, Array.isArray(context?.catalog) ? context.catalog : []);
+    if (!resolved.ok) {
+      const error = new Error(`broker risk context unavailable: ${resolved.reason || 'symbol resolution failed'}`);
+      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+      throw error;
+    }
+
+    let marketPrice = currentEntryPrice(action);
+    if (!(marketPrice > 0) && typeof context?.marketPriceFor === 'function') {
+      marketPrice = await context.marketPriceFor(resolved.platformSymbol);
+    }
+
+    const result = validateProductionRiskAction({
+      account,
+      action,
+      brokerAccount: context?.brokerAccount || {},
+      instrument: resolved,
+      currentMarketPrice: marketPrice,
+      exposure,
+    });
+    return {
+      ...result,
+      policyRequest: result.policyContext,
+    };
   }
 
   async function dispatchMt5(account, action, groupId) {
@@ -362,6 +496,7 @@ export function createProductionExecutionDependencies({
   return {
     accountLoader,
     authorityLoader,
+    riskMaterializer,
     dispatchAction,
     stateBinder,
   };
