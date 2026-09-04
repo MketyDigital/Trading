@@ -46,6 +46,19 @@ export async function signMT5BridgeBody(rawBody, secret) {
   return `v1=${toHex(signature)}`;
 }
 
+export async function signMT5MetadataRequest({ method = 'GET', target, timestamp = Date.now(), secret } = {}) {
+  const normalizedMethod = String(method || '').trim().toUpperCase();
+  const normalizedTarget = String(target || '').trim();
+  const normalizedTimestamp = String(timestamp ?? '').trim();
+  if (normalizedMethod !== 'GET' || !normalizedTarget.startsWith('/v1/') || !/^\d+$/.test(normalizedTimestamp)) {
+    throw new TypeError('valid MT5 metadata request method, target and timestamp required');
+  }
+  const key = await importHmacKey(secret);
+  const payload = `${normalizedMethod}\n${normalizedTarget}\n${normalizedTimestamp}`;
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(payload));
+  return `v1=${toHex(signature)}`;
+}
+
 export async function verifyMT5BridgeSignature(rawBody, secret, suppliedSignature) {
   if (!String(suppliedSignature ?? '').startsWith('v1=')) return false;
   const expected = await signMT5BridgeBody(rawBody, secret);
