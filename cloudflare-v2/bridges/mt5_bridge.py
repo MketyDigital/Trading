@@ -43,6 +43,26 @@ def verify_signature(raw_body, secret, supplied):
     return hmac.compare_digest(expected, supplied)
 
 
+def verify_metadata_request(secret, method, target, timestamp, signature, now_ms=None, max_skew_ms=30000):
+    if not secret or not timestamp or not signature or not signature.startswith('v1='):
+        return False
+    try:
+        issued_ms = int(timestamp)
+        current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        skew = int(max_skew_ms)
+    except (TypeError, ValueError):
+        return False
+    if skew < 0 or abs(current_ms - issued_ms) > skew:
+        return False
+    normalized_method = str(method or '').strip().upper()
+    normalized_target = str(target or '').strip()
+    if normalized_method != 'GET' or not normalized_target.startswith('/v1/'):
+        return False
+    payload = f'{normalized_method}\n{normalized_target}\n{timestamp}'.encode('utf-8')
+    expected = 'v1=' + hmac.new(secret.encode('utf-8'), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
 def validate_envelope(envelope, now_ms=None, max_future_skew_ms=30000):
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     if envelope.get('version') != 'mkety.mt5.v1':
@@ -278,13 +298,11 @@ class MT5Engine:
         marker = command_marker(command_id)
         records = self._query_reconciliation_records()
 
-        # A matching deal is the strongest proof of an executed market action.
         deals = [self._normalized_recovered_deal(item) for item in self._matching_records(records['history_deals'], marker)]
         recovered = self._unique_recovery(deals)
         if recovered is not None:
             return recovered
 
-        # Pending/open orders are next-best proof when no deal exists yet.
         order_records = self._matching_records(records['orders'], marker) + self._matching_records(records['history_orders'], marker)
         orders = [self._normalized_recovered_order(item) for item in order_records]
         recovered = self._unique_recovery(orders)
@@ -335,9 +353,24 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _metadata_authorized(self):
+        return verify_metadata_request(
+            secret=self.secret,
+            method='GET',
+            target=self.path,
+            timestamp=self.headers.get('X-Mkety-Timestamp'),
+            signature=self.headers.get('X-Mkety-Signature'),
+        )
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == '/health':
+            return self._json(200, {'ok': True})
+        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick'):
+            return self._json(404, {'ok': False, 'error': 'not found'})
+        if not self._metadata_authorized():
+            return self._json(401, {'ok': False, 'error': 'invalid metadata signature'})
+        if parsed.path == '/v1/health':
             return self._json(200, {'ok': True})
         if parsed.path == '/v1/account':
             info = self.mt5.account_info()
@@ -345,11 +378,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if parsed.path == '/v1/symbols':
             symbols = self.mt5.symbols_get() or []
             return self._json(200, {'ok': True, 'symbols': [symbol_snapshot(item) for item in symbols]})
-        if parsed.path == '/v1/tick':
-            symbol = parse_qs(parsed.query).get('symbol', [None])[0]
-            tick = self.mt5.symbol_info_tick(symbol) if symbol else None
-            return self._json(200 if tick else 404, {'ok': bool(tick), 'tick': tick._asdict() if tick else None})
-        return self._json(404, {'ok': False, 'error': 'not found'})
+        symbol = parse_qs(parsed.query).get('symbol', [None])[0]
+        tick = self.mt5.symbol_info_tick(symbol) if symbol else None
+        return self._json(200 if tick else 404, {'ok': bool(tick), 'tick': tick._asdict() if tick else None})
 
     def do_POST(self):
         if self.path != '/v1/command':
