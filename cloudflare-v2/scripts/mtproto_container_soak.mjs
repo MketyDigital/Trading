@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const REQUIRED_NAMES = [
@@ -14,6 +15,10 @@ function present(value) {
 function finiteMs(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function digestCanonicalEventId(value) {
+  return `sha256:${createHash('sha256').update(String(value)).digest('hex')}`;
 }
 
 export function validateSoakEnvironment(env = {}) {
@@ -35,13 +40,17 @@ export function createSoakMetrics({ workspaceId, sourceId, startedAtMs = Date.no
     uniqueEventCount: 0,
     duplicateCount: 0,
     catchUpCount: 0,
+    editedCount: 0,
     disconnectCount: 0,
     reconnectCount: 0,
+    downstreamIsolationObserved: false,
+    containerTouched: false,
     latencyMs: [],
     healthTransitions: [],
     lastConnected: null,
     lastHealthStatus: null,
     _seenEventIds: new Set(),
+    _canonicalEventDigests: new Set(),
   };
 }
 
@@ -54,6 +63,8 @@ export function recordHealthSample(metrics, sample = {}, atMs = Date.now()) {
   if (metrics.lastConnected === false && connected === true) metrics.reconnectCount += 1;
 
   if (changed) metrics.healthTransitions.push({ atMs: Number(atMs), status, connected });
+  if (Boolean(sample.downstreamIsolationObserved ?? sample.downstream_isolation_observed)) metrics.downstreamIsolationObserved = true;
+  if (Boolean(sample.containerTouched ?? sample.container_touched)) metrics.containerTouched = true;
   metrics.lastHealthStatus = status;
   metrics.lastConnected = connected;
   return metrics;
@@ -64,6 +75,7 @@ export function recordEventSample(metrics, sample = {}) {
   if (!canonicalEventId) return metrics;
 
   metrics.eventCount += 1;
+  metrics._canonicalEventDigests.add(digestCanonicalEventId(canonicalEventId));
   if (metrics._seenEventIds.has(canonicalEventId)) metrics.duplicateCount += 1;
   else {
     metrics._seenEventIds.add(canonicalEventId);
@@ -71,6 +83,9 @@ export function recordEventSample(metrics, sample = {}) {
   }
 
   if (Boolean(sample.catchUp ?? sample.catch_up)) metrics.catchUpCount += 1;
+  if (Boolean(sample.edited ?? sample.is_edited)) metrics.editedCount += 1;
+  if (Boolean(sample.downstreamIsolationObserved ?? sample.downstream_isolation_observed)) metrics.downstreamIsolationObserved = true;
+  if (Boolean(sample.containerTouched ?? sample.container_touched)) metrics.containerTouched = true;
 
   const occurredAtMs = Date.parse(sample.occurredAt ?? sample.occurred_at ?? '');
   const receivedAtMs = Date.parse(sample.receivedAt ?? sample.received_at ?? '');
@@ -97,8 +112,12 @@ export function buildSoakSummary(metrics, { endedAtMs = Date.now() } = {}) {
     uniqueEventCount: metrics.uniqueEventCount,
     duplicateCount: metrics.duplicateCount,
     catchUpCount: metrics.catchUpCount,
+    editedCount: metrics.editedCount,
     disconnectCount: metrics.disconnectCount,
     reconnectCount: metrics.reconnectCount,
+    downstreamIsolationObserved: metrics.downstreamIsolationObserved,
+    containerTouched: metrics.containerTouched,
+    canonicalEventDigests: [...metrics._canonicalEventDigests],
     latencyMs: latencySummary(metrics.latencyMs),
     healthTransitions: metrics.healthTransitions.map((item) => ({ ...item })),
     finalHealthStatus: metrics.lastHealthStatus,
