@@ -361,6 +361,7 @@ export async function executeProductionPlan({
   stateBinder,
   bindingRepairRecorder,
   latencyTrace,
+  finalizeExecutionBatch,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
   if (!trustedWorkspaceId) throw new TypeError('workspaceId is required');
@@ -378,19 +379,29 @@ export async function executeProductionPlan({
   if (typeof accountLoader !== 'function') throw new TypeError('accountLoader is required');
   if (typeof dispatchAction !== 'function') throw new TypeError('dispatchAction is required');
 
-  const accounts = await Promise.all(accountPlans.map((plan) => runAccountPlan({
-    workspaceId: trustedWorkspaceId,
-    eventId,
-    plan,
-    accountLoader,
-    authorityLoader,
-    snapshotLoader,
-    riskMaterializer,
-    dispatchAction,
-    stateBinder,
-    bindingRepairRecorder,
-    latencyTrace,
-  })));
+  try {
+    const accounts = await Promise.all(accountPlans.map((plan) => runAccountPlan({
+      workspaceId: trustedWorkspaceId,
+      eventId,
+      plan,
+      accountLoader,
+      authorityLoader,
+      snapshotLoader,
+      riskMaterializer,
+      dispatchAction,
+      stateBinder,
+      bindingRepairRecorder,
+      latencyTrace,
+    })));
 
-  return summarize(accounts, true);
+    return summarize(accounts, true);
+  } finally {
+    if (typeof finalizeExecutionBatch === 'function') {
+      try {
+        await finalizeExecutionBatch();
+      } catch {
+        // Runtime cleanup is best-effort and must never mask a broker outcome.
+      }
+    }
+  }
 }
