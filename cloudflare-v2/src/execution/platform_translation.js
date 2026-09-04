@@ -1,4 +1,10 @@
-import { normalizePrice, normalizeVolumeForMT5, normalizeVolumeForCTrader } from '../normalization/trading_normalizer.js';
+import {
+  normalizePrice,
+  normalizeVolumeForMT5,
+  normalizeVolumeForCTrader,
+  validateVolumeForMT5Execution,
+  validateVolumeForCTraderExecution,
+} from '../normalization/trading_normalizer.js';
 import {
   buildNewOrderMessage,
   buildAmendPositionSLTPMessage,
@@ -31,7 +37,7 @@ export function buildMT5OrderCommand(action, symbol) {
     symbol: symbol.platformSymbol,
     side: action.side,
     orderType: action.orderType,
-    volume: normalizeVolumeForMT5(action.lots, {
+    volume: validateVolumeForMT5Execution(action.lots, {
       min: symbol.minLots,
       max: symbol.maxLots,
       step: symbol.stepLots,
@@ -54,7 +60,7 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
     symbolId: symbol.platformId,
     side: action.side,
     orderType: action.orderType,
-    protocolVolume: normalizeVolumeForCTrader(action.lots, cTraderVolumeOptions(symbol)),
+    protocolVolume: validateVolumeForCTraderExecution(action.lots, cTraderVolumeOptions(symbol)),
     ...(entryPrice != null ? { entryPrice: normalizePrice(entryPrice, priceOptions) } : {}),
     // cTrader does not accept absolute stopLoss/takeProfit on MARKET new-order
     // requests. The executor applies them via 2110 after position creation.
