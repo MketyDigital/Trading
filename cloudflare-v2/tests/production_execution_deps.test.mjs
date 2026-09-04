@@ -242,3 +242,56 @@ test('unsupported platform and missing server-side platform configuration fail b
     /MT5_BRIDGE_URL|MT5_BRIDGE_SECRET/,
   );
 });
+
+test('production dependencies expose only whitelisted nonauthoritative snapshot configuration', async () => {
+  const row = account({
+    sizing_mode: 'FIXED_LOTS',
+    fast_entry_policy: 'WAIT_FOR_COMPLETE_SIGNAL',
+    entry_zone_policy: 'NEAREST_BOUNDARY',
+    api_token_encrypted: 'must-never-enter-snapshot',
+    safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 1 },
+    current_daily_pnl_percent: -4,
+    current_open_risk_percent: 3,
+  });
+  const deps = createProductionExecutionDependencies({
+    env: {},
+    supabase: createAccountQuerySupabase(row),
+    workspaceId: 'ws-a',
+  }, {
+    deliveryStoreFactory: () => ({}),
+  });
+
+  assert.equal(typeof deps.snapshotLoader, 'function');
+
+  const snapshot = await deps.snapshotLoader({
+    workspaceId: 'ws-a',
+    sourceId: 'src-a',
+    account: row,
+  });
+
+  assert.equal(snapshot.workspaceId, 'ws-a');
+  assert.equal(snapshot.sourceId, 'src-a');
+  assert.equal(snapshot.accountId, 'acct-row-a');
+  assert.equal(snapshot.platform, 'mt5');
+  assert.equal(snapshot.serverName, 'Broker-Demo');
+  assert.equal(snapshot.sizingMode, 'FIXED_LOTS');
+  assert.equal(snapshot.fastEntryPolicy, 'WAIT_FOR_COMPLETE_SIGNAL');
+  assert.equal(snapshot.entryZonePolicy, 'NEAREST_BOUNDARY');
+  assert.equal(typeof snapshot.version, 'string');
+
+  const serialized = JSON.stringify(snapshot);
+  for (const forbidden of [
+    'api_token_encrypted', 'must-never-enter-snapshot', 'safety_policy', 'killSwitch',
+    'execution_enabled', 'is_active', 'current_daily_pnl_percent', 'current_open_risk_percent',
+    'TRADING_ACCESS_ENABLED', 'BROKER_EXECUTION_ENABLED',
+  ]) {
+    assert.equal(serialized.includes(forbidden), false, `snapshot leaked mutable/secret authority: ${forbidden}`);
+  }
+
+  const replay = await deps.snapshotLoader({
+    workspaceId: 'ws-a',
+    sourceId: 'src-a',
+    account: row,
+  });
+  assert.deepEqual(replay, snapshot);
+});
