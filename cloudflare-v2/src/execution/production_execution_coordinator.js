@@ -135,6 +135,7 @@ async function runAccountPlan({
   plan,
   accountLoader,
   authorityLoader,
+  snapshotLoader,
   riskMaterializer,
   dispatchAction,
   stateBinder,
@@ -161,14 +162,15 @@ async function runAccountPlan({
 
   for (const action of actions) {
     let currentAccount = account;
+    let executionAuthority = null;
     if (typeof authorityLoader === 'function') {
       try {
-        const authority = await authorityLoader({
+        executionAuthority = await authorityLoader({
           workspaceId,
           tradingEventId: eventId,
           accountId: requestedAccountId,
         });
-        currentAccount = authority?.account || null;
+        currentAccount = executionAuthority?.account || null;
       } catch (error) {
         if (error?.code === 'EXECUTION_AUTHORITY_REVOKED') {
           return blockedAccount(requestedAccountId, 'EXECUTION_AUTHORITY_REVOKED');
@@ -178,6 +180,25 @@ async function runAccountPlan({
 
       const currentAuthorityBlock = validateAccountAuthority(currentAccount, workspaceId, requestedAccountId);
       if (currentAuthorityBlock) return currentAuthorityBlock;
+    }
+
+    // Runtime snapshots are advisory performance context only. They are loaded
+    // only after fresh durable authority has passed and snapshot failure/miss
+    // must never authorize, block, or replace the authoritative path.
+    let snapshot = null;
+    if (typeof snapshotLoader === 'function') {
+      try {
+        snapshot = await snapshotLoader({
+          workspaceId,
+          eventId,
+          sourceId: executionAuthority?.source?.id ?? null,
+          account: currentAccount,
+          action,
+          plan,
+        }) ?? null;
+      } catch {
+        snapshot = null;
+      }
     }
 
     let executableAction = action;
@@ -191,6 +212,7 @@ async function runAccountPlan({
           account: currentAccount,
           action,
           plan,
+          snapshot,
         });
       } catch (error) {
         outcomes.push({
@@ -241,6 +263,7 @@ async function runAccountPlan({
         account: currentAccount,
         action: executableAction,
         risk: materialized?.risk ?? null,
+        snapshot,
       });
       safeMark(latencyTrace, 'BROKER_ACK');
       if (result?.ok === false || result?.success === false) {
@@ -332,6 +355,7 @@ export async function executeProductionPlan({
 } = {}, {
   accountLoader,
   authorityLoader,
+  snapshotLoader,
   riskMaterializer,
   dispatchAction,
   stateBinder,
@@ -343,9 +367,9 @@ export async function executeProductionPlan({
   if (!Array.isArray(accountPlans)) throw new TypeError('accountPlans must be an array');
 
   // The Worker-wide broker master fuse is deliberately the first broker-capable
-  // decision. When it is off, no account lookup, authority lookup, risk
-  // materialization, delivery reservation, state mutation, broker adapter, or
-  // latency mark may be reached.
+  // decision. When it is off, no account lookup, authority lookup, snapshot,
+  // risk materialization, delivery reservation, state mutation, broker adapter,
+  // or latency mark may be reached.
   if (brokerExecutionEnabled !== true) {
     const accounts = accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED'));
     return summarize(accounts, false);
@@ -360,6 +384,7 @@ export async function executeProductionPlan({
     plan,
     accountLoader,
     authorityLoader,
+    snapshotLoader,
     riskMaterializer,
     dispatchAction,
     stateBinder,
