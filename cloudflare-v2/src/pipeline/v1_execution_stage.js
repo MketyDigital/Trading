@@ -1,5 +1,6 @@
 import { createProductionExecutionDependencies } from '../execution/production_execution_deps.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
+import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';
 
 function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
@@ -47,6 +48,7 @@ export async function runV1ProductionExecutionStage({
   result,
   simulation,
   executionDepsFactory = createProductionExecutionDependencies,
+  bindingRepairRecorderFactory = createProductionBindingRepairRecorder,
   executeProductionFn = executeProductionPlan,
 } = {}) {
   if (!result?.ok || result?.duplicate) {
@@ -74,10 +76,19 @@ export async function runV1ProductionExecutionStage({
   }
 
   const dependencies = await executionDepsFactory({ env, supabase, workspaceId, tradingEventId });
+  const bindingRepairRecorder = dependencies?.bindingRepairRecorder || bindingRepairRecorderFactory({
+    supabase,
+    workspaceId,
+    tradingEventId,
+  });
+
   return executeProductionFn({
     workspaceId,
     eventId: tradingEventId,
     accountPlans,
     brokerExecutionEnabled: true,
-  }, dependencies);
+  }, {
+    ...dependencies,
+    bindingRepairRecorder,
+  });
 }
