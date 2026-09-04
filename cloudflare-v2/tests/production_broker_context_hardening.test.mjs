@@ -31,6 +31,22 @@ function mt5Account(overrides = {}) {
   };
 }
 
+function ctraderAccount(overrides = {}) {
+  return {
+    id: 'ctrader-row-a',
+    workspace_id: 'ws-a',
+    platform: 'ctrader',
+    account_id: '70001',
+    server_name: 'demo',
+    api_token_encrypted: 'encrypted-token',
+    sizingMode: 'FIXED_LOTS',
+    is_active: true,
+    execution_enabled: true,
+    safety_policy: { enabled: true, killSwitch: false },
+    ...overrides,
+  };
+}
+
 function action(overrides = {}) {
   return {
     type: 'OPEN_POSITION',
@@ -135,4 +151,96 @@ test('one MT5 risk-sized action reuses only its freshly loaded broker context be
 
   await deps.riskMaterializer({ workspaceId: 'ws-a', account: row, action: action({ idempotencyKey: 'event-1:acct-row-a:leg-2' }) });
   assert.equal(contextLoads, 2, 'a different action must obtain fresh broker authority');
+});
+
+test('cTrader sequential actions reuse one exact batch runtime and batch finalization closes it once', async () => {
+  let runtimeCreates = 0;
+  let runtimeCloses = 0;
+  const executed = [];
+  const row = ctraderAccount();
+  const deps = createProductionExecutionDependencies({
+    env: {
+      TRADING_MASTER_KEY: 'master-key',
+      CTRADER_CLIENT_ID: 'client-id',
+      CTRADER_CLIENT_SECRET: 'client-secret',
+    },
+    supabase: supabaseStub(),
+    workspaceId: 'ws-a',
+    tradingEventId: 'event-1',
+  }, {
+    decryptFn: async () => 'access-token',
+    deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
+    ctraderRuntimeFactory: async () => {
+      runtimeCreates += 1;
+      return {
+        async execute(nextAction) {
+          executed.push(nextAction.idempotencyKey);
+          return { ok: true };
+        },
+        close() { runtimeCloses += 1; },
+      };
+    },
+  });
+
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-a', account: row, action: action({ idempotencyKey: 'event-1:ctrader-row-a:leg-1' }) });
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-a', account: row, action: action({ idempotencyKey: 'event-1:ctrader-row-a:leg-2' }) });
+
+  assert.equal(runtimeCreates, 1, 'same exact cTrader batch scope should reuse one runtime');
+  assert.equal(runtimeCloses, 0, 'warm runtime must remain open only until batch completion');
+  assert.deepEqual(executed, ['event-1:ctrader-row-a:leg-1', 'event-1:ctrader-row-a:leg-2']);
+
+  assert.equal(typeof deps.finalizeExecutionBatch, 'function');
+  await deps.finalizeExecutionBatch();
+  assert.equal(runtimeCloses, 1, 'batch finalization must dispose the reused runtime');
+});
+
+test('cTrader warm runtime never crosses group or account scope and execution failure disposes it', async () => {
+  let runtimeCreates = 0;
+  let runtimeCloses = 0;
+  let failNext = false;
+  const deps = createProductionExecutionDependencies({
+    env: {
+      TRADING_MASTER_KEY: 'master-key',
+      CTRADER_CLIENT_ID: 'client-id',
+      CTRADER_CLIENT_SECRET: 'client-secret',
+    },
+    supabase: supabaseStub(),
+    workspaceId: 'ws-a',
+    tradingEventId: 'event-1',
+  }, {
+    decryptFn: async () => 'access-token',
+    deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
+    ctraderRuntimeFactory: async () => {
+      runtimeCreates += 1;
+      return {
+        async execute() {
+          if (failNext) throw new Error('socket failed');
+          return { ok: true };
+        },
+        close() { runtimeCloses += 1; },
+      };
+    },
+  });
+
+  const rowA = ctraderAccount();
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-a', account: rowA, action: action({ idempotencyKey: 'a1' }) });
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-b', account: rowA, action: action({ idempotencyKey: 'a2' }) });
+  assert.equal(runtimeCreates, 2, 'different delivery group must not share contextual runtime state');
+
+  const rowB = ctraderAccount({ id: 'ctrader-row-b', account_id: '70002', api_token_encrypted: 'encrypted-token-b' });
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-b', account: rowB, action: action({ idempotencyKey: 'b1' }) });
+  assert.equal(runtimeCreates, 3, 'different broker account must not reuse runtime');
+
+  failNext = true;
+  await assert.rejects(
+    deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-b', account: rowB, action: action({ idempotencyKey: 'b2' }) }),
+    /socket failed/,
+  );
+  assert.equal(runtimeCloses, 1, 'failed warm runtime must be disposed immediately');
+
+  failNext = false;
+  await deps.dispatchAction({ workspaceId: 'ws-a', groupId: 'group-b', account: rowB, action: action({ idempotencyKey: 'b3' }) });
+  assert.equal(runtimeCreates, 4, 'post-failure action must create a fresh runtime');
+  await deps.finalizeExecutionBatch();
+  assert.equal(runtimeCloses, 4, 'finalizer must close every remaining warm runtime exactly once');
 });
