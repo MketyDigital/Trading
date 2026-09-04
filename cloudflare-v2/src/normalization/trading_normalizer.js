@@ -159,6 +159,16 @@ function clamp(value, min, max) {
   return Math.min(max ?? value, Math.max(min ?? value, value));
 }
 
+function approximatelyInteger(value) {
+  return Math.abs(value - Math.round(value)) <= 1e-9;
+}
+
+function strictPositive(value, label) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) throw new TypeError(`${label} must be positive`);
+  return numeric;
+}
+
 export function normalizePrice(value, { digits, tickSize } = {}) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) throw new TypeError('price must be finite');
@@ -168,11 +178,26 @@ export function normalizePrice(value, { digits, tickSize } = {}) {
   return Number(normalized.toFixed(places));
 }
 
+// Permissive normalizers are retained for simulation/display and explicitly
+// reviewed risk-reducing management paths. Risk-increasing production OPENs use
+// the strict validators below and may never be rounded or clamped upward.
 export function normalizeVolumeForMT5(lots, { min = 0.01, max = Number.POSITIVE_INFINITY, step = 0.01 } = {}) {
   const numeric = Number(lots);
   if (!Number.isFinite(numeric) || numeric <= 0) throw new TypeError('lots must be positive');
   const stepped = Math.round(numeric / step) * step;
   return Number(clamp(stepped, min, max).toFixed(decimalPlaces(step)));
+}
+
+export function validateVolumeForMT5Execution(lots, { min = 0.01, max = Number.POSITIVE_INFINITY, step = 0.01 } = {}) {
+  const numeric = strictPositive(lots, 'lots');
+  const minimum = strictPositive(min, 'minimum volume');
+  const increment = strictPositive(step, 'volume step');
+  const maximum = Number(max);
+  if (!Number.isFinite(maximum) && maximum !== Number.POSITIVE_INFINITY) throw new TypeError('maximum volume must be valid');
+  if (numeric < minimum - 1e-12) throw new RangeError('MT5 execution volume is below broker minimum');
+  if (numeric > maximum + 1e-12) throw new RangeError('MT5 execution volume exceeds broker maximum');
+  if (!approximatelyInteger(numeric / increment)) throw new RangeError('MT5 execution lots are not on broker volume step');
+  return Number(numeric.toFixed(decimalPlaces(increment)));
 }
 
 /**
@@ -191,4 +216,26 @@ export function normalizeVolumeForCTrader(lots, { protocolLotSize, lotSize, minV
   const protocolVolume = numericLots * lotSizeCents;
   const stepped = Math.round(protocolVolume / stepVolume) * stepVolume;
   return Math.trunc(clamp(stepped, minVolume, maxVolume));
+}
+
+export function validateVolumeForCTraderExecution(lots, {
+  protocolLotSize,
+  lotSize,
+  minVolume = 1,
+  maxVolume = Number.POSITIVE_INFINITY,
+  stepVolume = 1,
+} = {}) {
+  const numericLots = strictPositive(lots, 'lots');
+  const lotSizeCents = strictPositive(protocolLotSize ?? lotSize, 'protocolLotSize');
+  const minimum = strictPositive(minVolume, 'minimum volume');
+  const increment = strictPositive(stepVolume, 'volume step');
+  const maximum = Number(maxVolume);
+  if (!Number.isFinite(maximum) && maximum !== Number.POSITIVE_INFINITY) throw new TypeError('maximum volume must be valid');
+
+  const protocolVolume = numericLots * lotSizeCents;
+  if (protocolVolume < minimum - 1e-9) throw new RangeError('cTrader execution volume is below broker minimum');
+  if (protocolVolume > maximum + 1e-9) throw new RangeError('cTrader execution volume exceeds broker maximum');
+  if (!approximatelyInteger(protocolVolume / increment)) throw new RangeError('cTrader execution volume is not on broker volume step');
+  if (!approximatelyInteger(protocolVolume)) throw new RangeError('cTrader execution protocol volume must be integral');
+  return Math.round(protocolVolume);
 }
