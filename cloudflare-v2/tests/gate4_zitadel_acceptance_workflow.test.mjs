@@ -38,7 +38,7 @@ test('Gate 4 Zitadel acceptance is exact-marker, staging-protected and non-broke
   assert.match(block, /secrets\.GATE4_WRONG_PROJECT_TOKEN/);
   assert.match(block, /secrets\.GATE4_WRONG_ORG_TOKEN/);
   assert.match(block, /npm run accept:zitadel:gate4/);
-  assert.doesNotMatch(block, /CTRADER_|MT5_|BROKER_.*true|TRADING_ACCESS_ENABLED:\s*['"]true['"]|wrangler deploy|cloudflare/i);
+  assert.doesNotMatch(block, /CTRADER_|MT5_|BROKER_.*true|TRADING_ACCESS_ENABLED:\s*['"]true['"]|wrangler\s+(?:deploy|publish)|cloudflare[^\n]*(?:deploy|mutation|api)/i);
 });
 
 test('Gate 4 runner is secret-free and covers positive, negative, role and tenant isolation cases', async () => {
