@@ -22,8 +22,8 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 targeting `main`
-- Current verified implementation head before this documentation sync: `400880cab6502c75ac487830bc3a90bb022f485c`
-- Verified ordinary PR run: `33853785408`; test job `100962282286` SUCCESS.
+- Current verified implementation head before this documentation sync: `619fa842ee29addecc9cbbd3fad6bec6efe59f60`
+- Verified ordinary PR run: `33856378784`; test job `100970541404` SUCCESS.
 - This remains development-to-real-production work. Do not merge/finish the branch yet.
 - Never merge `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final approval.
@@ -33,7 +33,7 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Frozen audit-scope commit: `7b175a548c9134b0e88ba4fa5977de51142b6cd3`.
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md` at `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 - Detailed continuation/evidence record: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 6 GREEN / TASK 7 I2+U1 ACTIVE NEXT**.
+- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 7 GREEN / TASK 8 FAILURE-MATRIX ACCEPTANCE ACTIVE NEXT**.
 
 ## Critical runtime safety defaults
 Keep fail closed throughout static remediation:
@@ -57,6 +57,7 @@ No tenant/admin API may mutate Worker-wide master fuses.
 - State-binding repair remains separate from broker retry: broker delivery stays terminal `SUCCEEDED`; only `SUCCEEDED + STATE_BINDING_PENDING` is scanned by the binding-repair plane.
 - Uncertain broker outcomes are reconciled; never blindly retried.
 - Runtime execution snapshots are advisory optimization only; they may contain only explicit non-secret/non-authoritative fields and can never replace final fresh authority or broker-risk validation.
+- Warm broker/session reuse is bounded to the exact safe action/batch scope and must never cross account/group authority or replace fresh per-action authority/risk checks.
 
 ## Production execution locks
 Before a broker adapter may be reached, all applicable locks must pass:
@@ -146,14 +147,22 @@ GREEN:
 - no Cloudflare mutation, deployment, protected external probe, database mutation, or broker order occurred.
 
 ### Task 7 / I2/U1 — warm broker contexts + authenticated MT5 metadata
-**ACTIVE NEXT.**
-- RED first: authenticate MT5 `/v1/account`, `/v1/symbols`, `/v1/tick` metadata requests at the same trust boundary as broker command traffic or stronger.
-- Add bounded warm MT5/cTrader context/session reuse only where it cannot cache away fresh source/workspace/account/kill/risk/exposure/broker-economic authority.
-- Preserve exact account/server isolation and cTrader protocol-cent semantics.
-- Any cTrader monetary risk model must remain broker-native/reliable; do not invent generic live-risk math.
+**STATIC GREEN / RESOLVED.**
+- Final implementation head `619fa842ee29addecc9cbbd3fad6bec6efe59f60` (`feat: finalize warm broker batch contexts`).
+- Exact ordinary PR run `33856378784`, job `100970541404` SUCCESS.
+- Node/trading-core **685/685 PASS**.
+- pure MT5 bridge **14/14 PASS**.
+- Container MTProto **11/11 PASS**.
+- external MTProto **22/22 PASS**.
+- protected Cloudflare inspect/probe/deploy/accept jobs all SKIPPED.
+- MT5 `/v1/account`, `/v1/symbols`, `/v1/tick` metadata requests are authenticated with server-owned bridge-secret HMAC and bounded timestamps; the secret is not placed in URL/body.
+- One MT5 risk-sized action may reuse only its freshly loaded broker context from risk validation into that exact dispatch; the context is bounded/consumed and does not authorize another action.
+- cTrader sequential actions may reuse one warm runtime only inside the exact account/group batch; batch finalization closes it once, scope changes cannot reuse it, and execution failure disposes it.
+- Fresh durable source/workspace/account/kill/risk authority remains per action; warm reuse cannot override these checks.
+- No Cloudflare mutation, deployment, protected external probe, database mutation, demo broker order, or live broker order occurred.
 
 ### Task 8 — integrated failure matrix + exact-head static acceptance
-OPEN. Must cover master fuses, source/workspace/account revocation, broker-min/off-step volume, stale/missing risk exposure, event linkage, and broker-success/state-bind repair, then all ordinary suites exact-head GREEN with protected jobs skipped.
+**ACTIVE NEXT.** Prove from current source/tests that the exact matrix covers: master/access fuses on execution/retry, source/workspace/account revocation including between-action changes, broker-min/off-step volume, stale/missing risk exposure, durable event linkage, and broker-success/state-bind repair without resend. Add RED tests only for real uncovered gaps, then require exact-head full ordinary CI GREEN with protected jobs skipped.
 
 ### Task 9 — real production acceptance path
 Only after static remediation GREEN: Gates 4 -> 9, then Gate 10 shadow/demo phases, separate tiny-live approval, tiny live, beta, general production.
@@ -170,8 +179,8 @@ Only after static remediation GREEN: Gates 4 -> 9, then Gate 10 shadow/demo phas
 - F9 RESOLVED Task 2.
 - F10 RESOLVED Task 3.
 - I1 RESOLVED Task 6.
-- I2 OPEN / Task 7 ACTIVE NEXT.
-- U1 OPEN / Task 7 ACTIVE NEXT.
+- I2 RESOLVED Task 7.
+- U1 RESOLVED Task 7.
 
 ## External acceptance blockers — do not execute during static remediation
 - managed Zitadel real non-live acceptance;
@@ -193,13 +202,12 @@ CLOSED / not started.
 ## Exact startup / pickup point for any future session
 1. Read this file first, then `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then the Sept 3 launch master/remediation plans. Later Sept 3 resilience/cutover rules override older component plans where stricter.
 2. Confirm PR #2 still targets `main`, branch is `design/enterprise-trading-event-core`, and reconcile current branch head before any write.
-3. Trust Task 6 GREEN only from implementation head `400880cab6502c75ac487830bc3a90bb022f485c`, run `33853785408`, job `100962282286`: 681/681 + 14/14 + 11/11 + 22/22 passing, protected jobs skipped.
-4. Continue **Task 7/I2+U1 RED first**. Trace MT5 metadata authentication and current MT5/cTrader context/session lifecycles through the real production dependency composition.
-5. RED must prove metadata cannot be fetched across an unauthenticated trust boundary and warm reuse cannot replace per-action fresh durable authority or broker-risk/economic validation.
-6. Verify exact intended RED through ordinary PR CI before production implementation.
-7. Implement the minimum safe authentication/reuse changes, then require exact-head full ordinary PR CI GREEN with protected jobs skipped.
-8. Synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then proceed Task 8 immediately.
-9. Only after Task 8 exact-head static acceptance is GREEN return to separately authorized real Gates 4–9.
+3. Trust Task 7 GREEN only from implementation head `619fa842ee29addecc9cbbd3fad6bec6efe59f60`, run `33856378784`, job `100970541404`: 685/685 + 14/14 + 11/11 + 22/22 passing, protected jobs skipped.
+4. Continue **Task 8 integrated failure-matrix/static acceptance**. Re-read current production coordinator/integration/retry/repair tests and map every required failure row to exact executable evidence.
+5. Add RED tests only where the current matrix genuinely lacks an exact contract; verify intended RED through ordinary PR CI before any production change.
+6. If no matrix gap exists, close Task 8 only from source-level proof plus a fresh exact-head full ordinary PR CI run with protected jobs skipped.
+7. Synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` with exact Task 8 evidence.
+8. Only after Task 8 exact-head static acceptance is GREEN return to separately authorized real Gates 4–9. Do not trigger protected gates without explicit authorization.
 
 ## Safety state during static remediation
 Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static batch.
