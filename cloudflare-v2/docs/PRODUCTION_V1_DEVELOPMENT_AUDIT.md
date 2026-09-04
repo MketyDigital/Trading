@@ -39,17 +39,23 @@ Later Sept 3 resilience/cutover contracts control where stricter.
 - Controlling launch master blob: `48983550b3c33a7c3517c236370ffbc3d1d1788d`.
 
 ## Current development stage
-**STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 REAL ZITADEL IDENTITY/WORKSPACE AUTHORIZATION READINESS NEXT.**
+**STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 PROTECTED TOOLING STATIC GREEN — REAL ZITADEL IDENTITY/WORKSPACE ACCEPTANCE PENDING.**
 
-Static acceptance implementation head: `a7da981a5daec426b5aad840739555edfbc68819`.
-Exact ordinary PR run `33865341673`, job `100998803951` SUCCESS:
+Static remediation acceptance implementation head remains `a7da981a5daec426b5aad840739555edfbc68819` with run `33865341673`, job `100998803951` SUCCESS:
 - Node/trading-core **685/685 PASS**;
 - MT5 **14/14 PASS**;
 - Container MTProto **11/11 PASS**;
 - external MTProto **22/22 PASS**;
 - protected Cloudflare inspect/probe/deploy/accept jobs all **SKIPPED**.
 
-`AGENTS.md` static-remediation closure commit: `3820b26eb4dcf792f57dad14f6968d92501f016f`.
+Gate 4 protected-tooling exact-head verification is `e018ce79d2c7cc9018775b71281be033691f58b8`, ordinary PR run `33869550721`, test job `101012027592` SUCCESS:
+- Node/trading-core **687/687 PASS**;
+- MT5 **14/14 PASS**;
+- Container MTProto **11/11 PASS**;
+- external MTProto **22/22 PASS**;
+- protected Cloudflare inspect/probe/deploy/accept jobs all **SKIPPED**.
+
+The protected real-identity Gate 4 acceptance job was **not invoked** during tooling implementation/verification. No real Zitadel/Supabase identity acceptance evidence has yet been produced.
 
 This PR is not at branch-finishing/merge stage. General production still requires applicable real Gates 4–9, shadow production, production-infrastructure demo, separate tiny-live approval, tiny-live acceptance, controlled beta, and no unresolved severity-1/2 safety issue.
 
@@ -202,25 +208,75 @@ Current CI already proves the internal composition contract through the real aut
 - Trading-only identity model is supported;
 - no workspace role grants broker master-fuse/execution authority.
 
-This is source/CI evidence only; it does not prove the external Zitadel project/application, deployed Worker, or current real database/environment mapping.
+This source/CI evidence does not by itself prove the external Zitadel project/application or current real database/environment mapping.
 
-## Current environment evidence from runbook
-`STAGING_V1_RUNBOOK.md` records that migration `0009_trading_workspace_memberships.sql` was live-applied and verified on 2026-09-02, with RLS enabled, client table privileges absent, service-role access retained, zero initial membership rows, existing Trading entitlement disabled, and `zitadel_org_id` unset. This historical environment statement must be revalidated before relying on it for a new Gate 4 run.
+## Historical environment evidence from runbook
+`STAGING_V1_RUNBOOK.md` records that migration `0009_trading_workspace_memberships.sql` was live-applied and verified on 2026-09-02, with RLS enabled, client table privileges absent, service-role access retained, zero initial membership rows, existing Trading entitlement disabled, and `zitadel_org_id` unset. That historical statement must be revalidated during a separately authorized Gate 4 acceptance run before relying on it as current environment truth.
 
-## Tooling gap discovered
-Unlike Gates 6/7, the branch currently has no dedicated exact-marker protected Gate 4 workflow/harness. The existing source/CI tests are strong, but a real Gate 4 run should have a deliberately bounded, secret-free, broker-disabled execution surface rather than ad-hoc commands.
+## Gate 4 protected tooling TDD evidence
+A bounded protected Gate 4 workflow/harness was approved and implemented after the earlier readiness assessment.
 
-Adding such a Gate 4 workflow/harness is a **new production-facing bounded change**. Per the active development process it should be designed/approved before implementation, then built TDD-first. It must not itself be run against the real environment without separate Gate 4 authorization.
+### RED
+- Gate 4 contract tests were added first at head `a0759701…`.
+- Ordinary CI produced the intended RED: **687 tests total, 685 passed, exactly 2 intended failures** for the missing protected workflow/runner tooling.
+- Protected Cloudflare/identity acceptance work did not run during RED.
 
-## Proposed bounded Gate 4 tooling design awaiting approval
-- Add one `gate4-zitadel-identity` protected workflow, explicit marker/manual only, dependent on ordinary tests.
-- Default behavior is non-mutating preflight/verification; any deliberate test-membership/entitlement mutation must be separately explicit and reversible, and broker execution stays hard-disabled.
-- Add a thin acceptance runner/harness that reports only sanitized pass/fail names and identities by opaque test label, never bearer tokens or secrets.
-- Exercise positive identity plus wrong project/org/workspace, absent/disabled membership, role matrix and second-tenant isolation against the deployed non-live Worker.
-- Keep `BROKER_EXECUTION_ENABLED=false` throughout and do not grant any route/workspace role a broker-master-fuse capability.
-- Add CI contract tests proving marker-only/protected-environment/broker-disabled/secret-free behavior before any workflow is eligible to run.
+The RED contract required:
+- exact marker-only workflow triggering;
+- protected `staging` environment;
+- ordinary tests as a prerequisite;
+- non-broker/read-only behavior;
+- no Cloudflare deployment/mutation commands;
+- secret-free runner output;
+- positive existing-Mkety and Trading-only identity cases;
+- wrong project and wrong organization negatives;
+- missing and disabled Trading membership negatives;
+- owner/admin/operator/viewer role coverage;
+- second-tenant isolation;
+- broker execution remaining separately disabled.
 
-No implementation of this new Gate 4 workflow has been made yet because it requires design approval before code changes.
+### Implementation
+The tooling batch added:
+- a protected Gate 4 Zitadel identity acceptance workflow using the repository's established exact-marker protected-gate pattern;
+- a thin read-only acceptance runner exposed through `npm run accept:zitadel:gate4`;
+- Gate 4 trigger/runbook documentation.
+
+The runner deliberately uses the production Zitadel JWT verification + Trading workspace/membership authorization composition directly rather than normal Trading application routes. This is required because `TRADING_ACCESS_ENABLED` remains false until Gate 4 is accepted. The runner therefore can validate the real identity plane read-only without temporarily opening the Trading application API.
+
+The protected contract keeps both:
+```text
+TRADING_ACCESS_ENABLED=false
+BROKER_EXECUTION_ENABLED=false
+```
+throughout Gate 4 identity acceptance. No broker adapter is part of the Gate 4 runner.
+
+### First GREEN failure and root cause
+The first tooling GREEN attempt failed only in the static Node contract. Root cause was an over-broad test assertion banning the bare word `cloudflare`; that accidentally matched the harmless repository path `working-directory: cloudflare-v2`.
+
+This was a test false positive, not a production/workflow safety defect. The assertion was narrowed to forbid actual Wrangler/Cloudflare deployment or mutation commands while retaining the non-broker/read-only requirements.
+
+### Exact-head GREEN
+- Fix/verified head: `e018ce79d2c7cc9018775b71281be033691f58b8` (`test: narrow Gate 4 mutation assertion`).
+- Ordinary PR run: `33869550721` SUCCESS.
+- Test job: `101012027592` SUCCESS.
+- Node/trading-core: **687/687 PASS**.
+- MT5: **14/14 PASS**.
+- Container MTProto: **11/11 PASS**.
+- External MTProto: **22/22 PASS**.
+- Protected Cloudflare inspect/probe/deploy/accept jobs: **SKIPPED**.
+
+The CI log explicitly contains:
+- `Gate 4 Zitadel acceptance is exact-marker, staging-protected and non-broker` — PASS;
+- `Gate 4 runner is secret-free and covers positive, negative, role and tenant isolation cases` — PASS.
+
+No real Gate 4 token/JWKS/database acceptance probe, deployment, environment mutation, or broker action occurred in this tooling batch.
+
+## Gate 4 current interpretation
+Gate 4 tooling is **STATIC GREEN / READY TO RUN**, but Gate 4 itself is **NOT YET REAL-ACCEPTED**.
+
+The next bounded action, only after separate explicit authorization, is to trigger the exact protected Gate 4 identity acceptance workflow under the documented marker and protected `staging` environment, with required server-side credentials/configuration already present. The run must stay read-only, secret-free, and broker-disabled.
+
+A real Gate 4 GREEN claim will require exact run/job evidence for the positive/negative/role/tenant-isolation cases against the actual non-live Zitadel + Trading membership plane. Static tooling success is not a substitute.
 
 ---
 
@@ -228,7 +284,7 @@ No implementation of this new Gate 4 workflow has been made yet because it requi
 - Gate 1 historical GREEN.
 - Gate 2 historical GREEN/exited; do not repeat without reason.
 - Gate 3 deferred/fail-closed because genuine TradingView-originated acceptance capability remains unavailable.
-- **Gate 4 NEXT: real non-live Zitadel identity/workspace acceptance pending.**
+- **Gate 4: protected tooling STATIC GREEN; real non-live Zitadel identity/workspace acceptance pending and not invoked.**
 - Gates 5–7 static foundations exist; real acceptance pending.
 - Gates 8–9 static remediation prerequisite is satisfied; real E2E/ops acceptance still pending.
 - Gate 10 CLOSED/not started.
@@ -239,12 +295,13 @@ Gate 10 Phase C requires explicit max per-trade risk, max volume, max concurrent
 
 ## Exact pickup point
 1. Read `AGENTS.md` and this audit first; reconcile current branch/PR head before writes.
-2. Trust static remediation completion only from `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`: 685/685 + 14/14 + 11/11 + 22/22, protected jobs skipped.
-3. Current work is Gate 4 readiness. Re-read launch master Gate 4, `SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`, `STAGING_V1_RUNBOOK.md`, and current auth/membership/admin tests.
-4. The next proposed implementation is the bounded protected Gate 4 acceptance workflow/harness described above. Obtain explicit design approval before implementation.
-5. If approved: use TDD, first add workflow/harness contract RED tests, verify intended RED in ordinary PR CI, then implement the minimum workflow/runner and require exact-head GREEN.
-6. Do **not** actually invoke the Gate 4 protected workflow or mutate Zitadel/Cloudflare/Supabase until separate real-environment Gate 4 authorization is explicitly given.
-7. Synchronize this file and `AGENTS.md` after the verified preparation batch and again after any real Gate 4 acceptance batch.
+2. Static remediation completion is anchored at `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`: 685/685 + 14/14 + 11/11 + 22/22, protected jobs skipped.
+3. Gate 4 protected tooling static readiness is anchored at `e018ce79d2c7cc9018775b71281be033691f58b8`, run `33869550721`, job `101012027592`: 687/687 + 14/14 + 11/11 + 22/22, protected jobs skipped.
+4. Current next work is **real Gate 4 non-live Zitadel identity/workspace acceptance**, not additional static remediation.
+5. Before any real Gate 4 invocation, re-read the Gate 4 trigger/runbook, `SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`, `STAGING_V1_RUNBOOK.md`, and launch master Gate 4 contract.
+6. Verify the exact marker, protected `staging` environment, required server-side configuration names, read-only runner scope, secret-free output contract, and both master fuses pinned false.
+7. Do **not** invoke the Gate 4 protected workflow or mutate Zitadel/Cloudflare/Supabase until separate real-environment Gate 4 authorization is explicitly given.
+8. After any separately authorized Gate 4 run, record exact workflow/run/job/case evidence here and in `AGENTS.md` before moving to Gate 5.
 
 ## Safety state
 ```text
