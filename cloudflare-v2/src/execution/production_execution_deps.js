@@ -273,6 +273,8 @@ export function createProductionExecutionDependencies({
   const mt5ActionContexts = new Map();
   const mt5ContextTtlMs = 15000;
   const mt5ContextMaxEntries = 64;
+  const ctraderBatchRuntimes = new Map();
+  const ctraderBatchMaxEntries = 32;
 
   function mt5ActionContextKey(account, action) {
     const idempotencyKey = text(action?.idempotencyKey);
@@ -307,6 +309,35 @@ export function createProductionExecutionDependencies({
     const entry = mt5ActionContexts.get(key);
     mt5ActionContexts.delete(key);
     return entry?.context || null;
+  }
+
+  function ctraderBatchKey(account, brokerAccountId, environment, groupId) {
+    const group = text(groupId);
+    if (!group) return '';
+    return `${boundWorkspaceId}|${accountRef(account)}|${text(brokerAccountId)}|${text(environment).toLowerCase()}|${group}`;
+  }
+
+  async function closeCTraderRuntime(runtime) {
+    if (!runtime?.close) return;
+    try {
+      await runtime.close();
+    } catch {}
+  }
+
+  async function trimCTraderBatchRuntimes() {
+    while (ctraderBatchRuntimes.size > ctraderBatchMaxEntries) {
+      const oldestKey = ctraderBatchRuntimes.keys().next().value;
+      if (oldestKey == null) break;
+      const entry = ctraderBatchRuntimes.get(oldestKey);
+      ctraderBatchRuntimes.delete(oldestKey);
+      await closeCTraderRuntime(entry?.runtime);
+    }
+  }
+
+  async function finalizeExecutionBatch() {
+    const entries = [...ctraderBatchRuntimes.values()];
+    ctraderBatchRuntimes.clear();
+    await Promise.all(entries.map(async (entry) => closeCTraderRuntime(entry?.runtime)));
   }
 
   let authorityLoaderImpl = null;
@@ -506,18 +537,20 @@ export function createProductionExecutionDependencies({
       throw new Error('live cTrader execution is disabled');
     }
 
-    const accessToken = await decryptFn(encryptedAccessToken, masterKey);
-    const deliveryStore = deliveryStoreFor({
-      factory: deliveryStoreFactory,
-      supabase,
-      workspaceId: boundWorkspaceId,
-      account,
-      tradingEventId: boundTradingEventId || null,
-      groupId,
-    });
+    const batchKey = ctraderBatchKey(account, brokerAccountId, environment, groupId);
+    let runtime = batchKey ? ctraderBatchRuntimes.get(batchKey)?.runtime : null;
 
-    let runtime;
-    try {
+    if (!runtime) {
+      const accessToken = await decryptFn(encryptedAccessToken, masterKey);
+      const deliveryStore = deliveryStoreFor({
+        factory: deliveryStoreFactory,
+        supabase,
+        workspaceId: boundWorkspaceId,
+        account,
+        tradingEventId: boundTradingEventId || null,
+        groupId,
+      });
+
       runtime = await ctraderRuntimeFactory({
         environment,
         allowLiveTrading,
@@ -527,10 +560,26 @@ export function createProductionExecutionDependencies({
         accountId: numericAccountId,
         deliveryStore,
       });
-      if (!runtime?.execute) throw new Error('cTrader production runtime is unavailable');
+      if (!runtime?.execute) {
+        await closeCTraderRuntime(runtime);
+        throw new Error('cTrader production runtime is unavailable');
+      }
+      if (batchKey) {
+        ctraderBatchRuntimes.set(batchKey, { runtime });
+        await trimCTraderBatchRuntimes();
+      }
+    }
+
+    try {
       return await runtime.execute(action);
+    } catch (error) {
+      if (batchKey && ctraderBatchRuntimes.get(batchKey)?.runtime === runtime) {
+        ctraderBatchRuntimes.delete(batchKey);
+      }
+      await closeCTraderRuntime(runtime);
+      throw error;
     } finally {
-      runtime?.close?.();
+      if (!batchKey) await closeCTraderRuntime(runtime);
     }
   }
 
@@ -598,6 +647,7 @@ export function createProductionExecutionDependencies({
     riskMaterializer,
     dispatchAction,
     stateBinder,
+    finalizeExecutionBatch,
   };
 }
 
