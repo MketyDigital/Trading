@@ -43,10 +43,20 @@ function policyRequest(plan = {}, action = {}) {
   return {
     symbol: action.symbol,
     actionKind: isRiskIncreasingAction(action) ? 'INCREASE_RISK' : 'REDUCE_RISK',
-    lots: action.lots,
+    totalLots: action.lots,
     riskPercent: action.riskPercent ?? plan.riskPercent ?? plan?.risk?.riskPercent,
     currentDailyPnlPercent: plan.currentDailyPnlPercent,
     currentOpenRiskPercent: plan.currentOpenRiskPercent,
+  };
+}
+
+function mergePolicyRequest(plan, action, materialized = {}) {
+  const supplied = materialized?.policyRequest ?? materialized?.policyContext ?? {};
+  return {
+    ...policyRequest(plan, action),
+    ...supplied,
+    symbol: action.symbol,
+    actionKind: isRiskIncreasingAction(action) ? 'INCREASE_RISK' : 'REDUCE_RISK',
   };
 }
 
@@ -125,6 +135,7 @@ async function runAccountPlan({
   plan,
   accountLoader,
   authorityLoader,
+  riskMaterializer,
   dispatchAction,
   stateBinder,
   latencyTrace,
@@ -168,16 +179,52 @@ async function runAccountPlan({
       if (currentAuthorityBlock) return currentAuthorityBlock;
     }
 
+    let executableAction = action;
+    let materialized = null;
+    if (typeof riskMaterializer === 'function') {
+      try {
+        materialized = await riskMaterializer({
+          workspaceId,
+          eventId,
+          groupId: plan?.groupId ?? null,
+          account: currentAccount,
+          action,
+          plan,
+        });
+      } catch (error) {
+        outcomes.push({
+          status: 'BLOCKED',
+          legId: action?.legId ?? null,
+          idempotencyKey: action?.idempotencyKey ?? null,
+          reason: error?.code || 'BROKER_RISK_CONTEXT_UNAVAILABLE',
+        });
+        continue;
+      }
+      if (materialized?.allowed === false) {
+        outcomes.push({
+          status: 'BLOCKED',
+          legId: action?.legId ?? null,
+          idempotencyKey: action?.idempotencyKey ?? null,
+          reason: materialized.reason || 'BROKER_RISK_BLOCKED',
+        });
+        continue;
+      }
+      if (materialized?.action && typeof materialized.action === 'object') {
+        executableAction = materialized.action;
+      }
+    }
+
     const safetyPolicy = accountSafetyPolicy(currentAccount);
-    const policy = evaluateAccountPolicy(safetyPolicy, policyRequest(plan, action));
+    const finalPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
+    const policy = evaluateAccountPolicy(safetyPolicy, finalPolicyRequest);
     if (!policy.allowed) {
       if (policy.reasons?.includes('KILL_SWITCH')) {
         return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', { policy });
       }
       outcomes.push({
         status: 'BLOCKED',
-        legId: action?.legId ?? null,
-        idempotencyKey: action?.idempotencyKey ?? null,
+        legId: executableAction?.legId ?? null,
+        idempotencyKey: executableAction?.idempotencyKey ?? null,
         policy,
       });
       continue;
@@ -191,14 +238,15 @@ async function runAccountPlan({
         eventId,
         groupId: plan?.groupId ?? null,
         account: currentAccount,
-        action,
+        action: executableAction,
+        risk: materialized?.risk ?? null,
       });
       safeMark(latencyTrace, 'BROKER_ACK');
       if (result?.ok === false || result?.success === false) {
         outcomes.push({
           status: 'FAILED',
-          legId: action?.legId ?? null,
-          idempotencyKey: action?.idempotencyKey ?? null,
+          legId: executableAction?.legId ?? null,
+          idempotencyKey: executableAction?.idempotencyKey ?? null,
           reason: 'BROKER_DISPATCH_FAILED',
         });
         continue;
@@ -206,8 +254,8 @@ async function runAccountPlan({
     } catch {
       outcomes.push({
         status: 'FAILED',
-        legId: action?.legId ?? null,
-        idempotencyKey: action?.idempotencyKey ?? null,
+        legId: executableAction?.legId ?? null,
+        idempotencyKey: executableAction?.idempotencyKey ?? null,
         reason: 'BROKER_DISPATCH_FAILED',
       });
       continue;
@@ -220,7 +268,7 @@ async function runAccountPlan({
           eventId,
           accountId: requestedAccountId,
           groupId: plan?.groupId ?? null,
-          legId: action?.legId ?? null,
+          legId: executableAction?.legId ?? null,
           brokerPositionId: result?.brokerPositionId ?? null,
           brokerOrderId: result?.brokerOrderId ?? null,
           brokerDealId: result?.brokerDealId ?? null,
@@ -229,15 +277,15 @@ async function runAccountPlan({
       } catch {
         outcomes.push({
           status: 'FAILED',
-          legId: action?.legId ?? null,
-          idempotencyKey: action?.idempotencyKey ?? null,
+          legId: executableAction?.legId ?? null,
+          idempotencyKey: executableAction?.idempotencyKey ?? null,
           reason: 'STATE_BIND_FAILED',
         });
         continue;
       }
     }
 
-    outcomes.push(safeBrokerOutcome(action, result));
+    outcomes.push(safeBrokerOutcome(executableAction, result));
   }
 
   const failed = outcomes.some((item) => item.status === 'FAILED');
@@ -247,7 +295,8 @@ async function runAccountPlan({
   if (failed) return failedAccount(requestedAccountId, 'ACCOUNT_ACTION_FAILED', outcomes);
   if (!succeeded && blocked) {
     return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', {
-      policy: blocked.policy,
+      ...(blocked.policy ? { policy: blocked.policy } : {}),
+      ...(blocked.reason ? { blockReason: blocked.reason } : {}),
     });
   }
 
@@ -267,6 +316,7 @@ export async function executeProductionPlan({
 } = {}, {
   accountLoader,
   authorityLoader,
+  riskMaterializer,
   dispatchAction,
   stateBinder,
   latencyTrace,
@@ -276,8 +326,9 @@ export async function executeProductionPlan({
   if (!Array.isArray(accountPlans)) throw new TypeError('accountPlans must be an array');
 
   // The Worker-wide broker master fuse is deliberately the first broker-capable
-  // decision. When it is off, no account lookup, authority lookup, delivery
-  // reservation, state mutation, broker adapter, or latency mark may be reached.
+  // decision. When it is off, no account lookup, authority lookup, risk
+  // materialization, delivery reservation, state mutation, broker adapter, or
+  // latency mark may be reached.
   if (brokerExecutionEnabled !== true) {
     const accounts = accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED'));
     return summarize(accounts, false);
@@ -292,6 +343,7 @@ export async function executeProductionPlan({
     plan,
     accountLoader,
     authorityLoader,
+    riskMaterializer,
     dispatchAction,
     stateBinder,
     latencyTrace,
