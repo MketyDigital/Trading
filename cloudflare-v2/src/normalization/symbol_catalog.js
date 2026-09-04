@@ -5,6 +5,14 @@ function finiteNumber(value) {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+function positiveNumber(...values) {
+  for (const value of values) {
+    const numeric = finiteNumber(value);
+    if (numeric != null && numeric > 0) return numeric;
+  }
+  return undefined;
+}
+
 function decimalUnit(position) {
   return Number(`1e-${position}`);
 }
@@ -17,6 +25,12 @@ export function fromMT5Symbols(symbols = []) {
     aliases: [symbol.description].filter(Boolean),
     digits: Number.isInteger(symbol.digits) ? symbol.digits : undefined,
     tickSize: finiteNumber(symbol.trade_tick_size),
+    // Prefer the loss-side tick value for stop-loss risk. Fall back only to the
+    // broker's generic tick value when the loss-specific field is unavailable.
+    tickValuePerLot: positiveNumber(symbol.trade_tick_value_loss, symbol.trade_tick_value),
+    tickValueProfitPerLot: positiveNumber(symbol.trade_tick_value_profit),
+    tickValueLossPerLot: positiveNumber(symbol.trade_tick_value_loss),
+    contractSize: finiteNumber(symbol.trade_contract_size),
     lotSize: finiteNumber(symbol.trade_contract_size),
     minLots: finiteNumber(symbol.volume_min),
     maxLots: finiteNumber(symbol.volume_max),
@@ -41,10 +55,6 @@ export function fromCTraderSymbols(symbols = []) {
       aliases: [symbol.description].filter(Boolean),
       digits,
       pipPosition,
-      // cTrader quotes are normalized to the symbol's advertised digits. Use
-      // decimal scientific notation so 5 digits maps to the same canonical
-      // Number representation as a literal 0.00001 instead of a pow rounding
-      // artifact such as 0.000009999999999999999.
       tickSize: digits == null ? undefined : decimalUnit(digits),
       pipSize: pipPosition == null ? undefined : decimalUnit(pipPosition),
       // cTrader protocol metadata is already expressed in cents.
