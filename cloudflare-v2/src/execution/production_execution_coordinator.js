@@ -138,6 +138,7 @@ async function runAccountPlan({
   riskMaterializer,
   dispatchAction,
   stateBinder,
+  bindingRepairRecorder,
   latencyTrace,
 }) {
   const requestedAccountId = text(plan?.accountId);
@@ -275,6 +276,21 @@ async function runAccountPlan({
           fillPrice: Number.isFinite(Number(result?.fillPrice)) ? Number(result.fillPrice) : null,
         });
       } catch {
+        if (typeof bindingRepairRecorder === 'function') {
+          try {
+            await bindingRepairRecorder({
+              workspaceId,
+              eventId,
+              accountId: requestedAccountId,
+              groupId: plan?.groupId ?? null,
+              legId: executableAction?.legId ?? null,
+              idempotencyKey: executableAction?.idempotencyKey ?? null,
+            });
+          } catch {
+            // The broker action already succeeded. Recorder failure must never
+            // cause a broker resend in this coordinator invocation.
+          }
+        }
         outcomes.push({
           status: 'FAILED',
           legId: executableAction?.legId ?? null,
@@ -319,6 +335,7 @@ export async function executeProductionPlan({
   riskMaterializer,
   dispatchAction,
   stateBinder,
+  bindingRepairRecorder,
   latencyTrace,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
@@ -346,6 +363,7 @@ export async function executeProductionPlan({
     riskMaterializer,
     dispatchAction,
     stateBinder,
+    bindingRepairRecorder,
     latencyTrace,
   })));
 
