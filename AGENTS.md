@@ -22,8 +22,8 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 targeting `main`
-- Current verified implementation head before this documentation sync: `9a13bd2fa928d39cce826d05b005129fa10a68f3`
-- Verified ordinary PR run: `33851400665`; mandatory test job SUCCESS.
+- Current verified implementation head before this documentation sync: `400880cab6502c75ac487830bc3a90bb022f485c`
+- Verified ordinary PR run: `33853785408`; test job `100962282286` SUCCESS.
 - This remains development-to-real-production work. Do not merge/finish the branch yet.
 - Never merge `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final approval.
@@ -33,7 +33,7 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Frozen audit-scope commit: `7b175a548c9134b0e88ba4fa5977de51142b6cd3`.
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md` at `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 - Detailed continuation/evidence record: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 5 GREEN / TASK 6 I1 ACTIVE NEXT**.
+- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 6 GREEN / TASK 7 I2+U1 ACTIVE NEXT**.
 
 ## Critical runtime safety defaults
 Keep fail closed throughout static remediation:
@@ -56,6 +56,7 @@ No tenant/admin API may mutate Worker-wide master fuses.
 - Successful broker truth must remain reconcilable with persistent delivery state and exact Trade State without resending solely to repair state.
 - State-binding repair remains separate from broker retry: broker delivery stays terminal `SUCCEEDED`; only `SUCCEEDED + STATE_BINDING_PENDING` is scanned by the binding-repair plane.
 - Uncertain broker outcomes are reconciled; never blindly retried.
+- Runtime execution snapshots are advisory optimization only; they may contain only explicit non-secret/non-authoritative fields and can never replace final fresh authority or broker-risk validation.
 
 ## Production execution locks
 Before a broker adapter may be reached, all applicable locks must pass:
@@ -118,35 +119,38 @@ Production-ready/general launch still requires applicable real gate evidence and
 
 ### Task 5 / F6 — Trading-owned trade-account workspace FK migration contract
 **STATIC GREEN / RESOLVED.**
+- Final implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3`.
+- Exact ordinary PR run `33851400665` SUCCESS.
+- Node/trading-core **678/678 PASS**; MT5 **14/14**; Container MTProto **11/11**; external MTProto **22/22**.
+- Migration is fail-closed/static and repoints account tenancy to Trading-owned workspace authority without applying any real database mutation.
 
-RED:
-- RED head `6f479bb897566c4b16d61c0bf619db466d5d8ea9`.
-- The migration-contract tests failed only because migration `0012` did not yet exist; prior regression tests remained healthy.
-- No database/environment was touched.
+### Task 6 / I1 — runtime snapshot production integration
+**STATIC GREEN / RESOLVED.**
 
-Implementation:
-- final implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3` (`fix: move trade account tenancy to Trading workspace authority`).
-- migration is fail-closed and static: it verifies every existing `trade_accounts.workspace_id` is already provisioned in `trading_workspace_access`, aborts on orphaned account tenancy, drops only the exact legacy single-column FK to shared `public.workspaces`, and repoints `trade_accounts.workspace_id` to Trading-owned `trading_workspace_access(id)`.
-- existing account rows and workspace UUIDs are preserved; no MKSaaS `public.workspaces` row is created, rewritten, truncated, or deleted.
-- no real migration was applied; later apply still requires separately authorized read-only real-schema/constraint/data-prerequisite inspection first.
+TDD / implementation:
+- coordinator RED proved snapshot integration was absent while fresh authority/risk semantics remained intact;
+- production-composition RED proved real dependencies did not expose the snapshot loader;
+- coordinator implementation preserves order: **fresh durable authority -> advisory snapshot -> fresh broker-risk materialization -> final policy -> dispatch**;
+- snapshot miss/failure is a cache miss only and cannot authorize execution;
+- production snapshot composition is a positive whitelist only: platform, server name, sizing mode, fast-entry policy, entry-zone policy;
+- secrets, credentials, account/source enabled state, execution flag, kill/safety policy, dynamic risk/exposure and Worker master fuses are excluded from snapshot authority.
 
 GREEN:
-- exact ordinary PR run `33851400665` SUCCESS.
-- Node/trading-core **678/678 PASS**.
+- final implementation head `400880cab6502c75ac487830bc3a90bb022f485c` (`feat: compose safe production execution snapshots`).
+- exact ordinary PR run `33853785408`, job `100962282286` SUCCESS.
+- Node/trading-core **681/681 PASS**.
 - pure MT5 bridge **14/14 PASS**.
 - Container MTProto **11/11 PASS**.
 - external MTProto **22/22 PASS**.
-- protected Cloudflare inspect/probe/deploy/accept jobs remained SKIPPED.
-- no Cloudflare mutation, protected external probe, demo/live broker order, or real database mutation occurred.
-
-### Task 6 / I1 — runtime snapshot production integration
-**ACTIVE NEXT.** Non-secret/non-authoritative optimization only.
-- Trace the existing execution snapshot helper and production dependency composition.
-- RED first: prove production may consume a bounded safe snapshot for immutable/non-authoritative configuration while final source status, workspace entitlement, account active/execution state, kill switch, broker fuse, dynamic risk/exposure, and broker-authoritative economics are always reloaded/revalidated fresh before each money-moving action.
-- Snapshot miss/expiry/version mismatch must fall back safely to authoritative loading; stale snapshot must never authorize execution.
+- protected Cloudflare inspect/probe/deploy/accept jobs all SKIPPED.
+- no Cloudflare mutation, deployment, protected external probe, database mutation, or broker order occurred.
 
 ### Task 7 / I2/U1 — warm broker contexts + authenticated MT5 metadata
-OPEN. Add bounded context/session reuse without weakening final fresh authority; authenticate MT5 metadata boundary. Any cTrader monetary risk model must be broker-native/reliable, never invented.
+**ACTIVE NEXT.**
+- RED first: authenticate MT5 `/v1/account`, `/v1/symbols`, `/v1/tick` metadata requests at the same trust boundary as broker command traffic or stronger.
+- Add bounded warm MT5/cTrader context/session reuse only where it cannot cache away fresh source/workspace/account/kill/risk/exposure/broker-economic authority.
+- Preserve exact account/server isolation and cTrader protocol-cent semantics.
+- Any cTrader monetary risk model must remain broker-native/reliable; do not invent generic live-risk math.
 
 ### Task 8 — integrated failure matrix + exact-head static acceptance
 OPEN. Must cover master fuses, source/workspace/account revocation, broker-min/off-step volume, stale/missing risk exposure, event linkage, and broker-success/state-bind repair, then all ordinary suites exact-head GREEN with protected jobs skipped.
@@ -165,9 +169,9 @@ Only after static remediation GREEN: Gates 4 -> 9, then Gate 10 shadow/demo phas
 - F8 RESOLVED Task 3.
 - F9 RESOLVED Task 2.
 - F10 RESOLVED Task 3.
-- I1 OPEN / Task 6 ACTIVE NEXT.
-- I2 OPEN / Task 7.
-- U1 OPEN / Task 7.
+- I1 RESOLVED Task 6.
+- I2 OPEN / Task 7 ACTIVE NEXT.
+- U1 OPEN / Task 7 ACTIVE NEXT.
 
 ## External acceptance blockers — do not execute during static remediation
 - managed Zitadel real non-live acceptance;
@@ -189,14 +193,13 @@ CLOSED / not started.
 ## Exact startup / pickup point for any future session
 1. Read this file first, then `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then the Sept 3 launch master/remediation plans. Later Sept 3 resilience/cutover rules override older component plans where stricter.
 2. Confirm PR #2 still targets `main`, branch is `design/enterprise-trading-event-core`, and reconcile current branch head before any write.
-3. Trust Task 5 GREEN only from implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3`, run `33851400665`: 678/678 + 14/14 + 11/11 + 22/22 passing, protected jobs skipped.
-4. Continue **Task 6/I1 RED first**. Trace the existing bounded execution snapshot helper and the real production execution dependency composition.
-5. RED must prove snapshot data is limited to non-secret/non-authoritative performance configuration and can never replace fresh source/workspace/account/kill/fuse/risk/exposure/broker-economic authority.
-6. Verify the exact intended RED through ordinary PR CI before production integration.
-7. Implement the minimum safe snapshot integration; snapshot miss/expiry/version mismatch must fall back to authoritative loading rather than fail open.
-8. Require exact-head full ordinary PR CI GREEN, with protected jobs skipped, before calling Task 6 GREEN.
-9. Immediately synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then proceed Tasks 7–8 under the same RED -> minimal GREEN -> exact-head CI cycle.
-10. Only after all static remediation is GREEN return to separately authorized real Gates 4–9.
+3. Trust Task 6 GREEN only from implementation head `400880cab6502c75ac487830bc3a90bb022f485c`, run `33853785408`, job `100962282286`: 681/681 + 14/14 + 11/11 + 22/22 passing, protected jobs skipped.
+4. Continue **Task 7/I2+U1 RED first**. Trace MT5 metadata authentication and current MT5/cTrader context/session lifecycles through the real production dependency composition.
+5. RED must prove metadata cannot be fetched across an unauthenticated trust boundary and warm reuse cannot replace per-action fresh durable authority or broker-risk/economic validation.
+6. Verify exact intended RED through ordinary PR CI before production implementation.
+7. Implement the minimum safe authentication/reuse changes, then require exact-head full ordinary PR CI GREEN with protected jobs skipped.
+8. Synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then proceed Task 8 immediately.
+9. Only after Task 8 exact-head static acceptance is GREEN return to separately authorized real Gates 4–9.
 
 ## Safety state during static remediation
 Do not deploy, mutate Cloudflare, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution during this static batch.
