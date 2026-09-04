@@ -7,6 +7,7 @@ import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
 import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
 import { validateProductionRiskAction } from './production_risk_authority.js';
+import { createRuntimeExecutionSnapshotCache } from './runtime_execution_snapshot.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -54,6 +55,27 @@ function configuredPositive(policy = {}, name) {
 function requiresDynamicExposure(account = {}) {
   const policy = safetyPolicyOf(account);
   return configuredPositive(policy, 'maxDailyLossPercent') || configuredPositive(policy, 'maxOpenRiskPercent');
+}
+
+function snapshotStaticConfig(account = {}) {
+  return {
+    platform: platformOf(account),
+    serverName: text(account.server_name ?? account.serverName),
+    sizingMode: sizingModeOf(account),
+    fastEntryPolicy: text(account.fast_entry_policy ?? account.fastEntryPolicy).toUpperCase(),
+    entryZonePolicy: text(account.entry_zone_policy ?? account.entryZonePolicy).toUpperCase(),
+  };
+}
+
+function snapshotVersion(config = {}) {
+  return [
+    'v1',
+    text(config.platform),
+    text(config.serverName),
+    text(config.sizingMode),
+    text(config.fastEntryPolicy),
+    text(config.entryZonePolicy),
+  ].join('|');
 }
 
 function stateBindingPayload(binding = {}) {
@@ -228,6 +250,7 @@ export function createProductionExecutionDependencies({
   mt5Executor = executeMT5Action,
   ctraderRuntimeFactory = createCTraderRuntime,
   exposureLoader = null,
+  executionSnapshotCache = createRuntimeExecutionSnapshotCache(),
   fetchFn = fetch,
 } = {}) {
   const boundWorkspaceId = text(workspaceId);
@@ -235,6 +258,9 @@ export function createProductionExecutionDependencies({
   if (!boundWorkspaceId) throw new TypeError('workspaceId is required');
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
+  if (!executionSnapshotCache?.get || !executionSnapshotCache?.put) {
+    throw new TypeError('executionSnapshotCache is required');
+  }
 
   let authorityLoaderImpl = null;
   async function authorityLoader(input = {}) {
@@ -269,6 +295,27 @@ export function createProductionExecutionDependencies({
 
     if (error) throw new Error('failed to load production trade account');
     return data || null;
+  }
+
+  async function snapshotLoader({ workspaceId: requestedWorkspaceId, sourceId, account } = {}) {
+    if (text(requestedWorkspaceId) !== boundWorkspaceId) {
+      throw new Error('production execution workspace mismatch');
+    }
+    assertBoundAccount(account, boundWorkspaceId);
+    const trustedSourceId = text(sourceId);
+    if (!trustedSourceId) return null;
+    const accountId = accountRef(account);
+    const config = snapshotStaticConfig(account);
+    const version = snapshotVersion(config);
+    const identity = {
+      workspaceId: boundWorkspaceId,
+      sourceId: trustedSourceId,
+      accountId,
+      version,
+    };
+    const cached = executionSnapshotCache.get(identity);
+    if (cached) return cached;
+    return executionSnapshotCache.put({ ...identity, ...config });
   }
 
   async function loadExposure(account, action) {
@@ -496,6 +543,7 @@ export function createProductionExecutionDependencies({
   return {
     accountLoader,
     authorityLoader,
+    snapshotLoader,
     riskMaterializer,
     dispatchAction,
     stateBinder,
