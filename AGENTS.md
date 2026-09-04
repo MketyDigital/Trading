@@ -20,9 +20,10 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 targeting `main`
-- Current verified implementation/tooling head before this documentation sync: `e018ce79d2c7cc9018775b71281be033691f58b8`
-- Verified ordinary PR run: `33869550721`; test job `101012027592` SUCCESS.
-- Node/trading-core **687/687 PASS**; MT5 **14/14 PASS**; Container MTProto **11/11 PASS**; external MTProto **22/22 PASS**.
+- Current verified implementation/tooling head before this documentation sync: `5514d0fbff1d599580f042fbb77b34a3c927f8a5`
+- Verified ordinary PR run: `33898184523`; test job `101105739815` SUCCESS.
+- Node/trading-core **690/690 PASS**; MT5 **14/14 PASS**; Container MTProto **11/11 PASS**; external MTProto **22/22 PASS**.
+- Dedicated Gate 5 workflow run `33898179333`: regression job `101105722547` SUCCESS; protected `mtproto-soak-gate5` job `101105937826` **SKIPPED** because the real-acceptance marker was not used.
 - Protected Cloudflare inspect/probe/deploy/accept jobs all **SKIPPED**.
 - This remains development-to-real-production work. Do not merge/finish the branch yet.
 - Never merge `main` without explicit user instruction.
@@ -34,8 +35,8 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md` at `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 - Launch master plan: `docs/superpowers/plans/2026-09-03-production-v1-launch-master-plan.md` at blob `48983550b3c33a7c3517c236370ffbc3d1d1788d`.
 - Detailed evidence record: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Current stage: **STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 PROTECTED TOOLING STATIC GREEN — REAL ZITADEL ACCEPTANCE PENDING**.
-- Gate 4 real environment acceptance has **not** been invoked. Do not mutate Zitadel/Cloudflare/Supabase, enable Trading access, or run the protected identity workflow merely from this status.
+- Current stage: **STATIC PRODUCTION REMEDIATION COMPLETE — GATE 4 AND GATE 5 PROTECTED TOOLING STATIC GREEN — REAL GATE 4 ACCEPTANCE REMAINS NEXT**.
+- Gate 4 and Gate 5 real environment acceptance have **not** been invoked. Do not mutate Zitadel/Cloudflare/Supabase, enable Trading access, start real Telegram soak sessions, or run protected acceptance workflows merely from this status.
 
 ## Critical runtime safety defaults
 Keep fail closed until an exact later gate explicitly changes the corresponding control:
@@ -78,7 +79,7 @@ Before a broker adapter may be reached, all applicable locks must pass:
 2. Real Cloudflare staging — historical GREEN / exited; do not repeat without reason.
 3. TradingView direct ingress — DEFERRED / FAIL-CLOSED.
 4. Zitadel real non-live identity/workspace authorization — **protected tooling STATIC GREEN; real acceptance pending and not yet invoked**.
-5. Telegram MTProto soak/recovery — real acceptance pending.
+5. Telegram MTProto soak/recovery — **protected tooling STATIC GREEN; real soak/recovery acceptance pending and not yet invoked**.
 6. MT5/cTrader source acceptance — real demo source probes pending.
 7. MT5/cTrader broker demo destinations — real demo lifecycle pending.
 8. End-to-end staging/failure soak — real acceptance pending.
@@ -139,9 +140,24 @@ Use immutable Zitadel `sub`, never email. Successful login proves identity only.
 - The protected runner asserts both `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false`; it performs identity/membership acceptance read-only and does not use normal Trading application routes to bypass the closed access fuse.
 - No real Zitadel token/JWKS/database acceptance evidence has been produced yet. Static tooling GREEN is readiness only, not Gate 4 real acceptance.
 
+## Gate 5 protected tooling — STATIC GREEN
+- TDD RED contract head: `df9bd1b0f6804df4366dec0a091848ffd84ba796` (`test: define Gate 5 MTProto protected soak contract`).
+- RED ordinary PR run `33897870408`, job `101104697579`: Worker/trading-core step failed on the newly added missing-tooling contract; later Python stages did not run; protected jobs remained skipped.
+- GREEN implementation added:
+  - `.github/workflows/gate5-mtproto-soak.yml` with exact marker `source: accept mtproto gate 5`, protected `staging` environment, ordinary regression prerequisite, and both master fuses false;
+  - `scripts/gate5_mtproto_soak.mjs` covering all three provider types, recovery/catch-up/duplicate evidence, cross-provider convergence, downstream isolation and Container guard;
+  - `npm run accept:mtproto:gate5`;
+  - `docs/GATE5_MTPROTO_SOAK_TRIGGER.md`;
+  - sanitized SHA-256 canonical-event digests in the existing observation-only soak helper so cross-provider identity can be compared without outputting raw Telegram canonical IDs.
+- Exact GREEN implementation head: `5514d0fbff1d599580f042fbb77b34a3c927f8a5`.
+- Ordinary PR run `33898184523`, job `101105739815` SUCCESS: Node/trading-core **690/690 PASS**, MT5 **14/14 PASS**, Container MTProto **11/11 PASS**, external MTProto **22/22 PASS**; protected Cloudflare jobs skipped.
+- Dedicated Gate 5 workflow run `33898179333`: regression job `101105722547` SUCCESS; protected real soak job `101105937826` SKIPPED because the exact authorization marker was not used.
+- The runner is fail-closed and observation-only. It requires final healthy state, reconnect, catch-up, duplicate replay, edited-message evidence, downstream isolation, cross-provider duplicate convergence, and Container isolation. It never authorizes broker execution.
+- No real Telegram account/session/channel acceptance, reconnect/restart, downstream-failure injection, Container startup, Cloudflare mutation, broker action, or protected external probe occurred in this tooling batch. Static tooling GREEN is readiness only, not Gate 5 real acceptance.
+
 ## External acceptance blockers / later gates
 - managed Zitadel real non-live acceptance (Gate 4);
-- real Telegram account/channel soak (Gate 5);
+- real Telegram account/channel soak using the protected Gate 5 tooling (Gate 5);
 - MT5/cTrader real demo source probes with exact Gate 6 markers;
 - MT5/cTrader dedicated demo lifecycle with exact Gate 7 markers;
 - real E2E staging and sustained latency/failure/isolation measurements (Gate 8);
@@ -160,11 +176,12 @@ CLOSED / not started.
 1. Read this file first, then `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then the Sept 3 launch master plan and current acceptance runbooks.
 2. Confirm PR #2 still targets `main`, branch is `design/enterprise-trading-event-core`, and reconcile current branch head before any write.
 3. Static remediation closure remains anchored at Task 8 head `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`.
-4. Gate 4 protected tooling static readiness is anchored at `e018ce79d2c7cc9018775b71281be033691f58b8`, run `33869550721`, job `101012027592`: **687/687 + 14/14 + 11/11 + 22/22**, protected jobs skipped.
-5. Current next work is **Gate 4 real non-live Zitadel identity/workspace authorization acceptance**, not more static remediation.
-6. Before any real Gate 4 invocation, re-read the Gate 4 trigger/runbook and verify its exact marker, protected `staging` environment, required server-side configuration names, read-only scope, secret-free output, and both master fuses pinned false.
-7. Do **not** trigger the protected Gate 4 identity workflow, mutate Zitadel/Cloudflare/Supabase, or enable `TRADING_ACCESS_ENABLED` without separate explicit real-environment authorization.
-8. After a separately authorized Gate 4 run, record exact workflow/run/job/case evidence and synchronize this file plus `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md` before moving to Gate 5.
+4. Gate 4 protected tooling readiness is anchored at `e018ce79d2c7cc9018775b71281be033691f58b8`, run `33869550721`, job `101012027592`.
+5. Gate 5 protected tooling readiness is anchored at `5514d0fbff1d599580f042fbb77b34a3c927f8a5`, ordinary run `33898184523`, job `101105739815`, plus dedicated Gate 5 run `33898179333` with protected soak job skipped.
+6. Current next launch-order work remains **Gate 4 real non-live Zitadel identity/workspace authorization acceptance**. Gate 5 tooling is ready but must not be used to leapfrog Gate 4 unless the launch plan is explicitly revised.
+7. Before any real Gate 4 invocation, re-read `cloudflare-v2/docs/GATE4_ZITADEL_ACCEPTANCE_TRIGGER.md` and verify its exact marker, protected `staging` environment, required configuration, read-only scope, secret-free output, and both master fuses false.
+8. Do **not** trigger Gate 4 or Gate 5 protected workflows, mutate Zitadel/Cloudflare/Supabase, enable `TRADING_ACCESS_ENABLED`, or start real Telegram soak actions without the separate exact real-environment authorization for that gate.
+9. After any separately authorized Gate 4 run, record exact workflow/run/job/case evidence in both handoff files before proceeding to real Gate 5.
 
 ## Safety state
 Do not deploy, mutate Cloudflare/Zitadel/Supabase, run protected external probes, place demo/live broker orders, merge `main`, or enable real-money execution unless the exact later gate/approval explicitly authorizes that action.
