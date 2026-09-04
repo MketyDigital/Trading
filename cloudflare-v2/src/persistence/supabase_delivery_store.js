@@ -7,6 +7,11 @@ function boundedErrorCode(failure = {}, fallback = 'DELIVERY_FAILED') {
   return String(failure?.code || failure?.error || fallback).slice(0, 500);
 }
 
+function boundedErrorBody(failure = {}) {
+  const message = String(failure?.message || failure?.error || failure?.code || 'state binding failed');
+  return { message: message.slice(0, 1000) };
+}
+
 function requiredTimestamp(value, name) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new TypeError(`${name} is invalid`);
@@ -74,6 +79,27 @@ export class SupabaseDeliveryStore {
       .eq('workspace_id', this.workspaceId)
       .eq('idempotency_key', String(idempotencyKey));
     if (error) throw new Error(`delivery completion persistence failed: ${error.message}`);
+  }
+
+  async markBindingPending(idempotencyKey, failure = {}) {
+    const key = String(idempotencyKey || '');
+    if (!key) throw new TypeError('idempotencyKey is required');
+    const { error } = await this.supabase
+      .from('destination_deliveries')
+      .update({
+        // Broker truth is already terminal. Only the separate state-binding
+        // repair marker is opened; this row must never re-enter broker retry.
+        failure_class: 'STATE_BINDING_PENDING',
+        error_code: boundedErrorCode(failure, 'STATE_BIND_FAILED'),
+        error_body: boundedErrorBody(failure),
+        next_attempt_at: null,
+        lease_expires_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('workspace_id', this.workspaceId)
+      .eq('idempotency_key', key)
+      .eq('status', 'SUCCEEDED');
+    if (error) throw new Error(`state binding repair persistence failed: ${error.message}`);
   }
 
   async fail(idempotencyKey, failure = {}) {
