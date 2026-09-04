@@ -12,7 +12,7 @@ The intended production system is not a single broker copier. It is a Trading-ow
 4. **Destinations** — Telegram/human delivery and broker destinations are sibling fan-out paths. A Telegram destination failure must not cancel or roll back a healthy broker path, and one broker/account/destination/provider/workspace failure must remain isolated from siblings.
 5. **Final execution authority** — immediately before every broker action, the runtime revalidates the exact durable event/source, Trading-owned workspace entitlement, exact account active/execution state, kill/safety policy, fresh risk/exposure context, broker symbol/economic metadata, and final executable volume.
 6. **Broker send** — only the canonical validated action is dispatched through the exact platform adapter with persistent destination/order idempotency.
-7. **State convergence** — successful broker truth must become durable delivery truth and exact Trade State. If state binding fails after broker success, repair must use persisted successful broker truth and must never resend the broker action merely to repair state.
+7. **State convergence** — successful broker truth must become durable delivery truth and exact Trade State. If state binding fails after broker success, repair uses persisted successful broker truth through a separate state-repair plane and never resends the broker action merely to repair state.
 8. **Identity/tenancy** — Mkety Trading may share Zitadel identity with the wider Mkety ecosystem, but Trading authorization/runtime/data/workspace authority is Trading-owned; MKSaaS rows are not Trading tenancy authority.
 9. **Failure model** — optional subsystem failures degrade gracefully; safety/correctness uncertainty fails closed only on the affected money-moving path. Uncertain broker outcomes are reconciled, never blindly retried.
 
@@ -22,8 +22,8 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 targeting `main`
-- Current verified implementation head before this documentation sync: `a3a507b569499524d6de75ad8c519db5dd944efb`
-- PR merge ref for that verified head: `acae950fa02f509ecf69fb5c8d9ba5949da6513b`
+- Current verified implementation head before this documentation sync: `30be3bddb586e6a9bf02dea4520c338e3510287c`
+- Verified ordinary PR run: `33850696335`; mandatory test job `100952562634` SUCCESS.
 - This remains development-to-real-production work. Do not merge/finish the branch yet.
 - Never merge `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final approval.
@@ -33,7 +33,7 @@ Telegram AI is presentation-only and cannot mutate canonical execution semantics
 - Frozen audit-scope commit: `7b175a548c9134b0e88ba4fa5977de51142b6cd3`.
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md` at `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 - Detailed continuation/evidence record: `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 3 GREEN / TASK 4 ACTIVE NEXT**.
+- Current stage: **STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 4 GREEN / TASK 5 F6 ACTIVE NEXT**.
 
 ## Critical runtime safety defaults
 Keep fail closed throughout static remediation:
@@ -54,6 +54,7 @@ No tenant/admin API may mutate Worker-wide master fuses.
 - Risk-increasing live volume normalization must never silently increase intended risk.
 - Risk-reducing protective actions remain permitted under drawdown/open-risk locks unless the kill switch blocks them.
 - Successful broker truth must remain reconcilable with persistent delivery state and exact Trade State without resending solely to repair state.
+- State-binding repair remains separate from broker retry: broker delivery stays terminal `SUCCEEDED`; only `SUCCEEDED + STATE_BINDING_PENDING` is scanned by the binding-repair plane.
 - Uncertain broker outcomes are reconciled; never blindly retried.
 
 ## Production execution locks
@@ -100,49 +101,50 @@ Production-ready/general launch still requires applicable real gate evidence and
 
 ### Task 3 / F7/F8/F10 — broker-authoritative risk, strict volume, canonical final policy
 **STATIC GREEN / RESOLVED.**
+- Final implementation head `a3a507b569499524d6de75ad8c519db5dd944efb`.
+- GREEN run `33843616430`, job `100930741996` SUCCESS.
+- Node/trading-core **669/669 PASS**; MT5 **14/14**; Container MTProto **11/11**; external MTProto **22/22**; protected Cloudflare jobs skipped.
+- Final production broker risk is authoritative where a reliable broker-native monetary loss model exists; otherwise risk-increasing execution fails closed.
+- MT5/cTrader risk-increasing volume cannot clamp/round upward.
+- Final account policy consumes canonical broker-authoritative fields.
+
+### Task 4 / F5 — successful-broker-result Trade State repair without resend
+**STATIC GREEN / RESOLVED.**
 
 RED evidence:
-- initial broker-risk contract commit `825f8839b2ac53265547af547bc790e753f3f0da`, run `33785080713`, job `100747771938`;
-- strict MT5/cTrader volume RED commit `e9a4729699b7617ea44d12f9b15708264fe573b5`;
-- canonical final policy RED head `fc1496e7b62b4e11c385d0a8fed3ca8a783b8c24`, run `33785495528`, job `100749133738`;
-- RED result: Node/trading-core 665 total, 659 passed, exactly 6 intended Task 3 failures; no unrelated regression; protected Cloudflare jobs skipped.
-- additional real-composition RED guard `83ed3dcb6b739efff3077b9242d5f972af528f5f` required `createProductionExecutionDependencies()` itself to expose the broker-authoritative materializer so unit-only GREEN could not hide a runtime bypass.
+- initial RED run `33846974860`, job `100940915628`: Node 671 total, 669 pass, exactly 2 intended failures;
+- scheduled-recovery RED head `5369575250a6952f1630ca678e6f1acc281f5687`, run `33848080972`, job `100944432703`: Node 674 total, 671 pass, exactly 3 intended scheduler failures;
+- production-composition RED head `b694e51e09df53af63c0b07b3bfae842ac5ea992`, run `33850220984`, job `100951078369`: Node 675 total, 671 pass, exactly 4 intended failures;
+- protected Cloudflare jobs skipped throughout RED verification.
 
-Implemented contract:
-- `production_risk_authority.js` revalidates risk-increasing OPENs using current broker account truth and broker symbol economics before send;
-- planned volume above current broker-authoritative allowed volume blocks;
-- missing reliable monetary loss-at-stop model fails closed;
-- MT5 and cTrader OPEN translation uses strict execution validators: below-minimum, above-maximum, or off-step risk-increasing volume blocks rather than clamp/round upward;
-- partial-close/protective management keeps separate de-risking semantics;
-- coordinator order is final durable authority -> broker/risk materialization -> canonical account policy -> dispatch;
-- MT5 catalog preserves loss-side tick economics (`trade_tick_value_loss`, fallback generic broker tick value), min/max/step and contract metadata;
-- if max daily loss or max open-risk policy is configured, authoritative exposure context is mandatory; stale simulation values are not accepted as final authority;
-- current cTrader runtime does not expose a reliable monetary loss-at-stop model, therefore risk-percent/fixed-risk cTrader OPEN fails closed instead of using guessed economics. Fixed-lot and risk-reducing paths remain subject to their applicable broker-volume/policy checks.
+Implementation / recovery contract:
+- coordinator records a durable state-binding obligation only after broker success if Trade State bind fails;
+- delivery remains terminal `SUCCEEDED`; `failure_class='STATE_BINDING_PENDING'` marks repair work without reopening broker retry;
+- normal broker retry continues to scan only `RETRYABLE`;
+- binding repair scans only persisted `SUCCEEDED + STATE_BINDING_PENDING` rows;
+- repair reconstructs exact workspace/event/account/group/leg and broker identifiers from persisted trusted successful delivery truth;
+- repair calls Trade State binding only and never calls broker dispatch;
+- successful repair clears the binding marker; mismatch fails closed;
+- one-minute scheduler runs MTProto recovery, broker destination retry, and binding repair independently via settled sibling recovery; legacy 15-minute scheduling remains unchanged.
 
-Exact-head GREEN:
-- implementation head `a3a507b569499524d6de75ad8c519db5dd944efb`;
-- PR run `33843616430`;
-- mandatory test job `100930741996` SUCCESS;
-- Node/trading-core **669/669 PASS**;
+Verification:
+- first GREEN attempt at `febcbc35cc75905fdc2931d4341ce519d9bd4c97`, run `33850486547`, job `100951911601` correctly failed from one invalid Supabase import; no false GREEN was claimed;
+- root-cause fix reused the proven production Supabase factory;
+- final implementation head `30be3bddb586e6a9bf02dea4520c338e3510287c`;
+- exact ordinary PR run `33850696335`, job `100952562634` SUCCESS;
+- Node/trading-core **675/675 PASS**;
 - pure MT5 bridge **14/14 PASS**;
 - Container MTProto **11/11 PASS**;
 - external MTProto **22/22 PASS**;
 - protected Cloudflare inspect/probe/deploy/accept jobs all SKIPPED;
-- no deployment, external protected probe, demo/live broker order, or Cloudflare mutation occurred.
-
-### Task 4 / F5 — successful-broker-result Trade State repair without resend
-**ACTIVE NEXT / RED required first.**
-Required contract:
-- broker action succeeds and durable delivery retains exact broker IDs;
-- Trade State bind fails afterward;
-- durable repair work remains discoverable without turning the broker delivery back into a resendable broker action;
-- repair binds exact persisted broker IDs to exact workspace/account/group/leg;
-- repair performs **zero broker dispatches**;
-- repair is idempotent and already-bound state converges;
-- cross-workspace/event/account/group/leg mismatch fails closed.
+- no deployment, protected external probe, Cloudflare mutation, demo broker order, or live broker order occurred.
 
 ### Task 5 / F6 — Trading-owned trade-account workspace FK migration contract
-OPEN. Static migration contract only; do not apply to real DB until separately authorized read-only schema/ledger inspection confirms prerequisites.
+**ACTIVE NEXT. Static migration contract only.**
+- Trace current `trade_accounts` definition, Trading-owned workspace/access tables, migration history, and current identity/tenancy plans before choosing SQL.
+- RED first: prove legacy `trade_accounts.workspace_id -> public.workspaces(id)` lifecycle coupling is removed/repointed without mutating MKSaaS workspace data and while preserving existing Trading account UUID values.
+- Do not apply any migration to a real environment.
+- A later real-schema step requires separately authorized **read-only** schema/constraint/data-prerequisite inspection before any apply decision.
 
 ### Task 6 / I1 — runtime snapshot production integration
 OPEN. Non-secret/non-authoritative optimization only; snapshots must never override source status, workspace entitlement, account execution state, kill switch, broker fuse, or dynamic risk/exposure.
@@ -161,7 +163,7 @@ Only after static remediation GREEN: Gates 4 -> 9, then Gate 10 shadow/demo phas
 - F2 RESOLVED Task 2.
 - F3 RESOLVED Task 2 for mutable account authority; final dynamic risk/exposure authority resolved in Task 3.
 - F4 RESOLVED Task 2.
-- F5 OPEN / Task 4.
+- F5 RESOLVED Task 4.
 - F6 OPEN / Task 5.
 - F7 RESOLVED Task 3.
 - F8 RESOLVED Task 3.
@@ -191,13 +193,13 @@ CLOSED / not started.
 ## Exact startup / pickup point for any future session
 1. Read this file first, then `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then the Sept 3 launch master/remediation plans. Later Sept 3 resilience/cutover rules override older component plans where stricter.
 2. Confirm PR #2 still targets `main`, branch is `design/enterprise-trading-event-core`, and reconcile current branch head before any write.
-3. Trust Task 3 GREEN only from exact implementation head `a3a507b...` and PR run `33843616430` / job `100930741996` with counts 669 + 14 + 11 + 22 all passing and protected jobs skipped.
-4. Continue **Task 4/F5 RED first**. Trace delivery persistence, coordinator state-bind failure, Trade State binding API, and retry/recovery scanners before designing persistence changes.
-5. RED must prove broker success followed by state-bind failure leaves durable repair work, repair uses persisted successful broker IDs, and broker dispatch count remains zero during repair.
-6. Verify exact intended RED through ordinary PR CI before production repair implementation.
-7. Implement minimal durable state-repair path; do not convert successful broker delivery into ordinary RETRYABLE broker delivery.
-8. Require exact-head full ordinary PR CI GREEN, with protected jobs skipped, before calling Task 4 GREEN.
-9. Immediately synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then proceed Tasks 5–8 under the same RED -> minimal GREEN -> exact-head CI cycle.
+3. Trust Task 4 GREEN only from implementation head `30be3bddb586e6a9bf02dea4520c338e3510287c`, run `33850696335`, job `100952562634`, with 675/675 + 14/14 + 11/11 + 22/22 passing and protected jobs skipped.
+4. Continue **Task 5/F6 RED first**. Trace current `trade_accounts` schema/migrations and Trading-owned workspace/access authority before drafting migration SQL.
+5. RED must prove the legacy shared-workspace FK lifecycle coupling is eliminated without deleting/mutating MKSaaS workspace rows, without rewriting existing Trading workspace UUIDs, and without weakening Trading-owned tenancy isolation.
+6. Verify exact intended RED through ordinary PR CI before adding migration SQL.
+7. Implement only a static migration contract; do not apply it to any real database.
+8. Require exact-head full ordinary PR CI GREEN, with protected jobs skipped, before calling Task 5 GREEN.
+9. Immediately synchronize this file and `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`, then proceed Tasks 6–8 under the same RED -> minimal GREEN -> exact-head CI cycle.
 10. Only after all static remediation is GREEN return to separately authorized real Gates 4–9.
 
 ## Safety state during static remediation
