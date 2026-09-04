@@ -59,10 +59,10 @@ Mkety Trading may share Zitadel identity with the broader Mkety ecosystem, but T
 - Static remediation plan: `docs/superpowers/plans/2026-09-03-production-readiness-remediation.md`, commit `567d8fe06c291eb393b5c23b3bd2d2dfbb65dbe4`.
 
 ## Current development stage
-`STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 4 GREEN / TASK 5 F6 ACTIVE NEXT`
+`STATIC PRODUCTION REMEDIATION IN PROGRESS — TASK 5 GREEN / TASK 6 I1 ACTIVE NEXT`
 
-Verified Task 4 implementation head before documentation commits: `30be3bddb586e6a9bf02dea4520c338e3510287c`.
-Exact ordinary PR run `33850696335`, mandatory test job `100952562634` SUCCESS.
+Verified Task 5 implementation head before documentation commits: `9a13bd2fa928d39cce826d05b005129fa10a68f3`.
+Exact ordinary PR run `33851400665` SUCCESS: Node 678/678, MT5 14/14, Container MTProto 11/11, external MTProto 22/22; protected Cloudflare jobs skipped.
 
 This PR is not at branch-finishing/merge stage. General production still requires applicable real Gates 4–9, shadow production, production-infrastructure demo, separate tiny-live approval, tiny-live acceptance, controlled beta, and no unresolved severity-1/2 safety issue.
 
@@ -192,79 +192,85 @@ Concurrent implementation then added the recorder/marker while branch work was r
 Scheduled-recovery RED:
 - head `5369575250a6952f1630ca678e6f1acc281f5687`;
 - run `33848080972`, job `100944432703`;
-- Node 674 total, 671 pass, exactly three intended failures in scheduler composition:
-  - missing fulfilled `bindingRepairRecovery` result;
-  - repair runtime not invoked independently when MTProto recovery fails;
-  - missing rejected `bindingRepairRecovery` result;
+- Node 674 total, 671 pass, exactly three intended failures in scheduler composition;
 - repair engine/recorder tests already GREEN; protected jobs skipped.
 
 Production-composition RED:
 - head `b694e51e09df53af63c0b07b3bfae842ac5ea992`;
 - run `33850220984`, job `100951078369`;
-- Node 675 total, 671 pass, exactly four intended failures: the three scheduler failures plus missing `production_binding_repair.js` composition;
-- the new contract required exact persisted `workspace_id + trading_event_id` composition, Trade State binder use, and zero broker dispatch while both trading and broker flags were false;
+- Node 675 total, 671 pass, exactly four intended failures: the scheduler failures plus missing `production_binding_repair.js` composition;
 - protected jobs skipped.
 
 ### Implementation
-1. Coordinator recording
-   - after broker success, Trade State bind failure records a binding-repair obligation;
-   - successful broker delivery remains `status='SUCCEEDED'`;
-   - `failure_class='STATE_BINDING_PENDING'` marks state-repair work;
-   - no retry due/lease conversion occurs.
-
-2. Durable repair scanner
-   - `execution_binding_repair.js` scans only persisted `SUCCEEDED + STATE_BINDING_PENDING` rows;
-   - ordinary broker retry remains limited to `RETRYABLE` rows;
-   - repair reconstructs trusted account/group/action and broker identifiers from persisted successful delivery request/response truth;
-   - workspace/event/account/group/leg/destination disagreement fails closed;
-   - successful repair clears the binding marker;
-   - no broker execution method exists in the repair operation.
-
-3. Production composition
-   - `production_binding_repair.js` composes the state binder using exact persisted workspace/event identity;
-   - it reuses the proven production Supabase factory already used by destination retry;
-   - it invokes only `stateBinder`, never `dispatchAction`;
-   - because this is state convergence and not a new money-moving action, it can run while `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false` without bypassing the broker fuses.
-
-4. Scheduler composition
-   - one-minute recovery now runs MTProto recovery, destination retry recovery, and binding repair recovery independently via `Promise.allSettled`;
-   - one recovery failure cannot block siblings;
-   - the legacy 15-minute scheduler remains delegated unchanged.
+- after broker success, Trade State bind failure records a binding-repair obligation while delivery remains terminal `SUCCEEDED`;
+- `failure_class='STATE_BINDING_PENDING'` marks repair work without reopening broker retry;
+- binding repair scans only persisted `SUCCEEDED + STATE_BINDING_PENDING` rows;
+- repair reconstructs trusted account/group/action and broker identifiers from persisted successful delivery truth;
+- workspace/event/account/group/leg/destination disagreement fails closed;
+- successful repair clears the binding marker;
+- production repair composition invokes only `stateBinder`, never `dispatchAction`;
+- one-minute recovery runs MTProto, destination retry, and binding repair independently; legacy 15-minute scheduling remains unchanged.
 
 ### Failed first GREEN attempt and root-cause correction
-First GREEN candidate:
-- head `febcbc35cc75905fdc2931d4341ce519d9bd4c97`;
-- run `33850486547`, job `100951911601` FAILED;
-- root cause was one invalid import of nonexistent `../persistence/supabase_rest.js` in production repair composition;
-- module-load cascade produced multiple Node failures, so no GREEN claim was made;
-- MT5/MTProto correctly did not run after Node failure.
-
-Root-cause fix:
-- commit `30be3bddb586e6a9bf02dea4520c338e3510287c`;
-- production binding repair now reuses `defaultDestinationRetrySupabaseFactory` from the existing proven production retry composition instead of introducing another client path.
+- first GREEN candidate head `febcbc35cc75905fdc2931d4341ce519d9bd4c97`, run `33850486547`, job `100951911601` FAILED from one invalid Supabase import;
+- no false GREEN was claimed;
+- fix `30be3bddb586e6a9bf02dea4520c338e3510287c` reused the proven production Supabase factory.
 
 ### Exact-head GREEN evidence
 - final implementation head `30be3bddb586e6a9bf02dea4520c338e3510287c`;
-- ordinary PR run `33850696335`;
-- mandatory test job `100952562634` SUCCESS;
+- ordinary PR run `33850696335`, job `100952562634` SUCCESS;
 - Node/trading-core **675/675 PASS**;
 - pure MT5 bridge **14/14 PASS**;
 - Container MTProto **11/11 PASS**;
 - external MTProto **22/22 PASS**;
-- protected Cloudflare inspect/probe/deploy/accept jobs all SKIPPED.
+- protected Cloudflare jobs all SKIPPED.
 
-Key exact-head GREEN contracts include:
-- broker success followed by state-bind failure records repair work and does not resend broker action;
-- repair binds persisted successful broker truth and performs zero broker work;
-- repair scans only successful pending rows and leaves broker retry state untouched;
-- destination/account identity disagreement fails closed;
-- real production composition binds state from exact persisted workspace/event identity without broker execution;
-- one-minute scheduler runs all three recovery planes independently;
-- 15-minute legacy scheduling remains unchanged.
+Resolved: **F5** successful broker truth has a durable idempotent state-convergence path that cannot become a broker resend solely because Trade State binding failed.
 
-No deployment, Cloudflare mutation, protected external probe, demo broker order, live broker order, or real environment action occurred.
+---
 
-Resolved: **F5** successful broker truth now has a durable idempotent state-convergence path that cannot become a broker resend solely because Trade State binding failed.
+## Task 5 — Trading-owned trade-account tenancy migration contract
+**Finding:** F6. **Status: STATIC GREEN / RESOLVED.**
+
+### Root cause
+The legacy `trade_accounts.workspace_id` foreign key pointed to shared MKSaaS `public.workspaces(id)` with cascade lifecycle coupling. That contradicted the approved architecture where Trading may share Zitadel identity but Trading owns its workspace/authorization/data authority.
+
+### Controlling schema decision
+Current Trading-owned tenancy authority is `trading_workspace_access(id)`. The migration must not manufacture Trading workspaces, rewrite account workspace UUIDs, or mutate shared MKSaaS workspace rows merely to satisfy a foreign key.
+
+### RED evidence
+- RED head `6f479bb897566c4b16d61c0bf619db466d5d8ea9`.
+- Static migration tests required a new `0012` migration and failed because that migration did not yet exist.
+- Existing preceding regression contracts remained healthy; no database or environment was touched.
+
+The RED contract required that the migration:
+- abort if any current Trading account workspace is not already provisioned in `trading_workspace_access`;
+- remove only the legacy single-column `trade_accounts.workspace_id -> public.workspaces(id)` foreign key;
+- repoint account tenancy to Trading-owned authority;
+- preserve all existing `trade_accounts` rows and workspace UUID values;
+- never insert/update/delete/truncate shared `public.workspaces` data;
+- avoid shared-workspace `ON DELETE CASCADE` as Trading broker-account lifecycle authority.
+
+### Implementation
+- final implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3` (`fix: move trade account tenancy to Trading workspace authority`).
+- migration `0012` performs a fail-closed orphan precheck against `trading_workspace_access` before any constraint replacement;
+- it discovers/drops only the exact legacy single-column workspace foreign key targeting shared `public.workspaces`;
+- it creates the replacement `trade_accounts.workspace_id -> trading_workspace_access(id)` tenancy constraint;
+- account rows/workspace UUIDs remain unchanged;
+- no shared MKSaaS workspace row is created, rewritten, deleted, or used to manufacture Trading tenancy.
+
+### Exact-head GREEN evidence
+- implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3`;
+- ordinary PR run `33851400665` SUCCESS;
+- Node/trading-core **678/678 PASS**;
+- MT5 bridge **14/14 PASS**;
+- Container MTProto **11/11 PASS**;
+- external MTProto **22/22 PASS**;
+- protected Cloudflare inspect/probe/deploy/accept jobs SKIPPED.
+
+No real database migration, Cloudflare mutation, protected probe, demo broker order, or live broker order occurred. Any future real apply requires separate authorization and first a read-only real-schema/constraint/data-prerequisite inspection.
+
+Resolved: **F6** is statically remediated. Checked-in account tenancy now targets Trading-owned workspace authority instead of shared MKSaaS workspace lifecycle authority.
 
 ---
 
@@ -273,56 +279,50 @@ Resolved: **F5** successful broker truth now has a durable idempotent state-conv
 - **F2** workspace entitlement not final authority — RESOLVED Task 2.
 - **F3** mutable account/safety authority loaded once — RESOLVED Task 2; dynamic final risk/exposure authority completed Task 3.
 - **F4** source disablement not revalidated — RESOLVED Task 2.
-- **F5** broker success can remain unbound from Trade State after state-write failure — **RESOLVED Task 4**.
-- **F6** legacy `trade_accounts.workspace_id` FK couples Trading to MKSaaS workspace lifecycle — **OPEN / Task 5 ACTIVE NEXT**.
+- **F5** broker success can remain unbound from Trade State after state-write failure — RESOLVED Task 4.
+- **F6** legacy `trade_accounts.workspace_id` FK couples Trading to MKSaaS workspace lifecycle — **RESOLVED Task 5**.
 - **F7** broker-authoritative live risk sizing — RESOLVED Task 3.
 - **F8** upward live OPEN volume normalization — RESOLVED Task 3.
 - **F9** dropped production `tradingEventId` — RESOLVED Task 2.
 - **F10** unreliable final policy/risk/exposure shape — RESOLVED Task 3.
-- **I1** execution snapshot not production-integrated — OPEN / Task 6.
+- **I1** execution snapshot not production-integrated — **OPEN / Task 6 ACTIVE NEXT**.
 - **I2** warm broker context/session reuse incomplete — OPEN / Task 7.
 - **U1** MT5 metadata GET authentication boundary — OPEN / Task 7.
 
 ---
 
-# Task 5 / F6 exact boundary and next TDD contract
+# Task 6 / I1 exact boundary and next TDD contract
 
 ## Finding
-The checked-in legacy account tenancy shape includes:
-`trade_accounts.workspace_id UUID REFERENCES public.workspaces(id) ON DELETE CASCADE`
+A bounded execution snapshot helper already exists and has tests for exact workspace/source/account keying, TTL/version misses, bounded entry eviction, non-secret filtering, and immutable returned values. It is not yet proven as part of real production execution composition.
 
-Approved Trading identity architecture says Trading may share Zitadel identity but owns its own workspace/authorization/data authority. A Trading broker account must not require an MKSaaS workspace row or cascade-delete because an unrelated MKSaaS workspace lifecycle changes.
+## Safety boundary
+Snapshot integration is an optimization only. It may cache bounded non-secret/non-authoritative configuration, but it must never become final execution authority.
 
-## Required trace before SQL
-Before writing a migration, inspect:
-- current migration that creates/alters `trade_accounts.workspace_id` and its exact constraint name/shape;
-- current Trading-owned workspace/access/membership tables and indexes;
-- Sept 2 identity architecture still referenced by Sept 3 plans;
-- Sept 3 production launch/remediation plan tenancy wording;
-- existing migration-test style and any migrations that already partially decouple Trading identity.
+The following must always remain fresh/revalidated outside snapshot authority immediately before money-moving send:
+- source active/status and originating-event authority;
+- Trading workspace entitlement;
+- exact account active/execution state;
+- account kill switch / mutable safety policy where applicable;
+- Worker broker/access master fuses;
+- dynamic daily PnL/open-risk/exposure values;
+- broker-authoritative account/symbol/economic/volume truth required by final risk validation.
 
-Do not guess the replacement constraint target. The schema contract must follow current repository authority.
+Snapshot miss, expiry, version mismatch, or invalidation must fall back safely to authoritative loading; stale snapshot must never authorize execution.
 
-## Task 5 RED contract
-A static migration test must require that the new migration:
-- removes or safely repoints the legacy `trade_accounts.workspace_id -> public.workspaces(id)` foreign-key lifecycle coupling;
-- does **not** drop, truncate, rewrite, or otherwise mutate MKSaaS `public.workspaces` data;
-- preserves existing `trade_accounts.workspace_id` UUID values and broker-account rows;
-- does not use `ON DELETE CASCADE` from a shared MKSaaS workspace row as Trading account lifecycle authority;
-- aligns account tenancy to the Trading-owned authority established by current migrations/docs;
-- is additive/safe enough to review statically before any real-environment preflight.
+## Task 6 RED contract
+Trace the exact snapshot helper and real production dependency call graph, then add minimal tests proving:
+1. production composition can consume an eligible safe snapshot for non-authoritative configuration;
+2. fresh durable authority loader still runs per action even if snapshot says the account/source/workspace is enabled;
+3. fresh broker risk/economic materialization still runs per risk-increasing action;
+4. snapshot cannot carry or override secret credentials, kill/execution state, dynamic risk/exposure, or master-fuse values;
+5. miss/TTL/version mismatch falls back to authoritative load without fail-open behavior.
 
-RED must be verified through ordinary PR CI before migration SQL is added.
-
-## Real-environment prohibition
-Task 5 is static migration-contract work only. Do **not** apply it to a real database. Any later real apply requires separate authorization and first a read-only real schema/constraint/data-prerequisite inspection.
+Verify intended RED through ordinary PR CI before production integration.
 
 ---
 
 # Remaining remediation boundaries
-
-## Task 6 / I1 — bounded runtime snapshot
-Integrate only non-secret/non-authoritative performance configuration. Never cache away source status, workspace entitlement, account execution state, kill switch, broker fuse or dynamic risk/exposure authority.
 
 ## Task 7 / I2 + U1 — broker context hardening
 Authenticate MT5 metadata requests and add bounded MT5/cTrader warm context/session reuse where safe. Performance reuse must never override final fresh authority. A cTrader monetary risk model must be based on verified broker-native semantics, never guessed generic math.
@@ -354,13 +354,13 @@ Gate 10 Phase C later requires separate explicit owner approval and explicit max
 
 ## Exact pickup point for any future session
 1. Read `AGENTS.md` and this document first; confirm current branch/PR head before writes.
-2. Task 4 trusted GREEN evidence is implementation head `30be3bddb586e6a9bf02dea4520c338e3510287c`, PR run `33850696335`, job `100952562634`, counts 675/675 + 14/14 + 11/11 + 22/22, protected jobs skipped.
-3. Continue **Task 5/F6 RED first** by tracing current `trade_accounts` migration/constraint plus Trading-owned workspace/access authority. Do not start with replacement-schema guessing.
-4. Add a migration contract test proving shared MKSaaS workspace lifecycle coupling is removed/repointed safely while existing Trading account rows/UUIDs and MKSaaS workspace data are preserved.
-5. Verify intended RED through ordinary PR CI before adding migration SQL.
-6. Implement only the minimum static migration contract; do not apply to any real database.
+2. Trust Task 5 GREEN only from implementation head `9a13bd2fa928d39cce826d05b005129fa10a68f3`, PR run `33851400665`, counts 678/678 + 14/14 + 11/11 + 22/22, protected jobs skipped.
+3. Continue **Task 6/I1 RED first** by tracing the existing execution snapshot helper and real production dependency composition.
+4. Add production-integration tests proving snapshot use is optimization-only and cannot replace fresh source/workspace/account/fuse/risk/exposure/broker-economic authority.
+5. Verify intended RED through ordinary PR CI before production implementation.
+6. Implement only the minimum safe snapshot integration; miss/expiry/version mismatch must fall back to authoritative loading.
 7. Require exact-head full ordinary CI GREEN; protected jobs must remain skipped.
-8. Synchronize this file plus `AGENTS.md`, then proceed immediately through Tasks 6–8 under the same RED/minimal-GREEN/exact-head-CI discipline.
+8. Synchronize this file plus `AGENTS.md`, then proceed immediately through Tasks 7–8 under the same RED/minimal-GREEN/exact-head-CI discipline.
 9. Only after all static remediation is exact-head GREEN return to separately authorized real Gates 4–9.
 
 ## Safety state during static remediation
