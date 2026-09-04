@@ -25,9 +25,10 @@ function accountSupabase(row) {
   return { from() { return query; } };
 }
 
-test('normal production delivery persists trusted account/group/destination retry context rather than caller hints', async () => {
+test('normal production delivery persists trusted account/group/destination retry context and durable event linkage rather than caller hints', async () => {
   const row = accountRow();
   let reservedPayload;
+  let deliveryStoreContext;
   const baseStore = {
     async reserve(_key, payload) {
       reservedPayload = payload;
@@ -48,7 +49,10 @@ test('normal production delivery persists trusted account/group/destination retr
     workspaceId: 'ws-a',
     tradingEventId: 'evt-db-1',
   }, {
-    deliveryStoreFactory: () => baseStore,
+    deliveryStoreFactory: (_supabase, context) => {
+      deliveryStoreContext = context;
+      return baseStore;
+    },
     mt5ContextLoader: async () => ({ catalog: [] }),
     mt5Executor: async (action, options) => {
       await options.deliveryStore.reserve(action.idempotencyKey, { action });
@@ -66,11 +70,19 @@ test('normal production delivery persists trusted account/group/destination retr
       groupId: 'attacker-group',
       accountId: 'attacker-account',
       destinationType: 'ctrader',
+      tradingEventId: 'attacker-event',
     },
   });
 
+  assert.deepEqual(deliveryStoreContext, {
+    workspaceId: 'ws-a',
+    destinationType: 'mt5',
+    destinationRef: 'trade-account:acct-row-a',
+    tradingEventId: 'evt-db-1',
+  });
   assert.equal(reservedPayload.groupId, 'trusted-group-1');
   assert.equal(reservedPayload.accountId, 'acct-row-a');
   assert.equal(reservedPayload.destinationType, 'mt5');
   assert.equal(reservedPayload.action.idempotencyKey, 'k-1');
+  assert.notEqual(deliveryStoreContext.tradingEventId, 'attacker-event');
 });
