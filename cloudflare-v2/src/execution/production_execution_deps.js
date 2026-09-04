@@ -1,6 +1,7 @@
 import { decryptSecret } from '../security/secret_box.js';
 import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_store.js';
 import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
+import { signMT5MetadataRequest } from '../adapters/mt5_bridge_protocol.js';
 import { createCTraderRuntime } from '../adapters/ctrader_runtime.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
@@ -155,14 +156,21 @@ function tickPrice(body = {}) {
   return undefined;
 }
 
-async function defaultMt5ContextLoader({ bridgeUrl, accountId, serverName, fetchFn = fetch } = {}) {
+async function defaultMt5ContextLoader({ bridgeUrl, bridgeSecret, accountId, serverName, fetchFn = fetch } = {}) {
   const baseUrl = normalizedBaseUrl(bridgeUrl);
+  const secret = required(bridgeSecret, 'MT5_BRIDGE_SECRET');
   const request = async (path, label) => {
+    const timestamp = String(Date.now());
+    const signature = await signMT5MetadataRequest({ method: 'GET', target: path, timestamp, secret });
     let response;
     try {
       response = await fetchFn(`${baseUrl}${path}`, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'X-Mkety-Timestamp': timestamp,
+          'X-Mkety-Signature': signature,
+        },
         signal: AbortSignal.timeout(8000),
       });
     } catch {
@@ -260,6 +268,45 @@ export function createProductionExecutionDependencies({
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
   if (!executionSnapshotCache?.get || !executionSnapshotCache?.put) {
     throw new TypeError('executionSnapshotCache is required');
+  }
+
+  const mt5ActionContexts = new Map();
+  const mt5ContextTtlMs = 15000;
+  const mt5ContextMaxEntries = 64;
+
+  function mt5ActionContextKey(account, action) {
+    const idempotencyKey = text(action?.idempotencyKey);
+    if (!idempotencyKey) return '';
+    return `${boundWorkspaceId}|${accountRef(account)}|${brokerAccountIdOf(account)}|${idempotencyKey}`;
+  }
+
+  function purgeMt5ActionContexts(now = Date.now()) {
+    for (const [key, entry] of mt5ActionContexts) {
+      if (!entry || now - entry.createdAt > mt5ContextTtlMs) mt5ActionContexts.delete(key);
+    }
+    while (mt5ActionContexts.size > mt5ContextMaxEntries) {
+      const oldest = mt5ActionContexts.keys().next().value;
+      if (oldest == null) break;
+      mt5ActionContexts.delete(oldest);
+    }
+  }
+
+  function rememberMt5ActionContext(account, action, context) {
+    const key = mt5ActionContextKey(account, action);
+    if (!key || !context) return;
+    purgeMt5ActionContexts();
+    mt5ActionContexts.delete(key);
+    mt5ActionContexts.set(key, { context, createdAt: Date.now() });
+    purgeMt5ActionContexts();
+  }
+
+  function consumeMt5ActionContext(account, action) {
+    purgeMt5ActionContexts();
+    const key = mt5ActionContextKey(account, action);
+    if (!key) return null;
+    const entry = mt5ActionContexts.get(key);
+    mt5ActionContexts.delete(key);
+    return entry?.context || null;
   }
 
   let authorityLoaderImpl = null;
@@ -371,9 +418,11 @@ export function createProductionExecutionDependencies({
     }
 
     const bridgeUrl = required(env.MT5_BRIDGE_URL, 'MT5_BRIDGE_URL');
+    const bridgeSecret = required(env.MT5_BRIDGE_SECRET, 'MT5_BRIDGE_SECRET');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
     const context = await mt5ContextLoader({
       bridgeUrl,
+      bridgeSecret,
       accountId: brokerAccountId,
       serverName: text(account.server_name),
       fetchFn,
@@ -398,6 +447,7 @@ export function createProductionExecutionDependencies({
       currentMarketPrice: marketPrice,
       exposure,
     });
+    if (result?.allowed) rememberMt5ActionContext(account, result.action || action, context);
     return {
       ...result,
       policyRequest: result.policyContext,
@@ -417,8 +467,9 @@ export function createProductionExecutionDependencies({
       groupId,
     });
 
-    const context = await mt5ContextLoader({
+    const context = consumeMt5ActionContext(account, action) || await mt5ContextLoader({
       bridgeUrl,
+      bridgeSecret,
       accountId: brokerAccountId,
       serverName: text(account.server_name),
       fetchFn,
