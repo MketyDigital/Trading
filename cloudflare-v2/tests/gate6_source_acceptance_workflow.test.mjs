@@ -67,7 +67,8 @@ test('Gate 6 source runners exercise capture-to-canonical replay without creatin
   assert.match(ctrader, /ctidTraderAccountId|accountId/);
   assert.doesNotMatch(ctrader, /buildTestAction|OPEN_POSITION|lifecycle|DEMO_ORDER_TEST/i);
 
-  assert.match(trigger, /MT5.*deal history/i);
+  assert.match(trigger, /### MT5 source/i);
+  assert.match(trigger, /history_deals_get|broker deal history/i);
   assert.match(trigger, /cTrader.*deal event/i);
   assert.match(trigger, /canonical/i);
   assert.match(trigger, /replay/i);
