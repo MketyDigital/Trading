@@ -15,6 +15,9 @@ function hasServiceRole(env = {}) {
 }
 
 const OPTIONAL_KEYS = [
+  'ZITADEL_ISSUER',
+  'ZITADEL_AUDIENCE',
+  'ZITADEL_JWKS_URL',
   'ZITADEL_PROJECT_ID',
   'ZITADEL_TRADING_ROLE',
   'TRADING_V1_AI_TIMEOUT_MS',
@@ -26,13 +29,17 @@ export function validateStagingReadiness(
   { requireSimulation = false, requireMtprotoContainer = false } = {},
 ) {
   const missing = [];
+  const accessEnabled = enabled(env.TRADING_ACCESS_ENABLED);
 
   if (!present(env.SUPABASE_URL)) missing.push('SUPABASE_URL');
   if (!hasServiceRole(env)) missing.push('SUPABASE_SERVICE_ROLE');
   if (!present(env.TRADING_MASTER_KEY)) missing.push('TRADING_MASTER_KEY');
-  if (!present(env.ZITADEL_ISSUER)) missing.push('ZITADEL_ISSUER');
-  if (!present(env.ZITADEL_AUDIENCE)) missing.push('ZITADEL_AUDIENCE');
-  if (!present(env.ZITADEL_JWKS_URL)) missing.push('ZITADEL_JWKS_URL');
+
+  if (accessEnabled) {
+    if (!present(env.ZITADEL_ISSUER)) missing.push('ZITADEL_ISSUER');
+    if (!present(env.ZITADEL_AUDIENCE)) missing.push('ZITADEL_AUDIENCE');
+    if (!present(env.ZITADEL_JWKS_URL)) missing.push('ZITADEL_JWKS_URL');
+  }
 
   if (requireSimulation) {
     if (!present(env.TRADE_STATE_INTERNAL_TOKEN)) missing.push('TRADE_STATE_INTERNAL_TOKEN');
@@ -53,6 +60,7 @@ export function validateStagingReadiness(
     missing,
     optionalMissing: OPTIONAL_KEYS.filter((key) => !present(env[key])),
     features: {
+      accessEnabled,
       simulationRequested: Boolean(requireSimulation),
       mtprotoContainerRequested: Boolean(requireMtprotoContainer),
       simulationEnabled: enabled(env.TRADING_V1_SIMULATION),
