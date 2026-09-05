@@ -79,7 +79,7 @@ async function terminalFail(baseStore, delivery, code) {
   return { status: 'FAILED' };
 }
 
-async function retrySetupFailure(baseStore, delivery, error) {
+async function retrySetupFailure(baseStore, delivery, error, { now, retryDelayMs }) {
   if (typeof baseStore.markRetryable !== 'function') {
     await baseStore.fail(delivery.idempotency_key, { code: 'RETRY_SETUP_FAILED' });
     return;
@@ -87,6 +87,8 @@ async function retrySetupFailure(baseStore, delivery, error) {
   await baseStore.markRetryable(delivery.idempotency_key, {
     code: 'RETRY_SETUP_FAILED',
     message: error instanceof Error ? error.message : String(error),
+  }, {
+    nextAttemptAt: new Date(new Date(now).getTime() + retryDelayMs).toISOString(),
   });
 }
 
@@ -99,12 +101,15 @@ export function createProductionDestinationRetryRuntime({
   batchLimit = 10,
   leaseMs = 30000,
   maxAttempts = 5,
+  retryDelayMs = 15000,
 } = {}) {
   if (typeof supabaseFactory !== 'function') throw new TypeError('supabaseFactory is required');
   if (typeof listDueFn !== 'function') throw new TypeError('listDueFn is required');
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
   if (typeof executionDepsFactory !== 'function') throw new TypeError('executionDepsFactory is required');
   if (typeof executeProductionFn !== 'function') throw new TypeError('executeProductionFn is required');
+
+  const safeRetryDelayMs = Math.max(1000, Math.min(300000, Math.trunc(Number(retryDelayMs) || 15000)));
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
     if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
@@ -134,7 +139,7 @@ export function createProductionDestinationRetryRuntime({
         if (claim?.claimed && claim.row) stores.set(storeKey(claim.row), baseStore);
         return claim;
       },
-      recoverFn: async ({ supabase, delivery }) => {
+      recoverFn: async ({ supabase, delivery, now }) => {
         const baseStore = stores.get(storeKey(delivery));
         if (!baseStore) throw new Error('claimed destination delivery store is unavailable');
 
@@ -171,13 +176,13 @@ export function createProductionDestinationRetryRuntime({
             brokerExecutionEnabled: true,
           }, deps);
         } catch (error) {
-          await retrySetupFailure(baseStore, delivery, error);
+          await retrySetupFailure(baseStore, delivery, error, { now, retryDelayMs: safeRetryDelayMs });
           return { status: 'FAILED' };
         }
 
         const accountResult = Array.isArray(result?.accounts) ? result.accounts[0] : null;
         if (!accountResult) {
-          await retrySetupFailure(baseStore, delivery, new Error('retry execution returned no account result'));
+          await retrySetupFailure(baseStore, delivery, new Error('retry execution returned no account result'), { now, retryDelayMs: safeRetryDelayMs });
           return { status: 'FAILED' };
         }
 
@@ -186,7 +191,7 @@ export function createProductionDestinationRetryRuntime({
         }
 
         if (accountResult.status === 'FAILED' && accountResult.reason === 'ACCOUNT_LOAD_FAILED') {
-          await retrySetupFailure(baseStore, delivery, new Error('retry account reload failed'));
+          await retrySetupFailure(baseStore, delivery, new Error('retry account reload failed'), { now, retryDelayMs: safeRetryDelayMs });
           return { status: 'FAILED' };
         }
 
