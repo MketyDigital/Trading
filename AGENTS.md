@@ -1,137 +1,135 @@
 # Trading V1 – Operational Source of Truth
 
 ## Mission
-Build and launch Mkety Trading as an enterprise, multi-tenant trading automation SaaS with strict tenant/provider/account/destination isolation, deterministic safety, durable idempotency, provider redundancy, admin controls and a controlled production rollout.
+Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem, using shared Mkety identity with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and a controlled production rollout.
 
-The system is now past broad architecture/static-remediation development. The controlling objective is **run the already-built system in real staging/demo, fix defects proved by real evidence, then launch progressively**.
+The project is past architecture/static-remediation work. The controlling objective is now: **run the already-built system in real staging/demo, fix only defects proved by real evidence, then launch progressively.**
 
-## Controlling production-fast-path decision — 2026-09-04
-From this point forward, **no new production architecture or elaborate acceptance tooling is added unless it fixes a proven blocker discovered by ordinary CI, real staging, demo execution, or safe live-readiness verification.**
+## Controlling product model — APPROVED 2026-09-05
+The customer boundary is intentionally simple:
 
-Do not keep expanding gates, harnesses, abstractions, workflows or speculative enterprise hardening merely because they could be useful. Existing protected tooling may be used where it already exists, but tooling construction is no longer the project goal.
+**one enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
 
-### Direct path to production
-1. **Return the current branch to exact-head ordinary CI GREEN.** Fix only the current Gate 6 wording/assertion mismatch; do not change runtime behavior for it.
-2. **Freeze architecture/tooling.** No new framework/gate/workflow unless an actual test or staging/demo defect proves it is required.
-3. **Prepare and deploy the existing system to real staging** using the existing infrastructure and safe defaults.
-4. **Connect real integrations in staging:** shared Mkety Zitadel identity, Trading-owned database/workspaces, Telegram source/destination, MT5 demo source/destination and cTrader demo source/destination.
-5. **Run the actual end-to-end product flow:** real source event -> canonical Trading Event -> deterministic parse/normalization -> correlation/Trade State -> planning -> Telegram/broker fanout -> fresh execution authority/risk -> demo broker action -> durable result -> management/close -> recovery/idempotency.
-6. **Fix only defects demonstrated by staging/demo evidence.** Every money-moving defect still follows RED -> minimal fix -> exact-head GREEN.
-7. **Run failure/recovery checks in the real staging system** for the material risks: duplicate/replay, reconnect, source/account revocation, destination isolation, broker uncertainty, state-binding repair and kill/rollback behavior.
-8. **Run shadow production:** real incoming signals and real calculations/decisions, but no real-money broker execution.
-9. **Run controlled dedicated demo execution** long enough to prove broker behavior, reconnect/recovery, idempotency and position-management correctness under real conditions.
-10. **Tiny controlled live** only after separate explicit owner approval and explicit financial limits, followed by controlled beta and general production rollout.
+Trading is not a generic collaboration/team SaaS. Do not build departments, nested teams, complex role hierarchies, seat management or broker-style organization structures for V1 unless a real customer requirement later proves them necessary.
 
-### What is already built — do not rebuild it
-- enterprise multi-tenant Trading runtime;
-- shared Mkety Zitadel identity model with an independent Trading runtime/data plane;
-- Trading-owned workspaces, memberships and trade-account tenancy;
-- universal source registry;
-- canonical Trading Event pipeline;
-- deterministic parser/normalizer with bounded AI only for ambiguity;
-- Telegram MTProto source providers: Cloudflare Container, Cloudflare DO/mtcute and external MTProto;
-- TradingView/custom signed source foundations;
-- MT5 source capture and cTrader source capture;
-- Telegram channels/groups as first-class destinations;
-- MT5 and cTrader broker destinations;
-- parallel human-delivery and machine-execution fanout;
-- durable Trade State / Position Groups / multi-leg management;
-- risk, safety and kill-switch controls;
-- broker-authoritative symbol/economic/volume validation;
-- persistent event/destination/order idempotency;
-- isolated destination retry and recovery;
-- uncertain broker-outcome reconciliation;
-- successful broker-result -> Trade State repair without broker resend;
-- advisory execution snapshots and bounded broker/session reuse;
-- authenticated MT5 metadata boundary;
-- tenant/provider/source/destination/account fault isolation;
-- admin/operations/observability foundations;
-- full static remediation Tasks 1–8.
+Existing membership primitives may remain for compatibility/future use, but they are not a reason to build a complex team product now.
 
-### What actually remains before production
-This is now mostly **real-environment validation and rollout**, not architecture development:
-- current branch exact-head GREEN;
-- staging deployment/configuration of the already-built system;
-- real non-live Zitadel identity/workspace acceptance;
-- real Telegram source/destination soak;
-- real MT5/cTrader source events;
-- real MT5/cTrader dedicated demo execution E2E;
-- real staging failure/recovery drills;
-- shadow production;
-- controlled demo soak on production-like infrastructure;
-- tiny live only with explicit owner limits/approval;
-- controlled beta/general rollout.
+### Identity boundary
+- Mkety Trading shares the mother Mkety Zitadel identity authority.
+- Trading-only users may authenticate through that same Zitadel without requiring MKSaaS application access or an MKSaaS database profile.
+- Zitadel answers who the user is and whether the user is entitled to Trading.
+- Trading/Supabase data answers which Trading workspace that authenticated owner controls.
+- Authentication is independent from broker execution.
 
-## Product / SaaS identity
-- Mkety Trading is an enterprise product of the Mkety/MKSaaS ecosystem, not an isolated identity silo.
-- Mkety products share the managed Mkety Zitadel identity authority, while Trading owns its operational database, workspaces, memberships, sources, destinations, broker accounts, credentials, risk policy, Trade State, idempotency, retry/recovery and runtime state.
-- Existing Mkety users may enter Trading through the same Zitadel identity when they have Trading entitlement/membership.
-- Trading-only users may authenticate through the same Mkety Zitadel without requiring an MKSaaS database profile or MKSaaS application runtime.
-- MKSaaS runtime/database failure must not stop Trading. Trading runtime/database failure must not affect MKSaaS.
+### Workspace boundary
+A Trading workspace is the isolation boundary for one enterprise customer. Trading-owned sources, destinations, broker accounts, credentials, policies, events, Trade State, retries/recovery, logs and runtime data remain scoped to that workspace.
+
+The owner has full workspace control. Mkety does not need to model the customer's internal company hierarchy for V1.
+
+### Default and custom-domain access
+- Canonical product entry point: `trade.mkety.com`.
+- An enterprise customer may optionally attach a hostname they control, e.g. `trade.starpipsforex.com`, using the existing Cloudflare for SaaS capability.
+- Default and custom hostnames resolve to the same internal Trading workspace/backend.
+- A custom hostname never grants authorization by itself.
+- Hostname resolution identifies the requested workspace; Zitadel identifies the user; server-owned Trading data confirms that the owner may access that workspace.
+- Do not create a separate backend, workspace or identity silo per custom hostname.
+
+Controlling design spec:
+`docs/superpowers/specs/2026-09-05-trading-enterprise-workspace-product-model-design.md`
+
+Minimal production plan:
+`docs/superpowers/plans/2026-09-05-production-fast-path.md`
+
+Rolling pickup/handoff:
+`cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`
+
+## Mkety product isolation
+- MKSaaS runtime/database failure must not stop Trading.
+- Trading runtime/database failure must not affect MKSaaS.
+- Trading-only customers do not need MKSaaS application access.
+- A user entitled to multiple Mkety products may reuse the same identity.
+
+## Architecture/tooling freeze
+No new production architecture, framework, gate, workflow or elaborate acceptance tooling is added unless it fixes a blocker proved by ordinary CI, real staging, demo execution or safe live-readiness verification.
+
+Use the system already built. Fix only actual defects.
 
 ## Intended production flow
-1. Telegram MTProto, TradingView, MT5 source, cTrader source and custom API enter one authenticated canonical Trading Event pipeline.
-2. Clear machine-readable instructions are deterministic. AI is bounded ambiguity/presentation assistance only; unresolved ambiguity becomes `NEEDS_REVIEW`.
-3. Canonical source/event identity is persistent and workspace scoped.
+1. Telegram MTProto, TradingView, MT5 source, cTrader source and approved custom API enter one authenticated canonical Trading Event pipeline.
+2. Clear machine-readable instructions are deterministic; AI is bounded to ambiguity/presentation support only.
+3. Canonical source/event identity is persistent and workspace-scoped.
 4. Correlation + durable Trade State resolve entries and management against Position Groups/legs.
 5. Planning determines intended actions but is never final live authority.
-6. One canonical event may fan out independently to Telegram channels/groups, MT5, cTrader and approved custom destinations.
-7. Human Telegram delivery and broker execution are sibling paths; one destination failure must not cancel, roll back or resend unrelated successful siblings.
-8. Immediately before every broker action, reload exact persisted event/source, Trading workspace entitlement, account active/execution/kill state, fresh risk/exposure and broker-authoritative symbol/economic/volume truth.
+6. One canonical event may fan out independently to Telegram, MT5, cTrader and approved custom destinations.
+7. Human Telegram delivery and broker execution are sibling paths; one destination failure must not cancel or resend unrelated successful siblings.
+8. Immediately before every broker action, reload exact persisted source/event, workspace authority, account active/execution/kill state, fresh risk/exposure and broker-authoritative symbol/economic/volume truth.
 9. Reserve persistent destination/order idempotency before broker send.
 10. Persist broker/destination result truth and bind exact Position Group/leg.
-11. If state binding fails after broker success, repair from persisted successful broker truth without resending the broker action.
+11. If state binding fails after broker success, repair from persisted successful broker truth without broker resend.
 12. If broker outcome is uncertain, reconcile; never blindly retry.
 
-Caller-supplied workspace/account/provider/destination/broker/credential/execution hints are never authority. cTrader `ProtoOASymbol.lotSize` protocol-cent semantics remain unchanged.
+Caller-supplied workspace/account/provider/destination/broker/credential/execution hints are never authority.
 
-## Failure-isolation / no-unrelated-impact invariant
-The target is fault isolation, graceful degradation and safe recovery—not the impossible claim that external systems never fail.
+## Failure isolation
 - product isolation: MKSaaS failure != Trading failure;
-- workspace isolation: tenant A failure != tenant B failure;
+- workspace isolation: customer A failure != customer B failure;
 - source/provider isolation: one source/provider failure != sibling source/provider failure;
 - account/broker isolation: one broker/account failure != unrelated account/provider failure;
 - destination isolation: Telegram delivery failure != broker execution failure and vice versa;
 - AI isolation: deterministic clear execution does not depend on AI availability;
-- control-plane isolation: admin/dashboard/reporting/analytics/notification failures do not become execution authority;
-- configuration isolation: changing one role/source/destination/provider/account must not mutate or stop unrelated functionality;
 - safety uncertainty: inability to prove source/workspace/account/risk/idempotency/broker outcome fails closed only on the affected money-moving path.
 
 ## Repository / branch
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 -> `main`
-- Current pre-fast-path head when this decision was adopted: `052aa1d3b0b6a03b5c62a735fd4184791e83dd90`.
-- Do not merge/finish the branch until staging/demo launch readiness is actually proved.
 - Never merge `main` without explicit user instruction.
-- Never enable real-money execution without separate explicit final approval.
+- Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
-## Current stage / exact handoff
-**STATIC REMEDIATION COMPLETE. PRODUCTION FAST PATH ACTIVE. CURRENT IMMEDIATE BLOCKER = ONE GATE 6 TEST WORDING/ASSERTION MISMATCH, NOT A RUNTIME DEFECT. AFTER EXACT-HEAD GREEN, NEXT WORK IS STAGING READINESS/DEPLOYMENT PREPARATION — NOT MORE TOOLING.**
+## Current verified stage — 2026-09-05
+**CODE GREEN -> DATABASE GREEN THROUGH 0012 -> STAGING READINESS / CLOUDFLARE TARGET INSPECTION NEXT.**
 
-Current failing candidate:
-- head `052aa1d3b0b6a03b5c62a735fd4184791e83dd90`;
-- ordinary PR run `33900898768`;
-- job `101114473595`;
-- Node/trading-core: **692 total, 691 pass, 1 fail**;
-- failing test: `Gate 6 source runners exercise capture-to-canonical replay without creating broker orders`;
-- failure is documentation wording: assertion `/MT5.*deal history/i` does not span the existing correct wording (`MT5SourceCapture` / `history_deals_get` / `broker deal history`);
-- this is **not** evidence of a trading runtime/source-capture defect;
-- MT5/MTProto later suites did not run because Node failed first;
-- protected external jobs remained skipped;
-- no real source/broker/environment action occurred.
+Verified before the 2026-09-05 documentation lock-in:
+- exact GREEN code head: `86c3991617bbe2a381106e8c3a62a6ecf135110b`;
+- ordinary CI run `33902795369` succeeded;
+- test job `101120562074` succeeded;
+- protected Cloudflare jobs were skipped;
+- Gate 6 fix changed test semantics only, not runtime/source/execution behavior.
 
-### Immediate pickup
-1. Re-fetch PR #2/head before every write because the branch may advance concurrently.
-2. Fix only the Gate 6 wording/assertion mismatch. Prefer asserting the actual semantic evidence (`history_deals_get` or MT5 source section + broker deal history) rather than modifying runtime code.
-3. Run ordinary PR CI on the exact head.
-4. Require Node + MT5 + Container MTProto + external MTProto GREEN; protected real-environment jobs stay skipped.
-5. Record exact GREEN head/run/job/counts here and in `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`.
-6. Then stop adding gate/tooling architecture and move to **staging deployment/readiness inspection**.
-7. Static staging inspection may continue without authorization. Any actual deployment, external identity/Telegram probe, database mutation or demo broker action requires the corresponding explicit real-environment authorization.
+Supabase project `Mkety Digital`:
+- healthy and connected;
+- Trading migrations through `0010` were already applied;
+- `0011_destination_delivery_retry_state` applied successfully on 2026-09-05;
+- `0012_trade_accounts_trading_workspace_fk` applied successfully on 2026-09-05;
+- migration ledger now records through Trading `0012`;
+- orphan `trade_accounts.workspace_id` prerequisite count was `0`;
+- `trade_accounts.workspace_id` now references `trading_workspace_access(id)` with `ON DELETE RESTRICT`;
+- the `0011` retry columns and retry-due index were verified.
+
+Current external configuration known:
+- GitHub `staging` environment reportedly contains `CLOUDFLARE_API_TOKEN`;
+- GitHub `staging` environment reportedly contains `CLOUDFLARE_ACCOUNT_ID`;
+- GitHub `staging` environment reportedly contains a Supabase service-role key;
+- Supabase itself is connected here;
+- Mkety Zitadel account exists, but no Trading project/application has been created yet;
+- Cloudflare for SaaS already exists for Mkety and is the intended custom-hostname mechanism.
+
+Documentation lock-in commits may advance the branch beyond the last runtime GREEN head. Documentation-only advancement does not change runtime behavior; ordinary CI should still be verified on the resulting exact head before deployment.
+
+## Exact next pickup
+1. Re-fetch the branch exact head.
+2. Verify ordinary CI remains GREEN after documentation-only commits.
+3. Use the existing Cloudflare staging workflow in **`inspect` mode only** to prove account/worker target identity and dry-run both Wrangler profiles.
+4. Do **not** use `deploy-paid` or `deploy-free` until the target is proven to be an isolated staging target.
+5. Complete minimum staging runtime config by name only: `SUPABASE_URL`, accepted Supabase service-role secret name, `TRADING_MASTER_KEY`.
+6. Do not fake Zitadel values. Create the single shared-identity `Mkety Trading` Zitadel project/application when ready, then set issuer/audience/JWKS/project configuration.
+7. Deploy staging with all master fuses off.
+8. Verify `/api/v1/health` without exposing secret values.
+9. Then connect real Telegram + MT5 demo + cTrader demo, run one real E2E demo lifecycle, material recovery checks, shadow, demo soak.
+10. Tiny real-money live remains a separate explicit approval step.
 
 ## Critical runtime safety defaults
-Keep fail closed until an explicitly authorized later rollout step changes the corresponding control:
+Keep fail closed until the relevant explicitly authorized rollout step changes them:
 - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
 - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
 - `TRADING_ACCESS_ENABLED=false`
@@ -166,80 +164,35 @@ Before a broker adapter may be reached, all applicable locks must pass:
 10. persistent destination/order idempotency reservation succeeds;
 11. TradingView additionally requires its accepted ingress/source/certificate path.
 
-## Static remediation closure
-F1–F10, I1, I2 and U1 are STATIC RESOLVED. This remains important safety evidence but must not become an excuse for more speculative static work.
+## Simplified production sequence
+A. exact-head GREEN
+B. Cloudflare staging target inspection
+C. minimum runtime config + staging deploy, fuses off
+D. shared Mkety Zitadel Trading identity setup + non-money-moving access acceptance
+E. default `trade.mkety.com` + optional one custom hostname acceptance
+F. Telegram + MT5 demo + cTrader demo connectivity
+G. one real E2E demo lifecycle
+H. material recovery checks only
+I. shadow production
+J. dedicated demo soak
+K. separately approved tiny controlled live
+L. controlled beta -> general production
 
-- Task 1/F1 dual Worker fuses — GREEN `1632889c6b26e88451ece25ba13c649b43357c5a`, run `33783267187`, job `100741828652`.
-- Task 2/F2/F3/F4/F9 durable per-action authority/event linkage — GREEN `9ba95eea33748aea1ab641e2aab4e0aec67068dc`, run `33784508546`, job `100745907350`.
-- Task 3/F7/F8/F10 broker-authoritative risk/no-upward volume/final policy — GREEN `a3a507b569499524d6de75ad8c519db5dd944efb`, run `33843616430`, job `100930741996`.
-- Task 4/F5 broker-success state repair/no resend — GREEN `30be3bddb586e6a9bf02dea4520c338e3510287c`, run `33850696335`, job `100952562634`.
-- Task 5/F6 Trading-owned workspace FK contract — GREEN `9a13bd2fa928d39cce826d05b005129fa10a68f3`, run `33851400665`.
-- Task 6/I1 advisory execution snapshots — GREEN `400880cab6502c75ac487830bc3a90bb022f485c`, run `33853785408`, job `100962282286`.
-- Task 7/I2/U1 authenticated MT5 metadata + bounded warm contexts — GREEN `619fa842ee29addecc9cbbd3fad6bec6efe59f60`, run `33856378784`, job `100970541404`.
-- Task 8 integrated failure matrix/event linkage — GREEN `a7da981a5daec426b5aad840739555edfbc68819`, run `33865341673`, job `100998803951`: **685/685 Node + 14/14 MT5 + 11/11 Container MTProto + 22/22 external MTProto**; protected jobs skipped.
+TradingView direct-ingress/certificate acceptance remains deferred/fail-closed and does not block an approved launch scope that does not require genuine TradingView-originated ingress.
 
-## Existing protected tooling — use, do not keep expanding
-- Gate 4 Zitadel acceptance tooling: STATIC GREEN; real acceptance not run.
-  - head `e018ce79d2c7cc9018775b71281be033691f58b8`, run `33869550721`, job `101012027592`; **687/687 + 14/14 + 11/11 + 22/22**.
-- Gate 5 MTProto soak tooling: STATIC GREEN; real soak not run.
-  - head `5514d0fbff1d599580f042fbb77b34a3c927f8a5`, run `33898184523`, job `101105739815`; **690/690 + 14/14 + 11/11 + 22/22**.
-- Existing MT5/cTrader connectivity/metadata demo probes remain useful prerequisites.
-- Gate 6 source-capture wrapper was added to prove the launch-master source requirement. Its current only failure is the wording assertion described above. **Do not expand Gate 6 further once this test is GREEN unless real staging finds a source defect.**
-- Gate 7 demo lifecycle tooling already exists. Do not build more Gate 7 tooling pre-emptively; use real demo E2E to find actual defects.
+## Safety authorization boundary
+Generic `continue` authorizes safe repository development/static inspection only. It does not authorize Cloudflare/Zitadel deployment/config mutation, protected external probes, real Telegram acceptance, demo/live broker orders, enabling master access/execution fuses, `main` merge or real-money execution unless the user explicitly authorizes the corresponding step.
 
-## Simplified real-environment rollout sequence
-The old numbered gates remain useful as evidence categories, but they are not a mandate to build more tooling. The operational sequence is now:
-
-### Phase A — Branch GREEN
-Current task. Finish the one test mismatch and get full ordinary CI GREEN.
-
-### Phase B — Real staging
-Deploy/configure the existing system safely with master execution fuses off. Verify infrastructure, DB migrations/prerequisites, bindings/secrets presence without exposing secrets, and rollback path.
-
-### Phase C — Real integrations / non-live acceptance
-Use existing tooling or direct product flows to verify:
-- Zitadel identity + Trading-owned memberships/workspaces;
-- Telegram source and destination;
-- MT5 source/demo destination;
-- cTrader source/demo destination;
-- exact tenant/source/account isolation.
-
-### Phase D — Actual E2E demo
-Prove a real signal through the whole product:
-`source -> canonical event -> parser -> Trade State -> planning -> Telegram delivery + broker demo execution -> broker result -> management/close -> durable state/recovery`.
-
-### Phase E — Failure/recovery in staging
-Exercise only material launch risks: duplicate/replay, reconnect/restart, revocation/kill, one-destination failure isolation, uncertain broker outcome/reconciliation, state-bind repair and rollback.
-
-### Phase F — Shadow production
-Real inputs and real decisions on production-like infrastructure, but no real-money orders.
-
-### Phase G — Dedicated demo soak
-Continuous demo execution long enough to expose actual broker/platform/network behavior.
-
-### Phase H — Tiny controlled live
-Requires separate explicit user approval and exact owner-set limits:
-- max per-trade risk;
-- max volume;
-- max concurrent/open risk;
-- daily loss ceiling;
-- allowed symbols;
-- kill/rollback contacts/procedure.
-Never invent these defaults.
-
-### Phase I — Controlled beta -> general production
-Expand only after tiny-live evidence is clean and no unresolved severity-1/2 trading-safety issue remains.
-
-## TradingView status
-Genuine TradingView-originated direct-ingress/certificate acceptance remains deferred/fail-closed. It must not block launch of the approved non-TradingView source scope unless the product launch scope explicitly requires it.
-
-## Safety state
-Generic `continue` authorizes safe repository development/static inspection only. It does **not** authorize deployment, Cloudflare/Zitadel/Supabase mutation, protected external probes, real Telegram acceptance, demo/live broker orders, enabling master execution/access fuses, `main` merge or real-money execution.
+The 2026-09-05 user instruction explicitly authorized locking the approved product model into repository documentation and mapping the production path. It did not authorize real-money execution.
 
 ## Mandatory handoff discipline
 After every meaningful verified milestone:
-1. update this file;
-2. update `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`;
-3. record exact branch head, CI run/job and test counts;
+1. update this file if the controlling state changed;
+2. update `cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`;
+3. record exact branch head and relevant CI/run/job/test evidence;
 4. state what was achieved, what remains, safety state and exact next pickup;
-5. preserve the full product architecture and Production Fast Path so a new session does not restart speculative architecture/tooling work.
+5. never let stale historical blockers override a newer verified handoff;
+6. preserve the approved simple owner-workspace/custom-hostname product model;
+7. preserve the architecture/tooling freeze so a new session does not restart speculative design work.
+
+Historical remediation/gate evidence remains in `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`; use it as historical evidence, not as the current pickup source when it conflicts with this file or the rolling fast-path handoff.
