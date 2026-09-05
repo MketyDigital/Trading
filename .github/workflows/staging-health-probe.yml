@@ -1,0 +1,32 @@
+name: Staging Health Probe
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - '.github/workflows/staging-health-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  health-probe:
+    if: ${{ github.event.head_commit.message == 'staging: probe deployed health' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe deployed Worker health
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://mkety-copier-engine.dry-glitter-7e16.workers.dev/api/v1/health'
+          body_file="$RUNNER_TEMP/health-body.txt"
+          status="$(curl --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 --output "$body_file" --write-out '%{http_code}' "$url")"
+          echo "HTTP status: $status"
+          echo 'Response body:'
+          cat "$body_file"
+          echo
+          if [ "$status" != '200' ]; then
+            echo "Expected HTTP 200 from staging health endpoint."
+            exit 1
+          fi
