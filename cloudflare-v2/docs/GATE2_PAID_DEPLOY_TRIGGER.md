@@ -15,3 +15,4 @@ Acceptance trigger: 2026-09-03 Gate 2 queue/simulation/rollback verification.
 Acceptance retry: explicit MTProto allowlist + concrete Container instance non-selection verification.
 Acceptance retry 2: wait for the newly deployed internal transport secret to be active before Queue acceptance.
 Acceptance retry 3: include authorized Telegram native identity on the direct simulation probe.
+Deployment trigger: 2026-09-05 MTProto internal source callback configuration.
