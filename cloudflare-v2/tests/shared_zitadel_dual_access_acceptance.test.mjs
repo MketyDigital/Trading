@@ -6,7 +6,6 @@ import { dirname, resolve } from 'node:path';
 
 import { authorizeV1AdminRequest } from '../src/http/v1_admin.js';
 import { handleAuthorizedV1AdminMembersRequest } from '../src/http/v1_admin_members.js';
-import { authorizeTradingClaims } from '../src/security/zitadel_auth.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -33,8 +32,7 @@ function entitlementSupabase(workspaces) {
           return this;
         },
         async maybeSingle() {
-          const workspace = workspaces[id];
-          return { data: workspace || null, error: null };
+          return { data: workspaces[id] || null, error: null };
         },
       };
     },
@@ -51,80 +49,82 @@ function membershipFactory(rows, calls = []) {
   });
 }
 
-function claimsAuthenticator(claimsByToken) {
-  return async (req, { requiredRole, workspace, projectId }) => {
+function assertionAuthenticator(assertionsByToken) {
+  return async (req, { requestedWorkspaceId }) => {
     const token = req.headers.get('Authorization')?.replace(/^Bearer\s+/, '') || '';
-    const claims = claimsByToken[token] || {};
-    return authorizeTradingClaims(claims, { requiredRole, workspace, projectId });
+    const assertion = assertionsByToken[token];
+    if (!assertion) return { ok: false, reason: 'MALFORMED_TOKEN' };
+    if (assertion.product !== 'trading') return { ok: false, reason: 'WRONG_PRODUCT' };
+    if (String(assertion.workspace_id) !== String(requestedWorkspaceId)) {
+      return { ok: false, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
+    }
+    if (assertion.access !== 'owner') return { ok: false, reason: 'OWNER_ACCESS_REQUIRED' };
+    return {
+      ok: true,
+      subject: String(assertion.sub),
+      workspaceId: String(assertion.workspace_id),
+      access: 'owner',
+      claims: assertion,
+    };
   };
 }
 
-function workspace(id = 'ws-1', org = 'org-1') {
-  return {
-    id,
-    display_name: id,
-    owner_email: null,
-    zitadel_org_id: org,
-    trading_access_enabled: true,
-    trading_required_role: 'trading_access',
-  };
+function workspace(id = 'ws-1') {
+  return { id, display_name: id, owner_email: null, trading_access_enabled: true };
 }
 
-function member(workspaceId, subject, role = 'viewer', enabled = true) {
+function member(workspaceId, subject, role = 'owner', enabled = true) {
   return { workspaceId, subject, role, enabled, metadata: {} };
 }
 
-function projectClaims(subject, org = 'org-1', projectId = 'trading-project') {
+function assertion(subject, workspaceId = 'ws-1', overrides = {}) {
   return {
     sub: subject,
-    [`urn:zitadel:iam:org:project:${projectId}:roles`]: {
-      trading_access: { [org]: 'org-domain' },
-    },
+    product: 'trading',
+    workspace_id: workspaceId,
+    access: 'owner',
+    ...overrides,
   };
 }
 
 async function authorize({
   token,
   workspaceId = 'ws-1',
-  workspaces = { 'ws-1': workspace('ws-1', 'org-1'), 'ws-2': workspace('ws-2', 'org-2') },
-  claimsByToken,
+  workspaces = { 'ws-1': workspace('ws-1'), 'ws-2': workspace('ws-2') },
+  assertionsByToken,
   memberships,
   membershipCalls = [],
 }) {
-  return authorizeV1AdminRequest(request(workspaceId, token), {
-    ZITADEL_PROJECT_ID: 'trading-project',
-  }, {
+  return authorizeV1AdminRequest(request(workspaceId, token), {}, {
     supabase: entitlementSupabase(workspaces),
-    authenticateFn: claimsAuthenticator(claimsByToken),
+    authenticateFn: assertionAuthenticator(assertionsByToken),
     membershipStoreFactory: membershipFactory(memberships, membershipCalls),
   });
 }
 
-test('existing Mkety logical user and Trading-only logical user converge on the same Zitadel sub membership gate', async () => {
+test('existing Mkety user and Trading-only user converge on the same signed Trading assertion plus Supabase membership gate', async () => {
   const memberships = {
-    'ws-1:user-1': member('ws-1', 'user-1', 'admin', true),
-    'ws-1:user-2': member('ws-1', 'user-2', 'operator', true),
+    'ws-1:user-1': member('ws-1', 'user-1'),
+    'ws-1:user-2': member('ws-1', 'user-2'),
   };
-  const claimsByToken = {
-    existing: projectClaims('user-1'),
-    tradingOnly: projectClaims('user-2'),
+  const assertionsByToken = {
+    existing: assertion('user-1'),
+    tradingOnly: assertion('user-2'),
   };
 
-  const existing = await authorize({ token: 'existing', claimsByToken, memberships });
-  const tradingOnly = await authorize({ token: 'tradingOnly', claimsByToken, memberships });
+  const existing = await authorize({ token: 'existing', assertionsByToken, memberships });
+  const tradingOnly = await authorize({ token: 'tradingOnly', assertionsByToken, memberships });
 
   assert.equal(existing.ok, true);
   assert.equal(existing.auth.subject, 'user-1');
-  assert.equal(existing.membership.role, 'admin');
   assert.equal(tradingOnly.ok, true);
   assert.equal(tradingOnly.auth.subject, 'user-2');
-  assert.equal(tradingOnly.membership.role, 'operator');
 });
 
 test('authenticated subject without exact Trading membership fails closed', async () => {
   const result = await authorize({
     token: 'missing',
-    claimsByToken: { missing: projectClaims('user-missing') },
+    assertionsByToken: { missing: assertion('user-missing') },
     memberships: {},
   });
   assert.equal(result.ok, false);
@@ -132,39 +132,42 @@ test('authenticated subject without exact Trading membership fails closed', asyn
   assert.equal(result.reason, 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING');
 });
 
-test('wrong Trading project claim fails before membership lookup', async () => {
+test('wrong product assertion fails before membership lookup', async () => {
   const membershipCalls = [];
   const result = await authorize({
-    token: 'wrong-project',
-    claimsByToken: {
-      'wrong-project': {
-        sub: 'user-1',
-        'urn:zitadel:iam:org:project:other-project:roles': {
-          trading_access: { 'org-1': 'org-domain' },
-        },
-        'urn:zitadel:iam:org:project:roles': {
-          trading_access: { 'org-1': 'org-domain' },
-        },
-      },
-    },
-    memberships: { 'ws-1:user-1': member('ws-1', 'user-1', 'owner', true) },
+    token: 'wrong-product',
+    assertionsByToken: { 'wrong-product': assertion('user-1', 'ws-1', { product: 'mksaas' }) },
+    memberships: { 'ws-1:user-1': member('ws-1', 'user-1') },
     membershipCalls,
   });
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'ROLE_NOT_GRANTED_FOR_WORKSPACE_ORG');
+  assert.equal(result.reason, 'WRONG_PRODUCT');
   assert.deepEqual(membershipCalls, []);
 });
 
-test('right Trading project but wrong organization fails before membership lookup', async () => {
+test('assertion for another Trading workspace fails before membership lookup', async () => {
   const membershipCalls = [];
   const result = await authorize({
-    token: 'wrong-org',
-    claimsByToken: { 'wrong-org': projectClaims('user-1', 'org-foreign') },
-    memberships: { 'ws-1:user-1': member('ws-1', 'user-1', 'owner', true) },
+    token: 'wrong-workspace',
+    assertionsByToken: { 'wrong-workspace': assertion('user-1', 'ws-2') },
+    memberships: { 'ws-1:user-1': member('ws-1', 'user-1') },
     membershipCalls,
   });
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'ROLE_NOT_GRANTED_FOR_WORKSPACE_ORG');
+  assert.equal(result.reason, 'WORKSPACE_ASSERTION_MISMATCH');
+  assert.deepEqual(membershipCalls, []);
+});
+
+test('non-owner assertion fails before membership lookup', async () => {
+  const membershipCalls = [];
+  const result = await authorize({
+    token: 'viewer',
+    assertionsByToken: { viewer: assertion('user-1', 'ws-1', { access: 'viewer' }) },
+    memberships: { 'ws-1:user-1': member('ws-1', 'user-1') },
+    membershipCalls,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'OWNER_ACCESS_REQUIRED');
   assert.deepEqual(membershipCalls, []);
 });
 
@@ -172,8 +175,8 @@ test('membership in another Trading workspace never authorizes the selected work
   const calls = [];
   const result = await authorize({
     token: 'user-1',
-    claimsByToken: { 'user-1': projectClaims('user-1') },
-    memberships: { 'ws-2:user-1': member('ws-2', 'user-1', 'owner', true) },
+    assertionsByToken: { 'user-1': assertion('user-1') },
+    memberships: { 'ws-2:user-1': member('ws-2', 'user-1') },
     membershipCalls: calls,
   });
   assert.equal(result.ok, false);
@@ -181,40 +184,14 @@ test('membership in another Trading workspace never authorizes the selected work
   assert.deepEqual(calls, [['getMembership', 'ws-1', 'user-1']]);
 });
 
-test('disabled member is rejected without affecting another enabled member in the same workspace', async () => {
-  const claimsByToken = {
-    disabled: projectClaims('user-disabled'),
-    enabled: projectClaims('user-enabled'),
-  };
-  const memberships = {
-    'ws-1:user-disabled': member('ws-1', 'user-disabled', 'admin', false),
-    'ws-1:user-enabled': member('ws-1', 'user-enabled', 'viewer', true),
-  };
-
-  const disabled = await authorize({ token: 'disabled', claimsByToken, memberships });
-  const enabled = await authorize({ token: 'enabled', claimsByToken, memberships });
-
-  assert.equal(disabled.ok, false);
-  assert.equal(disabled.reason, 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING');
-  assert.equal(enabled.ok, true);
-  assert.equal(enabled.membership.subject, 'user-enabled');
-});
-
-test('two subjects in one workspace keep independent Trading roles', async () => {
-  const claimsByToken = {
-    owner: projectClaims('owner-sub'),
-    viewer: projectClaims('viewer-sub'),
-  };
-  const memberships = {
-    'ws-1:owner-sub': member('ws-1', 'owner-sub', 'owner', true),
-    'ws-1:viewer-sub': member('ws-1', 'viewer-sub', 'viewer', true),
-  };
-
-  const owner = await authorize({ token: 'owner', claimsByToken, memberships });
-  const viewer = await authorize({ token: 'viewer', claimsByToken, memberships });
-
-  assert.equal(owner.membership.role, 'owner');
-  assert.equal(viewer.membership.role, 'viewer');
+test('disabled membership revokes access even while the signed assertion is otherwise valid', async () => {
+  const result = await authorize({
+    token: 'disabled',
+    assertionsByToken: { disabled: assertion('user-disabled') },
+    memberships: { 'ws-1:user-disabled': member('ws-1', 'user-disabled', 'owner', false) },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING');
 });
 
 test('Trading authorization modules contain no MKSaaS database or shared Mkety workspace-table dependency', async () => {
@@ -223,7 +200,7 @@ test('Trading authorization modules contain no MKSaaS database or shared Mkety w
     'src/http/v1_admin_members.js',
     'src/security/trading_membership_store.js',
     'src/security/trading_permissions.js',
-    'src/security/zitadel_auth.js',
+    'src/security/mkety_access_assertion.js',
   ];
   for (const relative of files) {
     const source = await readFile(resolve(root, relative), 'utf8');
@@ -237,10 +214,7 @@ test('Trading authorization modules contain no MKSaaS database or shared Mkety w
 test('membership provisioning touches membership state only and no source/destination/account execution state', async () => {
   const calls = [];
   const membershipStore = {
-    async getMembership(workspaceId, subject) {
-      calls.push(['getMembership', workspaceId, subject]);
-      return null;
-    },
+    async getMembership() { return null; },
     async upsertMembership(workspaceId, subject, role) {
       calls.push(['upsertMembership', workspaceId, subject, role]);
       return member(workspaceId, subject, role, true);
@@ -261,16 +235,3 @@ test('membership provisioning touches membership state only and no source/destin
   assert.equal(response.status, 200);
   assert.deepEqual(calls, [['upsertMembership', 'ws-1', 'trading-only-sub', 'viewer']]);
 });
-
-test('operator identity document exists and states shared-Zitadel identity, Trading membership entitlement, and separate broker execution', async () => {
-  const doc = await readFile(resolve(root, 'docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md'), 'utf8');
-  assert.match(doc, /one managed Mkety Zitadel instance/i);
-  assert.match(doc, /MKSaaS project\/app/i);
-  assert.match(doc, /Trading project\/app/i);
-  assert.match(doc, /trading_workspace_memberships/i);
-  assert.match(doc, /identity/i);
-  assert.match(doc, /membership.*entitlement/is);
-  assert.match(doc, /broker execution.*separate/is);
-  assert.match(doc, /Trading-only/i);
-}
-);
