@@ -9,6 +9,7 @@ function accountRow() {
     workspace_id: 'ws-a',
     platform: 'mt5',
     account_id: '90001',
+    credential_ciphertext: 'synthetic-account-envelope',
     server_name: 'Broker-Demo',
     is_active: true,
     execution_enabled: true,
@@ -42,13 +43,21 @@ test('normal production delivery persists trusted account/group/destination retr
 
   const deps = createProductionExecutionDependencies({
     env: {
-      MT5_BRIDGE_URL: 'https://bridge.example',
-      MT5_BRIDGE_SECRET: 'server-secret',
+      TRADING_MASTER_KEY: 'master-key-placeholder',
     },
     supabase: accountSupabase(row),
     workspaceId: 'ws-a',
     tradingEventId: 'evt-db-1',
   }, {
+    decryptCredentialsFn: async (kind, ciphertext, masterKey) => {
+      assert.equal(kind, 'mt5');
+      assert.equal(ciphertext, 'synthetic-account-envelope');
+      assert.equal(masterKey, 'master-key-placeholder');
+      return {
+        bridgeUrl: 'https://bridge.example',
+        bridgeSecret: 'server-secret',
+      };
+    },
     deliveryStoreFactory: (_supabase, context) => {
       deliveryStoreContext = context;
       return baseStore;
