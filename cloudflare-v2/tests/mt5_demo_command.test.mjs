@@ -18,13 +18,24 @@ test('MT5 demo command reports required server-side config names only', () => {
   assert.doesNotMatch(JSON.stringify(result), /secret-project|service-secret-never-print/i);
 });
 
+test('MT5 demo command accepts the normalized staging SUPABASE_SERVICE_ROLE alias', () => {
+  const result = validateMT5DemoCommandEnvironment({
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_SERVICE_ROLE: 'service-secret',
+    TRADING_WORKSPACE_ID: 'workspace-123',
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missing, []);
+});
+
 test('dependency builder creates persistent MT5 demo delivery store scoped to workspace/account', () => {
   const calls = [];
   const fakeClient = { from() {} };
   const deps = buildMT5DemoCommandDependencies({
     env: {
       SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-secret',
+      SUPABASE_SERVICE_ROLE: 'service-secret',
       TRADING_WORKSPACE_ID: 'workspace-123',
       MT5_ACCOUNT_ID: '1001',
     },
@@ -48,7 +59,7 @@ test('dependency builder fails before client creation when command environment i
   assert.throws(() => buildMT5DemoCommandDependencies({
     env: {
       SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-secret',
+      SUPABASE_SERVICE_ROLE: 'service-secret',
       TRADING_WORKSPACE_ID: '',
       MT5_ACCOUNT_ID: '1001',
     },
