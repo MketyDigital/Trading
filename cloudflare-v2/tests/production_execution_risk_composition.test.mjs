@@ -10,6 +10,7 @@ function account(overrides = {}) {
     platform: 'mt5',
     account_id: '90001',
     server_name: 'Broker-Demo',
+    credential_ciphertext: 'synthetic-mt5-envelope',
     is_active: true,
     execution_enabled: true,
     sizingMode: 'RISK_PERCENT',
@@ -55,17 +56,22 @@ function supabaseStub() {
   return { from() { throw new Error('risk materialization must not query unrelated tables in this focused test'); } };
 }
 
+function decryptCredentialsFn() {
+  return Promise.resolve({
+    bridgeUrl: 'https://mt5-bridge.example',
+    bridgeSecret: 'server-only-secret',
+  });
+}
+
 test('real production dependencies expose broker-authoritative MT5 risk materialization', async () => {
   let contextCalls = 0;
   const deps = createProductionExecutionDependencies({
-    env: {
-      MT5_BRIDGE_URL: 'https://mt5-bridge.example',
-      MT5_BRIDGE_SECRET: 'server-only-secret',
-    },
+    env: { TRADING_MASTER_KEY: 'master-key' },
     supabase: supabaseStub(),
     workspaceId: 'ws-1',
     tradingEventId: 'event-1',
   }, {
+    decryptCredentialsFn,
     deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
     mt5ContextLoader: async () => { contextCalls += 1; return context(1); },
   });
@@ -89,14 +95,12 @@ test('real production dependencies expose broker-authoritative MT5 risk material
 
 test('real production MT5 risk materialization blocks when fresh broker economics reduce allowed volume', async () => {
   const deps = createProductionExecutionDependencies({
-    env: {
-      MT5_BRIDGE_URL: 'https://mt5-bridge.example',
-      MT5_BRIDGE_SECRET: 'server-only-secret',
-    },
+    env: { TRADING_MASTER_KEY: 'master-key' },
     supabase: supabaseStub(),
     workspaceId: 'ws-1',
     tradingEventId: 'event-1',
   }, {
+    decryptCredentialsFn,
     deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
     mt5ContextLoader: async () => context(2),
   });
