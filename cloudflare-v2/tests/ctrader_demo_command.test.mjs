@@ -18,13 +18,24 @@ test('cTrader demo command reports required server-side config names only', () =
   assert.doesNotMatch(JSON.stringify(result), /secret-project|service-secret-never-print/i);
 });
 
+test('cTrader demo command accepts the normalized staging SUPABASE_SERVICE_ROLE alias', () => {
+  const result = validateCTraderDemoCommandEnvironment({
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_SERVICE_ROLE: 'service-secret',
+    TRADING_WORKSPACE_ID: 'workspace-123',
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missing, []);
+});
+
 test('dependency builder creates persistent cTrader demo delivery store scoped to workspace/account', () => {
   const calls = [];
   const fakeClient = { from() {} };
   const deps = buildCTraderDemoCommandDependencies({
     env: {
       SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-secret',
+      SUPABASE_SERVICE_ROLE: 'service-secret',
       TRADING_WORKSPACE_ID: 'workspace-123',
       CTRADER_ACCOUNT_ID: '77',
     },
@@ -48,7 +59,7 @@ test('dependency builder fails before client creation when command environment i
   assert.throws(() => buildCTraderDemoCommandDependencies({
     env: {
       SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-secret',
+      SUPABASE_SERVICE_ROLE: 'service-secret',
       TRADING_WORKSPACE_ID: '',
       CTRADER_ACCOUNT_ID: '77',
     },
