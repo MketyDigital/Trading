@@ -39,8 +39,10 @@ test('passes exact raw body and signed source headers into persistent ingest pip
     ingestFn: async (input, dependencies) => {
       captured = { input, dependencies };
       await dependencies.aiRouterFactory({ source: { workspace_id: 'ws-authenticated' } });
-      return { ok: true, duplicate: false, eventId: 'evt-1', interpretation: { status: 'READY' } };
+      return { ok: true, duplicate: false, eventId: 'evt-1', event: {}, interpretation: { status: 'READY' } };
     },
+    simulationDepsFactory: async () => ({ safe: true }),
+    orchestrateFn: async () => ({ status: 'NO_ACTION', executionEnabled: false, actions: [], accounts: [] }),
   });
 
   assert.equal(response.status, 200);
@@ -55,10 +57,11 @@ test('passes exact raw body and signed source headers into persistent ingest pip
   assert.equal(aiFactoryCall[2].circuitBreaker, aiCircuitBreaker);
   const body = await response.json();
   assert.equal(body.eventId, 'evt-1');
-  assert.equal(body.simulation, undefined);
+  assert.equal(body.simulation.status, 'NO_ACTION');
+  assert.equal(body.simulation.executionEnabled, false);
 });
 
-test('simulation flag orchestrates only a successful non-duplicate interpreted event', async () => {
+test('successful non-duplicate interpreted event enters orchestration', async () => {
   let orchestrationInput;
   let depsBuilt = 0;
   const request = new Request('https://trade.test/api/v1/events', {
@@ -134,6 +137,8 @@ test('accepted events always enter orchestration even when simulation mode is di
   assert.equal(body.simulation.status, 'PROCESSED');
   assert.equal(body.simulation.executionEnabled, true);
   assert.equal(body.simulation.actions.length, 1);
+  assert.equal(body.execution.status, 'TRADING_ACCESS_DISABLED');
+  assert.equal(body.execution.executionEnabled, false);
 });
 
 test('duplicate or rejected ingress never enters orchestration', async () => {
