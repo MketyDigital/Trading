@@ -64,7 +64,9 @@ jobs:
       MT5_DEMO_ACCEPTANCE_MODE: 'lifecycle'
       MT5_DEMO_ORDER_TEST: 'true'
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       TRADING_WORKSPACE_ID: ${{ secrets.TRADING_WORKSPACE_ID }}
       BROKER_EXECUTION_ENABLED: 'false'
     steps:
@@ -87,7 +89,10 @@ jobs:
           test -n "${MT5_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: MT5_ACCOUNT_ID'; exit 1; }
           test -n "${MT5_DEMO_SERVER:-}" || { echo 'Missing GitHub staging secret: MT5_EXPECTED_DEMO_SERVER'; exit 1; }
           test -n "${SUPABASE_URL:-}" || { echo 'Missing GitHub staging secret: SUPABASE_URL'; exit 1; }
-          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE_KEY'; exit 1; }
+          service_role="${SUPABASE_SERVICE_ROLE:-${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}}"
+          test -n "$service_role" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE (or supported alias)'; exit 1; }
+          echo "::add-mask::$service_role"
+          echo "SUPABASE_SERVICE_ROLE=$service_role" >> "$GITHUB_ENV"
           test -n "${TRADING_WORKSPACE_ID:-}" || { echo 'Missing GitHub staging secret: TRADING_WORKSPACE_ID'; exit 1; }
           test -n "${MT5_DEMO_TEST_LOTS:-}" || { echo 'Missing Gate 7 MT5 demo lot configuration'; exit 1; }
 
@@ -115,7 +120,9 @@ jobs:
       CTRADER_DEMO_ACCEPTANCE_MODE: 'lifecycle'
       CTRADER_DEMO_ORDER_TEST: 'true'
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       TRADING_WORKSPACE_ID: ${{ secrets.TRADING_WORKSPACE_ID }}
       BROKER_EXECUTION_ENABLED: 'false'
     steps:
@@ -138,7 +145,10 @@ jobs:
           test -n "${CTRADER_ACCESS_TOKEN:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCESS_TOKEN'; exit 1; }
           test -n "${CTRADER_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCOUNT_ID'; exit 1; }
           test -n "${SUPABASE_URL:-}" || { echo 'Missing GitHub staging secret: SUPABASE_URL'; exit 1; }
-          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE_KEY'; exit 1; }
+          service_role="${SUPABASE_SERVICE_ROLE:-${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}}"
+          test -n "$service_role" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE (or supported alias)'; exit 1; }
+          echo "::add-mask::$service_role"
+          echo "SUPABASE_SERVICE_ROLE=$service_role" >> "$GITHUB_ENV"
           test -n "${TRADING_WORKSPACE_ID:-}" || { echo 'Missing GitHub staging secret: TRADING_WORKSPACE_ID'; exit 1; }
           test -n "${CTRADER_DEMO_TEST_LOTS:-}" || { echo 'Missing Gate 7 cTrader demo lot configuration'; exit 1; }
 
