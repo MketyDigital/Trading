@@ -221,11 +221,11 @@ export async function handleV1AdminRequest(request, env = {}, {
   if (url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')) {
     let sourceStore;
     try {
-      sourceStore = sourceStoreFactory(supabase);
+      sourceStore = sourceStoreFactory(supabase, env);
     } catch {
       return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503);
     }
-    return handleAuthorizedV1AdminSourcesRequest(request, authorization, { sourceStore });
+    return handleAuthorizedV1AdminSourcesRequest(request, authorization, { sourceStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/accounts' || url.pathname.startsWith('/api/v1/admin/accounts/')) {
