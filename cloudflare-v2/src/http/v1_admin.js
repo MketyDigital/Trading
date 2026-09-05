@@ -1,4 +1,4 @@
-import { authenticateTradingBearer } from '../security/zitadel_auth.js';
+import { authenticateMketyAccessBearer } from '../security/mkety_access_assertion.js';
 import { createTradingMembershipStore } from '../security/trading_membership_store.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
@@ -30,9 +30,7 @@ function publicWorkspace(workspace = {}) {
     id: workspace.id,
     name: workspace.display_name ?? null,
     owner_email: workspace.owner_email ?? null,
-    zitadel_org_id: workspace.zitadel_org_id,
     trading_access_enabled: Boolean(workspace.trading_access_enabled),
-    trading_required_role: workspace.trading_required_role || 'trading_access',
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
   };
@@ -40,7 +38,7 @@ function publicWorkspace(workspace = {}) {
 
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
-  authenticateFn = authenticateTradingBearer,
+  authenticateFn = authenticateMketyAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
 } = {}) {
   const workspaceId = request.headers.get('X-Mkety-Workspace-Id');
@@ -55,28 +53,28 @@ export async function authorizeV1AdminRequest(request, env = {}, {
 
   if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
   if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
-  if (!workspace.zitadel_org_id) return { ok: false, status: 403, reason: 'WORKSPACE_NOT_BOUND_TO_ZITADEL_ORG' };
 
-  const issuer = env.ZITADEL_ISSUER;
-  const audience = env.ZITADEL_AUDIENCE;
-  const jwksUrl = env.ZITADEL_JWKS_URL;
-  const usesProductionVerifier = authenticateFn === authenticateTradingBearer;
+  const issuer = env.MKETY_ACCESS_ISSUER;
+  const audience = env.MKETY_ACCESS_AUDIENCE;
+  const jwksUrl = env.MKETY_ACCESS_JWKS_URL;
+  const usesProductionVerifier = authenticateFn === authenticateMketyAccessBearer;
   if (usesProductionVerifier && (!issuer || !audience || !jwksUrl)) {
-    return { ok: false, status: 503, reason: 'ZITADEL_NOT_CONFIGURED' };
+    return { ok: false, status: 503, reason: 'MKETY_ACCESS_GATE_NOT_CONFIGURED' };
   }
 
-  const requiredRole = workspace.trading_required_role || env.ZITADEL_TRADING_ROLE || 'trading_access';
   const auth = await authenticateFn(request, {
     issuer,
     audience,
     jwksUrl,
-    requiredRole,
-    projectId: env.ZITADEL_PROJECT_ID,
-    workspace: { id: workspace.id, zitadelOrgId: workspace.zitadel_org_id },
+    requestedWorkspaceId: workspace.id,
   });
 
   if (!auth?.ok) {
-    const unauthorized = ['MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED', 'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND', 'JWKS_FETCH_FAILED'];
+    const unauthorized = [
+      'MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED',
+      'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND',
+      'JWKS_FETCH_FAILED',
+    ];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
 
@@ -97,9 +95,10 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   if (
     !membership?.enabled ||
     String(membership.workspaceId) !== String(workspace.id) ||
-    String(membership.subject) !== String(auth.subject)
+    String(membership.subject) !== String(auth.subject) ||
+    String(membership.role) !== 'owner'
   ) {
-    return { ok: false, status: 403, reason: 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING' };
+    return { ok: false, status: 403, reason: 'TRADING_OWNER_ACCESS_DISABLED_OR_MISSING' };
   }
 
   return { ok: true, workspace, auth, membership };
@@ -107,7 +106,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
 
 export async function handleV1AdminRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
-  authenticateFn = authenticateTradingBearer,
+  authenticateFn = authenticateMketyAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
