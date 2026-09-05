@@ -8,7 +8,7 @@ import { encryptSecret } from '../security/secret_box.js';
 
 const SOURCE_SELECT = [
   'id', 'workspace_id', 'source_type', 'source_instance_id', 'display_name', 'is_active',
-  'source_family', 'provider_type', 'is_default', 'priority', 'external_identity', 'config',
+  'source_family', 'provider_type', 'is_default', 'priority', 'external_identity', 'public_source_handle', 'config',
   'provider_secret_ciphertext', 'health_status', 'last_heartbeat_at', 'last_event_at',
   'last_connected_at', 'last_disconnected_at', 'restart_count', 'last_error_code',
 ].join(',');
@@ -21,8 +21,17 @@ const SOURCE_CREDENTIAL_KIND_BY_PROVIDER = Object.freeze({
   ctrader_source: 'ctrader',
 });
 
+const NON_CREDENTIAL_ONBOARDING_PROVIDERS = new Set([
+  'tradingview_webhook',
+  'custom_signed_api',
+]);
+
 function sourceCredentialKind(providerType) {
   return SOURCE_CREDENTIAL_KIND_BY_PROVIDER[String(providerType ?? '')] ?? null;
+}
+
+function isNonCredentialOnboardingProvider(providerType) {
+  return NON_CREDENTIAL_ONBOARDING_PROVIDERS.has(String(providerType ?? ''));
 }
 
 function json(body, status = 200, extraHeaders = {}) {
@@ -64,6 +73,7 @@ function normalizeSource(row) {
     sourceInstanceId: row.source_instance_id ?? row.sourceInstanceId ?? null,
     displayName: row.display_name ?? row.displayName ?? null,
     externalIdentity: row.external_identity ?? row.externalIdentity ?? null,
+    publicSourceHandle: row.public_source_handle ?? row.publicSourceHandle ?? null,
     config: row.config || {},
     credentialConfigured,
     credentialsConfigured: credentialConfigured,
@@ -93,9 +103,11 @@ function publicHealth(health = {}) {
 
 function publicSource(source = {}) {
   const credentialConfigured = Boolean(source.credentialConfigured ?? source.credentialsConfigured ?? source.providerSecretCiphertext);
+  const providerType = source.providerType ?? null;
+  const publicSourceHandle = source.publicSourceHandle ?? null;
   return {
     id: source.id,
-    providerType: source.providerType ?? null,
+    providerType,
     sourceFamily: source.sourceFamily ?? null,
     sourceType: source.sourceType ?? null,
     sourceInstanceId: source.sourceInstanceId ?? null,
@@ -104,6 +116,10 @@ function publicSource(source = {}) {
     isDefault: Boolean(source.isDefault),
     priority: Number(source.priority || 0),
     externalIdentity: source.externalIdentity ?? null,
+    publicSourceHandle,
+    ...(providerType === 'tradingview_webhook' && publicSourceHandle
+      ? { webhookPath: `/api/v1/webhooks/tradingview/${encodeURIComponent(publicSourceHandle)}` }
+      : {}),
     config: sanitizeValue(source.config || {}),
     credentialConfigured,
     credentialsConfigured: credentialConfigured,
@@ -157,19 +173,25 @@ function sourceCreationInput(body) {
   }
 
   const credentialKind = sourceCredentialKind(providerType);
-  if (!credentialKind) {
+  const nonCredentialOnboarding = isNonCredentialOnboardingProvider(providerType);
+  if (!credentialKind && !nonCredentialOnboarding) {
     return { ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' };
   }
 
-  try {
-    validateConnectionCredentials(credentialKind, body.credentials);
-  } catch {
+  if (credentialKind) {
+    try {
+      validateConnectionCredentials(credentialKind, body.credentials);
+    } catch {
+      return { ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' };
+    }
+  } else if (body.credentials !== undefined && body.credentials !== null) {
     return { ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' };
   }
 
   return {
     ok: true,
     credentialKind,
+    nonCredentialOnboarding,
     credentials: body.credentials,
     input: {
       providerType,
@@ -188,6 +210,11 @@ function sourceCreationInput(body) {
 
 function randomIngressSecret() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function randomPublicSourceHandle() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
@@ -222,14 +249,19 @@ export function createAdminSourceStore(supabase, env = {}) {
       if (!workspaceId || !input?.providerType || !input?.sourceFamily || !input?.sourceType || !input?.sourceInstanceId) {
         throw new Error('SOURCE_CREATE_FAILED');
       }
-      if (!providerSecretCiphertext) throw new Error('SOURCE_CREATE_FAILED');
       if (!env?.TRADING_MASTER_KEY) throw new Error('SOURCE_ENCRYPTION_NOT_CONFIGURED');
 
-      let ingressSecretCiphertext;
-      try {
-        ingressSecretCiphertext = await encryptSecret(randomIngressSecret(), env.TRADING_MASTER_KEY);
-      } catch {
-        throw new Error('SOURCE_ENCRYPTION_NOT_CONFIGURED');
+      const credentialKind = sourceCredentialKind(input.providerType);
+      if (credentialKind && !providerSecretCiphertext) throw new Error('SOURCE_CREATE_FAILED');
+      if (!credentialKind && !isNonCredentialOnboardingProvider(input.providerType)) throw new Error('SOURCE_CREATE_FAILED');
+
+      let ingressSecretCiphertext = input.ingressSecretCiphertext ?? null;
+      if (!ingressSecretCiphertext) {
+        try {
+          ingressSecretCiphertext = await encryptSecret(randomIngressSecret(), env.TRADING_MASTER_KEY);
+        } catch {
+          throw new Error('SOURCE_ENCRYPTION_NOT_CONFIGURED');
+        }
       }
 
       const insert = {
@@ -237,7 +269,7 @@ export function createAdminSourceStore(supabase, env = {}) {
         source_type: String(input.sourceType),
         source_instance_id: String(input.sourceInstanceId),
         display_name: input.displayName ?? null,
-        secret_ciphertext: ingressSecretCiphertext,
+        secret_ciphertext: String(ingressSecretCiphertext),
         settings: {},
         is_active: false,
         source_family: String(input.sourceFamily),
@@ -245,8 +277,9 @@ export function createAdminSourceStore(supabase, env = {}) {
         is_default: false,
         priority: Number(input.priority ?? 0),
         external_identity: input.externalIdentity ?? null,
+        public_source_handle: input.publicSourceHandle ?? null,
         config: sanitizeValue(input.config || {}),
-        provider_secret_ciphertext: String(providerSecretCiphertext),
+        provider_secret_ciphertext: providerSecretCiphertext ? String(providerSecretCiphertext) : null,
         health_status: 'DISABLED',
       };
 
@@ -271,6 +304,21 @@ export function createAdminSourceStore(supabase, env = {}) {
         .select(SOURCE_SELECT)
         .maybeSingle();
       if (error) throw new Error('SOURCE_CREDENTIAL_REPLACE_FAILED');
+      return normalizeSource(data);
+    },
+
+    async replaceIngressSecret(workspaceId, sourceId, secretCiphertext) {
+      if (!workspaceId || !sourceId || !secretCiphertext) {
+        throw new Error('SOURCE_INGRESS_SECRET_REPLACE_FAILED');
+      }
+      const { data, error } = await supabase
+        .from('source_connections')
+        .update({ secret_ciphertext: String(secretCiphertext) })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(sourceId))
+        .select(SOURCE_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('SOURCE_INGRESS_SECRET_REPLACE_FAILED');
       return normalizeSource(data);
     },
 
@@ -308,6 +356,9 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
   sourceStore,
   env = {},
   encryptCredentials = encryptConnectionCredentials,
+  generatePublicSourceHandle = randomPublicSourceHandle,
+  generateIngressSecret = randomIngressSecret,
+  encryptIngressSecret = encryptSecret,
 } = {}) {
   const workspaceId = String(authorization?.workspace?.id ?? '').trim();
   if (!workspaceId) return json({ ok: false, reason: 'ADMIN_WORKSPACE_AUTHORITY_MISSING' }, 403);
@@ -344,18 +395,58 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
         return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
       }
 
-      let providerSecretCiphertext;
+      if (parsed.credentialKind) {
+        let providerSecretCiphertext;
+        try {
+          providerSecretCiphertext = await encryptCredentials(parsed.credentialKind, parsed.credentials, env.TRADING_MASTER_KEY);
+        } catch {
+          return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
+        }
+
+        try {
+          const input = { ...parsed.input, providerSecretCiphertext };
+          const source = await sourceStore.createSource(workspaceId, input, providerSecretCiphertext);
+          if (!source) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+          return json({ ok: true, workspaceId, source: publicSource({ ...source, credentialConfigured: true }) }, 201);
+        } catch {
+          return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+        }
+      }
+
+      let ingressSecret;
+      let ingressSecretCiphertext;
       try {
-        providerSecretCiphertext = await encryptCredentials(parsed.credentialKind, parsed.credentials, env.TRADING_MASTER_KEY);
+        ingressSecret = generateIngressSecret();
+        ingressSecretCiphertext = await encryptIngressSecret(ingressSecret, env.TRADING_MASTER_KEY);
       } catch {
-        return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
+        return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
+      }
+
+      const publicSourceHandle = parsed.input.providerType === 'tradingview_webhook'
+        ? requiredText(generatePublicSourceHandle())
+        : null;
+      if (parsed.input.providerType === 'tradingview_webhook' && !publicSourceHandle) {
+        return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
       }
 
       try {
-        const input = { ...parsed.input, providerSecretCiphertext };
-        const source = await sourceStore.createSource(workspaceId, input, providerSecretCiphertext);
+        const input = {
+          ...parsed.input,
+          providerSecretCiphertext: null,
+          ingressSecretCiphertext,
+          publicSourceHandle,
+        };
+        const source = await sourceStore.createSource(workspaceId, input, null);
         if (!source) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
-        return json({ ok: true, workspaceId, source: publicSource({ ...source, credentialConfigured: true }) }, 201);
+        const safeSource = publicSource({
+          ...source,
+          publicSourceHandle: source.publicSourceHandle ?? publicSourceHandle,
+          credentialConfigured: false,
+        });
+        if (parsed.input.providerType === 'custom_signed_api') {
+          return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
+        }
+        return json({ ok: true, workspaceId, source: safeSource }, 201);
       } catch {
         return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
       }
@@ -396,19 +487,50 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
       return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
     }
 
-    let credentialKind = null;
+    let existing;
     if (typeof sourceStore.getSource === 'function') {
       try {
-        const existing = await sourceStore.getSource(workspaceId, sourceId);
+        existing = await sourceStore.getSource(workspaceId, sourceId);
         if (!existing) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
-        credentialKind = sourceCredentialKind(existing.providerType);
-        if (!credentialKind) {
-          return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
-        }
       } catch {
         return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
       }
     }
+    if (!existing) {
+      return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
+    }
+
+    if (existing.providerType === 'custom_signed_api') {
+      if (typeof sourceStore.replaceIngressSecret !== 'function') {
+        return json({ ok: false, reason: 'SOURCE_INGRESS_SECRET_REPLACE_FAILED' }, 503);
+      }
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+
+      let signingSecret;
+      let secretCiphertext;
+      try {
+        signingSecret = generateIngressSecret();
+        secretCiphertext = await encryptIngressSecret(signingSecret, env.TRADING_MASTER_KEY);
+      } catch {
+        return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
+      }
+
+      try {
+        const source = await sourceStore.replaceIngressSecret(workspaceId, sourceId, secretCiphertext);
+        if (!source) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
+        return json({
+          ok: true,
+          workspaceId,
+          source: publicSource({ ...source, credentialConfigured: false }),
+          oneTimeSigningSecret: signingSecret,
+        });
+      } catch {
+        return json({ ok: false, reason: 'SOURCE_INGRESS_SECRET_REPLACE_FAILED' }, 503);
+      }
+    }
+
+    const credentialKind = sourceCredentialKind(existing.providerType);
     if (!credentialKind) {
       return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
     }
