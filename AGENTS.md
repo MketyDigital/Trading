@@ -3,7 +3,7 @@
 ## Mission
 Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem, using shared Mkety identity with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and a controlled production rollout.
 
-The project is past architecture/static-remediation work. The controlling objective is now: **run the already-built system in real staging/demo, fix only defects proved by real evidence, then launch progressively.**
+The project is past broad architecture/static-remediation work. The controlling objective is now: **run the already-built system in real staging/demo, fix only defects proved by real evidence, then launch progressively.**
 
 ## Controlling product model — APPROVED 2026-09-05
 The customer boundary is intentionally simple:
@@ -14,12 +14,17 @@ Trading is not a generic collaboration/team SaaS. Do not build departments, nest
 
 Existing membership primitives may remain for compatibility/future use, but they are not a reason to build a complex team product now.
 
-### Identity boundary
-- Mkety Trading shares the mother Mkety Zitadel identity authority.
-- Trading-only users may authenticate through that same Zitadel without requiring MKSaaS application access or an MKSaaS database profile.
-- Zitadel answers who the user is and whether the user is entitled to Trading.
-- Trading/Supabase data answers which Trading workspace that authenticated owner controls.
-- Authentication is independent from broker execution.
+### Identity / access-gate boundary — APPROVED 2026-09-05
+- Mkety uses Zitadel as the mother identity authority. Trading will use one Mkety Trading Zitadel sub-project/application boundary, not one project per enterprise customer.
+- Trading core/runtime must remain independently deployable and operable when external user access is disabled.
+- Zitadel is an identity adapter behind the Mkety product-access gate; it is not a runtime dependency for event processing, Supabase persistence, Telegram, TradingView, MT5, cTrader or other Trading-core operation.
+- Mkety grants Trading access using a cryptographically signed, time-bounded access assertion/entitlement derived from authenticated identity/product access. Do not use a reusable plain access code as the authorization mechanism.
+- The signed access assertion identifies the authenticated subject and Trading product entitlement; server-owned Trading data remains authoritative for the workspace/owner relationship.
+- Supabase Trading workspace ownership is the final application authorization check. Never authorize a workspace solely from hostname, caller-supplied workspace ID or an unverified token claim.
+- Trading-only users may authenticate through the same Mkety/Zitadel identity without requiring MKSaaS application access or an MKSaaS database profile.
+- Authentication/access is independent from broker execution.
+- `TRADING_ACCESS_ENABLED=false` means Zitadel adapter configuration is optional for core readiness.
+- `TRADING_ACCESS_ENABLED=true` means `ZITADEL_ISSUER`, `ZITADEL_AUDIENCE` and `ZITADEL_JWKS_URL` are mandatory and readiness must fail closed if any are absent.
 
 ### Workspace boundary
 A Trading workspace is the isolation boundary for one enterprise customer. Trading-owned sources, destinations, broker accounts, credentials, policies, events, Trade State, retries/recovery, logs and runtime data remain scoped to that workspace.
@@ -31,17 +36,14 @@ The owner has full workspace control. Mkety does not need to model the customer'
 - An enterprise customer may optionally attach a hostname they control, e.g. `trade.starpipsforex.com`, using the existing Cloudflare for SaaS capability.
 - Default and custom hostnames resolve to the same internal Trading workspace/backend.
 - A custom hostname never grants authorization by itself.
-- Hostname resolution identifies the requested workspace; Zitadel identifies the user; server-owned Trading data confirms that the owner may access that workspace.
+- Hostname resolution identifies the requested workspace; the Mkety/Zitadel access gate identifies/entitles the user; server-owned Trading data confirms that the owner may access that workspace.
 - Do not create a separate backend, workspace or identity silo per custom hostname.
 
-Controlling design spec:
-`docs/superpowers/specs/2026-09-05-trading-enterprise-workspace-product-model-design.md`
+Controlling design spec: `docs/superpowers/specs/2026-09-05-trading-enterprise-workspace-product-model-design.md`
 
-Minimal production plan:
-`docs/superpowers/plans/2026-09-05-production-fast-path.md`
+Minimal production plan: `docs/superpowers/plans/2026-09-05-production-fast-path.md`
 
-Rolling pickup/handoff:
-`cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`
+Rolling pickup/handoff: `cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`
 
 ## Mkety product isolation
 - MKSaaS runtime/database failure must not stop Trading.
@@ -50,9 +52,7 @@ Rolling pickup/handoff:
 - A user entitled to multiple Mkety products may reuse the same identity.
 
 ## Architecture/tooling freeze
-No new production architecture, framework, gate, workflow or elaborate acceptance tooling is added unless it fixes a blocker proved by ordinary CI, real staging, demo execution or safe live-readiness verification.
-
-Use the system already built. Fix only actual defects.
+No new production architecture, framework, gate, workflow or elaborate acceptance tooling is added unless it fixes a blocker proved by ordinary CI, real staging, demo execution or safe live-readiness verification. Use the system already built. Fix only actual defects.
 
 ## Intended production flow
 1. Telegram MTProto, TradingView, MT5 source, cTrader source and approved custom API enter one authenticated canonical Trading Event pipeline.
@@ -76,6 +76,7 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - source/provider isolation: one source/provider failure != sibling source/provider failure;
 - account/broker isolation: one broker/account failure != unrelated account/provider failure;
 - destination isolation: Telegram delivery failure != broker execution failure and vice versa;
+- identity isolation: Trading core availability does not depend on Zitadel while external access is disabled;
 - AI isolation: deterministic clear execution does not depend on AI availability;
 - safety uncertainty: inability to prove source/workspace/account/risk/idempotency/broker outcome fails closed only on the affected money-moving path.
 
@@ -83,50 +84,59 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Repository: `MketyDigital/Trading`
 - Active branch: `design/enterprise-trading-event-core`
 - Draft PR: #2 -> `main`
-- Never merge `main` without explicit user instruction.
+- Never merge Trading runtime to `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
 ## Current verified stage — 2026-09-05
-**CODE GREEN -> DATABASE GREEN THROUGH 0012 -> STAGING READINESS / CLOUDFLARE TARGET INSPECTION NEXT.**
+**CODE GREEN -> DATABASE GREEN THROUGH 0012 -> CLOUDFLARE INSPECT GREEN -> CORE AUTH-ADAPTER READINESS GREEN -> STAGING RUNTIME CONFIG/DEPLOY NEXT.**
 
-Verified before the 2026-09-05 documentation lock-in:
-- exact GREEN code head: `86c3991617bbe2a381106e8c3a62a6ecf135110b`;
-- ordinary CI run `33902795369` succeeded;
-- test job `101120562074` succeeded;
-- protected Cloudflare jobs were skipped;
-- Gate 6 fix changed test semantics only, not runtime/source/execution behavior.
+### Latest auth-readiness TDD evidence
+- RED test-only head: `0760480263dfdcbdc8deec9ef80adfab63f24ce7` proved the old behavior incorrectly required Zitadel while access was disabled.
+- Minimal production fix head: `b9bb16a789a0765a47fe768dd761a64ce1d5f12d`.
+- Trading V1 CI run `33951294621`: **success**.
+- Test job `101266508504`: **success**.
+- Worker/trading-core, pure MT5 bridge and pure MTProto Python tests all passed.
+- Protected Cloudflare jobs remained skipped as intended.
+- `cloudflare-v2/src/config/staging_readiness.js` now requires only Supabase URL, one supported Supabase service-role secret and `TRADING_MASTER_KEY` for core readiness while `TRADING_ACCESS_ENABLED=false`.
+- Zitadel issuer/audience/JWKS are required only when `TRADING_ACCESS_ENABLED=true` and then fail closed if missing.
 
-Supabase project `Mkety Digital`:
-- healthy and connected;
-- Trading migrations through `0010` were already applied;
-- `0011_destination_delivery_retry_state` applied successfully on 2026-09-05;
-- `0012_trade_accounts_trading_workspace_fk` applied successfully on 2026-09-05;
-- migration ledger now records through Trading `0012`;
-- orphan `trade_accounts.workspace_id` prerequisite count was `0`;
-- `trade_accounts.workspace_id` now references `trading_workspace_access(id)` with `ON DELETE RESTRICT`;
-- the `0011` retry columns and retry-due index were verified.
+### Supabase
+- Project: `Mkety Digital` (`vdblajgxrfndjesoyayy`), healthy.
+- Trading migrations applied/verified through `0012`.
+- `trade_accounts.workspace_id` references `trading_workspace_access(id)` with `ON DELETE RESTRICT`; orphan prerequisite count was `0`.
 
-Current external configuration known:
-- GitHub `staging` environment reportedly contains `CLOUDFLARE_API_TOKEN`;
-- GitHub `staging` environment reportedly contains `CLOUDFLARE_ACCOUNT_ID`;
-- GitHub `staging` environment reportedly contains a Supabase service-role key;
-- Supabase itself is connected here;
-- Mkety Zitadel account exists, but no Trading project/application has been created yet;
-- Cloudflare for SaaS already exists for Mkety and is the intended custom-hostname mechanism.
+### Cloudflare staging inspect
+- Workflow run `33950342398`, job `101263798521`: **success**.
+- Authenticated to the intended Mkety Cloudflare account.
+- Paid/free Wrangler dry-runs passed.
+- Existing `mkety-copier-engine` history showed only prior Gate 2/Gate 3 acceptance uploads/rollbacks, with no evidence of customer production use; treat it as the current staging/test Worker for this launch path, not automatically the eventual general-production target.
+- No deployment occurred in the inspect run.
 
-Documentation lock-in commits may advance the branch beyond the last runtime GREEN head. Documentation-only advancement does not change runtime behavior; ordinary CI should still be verified on the resulting exact head before deployment.
+### Staging config reported present in GitHub environment `staging`
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `SUPABASE_URL`
+- a Supabase service-role key
+- `TRADING_MASTER_KEY`
+
+Important: GitHub environment presence does not by itself make `SUPABASE_URL`, service-role or `TRADING_MASTER_KEY` available inside the deployed Cloudflare Worker. The staging deployment path must inject these runtime values securely without logging/committing them.
+
+### Zitadel
+- Mkety Zitadel account/instance exists.
+- Mkety Trading sub-project/application not created yet.
+- This no longer blocks core staging deployment while `TRADING_ACCESS_ENABLED=false`.
+- Do not invent issuer/audience/JWKS/project values.
 
 ## Exact next pickup
-1. Re-fetch the branch exact head.
-2. Verify ordinary CI remains GREEN after documentation-only commits.
-3. Use the existing Cloudflare staging workflow in **`inspect` mode only** to prove account/worker target identity and dry-run both Wrangler profiles.
-4. Do **not** use `deploy-paid` or `deploy-free` until the target is proven to be an isolated staging target.
-5. Complete minimum staging runtime config by name only: `SUPABASE_URL`, accepted Supabase service-role secret name, `TRADING_MASTER_KEY`.
-6. Do not fake Zitadel values. Create the single shared-identity `Mkety Trading` Zitadel project/application when ready, then set issuer/audience/JWKS/project configuration.
-7. Deploy staging with all master fuses off.
-8. Verify `/api/v1/health` without exposing secret values.
-9. Then connect real Telegram + MT5 demo + cTrader demo, run one real E2E demo lifecycle, material recovery checks, shadow, demo soak.
-10. Tiny real-money live remains a separate explicit approval step.
+1. Securely wire GitHub `staging` values into the paid Cloudflare Worker runtime: `SUPABASE_URL`, canonical supported Supabase service-role secret and `TRADING_MASTER_KEY`; never print/commit values.
+2. Verify the workflow/config change through ordinary CI/dry-run.
+3. Deploy the paid staging Worker only with all four master fuses false.
+4. Verify `/api/v1/health` reports core readiness without leaking values; Zitadel may remain absent because access is off.
+5. Create the single Mkety Trading Zitadel sub-project/application and configure the signed Mkety access-gate adapter.
+6. Set issuer/audience/JWKS/project config and perform non-money-moving owner/workspace access acceptance before enabling external Trading access.
+7. Verify `trade.mkety.com` and one optional Cloudflare-for-SaaS customer hostname resolve to the same workspace with authorization enforced.
+8. Connect real Telegram + MT5 demo + cTrader demo, run one real E2E demo lifecycle, material recovery checks, shadow and demo soak.
+9. Tiny real-money live remains a separate explicit approval step with exact financial limits and kill/rollback procedure.
 
 ## Critical runtime safety defaults
 Keep fail closed until the relevant explicitly authorized rollout step changes them:
@@ -136,19 +146,6 @@ Keep fail closed until the relevant explicitly authorized rollout step changes t
 - `BROKER_EXECUTION_ENABLED=false`
 
 No tenant/admin API may mutate Worker-wide master fuses.
-
-## Core execution/safety contract
-- deterministic parsing/planning is primary; AI never authorizes clear execution;
-- persistent event/destination/order idempotency is mandatory;
-- broker metadata is authoritative for symbol, precision, tick economics, volume, account mode and execution semantics;
-- final source/workspace/account/safety/risk authority is revalidated immediately before every broker action;
-- critical source/workspace/account/kill/execution revocation wins immediately;
-- risk-increasing live volume normalization never silently increases intended risk;
-- risk-reducing protective actions remain possible unless the kill switch explicitly blocks them;
-- successful broker truth is repairable into Trade State without resend;
-- `SUCCEEDED + STATE_BINDING_PENDING` belongs to state-binding repair, never broker retry;
-- snapshots are advisory/non-secret/non-authoritative only;
-- warm broker/session reuse is bounded and never replaces fresh authority/risk.
 
 ## Production execution locks
 Before a broker adapter may be reached, all applicable locks must pass:
@@ -166,9 +163,9 @@ Before a broker adapter may be reached, all applicable locks must pass:
 
 ## Simplified production sequence
 A. exact-head GREEN
-B. Cloudflare staging target inspection
-C. minimum runtime config + staging deploy, fuses off
-D. shared Mkety Zitadel Trading identity setup + non-money-moving access acceptance
+B. Cloudflare target inspection — DONE
+C. secure runtime config injection + staging deploy, fuses off
+D. Mkety/Zitadel Trading access-gate setup + non-money-moving access acceptance
 E. default `trade.mkety.com` + optional one custom hostname acceptance
 F. Telegram + MT5 demo + cTrader demo connectivity
 G. one real E2E demo lifecycle
@@ -183,8 +180,6 @@ TradingView direct-ingress/certificate acceptance remains deferred/fail-closed a
 ## Safety authorization boundary
 Generic `continue` authorizes safe repository development/static inspection only. It does not authorize Cloudflare/Zitadel deployment/config mutation, protected external probes, real Telegram acceptance, demo/live broker orders, enabling master access/execution fuses, `main` merge or real-money execution unless the user explicitly authorizes the corresponding step.
 
-The 2026-09-05 user instruction explicitly authorized locking the approved product model into repository documentation and mapping the production path. It did not authorize real-money execution.
-
 ## Mandatory handoff discipline
 After every meaningful verified milestone:
 1. update this file if the controlling state changed;
@@ -192,7 +187,7 @@ After every meaningful verified milestone:
 3. record exact branch head and relevant CI/run/job/test evidence;
 4. state what was achieved, what remains, safety state and exact next pickup;
 5. never let stale historical blockers override a newer verified handoff;
-6. preserve the approved simple owner-workspace/custom-hostname product model;
+6. preserve the approved simple owner-workspace/custom-hostname/access-gate product model;
 7. preserve the architecture/tooling freeze so a new session does not restart speculative design work.
 
 Historical remediation/gate evidence remains in `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`; use it as historical evidence, not as the current pickup source when it conflicts with this file or the rolling fast-path handoff.
