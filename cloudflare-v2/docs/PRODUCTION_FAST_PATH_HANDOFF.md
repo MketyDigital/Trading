@@ -11,22 +11,22 @@
 
 ## Latest verified milestone — 2026-09-05
 
-### Production source onboarding — CODE GREEN
-- Exact source-onboarding head: `f6ee4a8e819418615d7a981cd2274bec2d193329`.
-- Trading V1 CI run `33975276085`, test job `101330765890`: **success**.
-- Core Worker/trading suite: **742/742 passed**.
-- Pure MT5 bridge suite: **30/30 passed**.
-- Pure MTProto/container/external Python suite: **34/34 passed**.
-- Admin source surface now supports workspace-scoped encrypted credential onboarding/rotation for:
-  - Telegram/MTProto providers -> `mtproto` credential envelope;
-  - MT5 source bridge -> `mt5` credential envelope;
-  - cTrader source -> `ctrader` credential envelope.
-- Source creation is inactive by default and does not grant broker execution authority.
-- Credential rotation derives the credential type from the exact persisted source provider; caller-supplied provider hints are not trusted as credential authority.
-- Provider credentials remain encrypted server-side with `TRADING_MASTER_KEY` in `source_connections.provider_secret_ciphertext` and are never returned as plaintext or ciphertext through admin responses.
-- TradingView webhook and custom signed API remain outside this provider-credential onboarding path because they use different authentication/transport models.
-- The RED checkpoint before the fix had exactly four expected failures: MT5/cTrader create + MT5/cTrader rotate. The provider-aware fix made those cases green without changing schema, broker execution, master fuses, or external integrations.
-- A legacy MTProto rotation fixture was updated to provide the persisted source record required by the strengthened stored-provider authority rule; production code did not fall back to caller-controlled provider data.
+### Production source onboarding — ALL APPROVED FAMILIES CODE GREEN
+- Exact TradingView + Custom Signed API onboarding head: `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d`.
+- Trading V1 CI run `33992264387`, test job `101376473506`: **success**.
+- Admin self-service source creation now covers every currently approved source family:
+  - Telegram/MTProto providers -> typed `mtproto` encrypted credential envelope;
+  - MT5 source bridge -> typed `mt5` encrypted credential envelope;
+  - cTrader source -> typed `ctrader` encrypted credential envelope;
+  - TradingView webhook -> server-generated public source handle with no fake broker/session credentials;
+  - Custom Signed API -> server-generated ingress signing secret with no broker/session credentials.
+- TradingView source creation is exact-workspace scoped, starts disabled, persists a server-generated `public_source_handle`, and exposes only the safe `/api/v1/webhooks/tradingview/<handle>` path. This milestone does not change the existing TradingView mTLS ingress/certificate security path.
+- Custom Signed API source creation is exact-workspace scoped and starts disabled. A strong plaintext signing secret is generated server-side, only its encrypted form is persisted in `source_connections.secret_ciphertext`, and the plaintext is returned once at creation only.
+- Custom Signed API secret rotation first resolves the exact persisted workspace/source, generates and persists an encrypted replacement in `secret_ciphertext`, and returns the replacement plaintext once. GET/list responses expose neither plaintext nor ciphertext signing secrets.
+- Credential-based providers continue to store encrypted provider/session material separately in `source_connections.provider_secret_ciphertext`; the two security systems remain intentionally separate.
+- All new sources remain inactive by default and source onboarding grants no broker execution authority.
+- The bounded RED checkpoint had exactly three failures: TradingView create, Custom Signed API create and Custom Signed API secret rotation. The approved patch made those cases green without schema, custom-hostname, broker-execution, deployment or external-provider changes.
+- Customer custom-hostname self-service provisioning/verification remains intentionally outside this milestone and is the next separate product gap.
 
 ### Production broker onboarding — CODE GREEN + LIVE DB READY
 - Production broker onboarding code head: `d852de184c0b156dc360c4d242569b756acc2225`.
@@ -71,12 +71,13 @@
 - Actual `/api/v1/health` response after redeploy: HTTP `200`, `ok:true`, `status:"ready"`, `ready:true`, `simulationReady:true`, `mtprotoContainerReady:true`, `missing:[]`, `mtprotoContainerMissing:[]`.
 - Optional Mkety access signer config is still absent by design: `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL`; `TRADING_ACCESS_ENABLED` remains false.
 - Hidden runtime bindings include `SUPABASE_URL`, normalized `SUPABASE_SERVICE_ROLE`, `TRADING_MASTER_KEY`, and the internal MTProto transport secret; secret values were not intentionally logged or committed.
+- The newer source-onboarding head `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d` has not been deployed by this repository-only milestone.
 
 ### Other already-verified boundaries
 - Mkety signed Trading assertion verifier is implemented and fail-closed; `TRADING_ACCESS_ENABLED` remains false.
-- Custom hostname -> workspace resolver is implemented; migration `0013` is live; `TRADING_CUSTOM_HOSTNAMES_ENABLED` remains false.
+- Custom hostname -> workspace resolver is implemented; migration `0013` is live; `TRADING_CUSTOM_HOSTNAMES_ENABLED` remains false. Customer hostname provisioning/verification remains a separate pending product subproject.
 - MT5/cTrader demo acceptance workflows support all accepted service-role secret aliases and keep global broker execution false.
-- External Telegram/MT5/cTrader acceptance has not yet been performed with real external credentials/accounts in this milestone.
+- External Telegram/MT5/cTrader/TradingView acceptance has not yet been performed with real external credentials/accounts/certificates in this milestone.
 
 ## Safety state
 Keep false unless a separately authorized rollout step changes them:
@@ -89,15 +90,16 @@ Keep false unless a separately authorized rollout step changes them:
 No real-money execution is authorized. Real-money enablement still requires separate explicit owner approval with exact financial limits, kill conditions and rollback procedure.
 
 ## Exact next pickup
-1. Treat production MT5/cTrader broker-account onboarding and Telegram/MT5/cTrader source credential onboarding as code-green; do not redesign them.
-2. Keep **offline readiness** distinct from **external connectivity acceptance**:
-   - offline readiness proves provider/family configuration, encrypted credential presence/decryptability and safe inactive state without network calls;
-   - actual Telegram/MT5/cTrader connectivity/health requires a separately authorized external probe/acceptance because it contacts the provider/account.
-3. Paid staging is now redeployed and `/api/v1/health` is verified HTTP 200 with `mtprotoContainerReady:true`; do not repeat this architecture/readiness check unless the relevant runtime/config changes.
-4. When actual external integration credentials/accounts are connected, run one production-path acceptance per integration: MTProto/source observation, MT5 connectivity, cTrader connectivity; then one complete non-live E2E lifecycle and recovery/soak.
-5. Do not enable `TRADING_ACCESS_ENABLED` until the central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access positive/negative acceptance passes.
-6. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths until the separate final financial-limit approval.
-7. Merge Trading runtime to `main` only on explicit owner instruction.
+1. Treat self-service onboarding for all currently approved source families as code-green; do not redesign it.
+2. Keep customer custom-hostname provisioning/verification as the next separate bounded product subproject; preserve hostname as routing context only, never authorization.
+3. Keep **offline readiness** distinct from **external connectivity acceptance**:
+   - offline readiness proves provider/family configuration, encrypted credential/signing-secret presence/decryptability and safe inactive state without network calls;
+   - actual Telegram/MT5/cTrader connectivity and TradingView mTLS ingress acceptance require separately authorized external probes because they contact providers/accounts/certificate paths.
+4. Paid staging is already healthy at the previously verified deployment; deploying the newer source-onboarding build is a separate external mutation and requires explicit authorization. If authorized, keep all five safety flags false.
+5. When actual external integration credentials/accounts/certificates are connected and external contact is authorized, run one production-path acceptance per integration: MTProto/source observation, MT5 connectivity, cTrader connectivity, TradingView mTLS ingress; then one complete non-live E2E lifecycle and recovery/soak.
+6. Do not enable `TRADING_ACCESS_ENABLED` until the central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access positive/negative acceptance passes.
+7. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths until the separate final financial-limit approval.
+8. Merge Trading runtime to `main` only on explicit owner instruction.
 
 ## Do not restart these debates
 - Do not redesign Trading as a complex team SaaS.
