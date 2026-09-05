@@ -42,55 +42,81 @@ Immediately before any broker action, the runtime must re-check persisted worksp
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
 ## Current verified stage — 2026-09-05
-**ALL APPROVED SOURCE FAMILIES SELF-SERVICE ONBOARDING CODE GREEN -> LIVE DATABASE GREEN THROUGH 0014 -> CURRENT PAID STAGING FUSES REMAIN OFF -> NEXT PRODUCT GAP IS CUSTOMER CUSTOM-HOSTNAME PROVISIONING, KEPT SEPARATE.**
+**ALL APPROVED SOURCE FAMILIES SELF-SERVICE ONBOARDING CODE GREEN -> LIVE DATABASE GREEN THROUGH 0014 -> CURRENT PAID STAGING FUSES REMAIN OFF.**
 
 ### Production source onboarding — GREEN
 - Exact code head for TradingView + Custom Signed API onboarding: `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d`.
 - Trading V1 CI run `33992264387`, test job `101376473506`: **success**.
-- Self-service admin source creation now covers every currently approved source family: Telegram/MTProto, MT5, cTrader, TradingView webhook and Custom Signed API.
-- Existing encrypted broker/session credential onboarding remains unchanged for:
-  - Telegram/MTProto -> typed `mtproto` encrypted credential envelope;
-  - MT5 source bridge -> typed `mt5` encrypted credential envelope;
-  - cTrader source -> typed `ctrader` encrypted credential envelope.
-- `tradingview_webhook` onboarding requires no fake broker/session credentials, generates a server-owned `public_source_handle`, starts disabled and returns only the safe `/api/v1/webhooks/tradingview/<handle>` path. Existing TradingView ingress/mTLS enforcement is unchanged by this onboarding milestone.
-- `custom_signed_api` onboarding requires no broker/session credentials, generates a strong signing secret, stores only its encrypted form in `source_connections.secret_ciphertext`, returns plaintext only once on creation, and rotates through exact-workspace source resolution with the replacement plaintext returned once.
-- GET/list admin responses do not expose Custom Signed API plaintext or ciphertext signing secrets.
-- Non-credential source onboarding remains exact-workspace scoped, inactive by default, and grants no broker execution authority.
-- `source_connections.provider_secret_ciphertext` remains the separate encrypted provider-credential field for credential-based sources; this milestone does not collapse provider credentials and ingress signing secrets into one security system.
-- The RED checkpoint before this fix had exactly three failures: TradingView create, Custom Signed API create and Custom Signed API secret rotation. The bounded onboarding fix resolved those without schema, custom-hostname, broker-execution, deployment or external-provider changes.
+- Self-service admin source creation covers Telegram/MTProto, MT5, cTrader, TradingView webhook and Custom Signed API.
+- Credential-based provider/session secrets remain encrypted in `source_connections.provider_secret_ciphertext`.
+- Custom Signed API ingress signing secrets remain separately encrypted in `source_connections.secret_ciphertext`, with plaintext returned only once at creation/rotation.
+- TradingView source creation generates a server-owned public handle, starts disabled and exposes only the safe webhook path.
+- All new sources remain inactive by default and source onboarding grants no broker execution authority.
 
 ### Production broker onboarding — GREEN
 - Broker-account onboarding code head: `d852de184c0b156dc360c4d242569b756acc2225`.
 - Trading V1 CI run `33964408888`, test job `101301829090`: **success**.
-- Admin surface supports production account creation and exact-workspace credential rotation.
-- MT5/cTrader credentials use provider-specific validation.
-- Credentials are encrypted server-side using `TRADING_MASTER_KEY` and persisted only as `trade_accounts.credential_ciphertext`.
-- Plaintext/ciphertext credentials are not returned through admin account responses.
-- New production account creation is forcibly safe: inactive, execution disabled, kill switch enabled.
-- Credential rotation changes only the encrypted credential envelope and cannot enable execution.
+- Credentials remain encrypted in `trade_accounts.credential_ciphertext`; new accounts are safe/inactive with execution disabled.
 
 ### Supabase — GREEN THROUGH 0014
 - Project: `Mkety Digital` (`vdblajgxrfndjesoyayy`).
 - Migration `20260905115452 trading_0014_connection_credentials` applied successfully.
-- Live `public.trade_accounts.credential_ciphertext` verified as nullable `text` with the intended server-only encrypted-credential comment.
-- `trade_accounts` RLS remains enabled.
-- `anon`/`authenticated` have no inspected table privileges; `service_role` retains server-side privileges.
-- Post-migration security advisor shows no new Trading-specific WARN blocker.
-- Expected INFO `rls_enabled_no_policy` remains for service-role-only Trading internal tables.
-- Existing project-wide WARNs remain unrelated: `vector` extension in `public` and shared `public.rls_auto_enable()` SECURITY DEFINER callable by anon/authenticated.
-- Performance advisor shows no new `0014`-specific blocker.
+- Trading service-role-only/RLS posture remains as previously verified.
 
 ### Current paid staging deployment
 - Worker: `mkety-copier-engine`.
 - Last recorded deployed Worker version: `68998f7f-74ce-4c37-8887-3751d3e17489`.
-- TradingView + Custom Signed API onboarding head `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d` is code/CI verified but has not been redeployed as part of this bounded repository milestone.
-- Runtime already has hidden `SUPABASE_URL`, normalized `SUPABASE_SERVICE_ROLE`, and `TRADING_MASTER_KEY` bindings from the reviewed staging setup.
+- Newer source-onboarding and audit/hostname heads have not been redeployed.
 
-### Other verified foundations
-- Mkety signed-access verifier is implemented and fail-closed; access remains disabled.
-- Custom hostname resolver is implemented; migration `0013` is live; custom-host routing remains disabled. Customer self-service hostname provisioning/verification is intentionally the next separate product gap.
-- MT5/cTrader demo acceptance workflows accept supported service-role aliases and keep global broker execution false.
-- No real external Telegram, MT5, cTrader or TradingView acceptance is claimed by this source-onboarding milestone.
+## Repository-wide audit continuation — IMPLEMENTED, CI BLOCKED BY RUNNER INFRASTRUCTURE
+Current branch head at handoff update: `3872be28457f3974261bfbb625c6be6d7be91ff8` before this documentation commit.
+
+### Confirmed audit findings and remediation
+1. **Destination retry setup-failure rescheduling defect**
+   - Production `markRetryable()` requires a valid `nextAttemptAt`, but the production retry wrapper omitted it when dependency/setup recovery failed.
+   - Fix commit: `a2b987d96639b59b648aadaab5829d7e4a5a155e`.
+   - Recovery now uses the existing 15-second adapter convention, based on the deterministic scheduler `now` value, and persists an explicit due timestamp.
+2. **Stale unauthenticated legacy broker-capable webhook**
+   - `/api/webhook/process_signal` was still delegated to the legacy worker and could reach legacy Deriv/cTrader/MT5 execution without the V1 ingress/authorization model.
+   - Current first-party MTProto DO/container paths no longer depend on it: they use `SOURCE_EVENT_QUEUE` or authenticated `/api/v1/internal/source-event` handoff.
+   - Route retired at the V1 entry boundary in commit `d572e59f1c0e4e9c7daa292b67bd92632a33606a`; it now returns `410 LEGACY_SIGNAL_WEBHOOK_RETIRED` before legacy code/shadow/database/broker behavior.
+3. **Initial broker-retry fuse concern was a false positive and was corrected**
+   - Full-chain review confirmed lower-level `createDestinationRetryRuntime()` already checks `BROKER_EXECUTION_ENABLED` before Supabase construction or due scanning.
+   - A redundant wrapper-level fuse patch was reverted; do not resurrect that false finding.
+
+### Audited boundaries with no demonstrated bypass
+- Mkety signed assertion + exact workspace + membership authorization.
+- Custom-hostname resolver as routing context only.
+- Custom Signed API HMAC ingress: server-side source resolution, active-source check, timestamp window and constant-time signature comparison.
+- Internal MTProto source handoff: POST-only shared-token authentication, strict native Telegram identity normalization and queue-only side effect.
+- Source queue: active persisted source resolution before signed V1 dispatch.
+- Durable event reservation/idempotency before processing.
+- Production execution authority: Trading access/master broker fuse, persisted source/workspace/account reload, account safety/kill/risk checks, persisted credentials and destination idempotency before adapter dispatch.
+- TradingView ingress remains fail-closed on the direct-ingress flag and certificate fingerprint verification.
+
+### TradingView lifecycle semantics gap — NOT AN INGRESS BYPASS
+- The generic source enable route can mark a TradingView row active independently of certificate transport readiness.
+- Actual TradingView ingress still requires the existing direct-ingress + certificate fingerprint checks and an active source, so this is a lifecycle/readiness semantics gap rather than a demonstrated security bypass.
+- Keep it separate from hostname/source-onboarding security systems; tighten enable semantics later if product behavior requires “certificate-ready before active row.”
+
+## Customer custom-hostname self-service — CODE IMPLEMENTED, NOT YET CI VERIFIED
+- Design: `docs/superpowers/specs/2026-09-05-custom-hostname-self-service-design.md`.
+- Cloudflare for SaaS client: server-side token/zone only; customer receives safe CNAME/ownership/certificate validation instructions, never provider credentials.
+- Authorized routes implemented:
+  - `GET /api/v1/admin/hostnames`
+  - `POST /api/v1/admin/hostnames`
+  - `POST /api/v1/admin/hostnames/:id/verify`
+- Only owner/admin roles receive `hostnames.read` / `hostnames.write`.
+- Creation validates exact non-wildcard DNS hostname, rejects canonical/target/IP/URL-style inputs, provisions Cloudflare then persists local `pending`; local persistence failure attempts provider cleanup.
+- Verification resolves the exact persisted `(workspace,id)` hostname and marks local routing active only when Cloudflare reports hostname `active` AND SSL `active`.
+- No schema change was required; existing migration 0013 already provides globally unique hostname, pending/active state and verified timestamp.
+- Required future runtime bindings: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `TRADING_CUSTOM_HOSTNAME_CNAME_TARGET`.
+- This repository work did **not** configure those bindings, call Cloudflare, alter DNS/fallback origin, enable `TRADING_CUSTOM_HOSTNAMES_ENABLED`, or deploy anything.
+
+### CI infrastructure blocker
+- Recent PR test runs fail before receiving a GitHub runner: `runner_id: 0`, empty `steps`, completion within seconds.
+- Latest recorded example: Trading V1 CI run `33993647691` (#1524), mandatory test job `101380170036` — marked failure but **no test step executed**.
+- Therefore branch head after the audit/hostname work must NOT be described as GREEN until a real runner executes the full mandatory test job successfully.
 
 ## Critical runtime safety defaults
 Keep fail-closed until a separately authorized rollout step changes them:
@@ -117,13 +143,13 @@ Before a broker adapter may be reached, all applicable locks must pass:
 11. TradingView additionally requires its accepted ingress/source/certificate path.
 
 ## Exact next pickup
-1. Treat self-service onboarding for all currently approved source families as code-green; do not redesign it.
-2. Keep customer custom-hostname provisioning/verification as a separate subproject from source onboarding and preserve hostname-as-routing-context-only semantics.
-3. Keep offline readiness separate from external connectivity acceptance. Offline checks may validate persisted provider/family configuration, encrypted credential/signing-secret presence and safe inactive state; they must not pretend to prove network/provider connectivity or TradingView certificate acceptance.
-4. Paid-staging deployment of the current source-onboarding GREEN build is an external mutation and requires explicit deployment authorization. If authorized, redeploy with all five safety flags still false.
-5. When actual credentials/accounts are available and external contact is authorized, run one production-path acceptance per integration: MTProto/source observation, MT5 connectivity, cTrader connectivity and TradingView mTLS ingress; then one complete non-live E2E lifecycle and recovery/soak.
+1. **First priority:** recover a functioning GitHub Actions runner and execute the full mandatory Trading V1 CI on the current branch. Do not claim GREEN from runner-less failures or static inspection.
+2. If CI exposes code/test defects, fix only reproduced failures TDD-first and rerun until a real full test job is GREEN.
+3. Once GREEN, update both handoffs with the exact final code head/run/job/test counts.
+4. Do not configure or call Cloudflare for SaaS until separate external-mutation authorization. When authorized later, configure the API token/zone/CNAME target first while keeping `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, run non-routing provisioning/verification acceptance, then separately decide whether to enable routing.
+5. Keep offline readiness separate from external provider acceptance.
 6. Do not enable `TRADING_ACCESS_ENABLED` until central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access acceptance passes.
-7. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths without separate explicit final approval including exact limits, kill conditions and rollback.
+7. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths without separate explicit final approval including limits/kill/rollback.
 8. Merge runtime to `main` only on explicit owner instruction.
 
 ## Architecture/tooling freeze
