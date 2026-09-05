@@ -24,12 +24,29 @@ function configuredFingerprints(value) {
   );
 }
 
+export function tradingViewTransportReadiness(env = {}) {
+  const directIngressEnabled = enabled(env?.TRADINGVIEW_DIRECT_INGRESS_ENABLED);
+  const certificateFingerprints = configuredFingerprints(env?.TRADINGVIEW_TLS_CLIENT_CERT_SHA256);
+  const certificateConfigured = certificateFingerprints.size > 0;
+  const ready = directIngressEnabled && certificateConfigured;
+
+  return {
+    ready,
+    directIngressEnabled,
+    certificateConfigured,
+    reason: ready
+      ? null
+      : !directIngressEnabled
+        ? 'TRADINGVIEW_DIRECT_INGRESS_DISABLED'
+        : 'TRADINGVIEW_CERTIFICATE_NOT_CONFIGURED',
+  };
+}
+
 export function verifyTradingViewTransport(request, env = {}) {
-  if (!enabled(env?.TRADINGVIEW_DIRECT_INGRESS_ENABLED)) return FAILURE;
+  const readiness = tradingViewTransportReadiness(env);
+  if (!readiness.ready) return FAILURE;
 
   const allowlist = configuredFingerprints(env?.TRADINGVIEW_TLS_CLIENT_CERT_SHA256);
-  if (allowlist.size === 0) return FAILURE;
-
   const tls = request?.cf?.tlsClientAuth;
   if (!tls || tls.certPresented !== '1') return FAILURE;
 
