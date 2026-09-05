@@ -158,6 +158,19 @@ test('viewer cannot create a source', async () => {
 test('owner can replace source credentials without receiving plaintext or ciphertext back', async () => {
   let replaceCall = null;
   const sourceStore = {
+    async getSource(authoritativeWorkspaceId, id) {
+      assert.equal(authoritativeWorkspaceId, workspaceId);
+      assert.equal(id, sourceId);
+      return {
+        id,
+        workspaceId: authoritativeWorkspaceId,
+        providerType: 'external_mtproto',
+        sourceFamily: 'telegram',
+        sourceType: 'telegram',
+        sourceInstanceId: 'starpips-primary',
+        enabled: false,
+      };
+    },
     async replaceSourceCredentials(authoritativeWorkspaceId, id, credentialCiphertext) {
       replaceCall = { authoritativeWorkspaceId, id, credentialCiphertext };
       return {
