@@ -122,7 +122,6 @@ class MT5SourceCapture:
         start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
         end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
         deals = self._mt5.history_deals_get(start, end) or ()
-        self._last_poll_until_ms = end_ms
         self._state['polls'] += 1
 
         observed = 0
@@ -130,6 +129,7 @@ class MT5SourceCapture:
         delivered = 0
         failed = 0
         candidates = []
+        earliest_failed_time_ms = None
 
         for deal in deals:
             observed += 1
@@ -141,7 +141,7 @@ class MT5SourceCapture:
 
         candidates.sort(key=lambda item: (item[0], item[1]))
         attempted_this_poll = set()
-        for _time_msc, native_event_id, event in candidates:
+        for event_time_ms, native_event_id, event in candidates:
             if native_event_id in self._seen or native_event_id in attempted_this_poll:
                 ignored += 1
                 continue
@@ -153,12 +153,25 @@ class MT5SourceCapture:
                 failed += 1
                 self._state['failedEvents'] += 1
                 self._state['status'] = 'degraded'
+                if earliest_failed_time_ms is None or event_time_ms < earliest_failed_time_ms:
+                    earliest_failed_time_ms = event_time_ms
                 continue
 
             delivered += 1
             self._state['deliveredEvents'] += 1
             self._state['status'] = 'healthy'
             self._remember_seen(native_event_id)
+
+        if earliest_failed_time_ms is None:
+            self._last_poll_until_ms = end_ms
+        else:
+            # Keep the next polling window anchored at or before the oldest failed
+            # deal. Successful events are held in the seen set, so replaying the
+            # wider history window retries only events that have not been accepted.
+            self._last_poll_until_ms = min(
+                end_ms,
+                earliest_failed_time_ms + self._overlap_ms,
+            )
 
         self._state['observedEvents'] += observed
         self._state['ignoredEvents'] += ignored
