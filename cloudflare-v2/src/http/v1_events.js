@@ -86,10 +86,11 @@ export async function handleV1EventsRequest(request, env = {}, {
 
     // Recovery replay is considered only after normal source authentication and
     // ingest authorization have succeeded. The marker cannot grant workspace or
-    // source authority; it only lets a trusted source runtime finish processing
-    // an already-reserved event after a transient planning failure.
+    // source authority. A duplicate is eligible for orchestration only when
+    // ingest rehydrated the canonical event from persisted DB truth.
     const recoveryReplay = request.headers.get('X-Mkety-Source-Recovery') === '1';
-    const allowDuplicateOrchestration = orchestrateDuplicates || recoveryReplay;
+    const duplicateReplayRequested = orchestrateDuplicates || recoveryReplay;
+    const allowDuplicateOrchestration = duplicateReplayRequested && result?.recoveryReady === true;
     if (!result?.ok || (result?.duplicate && !allowDuplicateOrchestration)) {
       return json(result, result?.ok ? 200 : Number(result?.status || 500));
     }
