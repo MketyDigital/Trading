@@ -79,6 +79,9 @@ function parseSuccess(response) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.ok !== true) {
     throw new PermanentSourceDeliveryError('INVALID_RESPONSE', status);
   }
+  if (parsed?.simulation?.status === 'BLOCKED') {
+    throw new RetryableSourceDeliveryError('ORCHESTRATION_BLOCKED', status);
+  }
   return parsed;
 }
 
@@ -115,6 +118,7 @@ export function createSignedV1SourceClient({
           'X-Mkety-Source-Id': id,
           'X-Mkety-Timestamp': timestamp,
           'X-Mkety-Signature': signature,
+          'X-Mkety-Source-Recovery': '1',
         },
         body: rawBody,
       };
