@@ -45,6 +45,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   executionStageFn = runV1ProductionExecutionStage,
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
+  orchestrateDuplicates = false,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -83,7 +84,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       }),
     });
 
-    if (!result?.ok || result?.duplicate) {
+    if (!result?.ok || (result?.duplicate && !orchestrateDuplicates)) {
       return json(result, result?.ok ? 200 : Number(result?.status || 500));
     }
 
@@ -106,10 +107,13 @@ export async function handleV1EventsRequest(request, env = {}, {
       simulation = blockedSimulation(error);
     }
 
+    const executionResult = result?.duplicate && orchestrateDuplicates
+      ? { ...result, duplicate: false, replayedDuplicate: true }
+      : result;
     const execution = await executionStageFn({
       env,
       supabase,
-      result,
+      result: executionResult,
       simulation,
       executionDepsFactory,
       executeProductionFn,
