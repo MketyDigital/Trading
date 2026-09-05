@@ -7,29 +7,66 @@ function completeCore(overrides = {}) {
     SUPABASE_URL: 'https://staging.supabase.co',
     SUPABASE_SERVICE_ROLE: 'secret-service-key',
     TRADING_MASTER_KEY: 'secret-master-key',
+    TRADING_ACCESS_ENABLED: 'false',
+    ...overrides,
+  };
+}
+
+function completeAccess(overrides = {}) {
+  return completeCore({
+    TRADING_ACCESS_ENABLED: 'true',
     ZITADEL_ISSUER: 'https://auth.example.com',
     ZITADEL_AUDIENCE: 'trading-api',
     ZITADEL_JWKS_URL: 'https://auth.example.com/oauth/v2/keys',
     ...overrides,
-  };
+  });
 }
 
 test('reports missing core staging configuration names without exposing values', () => {
   const result = validateStagingReadiness({
     SUPABASE_URL: 'https://staging.supabase.co',
     TRADING_MASTER_KEY: 'do-not-leak-this',
+    TRADING_ACCESS_ENABLED: 'false',
   });
 
   assert.equal(result.ready, false);
+  assert.deepEqual(result.missing, ['SUPABASE_SERVICE_ROLE']);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('do-not-leak-this'), false);
+  assert.equal(serialized.includes('https://staging.supabase.co'), false);
+});
+
+test('core staging is ready without Zitadel while trading access is disabled', () => {
+  const result = validateStagingReadiness(completeCore());
+
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.missing, []);
+  assert.equal(result.features.accessEnabled, false);
+  assert.equal(result.optionalMissing.includes('ZITADEL_ISSUER'), true);
+  assert.equal(result.optionalMissing.includes('ZITADEL_AUDIENCE'), true);
+  assert.equal(result.optionalMissing.includes('ZITADEL_JWKS_URL'), true);
+});
+
+test('trading access fails closed when Zitadel adapter configuration is missing', () => {
+  const result = validateStagingReadiness(completeCore({
+    TRADING_ACCESS_ENABLED: 'true',
+  }));
+
+  assert.equal(result.ready, false);
   assert.deepEqual(result.missing.sort(), [
-    'SUPABASE_SERVICE_ROLE',
     'ZITADEL_AUDIENCE',
     'ZITADEL_ISSUER',
     'ZITADEL_JWKS_URL',
   ]);
-  const serialized = JSON.stringify(result);
-  assert.equal(serialized.includes('do-not-leak-this'), false);
-  assert.equal(serialized.includes('https://staging.supabase.co'), false);
+  assert.equal(result.features.accessEnabled, true);
+});
+
+test('trading access is ready when Zitadel adapter configuration is complete', () => {
+  const result = validateStagingReadiness(completeAccess());
+
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.missing, []);
+  assert.equal(result.features.accessEnabled, true);
 });
 
 test('accepts supported Supabase service-role aliases but reports canonical missing name', () => {
@@ -80,9 +117,10 @@ test('complete staging simulation configuration returns ready without echoing se
   assert.equal(serialized.includes('XAUUSD'), false);
 });
 
-test('optional config is reported by name only and does not block readiness', () => {
+test('optional config is reported by name only and does not block core readiness', () => {
   const result = validateStagingReadiness(completeCore());
   assert.equal(result.ready, true);
   assert.equal(result.optionalMissing.includes('ZITADEL_PROJECT_ID'), true);
+  assert.equal(result.optionalMissing.includes('ZITADEL_ISSUER'), true);
   assert.equal(result.optionalMissing.includes('TRADING_V1_AI_TIMEOUT_MS'), true);
 });
