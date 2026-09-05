@@ -31,3 +31,5 @@ jobs:
             echo "Expected HTTP 200 from staging health endpoint."
             exit 1
           fi
+
+# Probe trigger refreshed after paid staging deploy on 2026-09-05.
