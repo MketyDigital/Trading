@@ -8,6 +8,7 @@ TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"
 TRADINGVIEW_CERT_PROBE_ENABLED = "false"
 TRADING_ACCESS_ENABLED = "false"
 BROKER_EXECUTION_ENABLED = "false"
+TRADING_CUSTOM_HOSTNAMES_ENABLED = "false"
 
 [[containers]]
 class_name = "MtprotoContainerRuntime"
