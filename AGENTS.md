@@ -11,7 +11,10 @@ The project is past broad architecture/static-remediation work. The controlling 
 Trading is not a generic collaboration/team SaaS. Do not build departments, nested teams, complex role hierarchies, seat management or broker-style organization structures for V1 unless a real customer requirement later proves them necessary. Existing membership/role primitives may remain for compatibility/future use.
 
 ### Identity / Mkety access-gate boundary — APPROVED AND IMPLEMENTED IN TRADING
+- Current Mkety development authority is `MketyDigital/mksaas`; do not implement new identity work in the legacy `MketyDigital/Mkety` repository.
 - Mkety uses Zitadel as the mother identity provider. Zitadel remains behind Mkety's identity/product-access layer.
+- The approved future shared identity boundary is one central Cloudflare-hosted Mkety Auth Gateway for Mkety Platform, Trading, Academy and future enterprise applications.
+- The central recommendation is recorded in `MketyDigital/mksaas/docs/CENTRAL_MKETY_AUTH_GATEWAY_RECOMMENDATION.md` at commit `152d9125a0d9c4c7c5a39e8360108e679c4185ab`.
 - Trading core/runtime is independently deployable and operable while external user access is disabled.
 - Trading V1 does **not** directly authorize from Zitadel organization/project-role claims.
 - Mkety grants Trading entry using a cryptographically signed, short-lived access assertion. A reusable plain code is not authorization.
@@ -23,6 +26,7 @@ Trading is not a generic collaboration/team SaaS. Do not build departments, nest
 - Authentication/access remains independent from broker execution.
 - While `TRADING_ACCESS_ENABLED=false`, no access-gate configuration is required for Trading core readiness.
 - Before `TRADING_ACCESS_ENABLED=true`, the Worker requires `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE` and `MKETY_ACCESS_JWKS_URL` and must fail closed if any are absent.
+- Do not create a temporary Trading-only issuer/direct-Zitadel fallback merely because the central Mkety Auth Gateway is not built yet.
 
 Detailed identity boundary: `cloudflare-v2/docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md`.
 
@@ -75,7 +79,7 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
 ## Current verified stage — 2026-09-05
-**CODE GREEN -> DATABASE GREEN THROUGH 0012 -> PAID STAGING DEPLOYED WITH FUSES OFF -> MKETY SIGNED ACCESS VERIFIER GREEN -> MKETY SIGNER/JWKS INTEGRATION NEXT.**
+**CODE GREEN -> DATABASE GREEN THROUGH 0012 -> PAID STAGING DEPLOYED WITH FUSES OFF -> MKETY SIGNED ACCESS VERIFIER GREEN -> REDEPLOY CURRENT GREEN TRADING BUILD WITH ACCESS/EXECUTION OFF NEXT.**
 
 ### Paid staging deployment — SUCCESS
 - `Cloudflare Staging Gate` deploy-paid run `33951878273`, job `101268094904`: **success**.
@@ -94,8 +98,15 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 - A demonstrated compatibility failure at head `9ae56e57abcee77166570005ce4c28ada6da7c0a`, CI run `33952893071`, correctly blocked progress before redeployment.
 - The stale direct-Zitadel acceptance assumptions were replaced with the approved Mkety access-gate contract.
 - Runtime/test head `04cb56247e7275d42c67b283ad16ff756c72a9cb`, CI run `33953020087`: **success**.
-- Exact documentation head `5a184fde3faccce9d9157a31d13a37f8fcf4e7cc`, CI run `33953060199`: **success**.
+- Identity-doc head `5a184fde3faccce9d9157a31d13a37f8fcf4e7cc`, CI run `33953060199`: **success**.
+- Branch head before the latest handoff correction: `bb986a4e09af40af3334f94ed59f2798c6739efe`, CI run `33953325178`: **success**.
 - `staging_readiness.js` now uses `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` only when `TRADING_ACCESS_ENABLED=true`.
+
+### Central Mkety Auth Gateway — RECOMMENDATION RECORDED
+- `MketyDigital/mksaas` is the current Mkety development source of truth.
+- The future shared Mkety Auth Gateway will be Cloudflare-hosted and reusable across Mkety products/enterprise applications.
+- Zitadel remains the initial identity provider behind Mkety; Trading consumes only the stable Mkety signed assertion contract.
+- This gateway is not required to keep Trading core staging work moving while `TRADING_ACCESS_ENABLED=false`.
 
 ### Supabase
 - Project: `Mkety Digital` (`vdblajgxrfndjesoyayy`), healthy.
@@ -111,15 +122,14 @@ Caller-supplied workspace/account/provider/destination/broker/credential/executi
 The paid staging deployment itself succeeded, but an HTTP response from `/api/v1/health` has not yet been independently captured in this session because direct Workers.dev probing from the available web client was blocked by URL-access policy. Do not interpret that tooling limitation as a Worker failure. Verify health through a safe Cloudflare/GitHub curl path before access enablement.
 
 ## Exact next pickup
-1. Discover the existing mother Mkety identity/auth service/repository and reuse its current Zitadel integration rather than creating a parallel identity stack.
-2. Add the smallest Mkety-side issuer/JWKS capability that can mint short-lived Trading assertions with `sub`, `product=trading`, exact `workspace_id`, `access=owner`, `iss`, `aud`, `iat`, `exp`, `jti`.
-3. Configure Trading staging with `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL`; keep `TRADING_ACCESS_ENABLED=false` while validating.
-4. Verify a non-live signed assertion end to end plus negative cases and exact Supabase membership revocation.
-5. Verify `/api/v1/health` through the staging workflow/Cloudflare-safe path with no secret exposure.
-6. Only after non-live access acceptance may `TRADING_ACCESS_ENABLED` be considered for explicit enablement. `BROKER_EXECUTION_ENABLED` stays false.
-7. Verify `trade.mkety.com` and one optional Cloudflare-for-SaaS customer hostname.
-8. Connect Telegram + MT5 demo + cTrader demo, run one real E2E demo lifecycle, material recovery checks, shadow and demo soak.
-9. Tiny real-money live remains a separate explicit approval step with exact financial limits and kill/rollback procedure.
+1. Redeploy the current GREEN Trading branch to the paid staging Worker with all four safety fuses false.
+2. Verify `/api/v1/health` through a safe Cloudflare/GitHub path; missing future Mkety access-gate values are acceptable because `TRADING_ACCESS_ENABLED=false`.
+3. Continue non-auth Trading readiness that does not require external user access: default-domain/runtime verification, real Telegram source/destination acceptance, MT5 demo and cTrader demo connectivity, then one real E2E demo lifecycle.
+4. When the central Mkety Auth Gateway is available, configure `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` while access remains false and run positive/negative signed-access acceptance plus Supabase workspace/membership revocation.
+5. Only after non-live access acceptance may `TRADING_ACCESS_ENABLED` be considered for explicit staging enablement. `BROKER_EXECUTION_ENABLED` stays false.
+6. Verify `trade.mkety.com` and one optional Cloudflare-for-SaaS customer hostname.
+7. Run material recovery checks, shadow production and dedicated demo soak.
+8. Tiny real-money live remains a separate explicit approval step with exact financial limits and kill/rollback procedure.
 
 ## Critical runtime safety defaults
 Keep fail closed until the relevant explicitly authorized rollout step changes them:
@@ -148,20 +158,22 @@ Before a broker adapter may be reached, all applicable locks must pass:
 A. exact-head GREEN — DONE
 B. Cloudflare target inspection — DONE
 C. secure core staging deploy, fuses off — DONE
-D. Mkety signed access issuer/JWKS + non-money-moving access acceptance — NEXT
-E. default `trade.mkety.com` + one custom hostname acceptance
+D. redeploy current GREEN Mkety-assertion Trading build, fuses off — NEXT
+E. health/default-domain verification
 F. Telegram + MT5 demo + cTrader demo connectivity
 G. one real E2E demo lifecycle
-H. material recovery checks
-I. shadow production
-J. dedicated demo soak
-K. separately approved tiny controlled live
-L. controlled beta -> general production
+H. central Mkety Auth Gateway integration + non-money-moving access acceptance when available
+I. custom hostname acceptance
+J. material recovery checks
+K. shadow production
+L. dedicated demo soak
+M. separately approved tiny controlled live
+N. controlled beta -> general production
 
 TradingView direct-ingress/certificate acceptance remains deferred/fail-closed and does not block an approved launch scope that does not require genuine TradingView-originated ingress.
 
 ## Safety authorization boundary
-Generic `continue` authorizes safe repository development/static inspection only. It does not authorize enabling master access/execution fuses, real Telegram acceptance, demo/live broker orders, `main` runtime merge or real-money execution unless the user explicitly authorizes the corresponding step.
+Generic `continue` authorizes safe repository development/static inspection only. It does not authorize Cloudflare/Zitadel deployment/config mutation, enabling master access/execution fuses, real Telegram acceptance, demo/live broker orders, `main` runtime merge or real-money execution unless the user explicitly authorizes the corresponding step.
 
 ## Mandatory handoff discipline
 After every meaningful verified milestone:
