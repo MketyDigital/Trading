@@ -73,11 +73,22 @@ test('duplicate ingest repairs a missing interpretation before returning replay 
       async updateInterpretation(_eventId, interpretation) { persisted = interpretation; },
     },
     aiRouter: {
-      async interpret() {
+      async processSignal() {
         aiCalls += 1;
         return {
-          status: 'READY',
-          intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' }, order_type: 'MARKET' },
+          success: true,
+          provider: 'test',
+          model: 'test',
+          text: JSON.stringify({
+            event_type: 'NEW_SIGNAL',
+            side: 'BUY',
+            symbol: 'XAUUSD',
+            order_type: 'MARKET',
+            entry: null,
+            stop_loss: 2400,
+            take_profits: [2600],
+            fast_entry: false,
+          }),
         };
       },
     },
