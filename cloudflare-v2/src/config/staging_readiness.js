@@ -15,11 +15,9 @@ function hasServiceRole(env = {}) {
 }
 
 const OPTIONAL_KEYS = [
-  'ZITADEL_ISSUER',
-  'ZITADEL_AUDIENCE',
-  'ZITADEL_JWKS_URL',
-  'ZITADEL_PROJECT_ID',
-  'ZITADEL_TRADING_ROLE',
+  'MKETY_ACCESS_ISSUER',
+  'MKETY_ACCESS_AUDIENCE',
+  'MKETY_ACCESS_JWKS_URL',
   'TRADING_V1_AI_TIMEOUT_MS',
   'TRADING_V1_SIMULATION_EXPOSURES',
 ];
@@ -36,9 +34,9 @@ export function validateStagingReadiness(
   if (!present(env.TRADING_MASTER_KEY)) missing.push('TRADING_MASTER_KEY');
 
   if (accessEnabled) {
-    if (!present(env.ZITADEL_ISSUER)) missing.push('ZITADEL_ISSUER');
-    if (!present(env.ZITADEL_AUDIENCE)) missing.push('ZITADEL_AUDIENCE');
-    if (!present(env.ZITADEL_JWKS_URL)) missing.push('ZITADEL_JWKS_URL');
+    if (!present(env.MKETY_ACCESS_ISSUER)) missing.push('MKETY_ACCESS_ISSUER');
+    if (!present(env.MKETY_ACCESS_AUDIENCE)) missing.push('MKETY_ACCESS_AUDIENCE');
+    if (!present(env.MKETY_ACCESS_JWKS_URL)) missing.push('MKETY_ACCESS_JWKS_URL');
   }
 
   if (requireSimulation) {
