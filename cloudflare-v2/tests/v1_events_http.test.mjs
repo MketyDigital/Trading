@@ -165,6 +165,75 @@ test('duplicate or rejected ingress never enters orchestration', async () => {
   }
 });
 
+test('recovery marker cannot orchestrate duplicate unless ingest rehydrated persisted event', async () => {
+  let called = false;
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{}', headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+      'X-Mkety-Source-Recovery': '1',
+    },
+  });
+  const response = await handleV1EventsRequest(request, { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({}),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({
+      ok: true,
+      duplicate: true,
+      recoveryReady: false,
+      eventId: 'existing',
+      interpretation: { status: 'READY', intent: { side: 'BUY' } },
+    }),
+    simulationDepsFactory: async () => { called = true; return {}; },
+    orchestrateFn: async () => { called = true; return {}; },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(called, false);
+  assert.equal(body.duplicate, true);
+  assert.equal(body.recoveryReady, false);
+});
+
+test('recovery marker orchestrates duplicate only when persisted recovery context is ready', async () => {
+  let orchestrationInput;
+  const persistedEvent = {
+    workspace_hint: 'ws-1', external_event_id: 'existing', source: { instance_id: 'src-1' },
+    thread: { thread_id: 'persisted-thread' },
+  };
+  const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{}', headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+      'X-Mkety-Source-Recovery': '1',
+    },
+  });
+  const response = await handleV1EventsRequest(request, { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({
+      ok: true,
+      duplicate: true,
+      recoveryReady: true,
+      eventId: 'existing',
+      event: persistedEvent,
+      interpretation,
+    }),
+    simulationDepsFactory: async () => ({ safe: true }),
+    orchestrateFn: async (input) => {
+      orchestrationInput = input;
+      return { status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [] };
+    },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(orchestrationInput.event, persistedEvent);
+  assert.equal(orchestrationInput.event.thread.thread_id, 'persisted-thread');
+  assert.equal(body.duplicate, true);
+});
+
 test('simulation planning failure is fail-closed diagnostics and cannot turn ingress into live execution', async () => {
   const request = new Request('https://trade.test/api/v1/events', {
     method: 'POST', body: '{}', headers: {
