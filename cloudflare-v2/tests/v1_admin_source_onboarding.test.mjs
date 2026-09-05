@@ -101,14 +101,17 @@ test('workspace owner creates MTProto source with encrypted-at-rest provider cre
   assert.equal(body.workspaceId, 'ws-1');
   assert.equal(body.source.id, 'src-created');
   assert.equal(body.source.credentialConfigured, true);
+  assert.equal('credentials' in body.source, false);
+  assert.equal('providerSecretCiphertext' in body.source, false);
 
   const serialized = JSON.stringify(body);
   for (const forbidden of [
+    'fixture-api-id',
     'fixture-api-hash',
     'fixture-session',
     'fixture-encrypted-envelope',
-    'providerSecretCiphertext',
-    'credentials',
+    '"providerSecretCiphertext":',
+    '"credentials":',
   ]) {
     assert.equal(serialized.includes(forbidden), false, `response leaked ${forbidden}`);
   }
