@@ -9,6 +9,7 @@ import { hasTradingPermission } from '../security/trading_permissions.js';
 import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
+import { createAdminHostnameStore, handleAuthorizedV1AdminHostnamesRequest } from './v1_admin_hostnames.js';
 import {
   createAdminOperationsStore,
   handleAuthorizedV1AdminOperationsRequest,
@@ -149,6 +150,7 @@ export async function handleV1AdminRequest(request, env = {}, {
   resolveHostnameFn = resolveTradingRequestHostname,
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
+  adminHostnameStoreFactory = createAdminHostnameStore,
   operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
   let supabase;
@@ -236,6 +238,16 @@ export async function handleV1AdminRequest(request, env = {}, {
       return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503);
     }
     return handleAuthorizedV1AdminAccountsRequest(request, authorization, { accountStore, env });
+  }
+
+  if (url.pathname === '/api/v1/admin/hostnames' || url.pathname.startsWith('/api/v1/admin/hostnames/')) {
+    let hostnameStore;
+    try {
+      hostnameStore = adminHostnameStoreFactory(supabase);
+    } catch {
+      return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503);
+    }
+    return handleAuthorizedV1AdminHostnamesRequest(request, authorization, { hostnameStore, env });
   }
 
   return json({ ok: false, reason: 'ADMIN_ROUTE_NOT_FOUND' }, 404);
