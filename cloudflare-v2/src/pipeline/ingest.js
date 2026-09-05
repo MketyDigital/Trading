@@ -22,6 +22,33 @@ function deriveCanonicalEventId(source, input) {
   }
 }
 
+async function interpretAndPersist({
+  source,
+  event,
+  eventId,
+  eventStore,
+  aiRouter,
+  aiRouterFactory,
+  interpretationTimeoutMs,
+}) {
+  // Tenant AI configuration is loaded only after HMAC authentication and
+  // trusted workspace resolution. A client payload cannot select another
+  // workspace's provider credentials.
+  const resolvedAiRouter = aiRouterFactory
+    ? await aiRouterFactory({ source, event })
+    : aiRouter;
+
+  const interpretation = await interpretTradingEvent(event, {
+    aiRouter: resolvedAiRouter,
+    timeoutMs: interpretationTimeoutMs,
+  });
+
+  if (eventStore.updateInterpretation) {
+    await eventStore.updateInterpretation(eventId, interpretation);
+  }
+  return interpretation;
+}
+
 export async function ingestTradingEvent({
   rawBody,
   sourceId,
@@ -103,32 +130,36 @@ export async function ingestTradingEvent({
   const reservation = await eventStore.reserve(reservationRow);
 
   if (reservation?.duplicate) {
+    const interpretation = reservation.interpretation || await interpretAndPersist({
+      source,
+      event,
+      eventId: reservation.eventId,
+      eventStore,
+      aiRouter,
+      aiRouterFactory,
+      interpretationTimeoutMs,
+    });
     return {
       ok: true,
       duplicate: true,
       eventId: reservation.eventId ?? null,
       event,
+      interpretation,
     };
   }
   if (!reservation?.ok) {
     return { ok: false, status: 503, reason: 'EVENT_RESERVATION_FAILED' };
   }
 
-  // Tenant AI configuration is loaded only after HMAC authentication and
-  // trusted workspace resolution. A client payload cannot select another
-  // workspace's provider credentials.
-  const resolvedAiRouter = aiRouterFactory
-    ? await aiRouterFactory({ source, event })
-    : aiRouter;
-
-  const interpretation = await interpretTradingEvent(event, {
-    aiRouter: resolvedAiRouter,
-    timeoutMs: interpretationTimeoutMs,
+  const interpretation = await interpretAndPersist({
+    source,
+    event,
+    eventId: reservation.eventId,
+    eventStore,
+    aiRouter,
+    aiRouterFactory,
+    interpretationTimeoutMs,
   });
-
-  if (eventStore.updateInterpretation) {
-    await eventStore.updateInterpretation(reservation.eventId, interpretation);
-  }
 
   return {
     ok: true,
