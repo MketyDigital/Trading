@@ -21,12 +21,12 @@ function workspaceQuery(workspace) {
   };
 }
 
-function enabledMembership(subject = 'u1', role = 'owner') {
+function membership(subject = 'u1', role = 'owner', enabled = true) {
   return () => ({
     async getMembership(workspaceId, requestedSubject) {
       assert.equal(workspaceId, 'ws-1');
       assert.equal(requestedSubject, subject);
-      return { id: 'membership-1', workspaceId: 'ws-1', subject, role, enabled: true, metadata: {} };
+      return { id: 'membership-1', workspaceId: 'ws-1', subject, role, enabled, metadata: {} };
     },
   });
 }
@@ -49,7 +49,7 @@ test('admin authorization fails closed without workspace selector or disabled en
   assert.equal(disabled.reason, 'TRADING_ACCESS_DISABLED');
 });
 
-test('admin authorization binds Mkety assertion to the exact Trading workspace and enabled owner membership', async () => {
+test('admin authorization binds Mkety assertion to the exact Trading workspace and enabled Supabase membership', async () => {
   let authOptions;
   const request = new Request('https://trade.test/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
@@ -60,30 +60,29 @@ test('admin authorization binds Mkety assertion to the exact Trading workspace a
       authOptions = options;
       return { ok: true, subject: 'u1', workspaceId: 'ws-1', access: 'owner' };
     },
-    membershipStoreFactory: enabledMembership(),
+    membershipStoreFactory: membership(),
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.workspace.id, 'ws-1');
   assert.equal(result.membership.subject, 'u1');
-  assert.equal(result.membership.role, 'owner');
   assert.equal(authOptions.requestedWorkspaceId, 'ws-1');
   assert.equal(authOptions.audience, 'mkety-trading');
 });
 
-test('admin authorization rejects a non-owner membership even when assertion authentication succeeds', async () => {
+test('admin authorization rejects disabled Supabase membership after signed assertion succeeds', async () => {
   const request = new Request('https://trade.test/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
   });
   const result = await authorizeV1AdminRequest(request, mketyAccessEnv, {
     supabase: workspaceQuery({ id: 'ws-1', trading_access_enabled: true }),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1', access: 'owner' }),
-    membershipStoreFactory: enabledMembership('u1', 'admin'),
+    membershipStoreFactory: membership('u1', 'owner', false),
   });
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 403);
-  assert.equal(result.reason, 'TRADING_OWNER_ACCESS_DISABLED_OR_MISSING');
+  assert.equal(result.reason, 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING');
 });
 
 test('GET workspace returns only authenticated Trading access record and strips secrets/legacy identity binding', async () => {
@@ -96,7 +95,7 @@ test('GET workspace returns only authenticated Trading access record and strips 
   }), mketyAccessEnv, {
     supabaseFactory: async () => workspaceQuery(workspace),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1', access: 'owner' }),
-    membershipStoreFactory: enabledMembership(),
+    membershipStoreFactory: membership(),
   });
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -113,7 +112,7 @@ test('generic legacy admin proxy paths are not exposed through V1 admin handler'
   }), mketyAccessEnv, {
     supabaseFactory: async () => workspaceQuery({ id: 'ws-1', trading_access_enabled: true }),
     authenticateFn: async () => ({ ok: true, subject: 'u1', workspaceId: 'ws-1', access: 'owner' }),
-    membershipStoreFactory: enabledMembership(),
+    membershipStoreFactory: membership(),
   });
   assert.equal(response.status, 404);
 });
