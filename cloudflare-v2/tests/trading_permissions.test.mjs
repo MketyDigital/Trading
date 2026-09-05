@@ -9,6 +9,12 @@ test('workspace role permissions are explicit and fail closed', () => {
   assert.equal(hasTradingPermission('operator', 'sources.write'), true);
   assert.equal(hasTradingPermission('viewer', 'sources.read'), true);
   assert.equal(hasTradingPermission('viewer', 'sources.write'), false);
+  assert.equal(hasTradingPermission('owner', 'hostnames.read'), true);
+  assert.equal(hasTradingPermission('owner', 'hostnames.write'), true);
+  assert.equal(hasTradingPermission('admin', 'hostnames.write'), true);
+  assert.equal(hasTradingPermission('operator', 'hostnames.read'), false);
+  assert.equal(hasTradingPermission('operator', 'hostnames.write'), false);
+  assert.equal(hasTradingPermission('viewer', 'hostnames.read'), false);
   assert.equal(hasTradingPermission('unknown', 'workspace.read'), false);
   assert.equal(hasTradingPermission('owner', 'broker.execute'), false);
 });
