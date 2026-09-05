@@ -70,6 +70,7 @@ export function createSourceQueueRuntime({
         const response = await eventsHandler(signedRequest(signed), env, {
           supabaseFactory: async () => supabase,
           storesFactory: () => stores,
+          orchestrateDuplicates: true,
         });
 
         let result = {};
@@ -77,6 +78,10 @@ export function createSourceQueueRuntime({
           result = await response.json();
         } catch {
           result = {};
+        }
+
+        if (result?.simulation?.status === 'BLOCKED') {
+          throw new Error(`source event orchestration blocked: ${result.simulation.error || 'unknown error'}`);
         }
 
         return {
