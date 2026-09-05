@@ -33,16 +33,15 @@
 - Integration regression at head `9ae56e57abcee77166570005ce4c28ada6da7c0a`, run `33952893071`, was caught before deployment and fixed without restoring Zitadel coupling.
 - Runtime/test head `04cb56247e7275d42c67b283ad16ff756c72a9cb`, CI run `33953020087`: **success**.
 - Exact identity-doc head `5a184fde3faccce9d9157a31d13a37f8fcf4e7cc`, CI run `33953060199`: **success**.
+- Current branch head before this handoff correction: `bb986a4e09af40af3334f94ed59f2798c6739efe`, CI run `33953325178`: **success**.
 
-### Mother Mkety identity discovery
-- Existing mother repository found: `MketyDigital/Mkety` (private, default branch `main`).
-- Current `main` is a Next.js 16 application shell and does not currently contain an indexed Zitadel/OIDC/JWKS/session implementation.
-- `middleware.ts` handles app/docs hostname routing and explicitly bypasses `/api`; there is no existing auth middleware to extend on `main`.
-- Existing branches were inspected; no branch named for auth/Zitadel exists and commit search found no Zitadel implementation.
-- The existing Mkety production blueprint on `replan/mkety-platform-blueprint` explicitly defines the intended abstraction as `CUSTOMER -> MKETY AUTH -> MKETY IDENTITY SERVICE -> ZITADEL` and states that Zitadel-specific logic must not be scattered through applications.
-- The same blueprint identifies Trading as a separate workspace/execution boundary and says actual trading execution remains isolated from the general Mkety platform.
-- This validates the approved Trading architecture. The Mkety-side signer/JWKS should live behind Mkety's own API/identity abstraction, not inside Trading and not as direct Zitadel claims.
-- Mother `main` already has Next.js API-route capability (`app/api/...`), so a minimal Mkety access-gate API/JWKS module can be added there without creating a second customer-facing product. Exact placement/design still requires explicit approval before implementation.
+### Central Mkety Auth Gateway direction — RECORDED, NOT A TRADING BLOCKER
+- Current Mkety development authority is `MketyDigital/mksaas`; the legacy `MketyDigital/Mkety` repository is not the implementation source for new identity work.
+- The approved direction is one central Cloudflare-hosted Mkety Auth Gateway for all Mkety products and enterprise applications.
+- Zitadel remains behind Mkety as the identity provider; products consume Mkety-signed access assertions rather than depending directly on Zitadel-specific token/organization/project claim shapes.
+- Recommendation is recorded in `MketyDigital/mksaas` at `docs/CENTRAL_MKETY_AUTH_GATEWAY_RECOMMENDATION.md`, commit `152d9125a0d9c4c7c5a39e8360108e679c4185ab`.
+- Trading work continues independently. Do not implement a temporary Trading-specific identity issuer or direct-Zitadel fallback just to unblock staging.
+- Until the central gateway exists, keep `TRADING_ACCESS_ENABLED=false`; Trading core/runtime can still be deployed and tested.
 
 ### Supabase
 - Project `Mkety Digital` (`vdblajgxrfndjesoyayy`), URL `https://vdblajgxrfndjesoyayy.supabase.co`.
@@ -65,15 +64,14 @@ Still false:
 Staging currently runs the earlier safe core build. The newly GREEN Mkety-access code has not yet been redeployed. No real-money execution authorized.
 
 ## Exact next pickup
-1. Obtain explicit design approval for the minimal mother-Mkety access-gate placement.
-2. Recommended design: add a small server-only Mkety Identity/Access module to `MketyDigital/Mkety` with a protected Trading assertion issuance endpoint and a public JWKS endpoint; signing private key remains server-only environment secret and never enters Trading.
-3. The issuance endpoint must authenticate through Mkety/Zitadel and confirm server-side Trading entitlement/workspace mapping before minting the short-lived assertion. Until Zitadel session verification is connected, issuance must remain fail closed.
-4. Configure Trading staging with the resulting `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` while `TRADING_ACCESS_ENABLED=false`.
-5. Redeploy the GREEN Trading auth build with access/execution still OFF and verify `/api/v1/health` through the workflow/Cloudflare-safe path.
-6. Run non-money-moving signed-access positive/negative acceptance and prove Supabase workspace/membership revocation.
-7. Only then explicitly consider staging `TRADING_ACCESS_ENABLED=true`; `BROKER_EXECUTION_ENABLED` remains false.
-8. Verify `trade.mkety.com` and one Cloudflare-for-SaaS custom hostname, then Telegram + MT5 demo + cTrader demo E2E/recovery/shadow/soak.
-9. Tiny live remains separately gated by explicit owner approval and exact financial limits.
+1. Redeploy the current GREEN Trading branch to the paid staging Worker with all four safety fuses false.
+2. Verify `/api/v1/health` through the workflow/Cloudflare-safe path; the future Mkety access issuer/audience/JWKS may remain absent because access is disabled.
+3. Continue non-auth Trading readiness that does not require external user access: default-domain/runtime verification, real Telegram source/destination acceptance, MT5 demo and cTrader demo connectivity, then one real E2E demo lifecycle.
+4. When the central Mkety Auth Gateway is later available, configure `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` while access remains false; run positive/negative signed-access acceptance and prove Supabase workspace/membership revocation.
+5. Only after access acceptance may `TRADING_ACCESS_ENABLED=true` be separately considered for staging. `BROKER_EXECUTION_ENABLED` remains false until its own later authorization.
+6. Verify `trade.mkety.com` and one Cloudflare-for-SaaS custom hostname.
+7. Run material recovery checks, shadow and demo soak.
+8. Tiny live remains separately gated by explicit owner approval and exact financial limits.
 
 ## Do not restart these debates
 - Do not redesign Trading as a complex team SaaS.
@@ -81,6 +79,8 @@ Staging currently runs the earlier safe core build. The newly GREEN Mkety-access
 - Do not authorize using reusable plain codes.
 - Do not create one Zitadel project per enterprise customer.
 - Do not create separate backend/workspace/identity per custom hostname.
+- Do not implement new auth work in the legacy Mkety repository.
+- Do not create a temporary Trading-only signer merely because central Mkety Auth is pending.
 - Do not merge Trading runtime to `main` without explicit instruction.
 - Do not enable real-money execution without separate explicit final approval.
 
