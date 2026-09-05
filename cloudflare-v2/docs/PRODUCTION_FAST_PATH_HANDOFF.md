@@ -14,15 +14,16 @@
 
 ## Latest verified milestone — 2026-09-05
 
-### Current signed-access build deployed to paid staging — SUCCESS
-- Exact deployed branch/head: `design/enterprise-trading-event-core` at `1d0a12f0b8ab24e112a4062bf87725ef050b4bf2`.
-- Exact-head Trading V1 CI run `33954207612`, test job `101274434754`: **success**.
-- Cloudflare Staging Gate `deploy-paid` run `33954946800`, job `101276450948`: **success**.
+### Current paid staging deployment — SUCCESS
+- Exact deployed branch/head: `design/enterprise-trading-event-core` at `ecb28b0e28709a6ac2bc778e78aa1fa77db0b41f`.
+- Exact-head Trading V1 CI run `33955898330`, test job `101279074305`: **success**.
+- Cloudflare Staging Gate `deploy-paid` run `33956116127`, job `101279663227`: **success**.
 - Paid Worker: `mkety-copier-engine`.
-- Deployed Worker version: `b05e5134-17b6-42a6-af98-425b382c1e46`.
+- Deployed Worker version: `42e450f3-d801-45bb-a1af-5544233bded5`.
 - Hidden runtime bindings include `SUPABASE_URL`, normalized `SUPABASE_SERVICE_ROLE`, and `TRADING_MASTER_KEY`; values were not intentionally logged or committed.
 - Ephemeral staging secrets file was created with restricted permissions, used for deploy, then removed successfully.
-- All four launch safety fuses remained false; no real-money execution was enabled.
+- MTProto container image was updated with the same reviewed deployment.
+- All five launch safety flags remained false; no custom-host routing, customer access, TradingView direct ingress or broker execution was enabled.
 
 ### Mkety signed Trading access boundary — IMPLEMENTED + GREEN + DEPLOYED DISABLED
 - V1 admin uses `src/security/mkety_access_assertion.js`, not direct Zitadel organization/project-role authorization.
@@ -31,21 +32,37 @@
 - Readiness requires `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` only when `TRADING_ACCESS_ENABLED=true`.
 - Access remains globally disabled in staging; the future central Mkety Auth Gateway is not a core-runtime blocker.
 
-### Custom hostname -> workspace boundary — CODE GREEN + DB APPLIED
+### Custom hostname -> workspace boundary — CODE GREEN + DB APPLIED + DEPLOYED DISABLED
 - Repo implementation head: `fb34a2fa187eeb66d6c74f54c81b5a75783525e1`.
 - Trading V1 CI run `33955346608`, test job `101277576265`: **success**.
-- Worker/trading-core, pure MT5 bridge and pure MTProto Python tests all passed; protected external/deploy jobs remained skipped.
 - Resolver/store: `src/security/trading_hostname_resolver.js`.
 - Migration file: `db/migrations/0013_trading_workspace_hostnames.sql`.
 - Migration applied to live Mkety Supabase as `20260905083908 trading_0013_workspace_hostnames`.
 - Ledger, RLS, grants, FK, uniqueness, normalization/status checks and indexes verified after apply.
 - `anon` SELECT: false; `authenticated` SELECT: false; `service_role` CRUD: true.
 - Workspace FK is `trading_workspace_hostnames.workspace_id -> trading_workspace_access(id) ON DELETE CASCADE`.
-- New tests cover hostname normalization, active mapping, unknown/pending/disabled fail-closed behavior, request-URL hostname authority over forwarded-host headers, canonical Mkety shared-host behavior, and custom-host/workspace mismatch rejection.
+- Tests cover hostname normalization, active mapping, unknown/pending/disabled fail-closed behavior, request-URL hostname authority over forwarded-host headers, canonical Mkety shared-host behavior, and custom-host/workspace mismatch rejection.
 - `trade.mkety.com` remains a shared canonical entry and does not permanently preselect one customer workspace.
 - Active customer custom hostnames resolve uniquely to one Trading workspace and must match the selected/authenticated workspace on `/api/v1/admin/*`.
 - Customer hostname logic applies only to the enterprise admin/control surface; machine/source ingress such as `/api/v1/events` remains governed by source authentication and is not coupled to customer browser domains.
-- `TRADING_CUSTOM_HOSTNAMES_ENABLED=false` remains explicit. No DNS, Cloudflare-for-SaaS hostname, or deployed custom-host behavior has been enabled yet.
+- The resolver code is present in the current paid staging Worker, but `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`; no DNS or Cloudflare-for-SaaS customer hostname has been enabled.
+
+### Demo acceptance service-role compatibility — FIXED + GREEN, NOT DEPLOYED
+- Latest repo head: `b8d2a9fd5018d23c8435e53cdfb2feb3d7bc34c0`.
+- Trading V1 CI run `33960604555`, test job `101291723338`: **success**.
+- Worker/trading-core, pure MT5 bridge and pure MTProto Python tests all passed.
+- TDD RED head `753b1ffcc4329d41e2772f34cce0e2d54d106699` failed exactly four tests because MT5/cTrader demo command code hard-required `SUPABASE_SERVICE_ROLE_KEY`.
+- `src/testing/mt5_demo_command.js` and `src/testing/ctrader_demo_command.js` now accept the same service-role aliases as staging: `SUPABASE_SERVICE_ROLE`, `SUPABASE_SERVICE_ROLE_KEY`, or `SUPABASE_SERVICE_KEY`.
+- Missing configuration reports the canonical `SUPABASE_SERVICE_ROLE` name without exposing secret values.
+- Probe mode remains non-ordering and does not require the Supabase delivery store; lifecycle modes still use persistent delivery state.
+- This compatibility change is repo-only at this checkpoint; the paid staging Worker remains the reviewed `ecb28b0e...` deployment because no runtime redeploy was authorized for this harness-only change.
+
+### External non-live acceptance gates — READY, NOT RUN
+- Gate 5 MTProto workflow is observation-only and forces `TRADING_ACCESS_ENABLED=false` and `BROKER_EXECUTION_ENABLED=false`.
+- Gate 6 MT5 demo connectivity probe requires staging names `MT5_BRIDGE_URL`, `MT5_BRIDGE_SECRET`, `MT5_ACCOUNT_ID`, `MT5_EXPECTED_DEMO_SERVER`; it sets `MT5_DEMO_ACCEPTANCE_MODE=probe`, `MT5_DEMO_ORDER_TEST=false`, `BROKER_EXECUTION_ENABLED=false`.
+- Gate 6 cTrader demo connectivity probe requires `CTRADER_CLIENT_ID`, `CTRADER_CLIENT_SECRET`, `CTRADER_ACCESS_TOKEN`, `CTRADER_ACCOUNT_ID`; it sets `CTRADER_DEMO_ACCEPTANCE_MODE=probe`, `CTRADER_DEMO_ORDER_TEST=false`, `BROKER_EXECUTION_ENABLED=false`.
+- Real MT5/cTrader source acceptance is separately gated in `gate6-source-acceptance.yml`; it is not the same as connectivity probe and must not be triggered casually.
+- No real Telegram, MT5, or cTrader external account was connected or probed during the repo-preparation milestone.
 
 ### Post-0013 advisor state
 - Security advisor: the new Trading hostname table reports expected INFO `rls_enabled_no_policy` because it is intentionally service-role-only with anon/authenticated privileges revoked.
@@ -66,7 +83,7 @@
 - Do not claim HTTP health acceptance until an actual response is captured through an approved path.
 
 ## Safety state
-Still false:
+Still false in paid staging:
 - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
 - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
 - `TRADING_ACCESS_ENABLED=false`
@@ -76,13 +93,14 @@ Still false:
 No real-money execution authorized.
 
 ## Exact next pickup
-1. Redeploy the latest GREEN Trading branch so the deployed Worker includes the hostname resolver code while all access/execution/custom-host flags remain false.
-2. Verify `/api/v1/health` through a GitHub/Cloudflare-safe path if possible.
-3. Keep `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` after redeploy.
-4. Later, under separate Cloudflare/domain authorization, add one staging/test customer hostname through Cloudflare for SaaS, insert/verify its mapping, and only then consider enabling custom-host routing for non-money-moving acceptance.
-5. When central Mkety Auth Gateway exists, configure `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` with access still false and run signed-access positive/negative acceptance.
-6. Continue Telegram source/destination + MT5 demo + cTrader demo, one real E2E demo lifecycle, recovery, shadow and demo soak.
-7. Tiny live remains separately gated by explicit owner approval and exact financial limits.
+1. Keep the paid staging Worker on the current safe deployment unless a new redeploy is explicitly authorized; the latest repo-only demo harness fix does not itself require runtime deployment for probe commands.
+2. Before any external acceptance, confirm required staging secret/config names exist by name only; never print values.
+3. With explicit authorization, run observation-only Gate 5 MTProto and/or Gate 6 MT5/cTrader connectivity probes first. These must keep order tests and broker execution OFF.
+4. After connectivity is proven, separately authorize real source acceptance, then demo destination lifecycle acceptance. Do not combine these gates.
+5. Build one complete non-live E2E signal lifecycle, then prove recovery/idempotency and run shadow/demo soak.
+6. Later, under separate Cloudflare/domain authorization, add one staging/test customer hostname through Cloudflare for SaaS, insert/verify its mapping, and only then consider enabling custom-host routing for non-money-moving acceptance.
+7. When central Mkety Auth Gateway exists, configure `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` with access still false and run signed-access positive/negative acceptance.
+8. Tiny live remains separately gated by explicit owner approval and exact financial limits.
 
 ## Do not restart these debates
 - Do not redesign Trading as a complex team SaaS.
