@@ -15,9 +15,9 @@ function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(text(value).toLowerCase());
 }
 
-function accessDisabledSummary() {
+function disabledSummary(status) {
   return {
-    status: 'TRADING_ACCESS_DISABLED',
+    status,
     scanned: 0,
     claimed: 0,
     dispatched: 0,
@@ -107,7 +107,8 @@ export function createProductionDestinationRetryRuntime({
   if (typeof executeProductionFn !== 'function') throw new TypeError('executeProductionFn is required');
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
-    if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
+    if (!enabled(env.TRADING_ACCESS_ENABLED)) return disabledSummary('TRADING_ACCESS_DISABLED');
+    if (!enabled(env.BROKER_EXECUTION_ENABLED)) return disabledSummary('BROKER_EXECUTION_DISABLED');
 
     // Per-invocation store map prevents claims from leaking between scheduled runs.
     const stores = new Map();
