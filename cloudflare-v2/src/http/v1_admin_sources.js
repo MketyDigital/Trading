@@ -13,11 +13,17 @@ const SOURCE_SELECT = [
   'last_connected_at', 'last_disconnected_at', 'restart_count', 'last_error_code',
 ].join(',');
 
-const MTPROTO_PROVIDERS = new Set([
-  'cloudflare_container_mtproto',
-  'cloudflare_do_mtproto',
-  'external_mtproto',
-]);
+const SOURCE_CREDENTIAL_KIND_BY_PROVIDER = Object.freeze({
+  cloudflare_container_mtproto: 'mtproto',
+  cloudflare_do_mtproto: 'mtproto',
+  external_mtproto: 'mtproto',
+  mt5_source_bridge: 'mt5',
+  ctrader_source: 'ctrader',
+});
+
+function sourceCredentialKind(providerType) {
+  return SOURCE_CREDENTIAL_KIND_BY_PROVIDER[String(providerType ?? '')] ?? null;
+}
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -129,7 +135,7 @@ function safePriority(value) {
   return Number.isFinite(priority) ? priority : null;
 }
 
-function mtprotoCreationInput(body) {
+function sourceCreationInput(body) {
   const providerType = requiredText(body.providerType ?? body.provider_type);
   const sourceFamily = requiredText(body.sourceFamily ?? body.source_family);
   const sourceType = requiredText(body.sourceType ?? body.source_type);
@@ -149,18 +155,21 @@ function mtprotoCreationInput(body) {
   if (definition.sourceFamily !== sourceFamily) {
     return { ok: false, reason: 'SOURCE_PROVIDER_FAMILY_MISMATCH' };
   }
-  if (!MTPROTO_PROVIDERS.has(providerType)) {
+
+  const credentialKind = sourceCredentialKind(providerType);
+  if (!credentialKind) {
     return { ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' };
   }
 
   try {
-    validateConnectionCredentials('mtproto', body.credentials);
+    validateConnectionCredentials(credentialKind, body.credentials);
   } catch {
     return { ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' };
   }
 
   return {
     ok: true,
+    credentialKind,
     credentials: body.credentials,
     input: {
       providerType,
@@ -329,7 +338,7 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
       }
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-      const parsed = mtprotoCreationInput(body);
+      const parsed = sourceCreationInput(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
       if (!env?.TRADING_MASTER_KEY) {
         return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
@@ -337,7 +346,7 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
 
       let providerSecretCiphertext;
       try {
-        providerSecretCiphertext = await encryptCredentials('mtproto', parsed.credentials, env.TRADING_MASTER_KEY);
+        providerSecretCiphertext = await encryptCredentials(parsed.credentialKind, parsed.credentials, env.TRADING_MASTER_KEY);
       } catch {
         return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
       }
@@ -387,29 +396,34 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
       return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
     }
 
+    let credentialKind = null;
     if (typeof sourceStore.getSource === 'function') {
       try {
         const existing = await sourceStore.getSource(workspaceId, sourceId);
         if (!existing) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
-        if (!MTPROTO_PROVIDERS.has(existing.providerType)) {
+        credentialKind = sourceCredentialKind(existing.providerType);
+        if (!credentialKind) {
           return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
         }
       } catch {
         return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
       }
     }
+    if (!credentialKind) {
+      return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
+    }
 
     const body = await readJson(request);
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     try {
-      validateConnectionCredentials('mtproto', body.credentials);
+      validateConnectionCredentials(credentialKind, body.credentials);
     } catch {
       return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
     }
 
     let providerSecretCiphertext;
     try {
-      providerSecretCiphertext = await encryptCredentials('mtproto', body.credentials, env.TRADING_MASTER_KEY);
+      providerSecretCiphertext = await encryptCredentials(credentialKind, body.credentials, env.TRADING_MASTER_KEY);
     } catch {
       return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
     }
