@@ -31,24 +31,28 @@
 - Readiness requires `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` only when `TRADING_ACCESS_ENABLED=true`.
 - Access remains globally disabled in staging; the future central Mkety Auth Gateway is not a core-runtime blocker.
 
-### Custom hostname -> workspace boundary — CODE GREEN, DB NOT APPLIED
+### Custom hostname -> workspace boundary — CODE GREEN + DB APPLIED
 - Repo implementation head: `fb34a2fa187eeb66d6c74f54c81b5a75783525e1`.
 - Trading V1 CI run `33955346608`, test job `101277576265`: **success**.
 - Worker/trading-core, pure MT5 bridge and pure MTProto Python tests all passed; protected external/deploy jobs remained skipped.
-- New resolver/store: `src/security/trading_hostname_resolver.js`.
-- New repo migration: `db/migrations/0013_trading_workspace_hostnames.sql`.
+- Resolver/store: `src/security/trading_hostname_resolver.js`.
+- Migration file: `db/migrations/0013_trading_workspace_hostnames.sql`.
+- Migration applied to live Mkety Supabase as `20260905083908 trading_0013_workspace_hostnames`.
+- Ledger, RLS, grants, FK, uniqueness, normalization/status checks and indexes verified after apply.
+- `anon` SELECT: false; `authenticated` SELECT: false; `service_role` CRUD: true.
+- Workspace FK is `trading_workspace_hostnames.workspace_id -> trading_workspace_access(id) ON DELETE CASCADE`.
 - New tests cover hostname normalization, active mapping, unknown/pending/disabled fail-closed behavior, request-URL hostname authority over forwarded-host headers, canonical Mkety shared-host behavior, and custom-host/workspace mismatch rejection.
 - `trade.mkety.com` remains a shared canonical entry and does not permanently preselect one customer workspace.
 - Active customer custom hostnames resolve uniquely to one Trading workspace and must match the selected/authenticated workspace on `/api/v1/admin/*`.
 - Customer hostname logic applies only to the enterprise admin/control surface; machine/source ingress such as `/api/v1/events` remains governed by source authentication and is not coupled to customer browser domains.
-- `TRADING_CUSTOM_HOSTNAMES_ENABLED=false` is explicit in the paid Worker config. No DNS, Cloudflare-for-SaaS hostname, or deployed runtime behavior has been changed by this code milestone.
-- Migration `0013` is **repo-only** and has not been applied to Supabase. Live database remains verified through `0012`.
+- `TRADING_CUSTOM_HOSTNAMES_ENABLED=false` remains explicit. No DNS, Cloudflare-for-SaaS hostname, or deployed custom-host behavior has been enabled yet.
 
-### Hostname migration security posture
-- Proposed table `public.trading_workspace_hostnames` is Trading-owned and service-role-only: anon/authenticated privileges revoked, service_role granted, RLS enabled.
-- Rows are normalized lowercase/no trailing dot, hostname is unique, statuses are `pending|active|disabled`, and an `active` row requires `verified_at`.
-- Existing Trading access/membership tables were read-verified to have service-role Data API grants and no anon/authenticated grants in the inspected set.
-- Pre-migration Supabase security advisor still shows the project-wide pre-existing RLS-with-no-policy INFO notices plus existing vector/public-extension and `rls_auto_enable()` SECURITY DEFINER warnings. Those shared/project-wide findings were not changed in this milestone. Remediation reference: https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy
+### Post-0013 advisor state
+- Security advisor: the new Trading hostname table reports expected INFO `rls_enabled_no_policy` because it is intentionally service-role-only with anon/authenticated privileges revoked.
+- No new Trading-specific WARN blocker appeared after migration 0013.
+- Existing project-wide WARNs remain: `vector` extension in `public`; shared `public.rls_auto_enable()` SECURITY DEFINER executable by anon/authenticated. These pre-date migration 0013 and were not altered under Trading scope.
+- Performance advisor reports the new hostname workspace/status index as unused, expected immediately after creation; no unindexed FK warning was raised for `trading_workspace_hostnames`.
+- Shared/project-wide unrelated advisor findings remain out of Trading scope unless separately authorized.
 
 ### Central Mkety Auth Gateway direction — RECORDED, NOT A TRADING BLOCKER
 - Current Mkety development authority is `MketyDigital/mksaas`.
@@ -72,9 +76,9 @@ Still false:
 No real-money execution authorized.
 
 ## Exact next pickup
-1. Obtain explicit authorization before applying repo migration `0013_trading_workspace_hostnames` to the live Mkety Supabase project.
-2. If authorized, apply `0013` with Supabase migration tooling, verify schema/grants/ledger, and rerun security/performance advisors. Do not alter unrelated shared findings.
-3. Keep `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` after DB migration.
+1. Redeploy the latest GREEN Trading branch so the deployed Worker includes the hostname resolver code while all access/execution/custom-host flags remain false.
+2. Verify `/api/v1/health` through a GitHub/Cloudflare-safe path if possible.
+3. Keep `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, `TRADING_ACCESS_ENABLED=false`, and `BROKER_EXECUTION_ENABLED=false` after redeploy.
 4. Later, under separate Cloudflare/domain authorization, add one staging/test customer hostname through Cloudflare for SaaS, insert/verify its mapping, and only then consider enabling custom-host routing for non-money-moving acceptance.
 5. When central Mkety Auth Gateway exists, configure `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` with access still false and run signed-access positive/negative acceptance.
 6. Continue Telegram source/destination + MT5 demo + cTrader demo, one real E2E demo lifecycle, recovery, shadow and demo soak.
