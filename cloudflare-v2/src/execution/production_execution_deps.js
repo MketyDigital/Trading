@@ -1,4 +1,4 @@
-import { decryptSecret } from '../security/secret_box.js';
+import { decryptConnectionCredentials } from '../security/connection_credentials.js';
 import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_store.js';
 import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { signMT5MetadataRequest } from '../adapters/mt5_bridge_protocol.js';
@@ -252,7 +252,7 @@ export function createProductionExecutionDependencies({
   workspaceId,
   tradingEventId = null,
 } = {}, {
-  decryptFn = decryptSecret,
+  decryptCredentialsFn = decryptConnectionCredentials,
   deliveryStoreFactory = createSupabaseDeliveryStore,
   mt5ContextLoader = defaultMt5ContextLoader,
   mt5Executor = executeMT5Action,
@@ -265,6 +265,7 @@ export function createProductionExecutionDependencies({
   const boundTradingEventId = text(tradingEventId);
   if (!boundWorkspaceId) throw new TypeError('workspaceId is required');
   if (!supabase?.from) throw new TypeError('Supabase client is required');
+  if (typeof decryptCredentialsFn !== 'function') throw new TypeError('decryptCredentialsFn is required');
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
   if (!executionSnapshotCache?.get || !executionSnapshotCache?.put) {
     throw new TypeError('executionSnapshotCache is required');
@@ -338,6 +339,22 @@ export function createProductionExecutionDependencies({
     const entries = [...ctraderBatchRuntimes.values()];
     ctraderBatchRuntimes.clear();
     await Promise.all(entries.map(async (entry) => closeCTraderRuntime(entry?.runtime)));
+  }
+
+  async function loadAccountCredentials(account, expectedPlatform) {
+    assertBoundAccount(account, boundWorkspaceId);
+    const platform = platformOf(account);
+    if (platform !== expectedPlatform) throw new Error('production broker credential platform mismatch');
+    const masterKey = required(env.TRADING_MASTER_KEY, 'TRADING_MASTER_KEY');
+    const ciphertext = required(
+      account.credential_ciphertext ?? account.credentialCiphertext,
+      'trade account credential_ciphertext',
+    );
+    try {
+      return await decryptCredentialsFn(expectedPlatform, ciphertext, masterKey);
+    } catch {
+      throw new Error('production broker credentials are unavailable');
+    }
   }
 
   let authorityLoaderImpl = null;
@@ -448,8 +465,9 @@ export function createProductionExecutionDependencies({
       });
     }
 
-    const bridgeUrl = required(env.MT5_BRIDGE_URL, 'MT5_BRIDGE_URL');
-    const bridgeSecret = required(env.MT5_BRIDGE_SECRET, 'MT5_BRIDGE_SECRET');
+    const credentials = await loadAccountCredentials(account, 'mt5');
+    const bridgeUrl = required(credentials.bridgeUrl, 'trade account MT5 bridgeUrl');
+    const bridgeSecret = required(credentials.bridgeSecret, 'trade account MT5 bridgeSecret');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
     const context = await mt5ContextLoader({
       bridgeUrl,
@@ -486,8 +504,9 @@ export function createProductionExecutionDependencies({
   }
 
   async function dispatchMt5(account, action, groupId) {
-    const bridgeUrl = required(env.MT5_BRIDGE_URL, 'MT5_BRIDGE_URL');
-    const bridgeSecret = required(env.MT5_BRIDGE_SECRET, 'MT5_BRIDGE_SECRET');
+    const credentials = await loadAccountCredentials(account, 'mt5');
+    const bridgeUrl = required(credentials.bridgeUrl, 'trade account MT5 bridgeUrl');
+    const bridgeSecret = required(credentials.bridgeSecret, 'trade account MT5 bridgeSecret');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
     const deliveryStore = deliveryStoreFor({
       factory: deliveryStoreFactory,
@@ -520,10 +539,10 @@ export function createProductionExecutionDependencies({
   }
 
   async function dispatchCTrader(account, action, groupId) {
-    const masterKey = required(env.TRADING_MASTER_KEY, 'TRADING_MASTER_KEY');
-    const clientId = required(env.CTRADER_CLIENT_ID, 'CTRADER_CLIENT_ID');
-    const clientSecret = required(env.CTRADER_CLIENT_SECRET, 'CTRADER_CLIENT_SECRET');
-    const encryptedAccessToken = required(account.api_token_encrypted, 'trade account api_token_encrypted');
+    const credentials = await loadAccountCredentials(account, 'ctrader');
+    const clientId = required(credentials.clientId, 'trade account cTrader clientId');
+    const clientSecret = required(credentials.clientSecret, 'trade account cTrader clientSecret');
+    const accessToken = required(credentials.accessToken, 'trade account cTrader accessToken');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
     const numericAccountId = Number(brokerAccountId);
     if (!Number.isInteger(numericAccountId)) throw new Error('trade account account_id must be an integer for cTrader');
@@ -541,7 +560,6 @@ export function createProductionExecutionDependencies({
     let runtime = batchKey ? ctraderBatchRuntimes.get(batchKey)?.runtime : null;
 
     if (!runtime) {
-      const accessToken = await decryptFn(encryptedAccessToken, masterKey);
       const deliveryStore = deliveryStoreFor({
         factory: deliveryStoreFactory,
         supabase,
