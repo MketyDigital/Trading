@@ -1,106 +1,102 @@
 # Mkety Trading – Production Fast Path Handoff
 
-**Purpose:** Rolling continuation record. Read this first. `AGENTS.md` is the controlling operational source of truth; `PRODUCTION_V1_DEVELOPMENT_AUDIT.md` is historical evidence.
+**Purpose:** Rolling continuation record. Read this first. `AGENTS.md` is controlling; the audit is historical evidence.
 
 ## Approved product model
-- One enterprise customer -> one Trading workspace -> one owner -> full workspace control.
-- No complex team/department/role product for V1.
-- Mkety uses Zitadel as the mother identity authority; Trading gets one Mkety Trading sub-project/application, not one per customer.
-- Trading core/runtime remains independently deployable while external access is disabled.
-- Mkety grants Trading access through a cryptographically signed, time-bounded entitlement/assertion derived from authenticated identity/product access; do not use a reusable plain access code.
-- Supabase Trading workspace ownership is final application authorization.
-- Trading-only customers do not need MKSaaS application access.
-- Canonical entry point: `trade.mkety.com`.
-- Optional verified customer hostname, e.g. `trade.starpipsforex.com`, via existing Cloudflare for SaaS.
-- Default and custom hostnames resolve to the same internal workspace/backend.
-- Hostname is routing context only and never authorization.
+- One enterprise customer -> one Trading workspace -> one owner -> full control.
+- No complex team/department product for V1.
+- Mkety uses Zitadel as mother identity provider, but Trading does not directly depend on Zitadel org/project-role claim shapes.
+- Mkety identity/product gate issues a short-lived signed Trading assertion.
+- Trading verifies Mkety signature/issuer/audience/time + `product=trading` + exact `workspace_id` + `access=owner`, then verifies exact enabled workspace membership in Supabase.
+- Supabase is final Trading application authorization/revocation authority.
+- Trading-only customers do not need MKSaaS app/database access.
+- Default entry `trade.mkety.com`; optional customer hostname via Cloudflare for SaaS maps to the same workspace/backend and never grants authorization.
 
 ## Latest verified milestone — 2026-09-05
 
-### Auth-adapter readiness refactor — GREEN
-- RED test-only head: `0760480263dfdcbdc8deec9ef80adfab63f24ce7`.
-- RED correctly demonstrated the old code still required Zitadel while `TRADING_ACCESS_ENABLED=false`.
-- Minimal production-fix head: `b9bb16a789a0765a47fe768dd761a64ce1d5f12d`.
-- Trading V1 CI run: `33951294621`.
-- Test job: `101266508504`.
-- Result: **success**.
-- Worker/trading-core, pure MT5 bridge and pure MTProto Python tests all succeeded.
-- Protected Cloudflare jobs remained skipped as intended.
-- Core staging readiness now requires `SUPABASE_URL`, one supported Supabase service-role secret and `TRADING_MASTER_KEY` while Trading access is disabled.
-- `ZITADEL_ISSUER`, `ZITADEL_AUDIENCE` and `ZITADEL_JWKS_URL` are optional while `TRADING_ACCESS_ENABLED=false`.
-- Those three Zitadel values become mandatory and fail closed when `TRADING_ACCESS_ENABLED=true`.
+### Paid Cloudflare staging deployment — SUCCESS
+- Workflow: `Cloudflare Staging Gate`.
+- Run: `33951878273`.
+- Job: `101268094904` (`staging-gate`).
+- Branch/head deployed: `design/enterprise-trading-event-core` at `c6dba590305bfc191b880fb7e15681bc81aa4997`.
+- Paid runtime configuration name checks succeeded.
+- Cloudflare identity and Wrangler dry-run checks succeeded.
+- Ephemeral paid staging secrets file was built successfully, used for deployment, then removed successfully.
+- Paid Worker deployment succeeded; free deployment was skipped.
+- Runtime secrets injected: `SUPABASE_URL`, normalized Supabase service-role secret and `TRADING_MASTER_KEY`; values were not intentionally logged/committed.
+- Safety remained fail closed:
+  - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
+  - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
+  - `TRADING_ACCESS_ENABLED=false`
+  - `BROKER_EXECUTION_ENABLED=false`
+- No real-money execution was enabled.
 
-### Secure paid-staging runtime injection — READY FOR DISPATCH
-- Design-branch workflow change: `bdb84f8e00f983d8d3da308c95e28d0ff292c1d4` (`ci: inject paid staging runtime secrets safely`).
-- Default-branch workflow-only sync: `049d2060373425bbb2a0570579208d7ee9864283`.
-- No Trading runtime/source/execution code was merged to `main`.
-- `cloudflare-staging-gate.yml` now reads `SUPABASE_URL` from either the GitHub staging secret or environment variable form.
-- It accepts Supabase service-role GitHub secrets named `SUPABASE_SERVICE_ROLE`, `SUPABASE_SERVICE_ROLE_KEY`, or `SUPABASE_SERVICE_KEY`, and normalizes the chosen value to Worker runtime name `SUPABASE_SERVICE_ROLE`.
-- It requires `TRADING_MASTER_KEY` by name before a paid deployment.
-- It creates a mode-0600 ephemeral JSON secrets file inside `RUNNER_TEMP`, deploys with Wrangler `--secrets-file`, and deletes the temporary file with an `always()` cleanup step.
-- Secret values are neither committed nor intentionally printed.
-- Current Cloudflare documentation confirms `wrangler deploy --secrets-file` uploads secrets alongside the Worker code in the same controlled deployment; this avoids a separate `wrangler secret put`, which would itself create/deploy a Worker version.
-- Ordinary Trading V1 CI intentionally excludes `.github/workflows/cloudflare-staging-gate.yml` from its path filters, so no separate ordinary CI run is expected solely for this workflow-plumbing commit. The underlying auth/runtime production head already passed GREEN CI above.
+### Mkety signed Trading access boundary — IMPLEMENTED + GREEN
+- New verifier: `src/security/mkety_access_assertion.js`.
+- V1 admin authorization now uses Mkety-signed assertions rather than direct Zitadel organization/project-role authorization.
+- Signed assertion contract checks:
+  - RS256 signature/key;
+  - trusted issuer;
+  - Trading audience;
+  - time validity;
+  - immutable `sub`;
+  - `product=trading`;
+  - exact requested `workspace_id`;
+  - `access=owner`.
+- After assertion verification, Trading independently checks exact enabled workspace membership in `trading_workspace_memberships`.
+- Workspace must exist and have `trading_access_enabled=true`.
+- Legacy Zitadel-specific fields remain only for compatibility and are not V1 admin authorization authority.
+- Readiness now uses `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` only when `TRADING_ACCESS_ENABLED=true`.
+- A real integration regression was caught before deployment at head `9ae56e57abcee77166570005ce4c28ada6da7c0a`, run `33952893071`; stale direct-Zitadel acceptance assumptions were then removed rather than reintroducing coupling.
+- Runtime/test head `04cb56247e7275d42c67b283ad16ff756c72a9cb`: CI run `33953020087` **success**.
+- Exact docs/current head before this handoff update: `5a184fde3faccce9d9157a31d13a37f8fcf4e7cc`: CI run `33953060199` **success**.
+- Operator identity doc `docs/SHARED_ZITADEL_ENTERPRISE_IDENTITY.md` now describes the Mkety-signed access boundary and Zitadel-behind-Mkety model.
 
-### Supabase / staging runtime configuration
-- Supabase project: `Mkety Digital` (`vdblajgxrfndjesoyayy`).
-- Project API URL: `https://vdblajgxrfndjesoyayy.supabase.co`.
-- Trading migrations are applied and verified through `0012`.
-- Owner confirmed `SUPABASE_URL` is present in GitHub environment `staging`.
-- Owner confirmed `TRADING_MASTER_KEY` is present securely in GitHub environment `staging`.
-- A Supabase service-role key was already reported present in GitHub environment `staging`.
+### Supabase
+- Project: `Mkety Digital` (`vdblajgxrfndjesoyayy`).
+- URL: `https://vdblajgxrfndjesoyayy.supabase.co`.
+- Trading migrations applied/verified through `0012`.
+- `trade_accounts.workspace_id` references `trading_workspace_access(id)` with `ON DELETE RESTRICT`.
 
-### Cloudflare staging inspect — SUCCESS
-- `Cloudflare Staging Gate` workflow run: `33950342398`.
-- Job: `101263798521` (`staging-gate`).
-- Mode: `inspect` on `design/enterprise-trading-event-core` at `d72531582f9ac843b47af0c7761e35566f00aae8`.
-- Result: **success**.
-- `wrangler whoami` authenticated to `Cloudflare@mkety.com's Account`.
-- Paid and free Wrangler dry-runs succeeded.
-- Paid deployment listing succeeded.
-- Visible `mkety-copier-engine` history is pre-production acceptance activity (Gate 2/Gate 3 temporary uploads/rollbacks); no evidence of live customer production use was found.
-- Treat `mkety-copier-engine` as the current staging/test Worker for this launch path, not automatically the final general-production target.
-- `deploy-paid` and `deploy-free` were skipped; no deployment occurred in the inspect run.
+### Cloudflare target
+- Inspect run `33950342398`, job `101263798521`: success.
+- Paid/free dry runs succeeded against Mkety Cloudflare account.
+- `mkety-copier-engine` is treated as current staging/test Worker for this path; do not assume it is final general-production target.
 
-### Zitadel
-- Mkety Zitadel account/instance exists.
-- No Mkety Trading sub-project/application exists yet.
-- This no longer blocks core staging deployment while `TRADING_ACCESS_ENABLED=false`.
-- Do not invent issuer/audience/JWKS/project values.
+### Health
+- Paid staging deployment success is verified.
+- `/api/v1/health` response has not yet been independently captured because the available direct web client rejected the Workers.dev URL before making the request. This is a tooling limitation, not evidence of Worker failure.
+- Verify health through a Cloudflare/GitHub-safe curl path before external Trading access is enabled.
 
-### Safety fuses
-Remain false until the relevant explicitly authorized rollout step:
+### Safety state
+Still false:
 - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
 - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
 - `TRADING_ACCESS_ENABLED=false`
 - `BROKER_EXECUTION_ENABLED=false`
 
-No real-money execution authorized.
+Staging currently runs the earlier safe core build. The newly GREEN Mkety-access code has not yet been redeployed. No real-money execution authorized.
 
 ## Exact next pickup
-1. In GitHub Actions open `Cloudflare Staging Gate`.
-2. Run branch `design/enterprise-trading-event-core` with mode **`deploy-paid`**.
-3. The workflow must fail before deployment if Cloudflare credentials, Supabase URL, an accepted service-role secret, or `TRADING_MASTER_KEY` are absent.
-4. During deployment keep all four master fuses false.
-5. After the run appears, inspect its exact job/logs here and confirm secret-file deployment succeeded without secret exposure.
-6. Verify the staging Worker `/api/v1/health` reports core readiness; Zitadel may remain absent because access is disabled.
-7. Create/configure the single Mkety Trading Zitadel sub-project/application and signed Mkety access-gate adapter.
-8. Set `ZITADEL_ISSUER`, `ZITADEL_AUDIENCE`, `ZITADEL_JWKS_URL` and preferably `ZITADEL_PROJECT_ID`; perform non-money-moving owner/workspace access acceptance before enabling Trading access.
-9. Verify `trade.mkety.com`, then one optional customer hostname through Cloudflare for SaaS to the same workspace.
-10. Connect real Telegram source/destination + MT5 demo + cTrader demo.
-11. Run one real E2E demo lifecycle, material recovery checks, shadow and demo soak.
-12. Tiny controlled live requires separate explicit owner approval with exact financial limits and kill/rollback procedure.
+1. Discover the mother Mkety repository/service that currently owns Zitadel authentication/product access. Reuse it; do not create a parallel identity stack.
+2. Implement or expose the smallest Mkety-side signed assertion issuer + JWKS endpoint for Trading. Claims: `sub`, `product=trading`, exact `workspace_id`, `access=owner`, `iss`, `aud`, `iat`, `exp`, `jti`.
+3. Configure Trading staging with `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL` while leaving `TRADING_ACCESS_ENABLED=false`.
+4. Redeploy the GREEN Trading auth build with access/execution still OFF.
+5. Verify `/api/v1/health` through the staging workflow/Cloudflare-safe path.
+6. Run non-money-moving positive/negative signed-access acceptance and prove Supabase membership/workspace revocation.
+7. Only after that may `TRADING_ACCESS_ENABLED` be explicitly considered for staging enablement. `BROKER_EXECUTION_ENABLED` remains false.
+8. Verify `trade.mkety.com` then one optional Cloudflare-for-SaaS custom hostname.
+9. Connect Telegram + MT5 demo + cTrader demo; run real E2E demo, recovery, shadow and demo soak.
+10. Tiny live remains separately gated by explicit owner approval and exact financial limits.
 
 ## Do not restart these debates
-- Do not redesign Trading as a complex team/tenant SaaS.
-- Do not make Trading core availability depend on Zitadel while access is disabled.
-- Do not use a reusable plain code as the real authorization mechanism.
-- Do not create a separate identity silo for Trading.
+- Do not redesign Trading as a complex team SaaS.
+- Do not make Trading core depend directly on Zitadel.
+- Do not authorize using reusable plain codes.
 - Do not create one Zitadel project per enterprise customer.
-- Do not create a separate backend per customer hostname.
-- Do not add new gates/workflows/harnesses without a demonstrated blocker.
-- Do not merge Trading runtime code into `main` without explicit owner instruction.
+- Do not create separate backend/workspace/identity per custom hostname.
+- Do not merge Trading runtime to `main` without explicit instruction.
 - Do not enable real-money execution without separate explicit final approval.
 
 ## Continuation discipline
-After every meaningful verified milestone, update this file with exact branch head, CI/run/job evidence, environment changes actually performed, safety state, defects found/fixed and exact next pickup.
+After every meaningful verified milestone, record exact branch head, CI/run/job evidence, environment changes actually performed, safety state, demonstrated defects/fixes and exact next pickup here and in `AGENTS.md` when controlling state changes.
