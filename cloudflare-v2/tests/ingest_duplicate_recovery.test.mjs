@@ -36,8 +36,27 @@ const rawBody = JSON.stringify({
   metadata: {},
 });
 
-test('duplicate ingest returns persisted canonical interpretation for safe internal replay', async () => {
-  const input = await signedInput(rawBody);
+const persistedEvent = {
+  version: '1.0',
+  workspace_hint: 'ws-1',
+  source: { type: 'custom_api', instance_id: 'src-1', external_id: 'customer-api-1' },
+  external_event_id: 'native-1',
+  occurred_at: '2026-09-05T20:00:00.000Z',
+  received_at: '2026-09-05T20:00:01.000Z',
+  text: 'BUY XAUUSD',
+  structured_payload: {},
+  thread: { thread_id: 'original-thread', reply_to_event_id: null, edited_event_id: null },
+  metadata: { original: true },
+};
+
+test('duplicate ingest returns persisted event and interpretation for safe internal replay', async () => {
+  const replayBody = JSON.stringify({
+    ...JSON.parse(rawBody),
+    text: 'SELL EURUSD',
+    thread: { thread_id: 'attacker-thread', reply_to_event_id: 'different-event' },
+    metadata: { replay: true },
+  });
+  const input = await signedInput(replayBody);
   const result = await ingestTradingEvent(input, {
     sourceStore: { async getActiveSource() { return source; } },
     eventStore: {
@@ -46,6 +65,7 @@ test('duplicate ingest returns persisted canonical interpretation for safe inter
           ok: true,
           duplicate: true,
           eventId: 'evt-existing',
+          event: persistedEvent,
           interpretation: {
             status: 'READY',
             intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } },
@@ -58,23 +78,33 @@ test('duplicate ingest returns persisted canonical interpretation for safe inter
   assert.equal(result.ok, true);
   assert.equal(result.duplicate, true);
   assert.equal(result.eventId, 'evt-existing');
+  assert.deepEqual(result.event, persistedEvent);
+  assert.equal(result.event.thread.thread_id, 'original-thread');
+  assert.equal(result.event.thread.reply_to_event_id, null);
   assert.equal(result.interpretation.status, 'READY');
   assert.equal(result.interpretation.intent.side, 'BUY');
 });
 
-test('duplicate ingest repairs a missing interpretation before returning replay context', async () => {
-  const input = await signedInput(rawBody);
+test('duplicate ingest repairs missing interpretation from persisted event, never replay body', async () => {
+  const replayBody = JSON.stringify({
+    ...JSON.parse(rawBody),
+    text: 'SELL EURUSD',
+    thread: { thread_id: 'attacker-thread', reply_to_event_id: 'different-event' },
+  });
+  const input = await signedInput(replayBody);
   let persisted;
-  let aiCalls = 0;
+  let aiInput;
   const result = await ingestTradingEvent(input, {
     sourceStore: { async getActiveSource() { return source; } },
     eventStore: {
-      async reserve() { return { ok: true, duplicate: true, eventId: 'evt-existing' }; },
+      async reserve() {
+        return { ok: true, duplicate: true, eventId: 'evt-existing', event: persistedEvent };
+      },
       async updateInterpretation(_eventId, interpretation) { persisted = interpretation; },
     },
     aiRouter: {
-      async processSignal() {
-        aiCalls += 1;
+      async processSignal(text) {
+        aiInput = text;
         return {
           success: true,
           provider: 'test',
@@ -96,7 +126,8 @@ test('duplicate ingest repairs a missing interpretation before returning replay 
 
   assert.equal(result.ok, true);
   assert.equal(result.duplicate, true);
-  assert.equal(aiCalls, 1);
+  assert.deepEqual(result.event, persistedEvent);
+  assert.equal(aiInput, 'BUY XAUUSD');
   assert.equal(result.interpretation.status, 'READY');
   assert.equal(persisted.status, 'READY');
 });
