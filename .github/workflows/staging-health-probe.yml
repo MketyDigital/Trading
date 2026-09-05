@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   health-probe:
-    if: ${{ github.event.head_commit.message == 'staging: probe deployed health' }}
+    if: >-
+      ${{ github.event.head_commit.message == 'staging probe deployed health' }}
     runs-on: ubuntu-latest
     steps:
       - name: Probe deployed Worker health
