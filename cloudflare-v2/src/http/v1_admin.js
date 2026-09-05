@@ -95,10 +95,9 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   if (
     !membership?.enabled ||
     String(membership.workspaceId) !== String(workspace.id) ||
-    String(membership.subject) !== String(auth.subject) ||
-    String(membership.role) !== 'owner'
+    String(membership.subject) !== String(auth.subject)
   ) {
-    return { ok: false, status: 403, reason: 'TRADING_OWNER_ACCESS_DISABLED_OR_MISSING' };
+    return { ok: false, status: 403, reason: 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING' };
   }
 
   return { ok: true, workspace, auth, membership };
