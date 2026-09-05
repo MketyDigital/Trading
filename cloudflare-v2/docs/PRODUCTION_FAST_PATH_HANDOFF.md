@@ -54,11 +54,23 @@
 - Existing unrelated project WARNs remain unchanged: `vector` extension in `public`; shared `public.rls_auto_enable()` SECURITY DEFINER executable by anon/authenticated.
 - Performance advisor after apply: no new `0014`-specific blocker; findings are existing project-wide INFO/WARN items.
 
-### Current paid staging deployment
+### Current paid staging deployment — REDEPLOYED + HEALTH VERIFIED
 - Paid Worker: `mkety-copier-engine`.
-- Last recorded deployed Worker version: `42e450f3-d801-45bb-a1af-5544233bded5` from deployed head `ecb28b0e28709a6ac2bc778e78aa1fa77db0b41f`.
-- The newer production onboarding/source-onboarding heads are code/CI verified but have **not** been redeployed by this milestone.
-- Hidden runtime bindings already include `SUPABASE_URL`, normalized `SUPABASE_SERVICE_ROLE`, and `TRADING_MASTER_KEY`; secret values were not intentionally logged or committed.
+- Deployment trigger head: `6f291aebe85857a4fa521ae48c32a712d8b1662e` (`cloudflare: deploy paid staging gate 2`).
+- Underlying verified MTProto callback config head: `a784d4b218a23418abf6390a123a6010e1487e33`.
+- Deployment workflow run `33988612981`:
+  - mandatory test job `101366660837`: **success**;
+  - paid deploy job `101366757603`: **success**.
+- Current Worker version: `68998f7f-74ce-4c37-8887-3751d3e17489`.
+- Worker URL: `https://mkety-copier-engine.dry-glitter-7e16.workers.dev`.
+- Paid runtime now includes non-secret `MTPROTO_INTERNAL_SOURCE_URL` targeting the first-party internal source-event endpoint.
+- MTProto container application `a03c0bd0-3dab-4578-bab2-88bf5d0d7c1f` is `ready`; post-deploy inventory reported 7 live instances.
+- Current MTProto container image digest: `sha256:be00f898cbe6c4b0ef614d31dc4b44efd151df38938a54cad47e312a18171ab4`.
+- Source-event queue remains present with one producer and one consumer; DLQ remains present.
+- Read-only deployed health probe run `33988725753`, job `101366975652`: **success**.
+- Actual `/api/v1/health` response after redeploy: HTTP `200`, `ok:true`, `status:"ready"`, `ready:true`, `simulationReady:true`, `mtprotoContainerReady:true`, `missing:[]`, `mtprotoContainerMissing:[]`.
+- Optional Mkety access signer config is still absent by design: `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, `MKETY_ACCESS_JWKS_URL`; `TRADING_ACCESS_ENABLED` remains false.
+- Hidden runtime bindings include `SUPABASE_URL`, normalized `SUPABASE_SERVICE_ROLE`, `TRADING_MASTER_KEY`, and the internal MTProto transport secret; secret values were not intentionally logged or committed.
 
 ### Other already-verified boundaries
 - Mkety signed Trading assertion verifier is implemented and fail-closed; `TRADING_ACCESS_ENABLED` remains false.
@@ -79,14 +91,13 @@ No real-money execution is authorized. Real-money enablement still requires sepa
 ## Exact next pickup
 1. Treat production MT5/cTrader broker-account onboarding and Telegram/MT5/cTrader source credential onboarding as code-green; do not redesign them.
 2. Keep **offline readiness** distinct from **external connectivity acceptance**:
-   - offline readiness may prove provider/family configuration, encrypted credential presence/decryptability and safe inactive state without network calls;
+   - offline readiness proves provider/family configuration, encrypted credential presence/decryptability and safe inactive state without network calls;
    - actual Telegram/MT5/cTrader connectivity/health requires a separately authorized external probe/acceptance because it contacts the provider/account.
-3. The next external mutation, if desired, is a separately authorized paid-staging redeploy of the current GREEN build with all safety fuses still false.
-4. After redeploy, capture an actual `/api/v1/health` response through an approved path.
-5. When actual external integration credentials/accounts are connected, run one production-path acceptance per integration: MTProto/source observation, MT5 connectivity, cTrader connectivity; then one complete non-live E2E lifecycle and recovery/soak.
-6. Do not enable `TRADING_ACCESS_ENABLED` until the central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access positive/negative acceptance passes.
-7. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths until the separate final financial-limit approval.
-8. Merge Trading runtime to `main` only on explicit owner instruction.
+3. Paid staging is now redeployed and `/api/v1/health` is verified HTTP 200 with `mtprotoContainerReady:true`; do not repeat this architecture/readiness check unless the relevant runtime/config changes.
+4. When actual external integration credentials/accounts are connected, run one production-path acceptance per integration: MTProto/source observation, MT5 connectivity, cTrader connectivity; then one complete non-live E2E lifecycle and recovery/soak.
+5. Do not enable `TRADING_ACCESS_ENABLED` until the central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access positive/negative acceptance passes.
+6. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths until the separate final financial-limit approval.
+7. Merge Trading runtime to `main` only on explicit owner instruction.
 
 ## Do not restart these debates
 - Do not redesign Trading as a complex team SaaS.
