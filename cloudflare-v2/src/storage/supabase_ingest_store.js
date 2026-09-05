@@ -1,5 +1,16 @@
 import { decryptSecret } from '../security/secret_box.js';
 
+function persistedInterpretation(row = {}) {
+  const status = String(row.processing_status ?? '').trim();
+  if (!status) return null;
+  const interpretation = { status };
+  if (row.canonical_intent && typeof row.canonical_intent === 'object') {
+    interpretation.intent = row.canonical_intent;
+  }
+  if (row.error_code) interpretation.reason = String(row.error_code);
+  return interpretation;
+}
+
 export function createSupabaseIngestStores(supabase, {
   masterKey,
   decryptFn = decryptSecret,
@@ -49,7 +60,7 @@ export function createSupabaseIngestStores(supabase, {
       if (error?.code === '23505') {
         let lookup = supabase
           .from('trading_events')
-          .select('id')
+          .select('id,processing_status,canonical_intent,error_code')
           .eq('workspace_id', row.workspace_id);
 
         if (row.canonical_event_id) {
@@ -62,7 +73,13 @@ export function createSupabaseIngestStores(supabase, {
 
         const { data: existing, error: lookupError } = await lookup.maybeSingle();
         if (!lookupError && existing?.id) {
-          return { ok: true, duplicate: true, eventId: existing.id };
+          const interpretation = persistedInterpretation(existing);
+          return {
+            ok: true,
+            duplicate: true,
+            eventId: existing.id,
+            ...(interpretation ? { interpretation } : {}),
+          };
         }
       }
 
