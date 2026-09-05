@@ -92,6 +92,50 @@ test('simulation flag orchestrates only a successful non-duplicate interpreted e
   assert.deepEqual(body.simulation.actions, []);
 });
 
+test('accepted events always enter orchestration even when simulation mode is disabled', async () => {
+  let depsBuilt = 0;
+  let orchestrationInput;
+  const event = { workspace_hint: 'ws-1', external_event_id: 'evt-production-path', source: { instance_id: 'src-1' }, thread: {} };
+  const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST',
+    body: '{"external_event_id":"evt-production-path","text":"BUY XAUUSD 2500"}',
+    headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+    },
+  });
+
+  const response = await handleV1EventsRequest(request, {
+    TRADING_MASTER_KEY: 'master',
+    TRADING_V1_SIMULATION: 'false',
+  }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({ ok: true, duplicate: false, eventId: 'db-event-production', event, interpretation }),
+    simulationDepsFactory: async () => {
+      depsBuilt += 1;
+      return { executionPath: 'production-capable' };
+    },
+    orchestrateFn: async (input, deps) => {
+      orchestrationInput = { input, deps };
+      return { status: 'PROCESSED', executionEnabled: true, actions: [{ accountId: 'acct-test' }], accounts: [] };
+    },
+  });
+
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(depsBuilt, 1);
+  assert.equal(orchestrationInput.input.eventId, 'db-event-production');
+  assert.equal(orchestrationInput.input.event, event);
+  assert.equal(orchestrationInput.input.interpretation, interpretation);
+  assert.deepEqual(orchestrationInput.deps, { executionPath: 'production-capable' });
+  assert.equal(body.simulation.status, 'PROCESSED');
+  assert.equal(body.simulation.executionEnabled, true);
+  assert.equal(body.simulation.actions.length, 1);
+});
+
 test('duplicate or rejected ingress never enters orchestration', async () => {
   for (const ingestResult of [
     { ok: true, duplicate: true, eventId: 'existing' },
