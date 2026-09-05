@@ -1,5 +1,10 @@
 import { authenticateMketyAccessBearer } from '../security/mkety_access_assertion.js';
 import { createTradingMembershipStore } from '../security/trading_membership_store.js';
+import {
+  canonicalTradingHostsFromEnv,
+  createTradingHostnameStore,
+  resolveTradingRequestHostname,
+} from '../security/trading_hostname_resolver.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
@@ -15,6 +20,10 @@ function json(body, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   });
+}
+
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
 }
 
 async function defaultSupabaseFactory(env) {
@@ -40,10 +49,39 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
   authenticateFn = authenticateMketyAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
+  hostnameStoreFactory = createTradingHostnameStore,
+  resolveHostnameFn = resolveTradingRequestHostname,
 } = {}) {
   const workspaceId = request.headers.get('X-Mkety-Workspace-Id');
   if (!workspaceId) return { ok: false, status: 400, reason: 'MISSING_WORKSPACE_SELECTOR' };
   if (!supabase?.from) return { ok: false, status: 503, reason: 'ADMIN_DATABASE_UNAVAILABLE' };
+
+  if (enabled(env.TRADING_CUSTOM_HOSTNAMES_ENABLED)) {
+    let hostnameStore;
+    try {
+      hostnameStore = hostnameStoreFactory(supabase);
+    } catch {
+      return { ok: false, status: 503, reason: 'TRADING_HOSTNAME_STORE_UNAVAILABLE' };
+    }
+
+    const hostname = await resolveHostnameFn(request, {
+      hostnameStore,
+      canonicalHosts: canonicalTradingHostsFromEnv(env),
+    });
+
+    if (!hostname?.ok) {
+      const serviceFailure = ['TRADING_HOSTNAME_STORE_UNAVAILABLE', 'TRADING_HOSTNAME_LOOKUP_FAILED'];
+      return {
+        ok: false,
+        status: serviceFailure.includes(hostname?.reason) ? 503 : hostname?.reason === 'INVALID_TRADING_HOSTNAME' ? 400 : 404,
+        reason: hostname?.reason || 'TRADING_HOSTNAME_NOT_ACTIVE',
+      };
+    }
+
+    if (hostname.kind === 'custom' && String(hostname.workspaceId) !== String(workspaceId)) {
+      return { ok: false, status: 403, reason: 'TRADING_HOSTNAME_WORKSPACE_MISMATCH' };
+    }
+  }
 
   const { data: workspace, error } = await supabase
     .from('trading_workspace_access')
@@ -107,6 +145,8 @@ export async function handleV1AdminRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   authenticateFn = authenticateMketyAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
+  hostnameStoreFactory = createTradingHostnameStore,
+  resolveHostnameFn = resolveTradingRequestHostname,
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
   operationsStoreFactory = createAdminOperationsStore,
@@ -122,6 +162,8 @@ export async function handleV1AdminRequest(request, env = {}, {
     supabase,
     authenticateFn,
     membershipStoreFactory,
+    hostnameStoreFactory,
+    resolveHostnameFn,
   });
   if (!authorization.ok) return json({ ok: false, reason: authorization.reason }, authorization.status);
 
