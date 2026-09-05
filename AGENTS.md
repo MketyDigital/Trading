@@ -41,82 +41,106 @@ Immediately before any broker action, the runtime must re-check persisted worksp
 - Never merge Trading runtime to `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
-## Current verified stage — 2026-09-05
-**ALL APPROVED SOURCE FAMILIES SELF-SERVICE ONBOARDING CODE GREEN -> LIVE DATABASE GREEN THROUGH 0014 -> CURRENT PAID STAGING FUSES REMAIN OFF.**
+## Detailed current checkpoint
+The detailed restart/audit/progress record is:
+- `cloudflare-v2/docs/PRODUCTION_AUDIT_PROGRESS_2026-09-05.md`
+- checkpoint commit: `f7b665e30675350c496c278ce48c4f76db1ffd56`
 
-### Production source onboarding — GREEN
-- Exact code head for TradingView + Custom Signed API onboarding: `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d`.
-- Trading V1 CI run `33992264387`, test job `101376473506`: **success**.
-- Self-service admin source creation covers Telegram/MTProto, MT5, cTrader, TradingView webhook and Custom Signed API.
-- Credential-based provider/session secrets remain encrypted in `source_connections.provider_secret_ciphertext`.
-- Custom Signed API ingress signing secrets remain separately encrypted in `source_connections.secret_ciphertext`, with plaintext returned only once at creation/rotation.
-- TradingView source creation generates a server-owned public handle, starts disabled and exposes only the safe webhook path.
-- All new sources remain inactive by default and source onboarding grants no broker execution authority.
+Read that file before continuing implementation. It records the full audit chronology, exact implementation/test commits, corrected false positive, custom-hostname implementation, CI blocker, progress summary and restart procedure.
 
-### Production broker onboarding — GREEN
-- Broker-account onboarding code head: `d852de184c0b156dc360c4d242569b756acc2225`.
-- Trading V1 CI run `33964408888`, test job `101301829090`: **success**.
-- Credentials remain encrypted in `trade_accounts.credential_ciphertext`; new accounts are safe/inactive with execution disabled.
+## Last fully verified GREEN implementation milestone
+**All approved source-family self-service onboarding is GREEN.**
 
-### Supabase — GREEN THROUGH 0014
-- Project: `Mkety Digital` (`vdblajgxrfndjesoyayy`).
-- Migration `20260905115452 trading_0014_connection_credentials` applied successfully.
-- Trading service-role-only/RLS posture remains as previously verified.
+- TradingView + Custom Signed API implementation: `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d`.
+- Trading V1 CI run `33992264387` (#1495), test job `101376473506`: **success**.
+- Documentation head `ee5c9f9d9836c5b99434ea8ebacabf5f9707f454` also passed run `33992567673` (#1497), test job `101377281313`.
+- Self-service source creation covers Telegram/MTProto, MT5, cTrader, TradingView webhook and Custom Signed API.
+- Source creation remains inactive by default and grants no broker execution authority.
 
-### Current paid staging deployment
-- Worker: `mkety-copier-engine`.
-- Last recorded deployed Worker version: `68998f7f-74ce-4c37-8887-3751d3e17489`.
-- Newer source-onboarding and audit/hostname heads have not been redeployed.
+Broker-account onboarding was separately verified GREEN at `d852de184c0b156dc360c4d242569b756acc2225`, CI run `33964408888`, test job `101301829090`.
 
-## Repository-wide audit continuation — IMPLEMENTED, CI BLOCKED BY RUNNER INFRASTRUCTURE
-Current branch head at handoff update: `3872be28457f3974261bfbb625c6be6d7be91ff8` before this documentation commit.
+Live Trading Supabase remains verified through migration 0014.
 
-### Confirmed audit findings and remediation
-1. **Destination retry setup-failure rescheduling defect**
-   - Production `markRetryable()` requires a valid `nextAttemptAt`, but the production retry wrapper omitted it when dependency/setup recovery failed.
-   - Fix commit: `a2b987d96639b59b648aadaab5829d7e4a5a155e`.
-   - Recovery now uses the existing 15-second adapter convention, based on the deterministic scheduler `now` value, and persists an explicit due timestamp.
-2. **Stale unauthenticated legacy broker-capable webhook**
-   - `/api/webhook/process_signal` was still delegated to the legacy worker and could reach legacy Deriv/cTrader/MT5 execution without the V1 ingress/authorization model.
-   - Current first-party MTProto DO/container paths no longer depend on it: they use `SOURCE_EVENT_QUEUE` or authenticated `/api/v1/internal/source-event` handoff.
-   - Route retired at the V1 entry boundary in commit `d572e59f1c0e4e9c7daa292b67bd92632a33606a`; it now returns `410 LEGACY_SIGNAL_WEBHOOK_RETIRED` before legacy code/shadow/database/broker behavior.
-3. **Initial broker-retry fuse concern was a false positive and was corrected**
-   - Full-chain review confirmed lower-level `createDestinationRetryRuntime()` already checks `BROKER_EXECUTION_ENABLED` before Supabase construction or due scanning.
-   - A redundant wrapper-level fuse patch was reverted; do not resurrect that false finding.
+## Repository-wide audit continuation — IMPLEMENTED, CI CURRENTLY UNAVAILABLE
+Implementation head before the documentation-only checkpoint commits:
+- `3872be28457f3974261bfbb625c6be6d7be91ff8`
+
+### Confirmed defect fixed — retry setup rescheduling
+- Regression: `82624bb14b1b6a0bf75485069cb927c8fa5d41a0`.
+- Fix: `a2b987d96639b59b648aadaab5829d7e4a5a155e`.
+- Production retry setup/dependency failures now pass a valid explicit `nextAttemptAt` using the existing 15-second convention.
+
+### Confirmed high-risk stale surface retired
+- Regression: `f46091ec27f5ba54e5a44023280064e5f5849080`.
+- Fix: `d572e59f1c0e4e9c7daa292b67bd92632a33606a`.
+- `POST /api/webhook/process_signal` no longer reaches legacy broker-capable code; it returns `410 LEGACY_SIGNAL_WEBHOOK_RETIRED` at the V1 boundary.
+- Current MTProto first-party transports use `SOURCE_EVENT_QUEUE` or authenticated `/api/v1/internal/source-event`, so the legacy route was not required by the supported path.
+
+### Corrected false positive
+- The scheduled destination-retry path does **not** bypass `BROKER_EXECUTION_ENABLED`.
+- Full-chain tracing confirmed `createDestinationRetryRuntime()` checks the real Worker env before Supabase construction/scanning/claim.
+- Redundant wrapper patch was reverted in `fdf1346430e51c7d34901798bbeb6586d427eefe`.
+- Do not resurrect this as an outstanding finding.
 
 ### Audited boundaries with no demonstrated bypass
-- Mkety signed assertion + exact workspace + membership authorization.
-- Custom-hostname resolver as routing context only.
-- Custom Signed API HMAC ingress: server-side source resolution, active-source check, timestamp window and constant-time signature comparison.
-- Internal MTProto source handoff: POST-only shared-token authentication, strict native Telegram identity normalization and queue-only side effect.
-- Source queue: active persisted source resolution before signed V1 dispatch.
-- Durable event reservation/idempotency before processing.
-- Production execution authority: Trading access/master broker fuse, persisted source/workspace/account reload, account safety/kill/risk checks, persisted credentials and destination idempotency before adapter dispatch.
-- TradingView ingress remains fail-closed on the direct-ingress flag and certificate fingerprint verification.
+- Mkety signed assertion + exact workspace + enabled membership authorization.
+- Custom Signed API HMAC ingress.
+- Internal MTProto token-authenticated queue handoff.
+- Active-source resolution in source queue.
+- Durable event reservation/idempotency.
+- Production persisted workspace/source/account authority, safety/risk/kill checks, persisted credentials and destination/order idempotency.
+- TradingView direct-ingress/certificate fingerprint enforcement.
 
-### TradingView lifecycle semantics gap — NOT AN INGRESS BYPASS
-- The generic source enable route can mark a TradingView row active independently of certificate transport readiness.
-- Actual TradingView ingress still requires the existing direct-ingress + certificate fingerprint checks and an active source, so this is a lifecycle/readiness semantics gap rather than a demonstrated security bypass.
-- Keep it separate from hostname/source-onboarding security systems; tighten enable semantics later if product behavior requires “certificate-ready before active row.”
+### TradingView lifecycle semantics gap — tracked separately
+A TradingView source row can be activated independently of certificate readiness, while actual ingress still fails closed behind the direct-ingress and certificate requirements. This is a lifecycle/readiness semantics gap, not a demonstrated ingress bypass. Revisit only after the current post-audit branch is genuinely CI GREEN.
 
-## Customer custom-hostname self-service — CODE IMPLEMENTED, NOT YET CI VERIFIED
+## Customer custom-hostname self-service — CODE IMPLEMENTED, CI PENDING
 - Design: `docs/superpowers/specs/2026-09-05-custom-hostname-self-service-design.md`.
-- Cloudflare for SaaS client: server-side token/zone only; customer receives safe CNAME/ownership/certificate validation instructions, never provider credentials.
-- Authorized routes implemented:
-  - `GET /api/v1/admin/hostnames`
-  - `POST /api/v1/admin/hostnames`
-  - `POST /api/v1/admin/hostnames/:id/verify`
-- Only owner/admin roles receive `hostnames.read` / `hostnames.write`.
-- Creation validates exact non-wildcard DNS hostname, rejects canonical/target/IP/URL-style inputs, provisions Cloudflare then persists local `pending`; local persistence failure attempts provider cleanup.
-- Verification resolves the exact persisted `(workspace,id)` hostname and marks local routing active only when Cloudflare reports hostname `active` AND SSL `active`.
-- No schema change was required; existing migration 0013 already provides globally unique hostname, pending/active state and verified timestamp.
-- Required future runtime bindings: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `TRADING_CUSTOM_HOSTNAME_CNAME_TARGET`.
-- This repository work did **not** configure those bindings, call Cloudflare, alter DNS/fallback origin, enable `TRADING_CUSTOM_HOSTNAMES_ENABLED`, or deploy anything.
+- Cloudflare SaaS client: `004711f4c6c1464a19ba7110ac597c15f46d8471`.
+- Workspace hostname API: `7e101e130fed83376986d2f421b7a5728f6aead0`.
+- Owner/admin permissions: `fda9cfaf3c190bb2e8fa1293b5ad114c653dcd3a`.
+- Admin router wiring: `053d70a4b98394a891b637ee489737c2968b85b4`.
+- Lifecycle tests: `9d9ba11b24559ebc5aa2dcc258bb50ae59a54bab`.
+- Permission regression: `3872be28457f3974261bfbb625c6be6d7be91ff8`.
 
-### CI infrastructure blocker
-- Recent PR test runs fail before receiving a GitHub runner: `runner_id: 0`, empty `steps`, completion within seconds.
-- Latest recorded example: Trading V1 CI run `33993647691` (#1524), mandatory test job `101380170036` — marked failure but **no test step executed**.
-- Therefore branch head after the audit/hostname work must NOT be described as GREEN until a real runner executes the full mandatory test job successfully.
+Admin routes:
+- `GET /api/v1/admin/hostnames`
+- `POST /api/v1/admin/hostnames`
+- `POST /api/v1/admin/hostnames/:id/verify`
+
+Only owner/admin roles may manage hostnames. Creation is exact-workspace scoped and pending by default. Verification activates local routing only when Cloudflare reports both hostname and SSL active. Hostname remains routing context only; normal Mkety assertion/workspace authorization still applies.
+
+No schema change was required beyond existing migration 0013.
+
+Required future provider configuration:
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ZONE_ID`
+- `TRADING_CUSTOM_HOSTNAME_CNAME_TARGET`
+
+No Cloudflare API call, DNS/fallback-origin change, runtime binding change, deployment or custom-hostname routing enablement was performed.
+
+## GitHub Actions blocker — PROBABLE MONTHLY ALLOCATION EXHAUSTION
+Recent mandatory CI jobs are being marked failed before GitHub assigns a runner:
+- `runner_id: 0`
+- `steps: []`
+- completion within seconds.
+
+Representative run:
+- Trading V1 CI `33993647691` (#1524)
+- mandatory test job `101380170036`
+- no runner and no executed test step.
+
+The repository owner reports the GitHub account appears to have reached its approximately 3,000 Actions monthly allocation. That explanation is plausible and fits the runner-less pattern, but it has not been independently verified through a billing/usage endpoint in this session.
+
+Classification until a real runner executes the suite:
+**CI UNAVAILABLE / INFRASTRUCTURE-BLOCKED — NOT CODE-RED AND NOT CODE-GREEN.**
+
+Do not burn additional Actions runs repeatedly while quota availability is uncertain.
+
+## Current paid staging deployment
+- Worker: `mkety-copier-engine`.
+- Last recorded deployed Worker version: `68998f7f-74ce-4c37-8887-3751d3e17489`.
+- Newer source-onboarding, audit-remediation and hostname-self-service heads have not been redeployed.
 
 ## Critical runtime safety defaults
 Keep fail-closed until a separately authorized rollout step changes them:
@@ -143,14 +167,25 @@ Before a broker adapter may be reached, all applicable locks must pass:
 11. TradingView additionally requires its accepted ingress/source/certificate path.
 
 ## Exact next pickup
-1. **First priority:** recover a functioning GitHub Actions runner and execute the full mandatory Trading V1 CI on the current branch. Do not claim GREEN from runner-less failures or static inspection.
-2. If CI exposes code/test defects, fix only reproduced failures TDD-first and rerun until a real full test job is GREEN.
-3. Once GREEN, update both handoffs with the exact final code head/run/job/test counts.
-4. Do not configure or call Cloudflare for SaaS until separate external-mutation authorization. When authorized later, configure the API token/zone/CNAME target first while keeping `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, run non-routing provisioning/verification acceptance, then separately decide whether to enable routing.
-5. Keep offline readiness separate from external provider acceptance.
-6. Do not enable `TRADING_ACCESS_ENABLED` until central Mkety Auth Gateway issuer/audience/JWKS configuration exists and signed-access acceptance passes.
-7. Do not enable `BROKER_EXECUTION_ENABLED` for real-money paths without separate explicit final approval including limits/kill/rollback.
-8. Merge runtime to `main` only on explicit owner instruction.
+### While GitHub Actions capacity is unavailable
+1. Do not stack additional non-critical production features on the unverified audit/hostname head.
+2. Continue static review/documentation only, or prepare exact acceptance checklists without invoking external systems.
+3. If a critical security defect is proved by repository evidence, a narrow emergency fix is allowed, but record that it is unverified until CI returns.
+4. Keep all five safety fuses false.
+5. Do not deploy, call Cloudflare, mutate DNS, contact real brokers/providers, place orders, or merge `main`.
+
+### First step when Actions capacity returns
+1. Run ordinary full Trading V1 CI on the current branch.
+2. Confirm the mandatory test job receives a real runner and executes steps.
+3. Fix only reproduced RED assertions TDD-first.
+4. Rerun until genuinely GREEN.
+5. Update this file, `PRODUCTION_AUDIT_PROGRESS_2026-09-05.md`, and `PRODUCTION_FAST_PATH_HANDOFF.md` with exact final branch head/run/job/test evidence.
+
+### After the current code is GREEN
+The next bounded engineering decision is the TradingView lifecycle semantics gap. Decide whether certificate readiness must be required before a TradingView source row becomes active. Keep that work separate from hostname routing and source authentication.
+
+### Later external acceptance — separately authorized
+For custom hostnames, configure Cloudflare token/zone/CNAME target while `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`, run controlled non-routing provisioning/verification acceptance, verify exact workspace authorization, and only then consider routing enablement as a separate rollout decision.
 
 ## Architecture/tooling freeze
 No new production architecture, framework, gate, workflow or elaborate acceptance tooling unless it fixes a blocker proved by ordinary CI, staging, demo execution or safe live-readiness verification. Use the system already built.
@@ -162,10 +197,11 @@ Generic `continue` authorizes safe repository development/static inspection only
 After every meaningful verified milestone:
 1. update this file if controlling state changed;
 2. update `cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`;
-3. record exact branch/code head and relevant CI/run/job/test evidence;
-4. state achieved/remaining/safety state/exact next pickup;
-5. never let stale historical blockers override a newer verified handoff;
-6. preserve the approved simple owner-workspace/custom-hostname/Mkety-access-gate model;
-7. preserve the architecture/tooling freeze.
+3. update the detailed audit checkpoint while this audit/hostname milestone remains active;
+4. record exact branch/code head and relevant CI/run/job/test evidence;
+5. state achieved/remaining/safety state/exact next pickup;
+6. never let stale historical blockers override a newer verified handoff;
+7. preserve the approved simple owner-workspace/custom-hostname/Mkety-access-gate model;
+8. preserve the architecture/tooling freeze.
 
 Historical remediation evidence remains in `cloudflare-v2/docs/PRODUCTION_V1_DEVELOPMENT_AUDIT.md`; use it as history, not the current pickup source when it conflicts with this file or the rolling handoff.
