@@ -26,12 +26,34 @@ function account(overrides = {}) {
     workspace_id: 'ws-a',
     platform: 'mt5',
     account_id: '90001',
-    api_token_encrypted: 'encrypted-account-token',
+    credential_ciphertext: 'synthetic-account-envelope',
     server_name: 'Broker-Demo',
     is_active: true,
     execution_enabled: true,
     safety_policy: { enabled: true, killSwitch: false },
     ...overrides,
+  };
+}
+
+function mt5CredentialDecryptor(seen = null) {
+  return async (kind, ciphertext, masterKey) => {
+    if (seen) seen.decrypt = { kind, ciphertext, masterKey };
+    return {
+      bridgeUrl: 'https://server-bridge.example/base',
+      bridgeSecret: 'server-bridge-secret',
+    };
+  };
+}
+
+function ctraderCredentialDecryptor(seen = null) {
+  return async (kind, ciphertext, masterKey) => {
+    if (seen) seen.decrypt = { kind, ciphertext, masterKey };
+    return {
+      clientId: 'server-client-id',
+      clientSecret: 'server-client-secret',
+      accessToken: 'server-account-access-token',
+      refreshToken: 'server-refresh-token',
+    };
   };
 }
 
@@ -63,18 +85,16 @@ test('account loader is permanently bound to one workspace and one exact trade a
   );
 });
 
-test('MT5 dispatch uses only server env plus exact database account authority and persistent workspace-scoped delivery store', async () => {
+test('MT5 dispatch uses exact account credential envelope plus database account authority and persistent workspace-scoped delivery store', async () => {
   const seen = {};
   const row = account();
   const deps = createProductionExecutionDependencies({
-    env: {
-      MT5_BRIDGE_URL: 'https://server-bridge.example/base',
-      MT5_BRIDGE_SECRET: 'server-bridge-secret',
-    },
+    env: { TRADING_MASTER_KEY: 'master-key-placeholder' },
     supabase: createAccountQuerySupabase(row),
     workspaceId: 'ws-a',
     tradingEventId: 'event-db-id',
   }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(seen),
     deliveryStoreFactory: (_supabase, options) => {
       seen.store = options;
       return { reserve() {}, complete() {}, fail() {} };
@@ -106,6 +126,11 @@ test('MT5 dispatch uses only server env plus exact database account authority an
   });
 
   assert.equal(result.brokerPositionId, 'position-1');
+  assert.deepEqual(seen.decrypt, {
+    kind: 'mt5',
+    ciphertext: 'synthetic-account-envelope',
+    masterKey: 'master-key-placeholder',
+  });
   assert.deepEqual(seen.store, {
     workspaceId: 'ws-a',
     destinationType: 'mt5',
@@ -122,29 +147,25 @@ test('MT5 dispatch uses only server env plus exact database account authority an
   assert.equal(JSON.stringify(seen.executor).includes('attacker'), false);
 });
 
-test('cTrader dispatch decrypts exact account token server-side and caller cannot select credentials or live mode', async () => {
+test('cTrader dispatch decrypts exact account credential envelope server-side and caller cannot select credentials or live mode', async () => {
   const seen = {};
   const row = account({
     platform: 'ctrader',
     account_id: '123456',
     server_name: 'demo',
-    api_token_encrypted: 'ciphertext-row-a',
+    credential_ciphertext: 'synthetic-ctrader-envelope',
+    api_token_encrypted: 'legacy-token-must-not-be-used',
   });
   const deps = createProductionExecutionDependencies({
     env: {
       TRADING_MASTER_KEY: 'master-key-placeholder',
-      CTRADER_CLIENT_ID: 'server-client-id',
-      CTRADER_CLIENT_SECRET: 'server-client-secret',
       CTRADER_LIVE_TRADING_ENABLED: 'false',
     },
     supabase: createAccountQuerySupabase(row),
     workspaceId: 'ws-a',
     tradingEventId: 'event-db-id',
   }, {
-    decryptFn: async (ciphertext, masterKey) => {
-      seen.decrypt = { ciphertext, masterKey };
-      return 'server-account-access-token';
-    },
+    decryptCredentialsFn: ctraderCredentialDecryptor(seen),
     deliveryStoreFactory: (_supabase, options) => {
       seen.store = options;
       return { reserve() {}, complete() {}, fail() {} };
@@ -174,7 +195,8 @@ test('cTrader dispatch decrypts exact account token server-side and caller canno
 
   assert.equal(result.brokerPositionId, 'ct-position-1');
   assert.deepEqual(seen.decrypt, {
-    ciphertext: 'ciphertext-row-a',
+    kind: 'ctrader',
+    ciphertext: 'synthetic-ctrader-envelope',
     masterKey: 'master-key-placeholder',
   });
   assert.equal(seen.runtime.environment, 'demo');
@@ -185,6 +207,7 @@ test('cTrader dispatch decrypts exact account token server-side and caller canno
   assert.equal(seen.runtime.accountId, 123456);
   assert.equal(seen.closed, true);
   assert.equal(JSON.stringify(seen.runtime).includes('attacker'), false);
+  assert.equal(JSON.stringify(seen.runtime).includes('legacy-token'), false);
 });
 
 test('live cTrader account remains fail-closed unless a separate server-side live opt-in is true', async () => {
@@ -192,19 +215,18 @@ test('live cTrader account remains fail-closed unless a separate server-side liv
     platform: 'ctrader',
     account_id: '123456',
     server_name: 'live',
+    credential_ciphertext: 'synthetic-live-envelope',
   });
   let runtimeCalls = 0;
   const deps = createProductionExecutionDependencies({
     env: {
       TRADING_MASTER_KEY: 'master',
-      CTRADER_CLIENT_ID: 'client',
-      CTRADER_CLIENT_SECRET: 'secret',
       CTRADER_LIVE_TRADING_ENABLED: 'false',
     },
     supabase: createAccountQuerySupabase(row),
     workspaceId: 'ws-a',
   }, {
-    decryptFn: async () => 'token',
+    decryptCredentialsFn: ctraderCredentialDecryptor(),
     deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
     ctraderRuntimeFactory: async () => { runtimeCalls += 1; return { execute() {}, close() {} }; },
   });
@@ -216,7 +238,7 @@ test('live cTrader account remains fail-closed unless a separate server-side liv
   assert.equal(runtimeCalls, 0);
 });
 
-test('unsupported platform and missing server-side platform configuration fail before executor construction', async () => {
+test('unsupported platform and missing per-account credential authority fail before executor construction', async () => {
   const unsupported = account({ platform: 'deriv' });
   const deps = createProductionExecutionDependencies({
     env: {},
@@ -228,9 +250,9 @@ test('unsupported platform and missing server-side platform configuration fail b
     /unsupported production broker platform/i,
   );
 
-  const mt5 = account();
+  const mt5 = account({ credential_ciphertext: null });
   const missing = createProductionExecutionDependencies({
-    env: {},
+    env: { TRADING_MASTER_KEY: 'master' },
     supabase: createAccountQuerySupabase(mt5),
     workspaceId: 'ws-a',
   }, {
@@ -239,7 +261,7 @@ test('unsupported platform and missing server-side platform configuration fail b
   });
   await assert.rejects(
     () => missing.dispatchAction({ workspaceId: 'ws-a', account: mt5, action: { type: 'OPEN_POSITION', idempotencyKey: 'k1' } }),
-    /MT5_BRIDGE_URL|MT5_BRIDGE_SECRET/,
+    /credential_ciphertext/,
   );
 });
 
@@ -249,6 +271,7 @@ test('production dependencies expose only whitelisted nonauthoritative snapshot 
     fast_entry_policy: 'WAIT_FOR_COMPLETE_SIGNAL',
     entry_zone_policy: 'NEAREST_BOUNDARY',
     api_token_encrypted: 'must-never-enter-snapshot',
+    credential_ciphertext: 'credential-envelope-must-never-enter-snapshot',
     safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 1 },
     current_daily_pnl_percent: -4,
     current_open_risk_percent: 3,
@@ -281,8 +304,9 @@ test('production dependencies expose only whitelisted nonauthoritative snapshot 
 
   const serialized = JSON.stringify(snapshot);
   for (const forbidden of [
-    'api_token_encrypted', 'must-never-enter-snapshot', 'safety_policy', 'killSwitch',
-    'execution_enabled', 'is_active', 'current_daily_pnl_percent', 'current_open_risk_percent',
+    'api_token_encrypted', 'must-never-enter-snapshot', 'credential_ciphertext', 'credential-envelope-must-never-enter-snapshot',
+    'safety_policy', 'killSwitch', 'execution_enabled', 'is_active',
+    'current_daily_pnl_percent', 'current_open_risk_percent',
     'TRADING_ACCESS_ENABLED', 'BROKER_EXECUTION_ENABLED',
   ]) {
     assert.equal(serialized.includes(forbidden), false, `snapshot leaked mutable/secret authority: ${forbidden}`);
