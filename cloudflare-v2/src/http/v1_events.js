@@ -17,10 +17,6 @@ function json(body, status = 200) {
   });
 }
 
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
-
 function blockedSimulation(error) {
   return {
     status: 'BLOCKED',
@@ -87,7 +83,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       }),
     });
 
-    if (!result?.ok || result?.duplicate || !enabled(env.TRADING_V1_SIMULATION)) {
+    if (!result?.ok || result?.duplicate) {
       return json(result, result?.ok ? 200 : Number(result?.status || 500));
     }
 
