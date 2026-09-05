@@ -36,6 +36,7 @@ test('internal queue replay can re-orchestrate an authenticated duplicate using 
     ingestFn: async () => ({
       ok: true,
       duplicate: true,
+      recoveryReady: true,
       eventId: 'event-db-1',
       event,
       interpretation,
@@ -65,6 +66,7 @@ test('public duplicate requests remain no-op even when event and interpretation 
     ingestFn: async () => ({
       ok: true,
       duplicate: true,
+      recoveryReady: true,
       eventId: 'event-db-1',
       event: { workspace_hint: 'ws-1' },
       interpretation: { status: 'READY' },
