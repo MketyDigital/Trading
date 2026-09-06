@@ -28,9 +28,9 @@ function recoverPersistedEvent(source, persisted = {}) {
     version: persisted.version,
     workspace_hint: source.workspace_id,
     source: {
-      type: persisted.source_type || source.source_type,
+      type: persisted.source_type || persisted.source?.type || source.source_type,
       instance_id: source.source_instance_id,
-      external_id: persisted.source_external_id ?? null,
+      external_id: persisted.source_external_id ?? persisted.source?.external_id ?? null,
     },
     external_event_id: persisted.external_event_id,
     occurred_at: persisted.occurred_at,
