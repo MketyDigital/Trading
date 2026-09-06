@@ -63,3 +63,4 @@ The protected workflow first runs the ordinary Node/MT5/MTProto regression suite
 Merely adding or editing the workflow/runner does not authorize or trigger Gate 4 real acceptance.
 
 Acceptance trigger: 2026-09-06 post-CodeQL GREEN read-only identity verification.
+Acceptance trigger: 2026-09-06 production path after Gate 2 passed and Gate 3 blocked on custom-domain 503 readiness.
