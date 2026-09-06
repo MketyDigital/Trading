@@ -81,3 +81,4 @@ The protected workflow first runs the ordinary Node/MT5/MTProto regression suite
 Merely adding or editing this workflow, runner, package command, or runbook does not authorize or trigger a real Gate 5 soak.
 
 Acceptance attempt: 2026-09-06 production-readiness audit with Trading access and broker execution disabled.
+Acceptance attempt: 2026-09-06 production path after Gate 4 blocked on missing identity staging secrets.
