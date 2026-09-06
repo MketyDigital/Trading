@@ -3,7 +3,7 @@
 ## Mission
 Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and controlled rollout.
 
-The controlling repository objective is now: **the V1 completion build is implemented on the isolated completion branch; perform one consolidated executable verification, batch-fix any reproduced failures, then proceed to separately authorized staging/external acceptance.**
+The controlling repository objective is now: **the V1 completion build is implemented and freshly GREEN on the isolated completion branch; proceed through controlled staging/external acceptance with all real-execution fuses disabled before any production promotion.**
 
 ## Controlling product model — APPROVED 2026-09-05
 **one enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
@@ -40,11 +40,11 @@ Repository tests may inject production gates as enabled and fake broker/provider
 - Preserved feature branch / draft PR #2 head: `design/enterprise-trading-event-core`
 - Active completion branch: `design/enterprise-trading-event-core-completion`
 - Draft PR #2 targets `main` but still points at the preserved original branch.
-- Completion branch comparison at final static audit: **55 commits ahead, 0 behind** the preserved feature branch.
+- Draft PR #3 targets `design/enterprise-trading-event-core` from the completion branch.
 - Never merge Trading runtime to `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
-## V1 completion build — IMPLEMENTED / EXECUTABLE VERIFICATION PENDING
+## V1 completion build — GREEN / STAGING ACCEPTANCE PENDING
 The approved completion plan is:
 - `docs/superpowers/plans/2026-09-05-v1-production-completion-plan.md`
 
@@ -57,51 +57,43 @@ Repository implementation covers:
 6. Mkety access-gateway verification with fake JWKS fetch fixtures, `nbf` coverage, exact workspace binding before workspace lookup and exact enabled membership.
 7. Legacy execution-surface audit: `/api/webhook/process_signal` is retired at the V1 wrapper and all legacy `/api/admin/*` routes are intercepted before legacy database/broker-capable code. Remaining legacy fallthrough is non-trading dashboard/VIP behavior.
 
-No real broker/provider connection, Cloudflare custom-host API call, DNS mutation, deployment or `main` merge was performed as part of this repository build.
+No real broker/provider connection, Cloudflare custom-host API call, DNS mutation or `main` merge was performed as part of repository completion.
 
-## Last fully verified GREEN historical milestones
-These are historical verified baselines, not evidence that the current completion branch is green:
+## Fresh completion-branch verification
+Current verified code head before this documentation update:
+- SHA: `20f46dce609cfb0d368557035c2fe33b019a5865`
+- Trading V1 CI run: `34031424441` (#1585)
+- mandatory test job: `101481528392` — success
+- `Run Worker and trading-core tests` — success
+- `Run pure MT5 bridge tests` — success
+- `Run pure MTProto Python tests` — success
+
+The reproduced RED cause was a stale `v1_admin_sources.test.mjs` store-call assertion after source enablement gained a required readiness lookup. The production readiness check was preserved; the test now explicitly requires the `getSource` readiness lookup before enable mutation.
+
+Classification:
+
+**GREEN / STAGING ACCEPTANCE PENDING.**
+
+This GREEN evidence verifies the repository test surface at the exact code SHA above. It does not itself authorize real broker connectivity, real-money execution, `main` merge, DNS mutation or production fuse enablement.
+
+## Historical verified GREEN milestones
+These remain useful regression baselines:
 - Source onboarding implementation `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d` — CI run `33992264387`, test job `101376473506`: success.
-- Documentation head `ee5c9f9d9836c5b99434ea8ebacabf5f9707f454` — CI run `33992567673`, test job `101377281313`: success.
-- Broker onboarding `d852de184c0b156dc360c4d242569b756acc2225` — CI run `33964408888`, test job `101301829090`: success.
+- Documentation head `ee5c9f9d9836c5b99434ea8ebacabf5f9707f454` — CI run `33992567673`, job `101377281313`: success.
+- Broker onboarding `d852de184c0b156dc360c4d242569b756acc2225` — CI run `33964408888`, job `101301829090`: success.
 - Live Trading Supabase previously verified through migration 0014.
 
-## Current verification classification
-GitHub Actions recently failed before assigning a runner (`runner_id: 0`, no executed steps), consistent with unavailable Actions capacity. The container used in this development session also could not clone GitHub because DNS resolution to github.com failed.
-
-Therefore the current completion branch is classified:
-
-**IMPLEMENTED / EXECUTABLE VERIFICATION PENDING — CI INFRASTRUCTURE UNAVAILABLE.**
-
-It is neither code-RED nor code-GREEN until a fresh full test command actually executes.
-
-Do not claim current tests pass based on commits, static inspection or historical green runs.
-
-## Consolidated verification
-When an executable environment is available, run one full local verification instead of per-commit micro-runs:
-
-```bash
-git checkout design/enterprise-trading-event-core-completion
-git pull
-cd cloudflare-v2
-npm install
-npm test
-```
-
-Treat reproduced failures as one batch. Fix those failures, rerun the complete suite, and only call the completion branch GREEN after a fresh zero-failure result.
-
 ## Current external/deployment safety state
-Repository completion does not change deployed environment state. Keep fail-closed until separately authorized rollout:
+Keep fail-closed through staging acceptance unless the applicable gate explicitly and temporarily requires a narrower non-broker probe:
 - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
 - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
 - `TRADING_ACCESS_ENABLED=false`
 - `BROKER_EXECUTION_ENABLED=false`
 - `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`
 
-Last recorded paid staging Worker:
+Last recorded paid staging Worker before the current rollout sequence:
 - Worker: `mkety-copier-engine`
 - deployed version: `68998f7f-74ce-4c37-8887-3751d3e17489`
-- completion-branch code has not been deployed.
 
 Required future custom-host provider configuration:
 - `CLOUDFLARE_API_TOKEN`
@@ -128,14 +120,14 @@ Before a broker adapter may be reached, all applicable locks must pass:
 The scheduled destination-retry path does **not** bypass `BROKER_EXECUTION_ENABLED`. `createDestinationRetryRuntime()` checks real Worker env before database construction/scanning/claim. The redundant wrapper patch was reverted in `fdf1346430e51c7d34901798bbeb6586d427eefe`. Do not resurrect this as an outstanding finding.
 
 ## Exact next pickup
-1. Run the consolidated test command above when an executable environment is available.
-2. Batch-fix only reproduced failures and rerun the complete suite.
-3. Update this file and both production handoffs with exact test counts/head/run evidence.
-4. Only after GREEN, perform separately authorized staging deployment/configuration and external acceptance using existing scripts.
-5. Keep real-money execution disabled until separate explicit approval and limits.
+1. Preserve the verified completion SHA evidence above.
+2. Merge/advance only the staging feature branch when required for controlled acceptance; do not merge `main`.
+3. Run the existing fail-closed staging deployment/acceptance gates with non-real/ephemeral credentials and `BROKER_EXECUTION_ENABLED=false`.
+4. Record exact staging deployment and acceptance evidence in the production handoffs.
+5. Production promotion remains blocked until staging acceptance, required Mkety/Supabase/Cloudflare configuration verification, rollback verification and a separate real-money decision. Real-money execution remains disabled without explicit approval and exact limits.
 
 ## Architecture/tooling freeze
 No new framework, identity system, execution architecture or acceptance framework unless a concrete reproduced blocker requires it. Use the V1 system already built.
 
 ## Safety authorization boundary
-Generic `continue` authorizes safe repository development/static inspection only. It does not authorize Cloudflare deployment/config mutation, enabling access/execution/custom-host fuses, real Telegram/provider acceptance, demo/live broker orders, `main` merge or real-money execution unless the user explicitly authorizes the corresponding step.
+Repository completion and safe staging/simulation acceptance may use production-shaped code with non-real/ephemeral credentials while all broker execution fuses remain disabled. Never enable real-money execution, connect real broker credentials, merge to `main`, or change customer DNS/custom-host production state without the separate explicit authorization required for that action.
