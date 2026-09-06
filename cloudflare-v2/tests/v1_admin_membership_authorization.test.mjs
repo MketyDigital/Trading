@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { authorizeV1AdminRequest } from '../src/http/v1_admin.js';
 
 const env = {
-  ZITADEL_ISSUER: 'https://login.example',
-  ZITADEL_AUDIENCE: 'trading-api',
-  ZITADEL_JWKS_URL: 'https://login.example/oauth/v2/keys',
-  ZITADEL_PROJECT_ID: 'trading-project',
+  MKETY_ACCESS_ISSUER: 'https://access.mkety.example',
+  MKETY_ACCESS_AUDIENCE: 'mkety-trading',
+  MKETY_ACCESS_JWKS_URL: 'https://access.mkety.example/.well-known/jwks.json',
 };
 
 const workspace = {
@@ -17,7 +16,7 @@ const workspace = {
 };
 
 function request(workspaceId = 'ws-1') {
-  return new Request('https://trade.test/api/v1/admin/workspace', {
+  return new Request('https://trade.mkety.com/api/v1/admin/workspace', {
     headers: {
       'X-Mkety-Workspace-Id': workspaceId,
       Authorization: 'Bearer token',
@@ -56,11 +55,10 @@ const authenticate = async () => ({
   ok: true,
   subject: 'zitadel-user-1',
   workspaceId: 'ws-1',
-  organizationId: 'org-1',
-  role: 'trading_access',
+  access: 'owner',
 });
 
-test('valid Zitadel identity is denied when exact Trading membership is missing', async () => {
+test('valid Mkety-gateway identity is denied when exact Trading membership is missing', async () => {
   const result = await authorizeV1AdminRequest(request(), env, {
     supabase: makeSupabase(),
     authenticateFn: authenticate,
@@ -70,7 +68,7 @@ test('valid Zitadel identity is denied when exact Trading membership is missing'
   assert.equal(result.reason, 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING');
 });
 
-test('enabled exact workspace membership authorizes the Trading-only Zitadel subject', async () => {
+test('enabled exact workspace membership authorizes the Trading subject from the Mkety gateway', async () => {
   const supabase = makeSupabase({ membership: {
     id: 'membership-1',
     workspace_id: 'ws-1',
