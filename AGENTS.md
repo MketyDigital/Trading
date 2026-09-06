@@ -3,10 +3,12 @@
 ## Mission
 Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and controlled rollout.
 
-The controlling repository objective is now: **the V1 completion build is implemented and freshly GREEN on the isolated completion branch; proceed through controlled staging/external acceptance with all real-execution fuses disabled before any production promotion.**
+The current repository objective is: **finish the Trading repo V1 completion branch, verify safe source-to-destination simulation, then proceed to controlled staging/external acceptance with all real-execution fuses disabled before any production promotion.**
 
-## Controlling product model — APPROVED 2026-09-05
-**one enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
+This repo is the focus. MkSaaS/Mkety matters only as the upstream auth/access assertion contract that Trading consumes.
+
+## Controlling product model — APPROVED
+**One enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
 
 Do not redesign V1 as a complex collaboration/team SaaS. Existing membership/role primitives may remain for compatibility/future use.
 
@@ -37,51 +39,52 @@ Repository tests may inject production gates as enabled and fake broker/provider
 
 ## Repository / branches
 - Repository: `MketyDigital/Trading`
-- Preserved feature branch / draft PR #2 head: `design/enterprise-trading-event-core`
-- Active completion branch: `design/enterprise-trading-event-core-completion`
-- Draft PR #2 targets `main` but still points at the preserved original branch.
-- Draft PR #3 targets `design/enterprise-trading-event-core` from the completion branch.
+- Base staging feature branch for this PR: `design/enterprise-trading-event-core`
+- Active completion PR: PR #6, `fix/v1-frontend-sync-simulation`
+- PR #6 remains draft/open until Task 8 final verification and handoff are complete.
 - Never merge Trading runtime to `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
 
-## V1 completion build — GREEN / STAGING ACCEPTANCE PENDING
-The approved completion plan is:
-- `docs/superpowers/plans/2026-09-05-v1-production-completion-plan.md`
+## Current completion workstream — PR #6
+Approved implementation plan:
+- `docs/superpowers/plans/2026-09-06-v1-frontend-sync-simulation.md`
 
-Repository implementation covers:
-1. TradingView source readiness and ready-before-enable semantics.
-2. Source-family ingestion/event pipeline parity and orchestration independent of the legacy `TRADING_V1_SIMULATION` response mode.
-3. Broker account activation/deactivation lifecycle and enabled production-shaped MT5/cTrader execution tests using fake broker dependencies.
-4. Retry/recovery durability: pre-claim validation, expired-lease crash recovery, CAS renewal, durable post-coordinator reconciliation, transient risk rescheduling and separate no-resend state-binding repair.
-5. Workspace/admin/customer-hostname lifecycle, including provider-independent local list and unconditional canonical hostname enforcement.
-6. Mkety access-gateway verification with fake JWKS fetch fixtures, `nbf` coverage, exact workspace binding before workspace lookup and exact enabled membership.
-7. Legacy execution-surface audit: `/api/webhook/process_signal` is retired at the V1 wrapper and all legacy `/api/admin/*` routes are intercepted before legacy database/broker-capable code. Remaining legacy fallthrough is non-trading dashboard/VIP behavior.
+Frontend/API/schema audit:
+- `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
 
-No real broker/provider connection, Cloudflare custom-host API call, DNS mutation or `main` merge was performed as part of repository completion.
-
-## Fresh completion-branch verification
-Current verified code head before this documentation update:
-- SHA: `20f46dce609cfb0d368557035c2fe33b019a5865`
-- Trading V1 CI run: `34031424441` (#1585)
-- mandatory test job: `101481528392` — success
+Current verified status before this AGENTS update:
+- Branch: `fix/v1-frontend-sync-simulation`
+- Verified SHA: `f38189dd6a23a9e663796650e85eb88ec62cb894`
+- Trading V1 CI run: `34057441296` — success
+- Test job: `101551794307` — success
 - `Run Worker and trading-core tests` — success
 - `Run pure MT5 bridge tests` — success
 - `Run pure MTProto Python tests` — success
 
-The reproduced RED cause was a stale `v1_admin_sources.test.mjs` store-call assertion after source enablement gained a required readiness lookup. The production readiness check was preserved; the test now explicitly requires the `getSource` readiness lookup before enable mutation.
+Recent continuation commits:
+- `922f09d777fa68322a2b0148220d617a3e164ad5` — added focused full-stack simulation acceptance coverage.
+- `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095` — added duplicate/idempotency and audit-readback Task 6 coverage.
+- `f38189dd6a23a9e663796650e85eb88ec62cb894` — added `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`.
+- `ae46753c0f33df05b4b6def61671a54ad41f47f1` — updated the implementation plan with Tasks 1–7 complete and Task 8 active.
 
-Classification:
+## V1 frontend/simulation completion classification
 
-**GREEN / STAGING ACCEPTANCE PENDING.**
+**GREEN THROUGH TASK 7 / FINAL VERIFICATION PENDING.**
 
-This GREEN evidence verifies the repository test surface at the exact code SHA above. It does not itself authorize real broker connectivity, real-money execution, `main` merge, DNS mutation or production fuse enablement.
+Tasks 1–7 are complete in the plan:
+1. Frontend contract guard.
+2. V1 overview, members, sources, accounts and hostnames views.
+3. Operations, event audit, risk/execution and truthful read-only settings.
+4. Server-owned safe simulation adapter boundary.
+5. Synthetic Mkety identity acceptance seam.
+6. End-to-end synthetic source-to-destination acceptance.
+7. Frontend/API/schema audit matrix.
 
-## Historical verified GREEN milestones
-These remain useful regression baselines:
-- Source onboarding implementation `e36c04f37f8e0bf27c7db2362ebd91d161b6af9d` — CI run `33992264387`, test job `101376473506`: success.
-- Documentation head `ee5c9f9d9836c5b99434ea8ebacabf5f9707f454` — CI run `33992567673`, job `101377281313`: success.
-- Broker onboarding `d852de184c0b156dc360c4d242569b756acc2225` — CI run `33964408888`, job `101301829090`: success.
-- Live Trading Supabase previously verified through migration 0014.
+Task 8 remains active:
+- final full CI evidence on the latest documentation SHA,
+- CodeQL/status verification,
+- retired-endpoint/no-secret/no-real-default confirmation,
+- production handoff refresh.
 
 ## Current external/deployment safety state
 Keep fail-closed through staging acceptance unless the applicable gate explicitly and temporarily requires a narrower non-broker probe:
@@ -91,14 +94,15 @@ Keep fail-closed through staging acceptance unless the applicable gate explicitl
 - `BROKER_EXECUTION_ENABLED=false`
 - `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`
 
-Last recorded paid staging Worker before the current rollout sequence:
-- Worker: `mkety-copier-engine`
-- deployed version: `68998f7f-74ce-4c37-8887-3751d3e17489`
-
 Required future custom-host provider configuration:
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ZONE_ID`
 - `TRADING_CUSTOM_HOSTNAME_CNAME_TARGET`
+
+Required future Mkety access-gateway configuration:
+- `MKETY_ACCESS_ISSUER`
+- `MKETY_ACCESS_AUDIENCE`
+- `MKETY_ACCESS_JWKS_URL`
 
 Provider/broker credentials remain external deployment secrets; do not commit them.
 
@@ -117,14 +121,17 @@ Before a broker adapter may be reached, all applicable locks must pass:
 11. provider-specific production safety requirements also pass.
 
 ## Corrected historical false positive
-The scheduled destination-retry path does **not** bypass `BROKER_EXECUTION_ENABLED`. `createDestinationRetryRuntime()` checks real Worker env before database construction/scanning/claim. The redundant wrapper patch was reverted in `fdf1346430e51c7d34901798bbeb6586d427eefe`. Do not resurrect this as an outstanding finding.
+The scheduled destination-retry path does **not** bypass `BROKER_EXECUTION_ENABLED`. `createDestinationRetryRuntime()` checks real Worker env before database construction/scanning/claim. Do not resurrect this as an outstanding finding.
 
 ## Exact next pickup
-1. Preserve the verified completion SHA evidence above.
-2. Merge/advance only the staging feature branch when required for controlled acceptance; do not merge `main`.
-3. Run the existing fail-closed staging deployment/acceptance gates with non-real/ephemeral credentials and `BROKER_EXECUTION_ENABLED=false`.
-4. Record exact staging deployment and acceptance evidence in the production handoffs.
-5. Production promotion remains blocked until staging acceptance, required Mkety/Supabase/Cloudflare configuration verification, rollback verification and a separate real-money decision. Real-money execution remains disabled without explicit approval and exact limits.
+1. Continue with Task 8 only.
+2. Verify CI for the latest AGENTS/documentation SHA.
+3. Verify CodeQL/status checks for the final code-bearing SHA and/or final branch SHA.
+4. Confirm no retired Trading frontend endpoint references, real provider credentials, or real-execution defaults were added.
+5. Update production handoff classification based on evidence.
+6. Decide whether PR #6 can leave draft or merge into `design/enterprise-trading-event-core` for controlled staging acceptance.
+7. Do not merge `main`.
+8. Do not enable live broker execution.
 
 ## Architecture/tooling freeze
 No new framework, identity system, execution architecture or acceptance framework unless a concrete reproduced blocker requires it. Use the V1 system already built.
