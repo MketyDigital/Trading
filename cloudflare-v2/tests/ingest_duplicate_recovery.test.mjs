@@ -131,3 +131,72 @@ test('duplicate ingest repairs missing interpretation from persisted event, neve
   assert.equal(result.interpretation.status, 'READY');
   assert.equal(persisted.status, 'READY');
 });
+
+test('duplicate ingest re-interprets incomplete persisted interpretation from persisted event', async () => {
+  const replayBody = JSON.stringify({
+    ...JSON.parse(rawBody),
+    text: 'SELL EURUSD',
+    thread: { thread_id: 'attacker-thread', reply_to_event_id: 'different-event' },
+  });
+  const input = await signedInput(replayBody);
+  const staleInterpretation = {
+    status: 'PENDING',
+    intent: { side: 'SELL', symbol: { canonical: 'EURUSD' } },
+  };
+  let aiCalls = 0;
+  let aiInput;
+  let persistedEventId;
+  let repairedInterpretation;
+
+  const result = await ingestTradingEvent(input, {
+    sourceStore: { async getActiveSource() { return source; } },
+    eventStore: {
+      async reserve() {
+        return {
+          ok: true,
+          duplicate: true,
+          eventId: 'evt-existing',
+          event: persistedEvent,
+          interpretation: staleInterpretation,
+          needsInterpretation: true,
+        };
+      },
+      async updateInterpretation(eventId, interpretation) {
+        persistedEventId = eventId;
+        repairedInterpretation = interpretation;
+      },
+    },
+    aiRouter: {
+      async processSignal(text) {
+        aiCalls += 1;
+        aiInput = text;
+        return {
+          success: true,
+          provider: 'test',
+          model: 'test',
+          text: JSON.stringify({
+            event_type: 'NEW_SIGNAL',
+            side: 'BUY',
+            symbol: 'XAUUSD',
+            order_type: 'MARKET',
+            entry: null,
+            stop_loss: 2400,
+            take_profits: [2600],
+            fast_entry: false,
+          }),
+        };
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicate, true);
+  assert.equal(result.recoveryReady, true);
+  assert.equal(aiCalls, 1);
+  assert.equal(aiInput, 'BUY XAUUSD');
+  assert.equal(persistedEventId, 'evt-existing');
+  assert.equal(result.interpretation.status, 'READY');
+  assert.equal(result.interpretation.intent.side, 'BUY');
+  assert.equal(repairedInterpretation.status, 'READY');
+  assert.notDeepEqual(result.interpretation, staleInterpretation);
+});
