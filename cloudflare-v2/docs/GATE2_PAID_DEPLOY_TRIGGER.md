@@ -21,3 +21,4 @@ Paid staging deployment trigger: 2026-09-06 verified completion runtime with fai
 Post-deploy Gate 2 acceptance trigger: 2026-09-06 ephemeral simulation, queue/deduplication, Container non-selection, and rollback verification.
 Acceptance retry 4: 2026-09-06 assert external Trading access remains fail-closed while internal Queue/dedupe path succeeds with zero broker deliveries.
 Acceptance retry 5: 2026-09-06 bounded post-deploy internal-token propagation retry; require eventual authenticated Queue 202 before proceeding.
+Read-only staging inspection trigger: 2026-09-06 production PR readiness verification after PR #6 merge.
