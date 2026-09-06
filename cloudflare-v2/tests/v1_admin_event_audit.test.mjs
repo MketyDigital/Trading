@@ -100,7 +100,7 @@ function auditSupabase() {
 }
 
 async function requestAudit(supabase, { eventId = 'evt-1', method = 'GET', role = 'admin' } = {}) {
-  return handleV1AdminRequest(new Request(`https://trade.test/api/v1/admin/events/${eventId}/audit`, {
+  return handleV1AdminRequest(new Request(`https://trade.mkety.com/api/v1/admin/events/${eventId}/audit`, {
     method,
     headers: {
       'X-Mkety-Workspace-Id': 'ws-1',
