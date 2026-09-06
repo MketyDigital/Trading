@@ -19,7 +19,7 @@ function samplePayload(id = 'event-1') {
   };
 }
 
-test('client signs exact serialized V1 body with only source auth headers', async () => {
+test('client signs exact serialized V1 body with source auth and recovery marker only', async () => {
   const calls = [];
   const client = createSignedV1SourceClient({
     endpoint: 'https://trading.example.com/api/v1/events',
@@ -43,9 +43,11 @@ test('client signs exact serialized V1 body with only source auth headers', asyn
     'Content-Type',
     'X-Mkety-Signature',
     'X-Mkety-Source-Id',
+    'X-Mkety-Source-Recovery',
     'X-Mkety-Timestamp',
   ].sort());
   assert.equal(request.headers['X-Mkety-Source-Id'], 'src-mt5-a');
+  assert.equal(request.headers['X-Mkety-Source-Recovery'], '1');
   assert.equal(request.headers['X-Mkety-Timestamp'], String(NOW));
   assert.equal(request.body, JSON.stringify(samplePayload()));
 
