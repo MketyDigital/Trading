@@ -37,16 +37,7 @@ Trading V1 CI evidence for that SHA:
 - `Run pure MTProto Python tests`: success
 - deployment/gate jobs: skipped unless explicitly configured for staging.
 
-Recent PR #6 continuation commits:
-- `922f09d777fa68322a2b0148220d617a3e164ad5` — focused full-stack simulation acceptance coverage.
-- `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095` — duplicate/idempotency and audit-readback Task 6 coverage.
-- `f38189dd6a23a9e663796650e85eb88ec62cb894` — frontend/API/schema audit matrix.
-- `ae46753c0f33df05b4b6def61671a54ad41f47f1` — implementation plan progress update.
-- `bd72dbf67fd027a5f74611e8dc64bb0b8a593fbb` — `AGENTS.md` operational source-of-truth refresh.
-- `4ae686ab6523ec7f8b7ff1fc58d4e43efcbddce0` — production fast-path handoff refresh.
-- `e5338458dfe04f98cc12b4c21de63c660356677a` — temporary advanced CodeQL workflow attempt.
-- `a56e5a423b24e9b797757179dbd99bf4c11646d0` — removed conflicting advanced CodeQL workflow.
-- `6da2232f666ae8129f9909f7604128a5e86e823d` — recorded final Task 8 verification blocker.
+Documentation-only commits after that SHA update the handoff/plan/AGENTS and restore README to its original blob. Do not keep adding documentation-only commits just to chase CI; they will retrigger the same repository-level CodeQL default/advanced setup conflict until GitHub Code Security settings are fixed.
 
 ## Completed PR #6 tasks
 1. Frontend contract guard.
@@ -66,7 +57,7 @@ CodeQL verification status:
 - GitHub rejected the uploaded SARIF because default setup is already enabled for the repository.
 - The temporary workflow was removed in `a56e5a423b24e9b797757179dbd99bf4c11646d0`.
 - GitHub default CodeQL still ran on the restored head and on `6da2232f666ae8129f9909f7604128a5e86e823d`.
-- The latest default CodeQL run is `34058536874`; both Python and JavaScript/TypeScript jobs failed with the same processing/configuration error: CodeQL analyses from advanced configurations cannot be processed when default setup is enabled.
+- The latest default CodeQL run with complete logs reviewed is `34058536874`; both Python and JavaScript/TypeScript jobs failed with the same processing/configuration error: CodeQL analyses from advanced configurations cannot be processed when default setup is enabled.
 - The fetched CodeQL logs show extraction/querying reached SARIF upload, then code-scanning processing rejected the upload as a configuration conflict. This is a repository Code Security setup blocker, not a confirmed runtime code vulnerability.
 
 Required CodeQL admin action:
