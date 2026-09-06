@@ -53,6 +53,20 @@ test('Gate 2 waits for the newly deployed internal transport token before queue 
   assert.match(block, /x-mkety-internal-source-token/i);
 });
 
+test('Gate 2 queue ingress tolerates only bounded post-deploy auth propagation before requiring 202', async () => {
+  const harness = await readHarness();
+  const start = harness.indexOf('async function postInternalQueueEvent()');
+  const end = harness.indexOf('async function waitForSingleQueuedEvent()', start);
+  assert.ok(start >= 0 && end > start, 'queue ingress helper must exist');
+  const block = harness.slice(start, end);
+  assert.match(block, /Date\.now\(\)\s*\+\s*15_000/);
+  assert.match(block, /response\.status\s*===\s*401/);
+  assert.match(block, /setTimeout\(resolve,\s*500\)/);
+  assert.match(block, /response\.status\s*===\s*202/);
+  assert.match(block, /body\?\.ok\s*===\s*true/);
+  assert.match(block, /body\?\.queued\s*===\s*true/);
+});
+
 test('Gate 2 temporary external MTProto source explicitly authorizes only its synthetic chat', async () => {
   const harness = await readHarness();
   assert.match(harness, /provider_type:\s*'external_mtproto'/);
