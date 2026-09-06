@@ -62,6 +62,7 @@ test('authenticated recovery-marked duplicate re-enters orchestration while ordi
     ingestFn: async () => ({
       ok: true,
       duplicate: true,
+      recoveryReady: true,
       eventId: 'evt-1',
       event: { workspace_hint: 'ws-1' },
       interpretation: { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } },
