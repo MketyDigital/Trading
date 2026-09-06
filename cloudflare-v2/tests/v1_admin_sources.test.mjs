@@ -37,6 +37,7 @@ function source(overrides = {}) {
     isDefault: true,
     priority: 10,
     externalIdentity: 'acct-a',
+    credentialConfigured: true,
     config: { chat_ids: ['-1001'], session_string: 'must-strip', api_hash: 'must-strip' },
     health: { status: 'HEALTHY', lastErrorCode: null, restartCount: 1 },
     secret: 'must-strip',
