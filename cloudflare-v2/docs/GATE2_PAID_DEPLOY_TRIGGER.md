@@ -18,3 +18,4 @@ Acceptance retry 3: include authorized Telegram native identity on the direct si
 Deployment trigger: 2026-09-05 MTProto internal source callback configuration.
 Read-only staging inspection trigger: 2026-09-06 post-completion GREEN verification.
 Paid staging deployment trigger: 2026-09-06 verified completion runtime with fail-closed execution fuses.
+Post-deploy Gate 2 acceptance trigger: 2026-09-06 ephemeral simulation, queue/deduplication, Container non-selection, and rollback verification.
