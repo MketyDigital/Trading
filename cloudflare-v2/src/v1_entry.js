@@ -54,6 +54,15 @@ function notFoundResponse() {
   });
 }
 
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function isTradingViewCertificateProbeRequest(url, env = {}) {
+  return url.pathname === '/api/v1/webhooks/tradingview/probe'
+    && enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED);
+}
+
 function healthResponse(request, env = {}) {
   if (request.method !== 'GET') {
     return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), {
@@ -129,7 +138,9 @@ export function createTradingV1Entrypoint({
         return adminHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/tradingview/')) {
-        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        if (!isTradingAccessEnabled(env) && !isTradingViewCertificateProbeRequest(url, env)) {
+          return tradingAccessDisabledResponse();
+        }
         return tradingViewHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/')) {
