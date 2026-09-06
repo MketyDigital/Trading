@@ -56,6 +56,34 @@ test('verifies Mkety RS256 assertion and returns the Trading owner identity cont
   assert.equal(result.claims.product, 'trading');
 });
 
+test('real bearer verifier retrieves JWKS through the configured gateway URL using an injected fetch fixture', async () => {
+  const now = 1700000000;
+  const { token, jwks } = await makeSignedJwt(ownerClaims(now));
+  const calls = [];
+  const result = await authenticateMketyAccessBearer(new Request('https://trade.mkety.com/api/v1/admin/workspace', {
+    headers: { Authorization: `Bearer ${token}` },
+  }), {
+    issuer: 'https://access.mkety.test',
+    audience: 'mkety-trading',
+    jwksUrl: 'https://access.mkety.test/.well-known/jwks.json',
+    fetchFn: async (url, options) => {
+      calls.push([url, options]);
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+    nowSec: now,
+    requestedWorkspaceId: 'ws-starpips',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.subject, 'user-123');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'https://access.mkety.test/.well-known/jwks.json');
+  assert.equal(calls[0][1].headers.Accept, 'application/json');
+});
+
 test('fails closed for wrong product, workspace or access', async () => {
   const now = 1700000000;
   for (const [overrides, reason] of [
@@ -73,17 +101,18 @@ test('fails closed for wrong product, workspace or access', async () => {
   }
 });
 
-test('fails closed for wrong issuer/audience, expiry and invalid signature', async () => {
+test('fails closed for wrong issuer/audience, expiry, not-before and invalid signature', async () => {
   const now = 1700000000;
-  for (const [overrides, options, reason] of [
-    [{ iss: 'https://evil.test' }, {}, 'INVALID_ISSUER'],
-    [{ aud: 'other-product' }, {}, 'INVALID_AUDIENCE'],
-    [{ exp: now - 1 }, {}, 'TOKEN_EXPIRED'],
+  for (const [overrides, reason] of [
+    [{ iss: 'https://evil.test' }, 'INVALID_ISSUER'],
+    [{ aud: 'other-product' }, 'INVALID_AUDIENCE'],
+    [{ exp: now - 1 }, 'TOKEN_EXPIRED'],
+    [{ nbf: now + 60 }, 'TOKEN_NOT_YET_VALID'],
   ]) {
     const { token, jwks } = await makeSignedJwt(ownerClaims(now, overrides));
     const result = await verifyMketyAccessJwt(token, {
       issuer: 'https://access.mkety.test', audience: 'mkety-trading', jwks, nowSec: now,
-      requestedWorkspaceId: 'ws-starpips', ...options,
+      requestedWorkspaceId: 'ws-starpips',
     });
     assert.equal(result.ok, false);
     assert.equal(result.reason, reason);
@@ -101,7 +130,7 @@ test('fails closed for wrong issuer/audience, expiry and invalid signature', asy
 });
 
 test('bearer helper requires authorization header and binds requested workspace', async () => {
-  const missing = await authenticateMketyAccessBearer(new Request('https://trade.test/api/v1/admin/workspace'), {
+  const missing = await authenticateMketyAccessBearer(new Request('https://trade.mkety.com/api/v1/admin/workspace'), {
     issuer: 'https://access.mkety.test', audience: 'mkety-trading', jwks: { keys: [] }, requestedWorkspaceId: 'ws-starpips',
   });
   assert.equal(missing.ok, false);
@@ -109,7 +138,7 @@ test('bearer helper requires authorization header and binds requested workspace'
 
   const now = 1700000000;
   const { token, jwks } = await makeSignedJwt(ownerClaims(now));
-  const allowed = await authenticateMketyAccessBearer(new Request('https://trade.test/api/v1/admin/workspace', {
+  const allowed = await authenticateMketyAccessBearer(new Request('https://trade.mkety.com/api/v1/admin/workspace', {
     headers: { Authorization: `Bearer ${token}` },
   }), {
     issuer: 'https://access.mkety.test', audience: 'mkety-trading', jwks, nowSec: now,
