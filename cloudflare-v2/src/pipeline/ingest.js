@@ -166,15 +166,18 @@ export async function ingestTradingEvent({
       };
     }
 
-    const interpretation = reservation.interpretation || await interpretAndPersist({
-      source,
-      event: persistedEvent,
-      eventId: reservation.eventId,
-      eventStore,
-      aiRouter,
-      aiRouterFactory,
-      interpretationTimeoutMs,
-    });
+    const needsInterpretation = reservation.needsInterpretation === true;
+    const interpretation = !needsInterpretation && reservation.interpretation
+      ? reservation.interpretation
+      : await interpretAndPersist({
+          source,
+          event: persistedEvent,
+          eventId: reservation.eventId,
+          eventStore,
+          aiRouter,
+          aiRouterFactory,
+          interpretationTimeoutMs,
+        });
     return {
       ok: true,
       duplicate: true,
