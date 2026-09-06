@@ -38,16 +38,21 @@ function trustedReadyPlans(simulation = {}) {
     .filter((plan) => plan.accountId && plan.actions.length > 0);
 }
 
+function withTransportMode(value, transportMode) {
+  return transportMode === 'simulation'
+    ? { ...value, transportMode: 'simulation' }
+    : value;
+}
+
 function summary(status, { executionEnabled = false, blocked = 0, transportMode = 'real' } = {}) {
-  return {
+  return withTransportMode({
     executionEnabled,
-    transportMode,
     status,
     accounts: [],
     succeeded: 0,
     failed: 0,
     blocked,
-  };
+  }, transportMode);
 }
 
 export async function runV1ProductionExecutionStage({
@@ -109,5 +114,5 @@ export async function runV1ProductionExecutionStage({
     bindingRepairRecorder,
   });
 
-  return { ...execution, transportMode };
+  return withTransportMode(execution, transportMode);
 }
