@@ -7,6 +7,42 @@ The current repository objective is: **finish the Trading repo V1 completion bra
 
 This repo is the focus. MkSaaS/Mkety matters only as the upstream auth/access assertion contract that Trading consumes.
 
+## Current PR #6 status
+- PR: #6 `fix: synchronize Trading V1 frontend and safe simulation`
+- Branch: `fix/v1-frontend-sync-simulation`
+- Base: `design/enterprise-trading-event-core`
+- State: draft/open, not merged
+- Classification: `REPO GREEN / CODEQL SETTINGS BLOCKED / EXTERNAL STAGING ACCEPTANCE BLOCKED`
+
+Repo-controlled tasks 1-8 are recorded in:
+- `docs/superpowers/plans/2026-09-06-v1-frontend-sync-simulation.md`
+
+Canonical handoff is recorded in:
+- `cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`
+
+Frontend/API/schema audit is recorded in:
+- `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
+
+Latest verified CI evidence before this AGENTS update:
+- SHA: `6da2232f666ae8129f9909f7604128a5e86e823d`
+- Trading V1 CI run: `34058536767`
+- Test job: `101554777002`
+- Worker/trading-core tests: success
+- pure MT5 bridge tests: success
+- pure MTProto Python tests: success
+
+Latest CodeQL evidence:
+- Default CodeQL run: `34058536874`
+- Python job: failed during SARIF processing/configuration
+- JavaScript/TypeScript job: failed during SARIF processing/configuration
+- Root cause from logs: GitHub Code Security rejected CodeQL analyses because advanced configurations cannot be processed when default setup is enabled.
+- Treat this as a repository Code Security settings blocker, not a confirmed runtime code vulnerability.
+
+Required external/admin action:
+1. In GitHub Code Security settings, choose exactly one CodeQL mode: default setup or advanced setup.
+2. Clear the default-vs-advanced conflict.
+3. Rerun CodeQL on PR #6.
+
 ## Controlling product model — APPROVED
 **One enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
 
@@ -41,50 +77,9 @@ Repository tests may inject production gates as enabled and fake broker/provider
 - Repository: `MketyDigital/Trading`
 - Base staging feature branch for this PR: `design/enterprise-trading-event-core`
 - Active completion PR: PR #6, `fix/v1-frontend-sync-simulation`
-- PR #6 remains draft/open until Task 8 final verification and handoff are complete.
+- PR #6 remains draft/open until CodeQL settings are resolved and external staging acceptance preparation is deliberately advanced.
 - Never merge Trading runtime to `main` without explicit user instruction.
 - Never enable real-money execution without separate explicit final owner approval and exact financial limits.
-
-## Current completion workstream — PR #6
-Approved implementation plan:
-- `docs/superpowers/plans/2026-09-06-v1-frontend-sync-simulation.md`
-
-Frontend/API/schema audit:
-- `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
-
-Current verified status before this AGENTS update:
-- Branch: `fix/v1-frontend-sync-simulation`
-- Verified SHA: `f38189dd6a23a9e663796650e85eb88ec62cb894`
-- Trading V1 CI run: `34057441296` — success
-- Test job: `101551794307` — success
-- `Run Worker and trading-core tests` — success
-- `Run pure MT5 bridge tests` — success
-- `Run pure MTProto Python tests` — success
-
-Recent continuation commits:
-- `922f09d777fa68322a2b0148220d617a3e164ad5` — added focused full-stack simulation acceptance coverage.
-- `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095` — added duplicate/idempotency and audit-readback Task 6 coverage.
-- `f38189dd6a23a9e663796650e85eb88ec62cb894` — added `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`.
-- `ae46753c0f33df05b4b6def61671a54ad41f47f1` — updated the implementation plan with Tasks 1–7 complete and Task 8 active.
-
-## V1 frontend/simulation completion classification
-
-**GREEN THROUGH TASK 7 / FINAL VERIFICATION PENDING.**
-
-Tasks 1–7 are complete in the plan:
-1. Frontend contract guard.
-2. V1 overview, members, sources, accounts and hostnames views.
-3. Operations, event audit, risk/execution and truthful read-only settings.
-4. Server-owned safe simulation adapter boundary.
-5. Synthetic Mkety identity acceptance seam.
-6. End-to-end synthetic source-to-destination acceptance.
-7. Frontend/API/schema audit matrix.
-
-Task 8 remains active:
-- final full CI evidence on the latest documentation SHA,
-- CodeQL/status verification,
-- retired-endpoint/no-secret/no-real-default confirmation,
-- production handoff refresh.
 
 ## Current external/deployment safety state
 Keep fail-closed through staging acceptance unless the applicable gate explicitly and temporarily requires a narrower non-broker probe:
@@ -124,14 +119,12 @@ Before a broker adapter may be reached, all applicable locks must pass:
 The scheduled destination-retry path does **not** bypass `BROKER_EXECUTION_ENABLED`. `createDestinationRetryRuntime()` checks real Worker env before database construction/scanning/claim. Do not resurrect this as an outstanding finding.
 
 ## Exact next pickup
-1. Continue with Task 8 only.
-2. Verify CI for the latest AGENTS/documentation SHA.
-3. Verify CodeQL/status checks for the final code-bearing SHA and/or final branch SHA.
-4. Confirm no retired Trading frontend endpoint references, real provider credentials, or real-execution defaults were added.
-5. Update production handoff classification based on evidence.
-6. Decide whether PR #6 can leave draft or merge into `design/enterprise-trading-event-core` for controlled staging acceptance.
-7. Do not merge `main`.
-8. Do not enable live broker execution.
+1. Do not change code simply to satisfy CodeQL until repository Code Security settings are fixed.
+2. Resolve GitHub CodeQL default-vs-advanced setup conflict and rerun CodeQL.
+3. Configure staging gates deliberately with non-live/test values.
+4. Run controlled staging acceptance gates while real-money execution remains disabled.
+5. Do not merge `main`.
+6. Do not enable live broker execution.
 
 ## Architecture/tooling freeze
 No new framework, identity system, execution architecture or acceptance framework unless a concrete reproduced blocker requires it. Use the V1 system already built.
