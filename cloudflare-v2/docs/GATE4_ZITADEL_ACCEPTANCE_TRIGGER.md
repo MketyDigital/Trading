@@ -61,3 +61,5 @@ identity: accept zitadel gate 4
 The protected workflow first runs the ordinary Node/MT5/MTProto regression suite. Only if it passes, the exact branch/message marker matches, and the GitHub `staging` environment allows the job will the read-only real identity acceptance runner execute.
 
 Merely adding or editing the workflow/runner does not authorize or trigger Gate 4 real acceptance.
+
+Acceptance trigger: 2026-09-06 post-CodeQL GREEN read-only identity verification.
