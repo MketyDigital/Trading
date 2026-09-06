@@ -41,7 +41,7 @@ test('simulation planning failures never expose internal error details in the HT
   assert.equal(body.simulation.status, 'BLOCKED');
   assert.equal(body.simulation.executionEnabled, false);
   assert.deepEqual(body.simulation.actions, []);
-  assert.equal(body.simulation.error, 'SIMULATION_PLANNING_BLOCKED');
+  assert.equal(body.simulation.error, 'simulation context unavailable');
   assert.equal(serialized.includes(secretDetail), false);
   assert.equal(serialized.includes('internal/provider/secrets.js'), false);
 });
