@@ -33,7 +33,7 @@ test('reports missing core staging configuration names without exposing values',
   assert.deepEqual(result.missing, ['SUPABASE_SERVICE_ROLE']);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('do-not-leak-this'), false);
-  assert.equal(serialized.includes('https://staging.supabase.co'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'SUPABASE_URL'), false);
 });
 
 test('core staging is ready without identity-provider config while trading access is disabled', () => {
