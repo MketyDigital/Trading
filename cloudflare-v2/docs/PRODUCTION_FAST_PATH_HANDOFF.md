@@ -1,6 +1,6 @@
 # Mkety Trading – Production Fast Path Handoff
 
-**Current classification:** `GREEN THROUGH PR #6 TASK 7 / FINAL CODEQL + EXTERNAL STAGING ACCEPTANCE BLOCKED`  
+**Current classification:** `REPO GREEN / CODEQL SETTINGS BLOCKED / EXTERNAL STAGING ACCEPTANCE BLOCKED`  
 **Repository:** `MketyDigital/Trading`  
 **Active PR #6 branch:** `fix/v1-frontend-sync-simulation`  
 **PR #6 base:** `design/enterprise-trading-event-core`  
@@ -25,18 +25,17 @@ Approved plan:
 Audit matrix:
 - `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
 
-Current verified SHA before this handoff update:
-- `bd72dbf67fd027a5f74611e8dc64bb0b8a593fbb`
+Final repo-controlled branch head before this handoff update:
+- `a56e5a423b24e9b797757179dbd99bf4c11646d0`
 
 Trading V1 CI evidence for that SHA:
-- Run: `34057505132`
-- Job: `101551972372`
+- Run: `34058389104`
+- Job: `101554386328`
 - Workflow conclusion: success
 - `Run Worker and trading-core tests`: success
 - `Run pure MT5 bridge tests`: success
 - `Run pure MTProto Python tests`: success
-- `cloudflare-inspect`: skipped
-- `cloudflare-inspect-gate3-zones`: skipped
+- deployment/gate jobs: skipped unless explicitly configured for staging.
 
 Recent PR #6 continuation commits:
 - `922f09d777fa68322a2b0148220d617a3e164ad5` — focused full-stack simulation acceptance coverage.
@@ -44,6 +43,9 @@ Recent PR #6 continuation commits:
 - `f38189dd6a23a9e663796650e85eb88ec62cb894` — frontend/API/schema audit matrix.
 - `ae46753c0f33df05b4b6def61671a54ad41f47f1` — implementation plan progress update.
 - `bd72dbf67fd027a5f74611e8dc64bb0b8a593fbb` — `AGENTS.md` operational source-of-truth refresh.
+- `4ae686ab6523ec7f8b7ff1fc58d4e43efcbddce0` — production fast-path handoff refresh.
+- `e5338458dfe04f98cc12b4c21de63c660356677a` — temporary advanced CodeQL workflow attempt.
+- `a56e5a423b24e9b797757179dbd99bf4c11646d0` — removed conflicting advanced CodeQL workflow.
 
 ## Completed PR #6 tasks
 1. Frontend contract guard.
@@ -53,16 +55,24 @@ Recent PR #6 continuation commits:
 5. Synthetic Mkety identity acceptance seam.
 6. End-to-end synthetic source-to-destination acceptance.
 7. Frontend/API/schema audit matrix.
+8. Repo-controlled final verification, with CodeQL blocked by repository code-scanning configuration.
 
 ## Final verification status
-Trading V1 CI is green on the latest verified PR #6 SHA listed above.
+Trading V1 CI is green on the final repo-controlled SHA listed above.
 
-CodeQL/status note:
-- The current branch workflow list includes Trading V1 CI and staging/gate workflows. No CodeQL workflow file is present on this branch.
-- The previously recorded full successful CodeQL evidence remains `34035889265` on code SHA `df4d6a067bd7084baddb3982ef0d4fb0e77eb01f`.
-- PR #6 added test and documentation coverage after that earlier CodeQL evidence. No production-runtime code was changed in the latest Task 6/7/AGENTS documentation sequence, but a fresh CodeQL signal for the latest branch SHA is not available from the current branch workflow list.
+CodeQL verification status:
+- A temporary advanced CodeQL workflow was added in `e5338458dfe04f98cc12b4c21de63c660356677a` to force fresh branch CodeQL evidence.
+- GitHub rejected the uploaded SARIF because default setup is already enabled for the repository.
+- The temporary workflow was removed in `a56e5a423b24e9b797757179dbd99bf4c11646d0`.
+- GitHub default CodeQL still ran on the restored head and failed both Python and JavaScript/TypeScript jobs with the same processing/configuration error: CodeQL analyses from advanced configurations cannot be processed when default setup is enabled.
+- The fetched CodeQL logs show extraction/querying reached SARIF upload, then code-scanning processing rejected the upload as a configuration conflict. This is a repository Code Security setup blocker, not a confirmed runtime code vulnerability.
 
-Do not claim CodeQL has freshly passed on `bd72dbf...` unless a new code-scanning/check-run signal appears.
+Required CodeQL admin action:
+- In GitHub Code Security settings, select one CodeQL operating mode only: default setup or advanced setup.
+- Clear the default-vs-advanced configuration conflict.
+- Rerun CodeQL on PR #6.
+
+Do not claim fresh CodeQL success on PR #6 until the repository CodeQL settings conflict is resolved and a new CodeQL run succeeds.
 
 ## Frontend/API/schema audit result
 `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md` records the current dashboard mapping:
@@ -79,85 +89,27 @@ No production promotion happened in this workstream.
 
 No real broker/provider credentials were added.
 
-No real-money execution was enabled.
+No real-money orders were placed.
 
 No merge to `main` occurred.
 
-Keep rollout fuses false until the applicable external acceptance gate explicitly requires a narrower non-broker probe:
+Keep rollout fuses false until their corresponding acceptance/configuration gates are deliberately satisfied:
 - `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
 - `TRADINGVIEW_CERT_PROBE_ENABLED=false`
 - `TRADING_ACCESS_ENABLED=false`
 - `BROKER_EXECUTION_ENABLED=false`
 - `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`
 
-## Production execution authority
-Caller-supplied workspace/account/provider/destination/broker/credential/execution hints are never authority.
+## External staging acceptance remains blocked
+The repo is ready for controlled staging preparation, but production promotion remains blocked until these non-code gates are satisfied:
 
-Before any broker adapter may be reached, all applicable locks must pass:
-1. Worker/user access gate where applicable;
-2. `BROKER_EXECUTION_ENABLED=true`;
-3. exact persisted source remains active/workspace-authoritative;
-4. exact Trading workspace entitlement remains enabled;
-5. exact account belongs to the workspace and is active;
-6. account `execution_enabled=true`;
-7. kill/safety/risk/exposure policy allows the action;
-8. server-owned platform/destination configuration is complete;
-9. broker-authoritative symbol/risk/volume metadata validates the final action;
-10. persistent destination/order idempotency reservation succeeds;
-11. provider-specific production safety requirements also pass.
-
-## Staging/external acceptance blockers
-The repository code is green through PR #6 Task 7, but external staging acceptance is still blocked by missing/unfinished environment configuration and live-source/demo-source preparation.
-
-### Gate 4 identity acceptance
-Still requires prepared Mkety access-gateway/ZITADEL staging inputs and a real workers.dev/staging smoke path.
-
-Required future Trading access-gateway configuration:
-- `MKETY_ACCESS_ISSUER`
-- `MKETY_ACCESS_AUDIENCE`
-- `MKETY_ACCESS_JWKS_URL`
-
-The older Gate 4 workflow names also reference `ZITADEL_*` values and may need alignment to the Mkety access assertion contract before the real staging smoke is considered canonical.
-
-### Gate 5 MTProto soak
-Requires dedicated non-production Telegram/MTProto source IDs, health URLs, event URLs and bearer access values. It remains observation-only.
-
-### Gate 6 source acceptance
-Requires verified MT5/cTrader demo-source endpoints, source IDs and signing secrets. Broker execution remains disabled.
-
-### Gate 7 demo destination lifecycle
-Must not run until selected MT5/cTrader accounts are independently confirmed as demo-only. Demo lifecycle must use small bounded lots and never live broker accounts.
-
-## Existing carried-forward staging notes
-- Caller payload workspace is overwritten by authenticated source workspace during ingest.
-- Duplicate recovery reconstructs canonical event content from persisted DB truth and requires `recoveryReady=true` before re-orchestration.
-- Production execution reloads persisted event/source/workspace/account authority before each broker action.
-- Workspace entitlement, source active state, account active state and account `execution_enabled` are rechecked from Supabase.
-- Kill-switch and account policy are evaluated after fresh authority and broker-risk materialization.
-- Broker credentials/configuration come from encrypted persisted account state and server environment, not caller execution hints.
-- Event idempotency is workspace/source scoped; destination execution idempotency is protected by a workspace-scoped unique key.
-- Retry claims use compare-and-set semantics and do not reclaim live leases or ambiguous first-attempt `PENDING` rows.
-- Simulation-planning internal error detail is logged server-side but HTTP responses receive only opaque diagnostics.
-- Trading V1 CI defaults `GITHUB_TOKEN` to `contents: read`.
-
-## Repository governance
-- PR #6 remains draft and unmerged.
-- PR #6 targets `design/enterprise-trading-event-core`, not `main`.
-- PR #2 to `main` remains the larger staging feature branch boundary.
-- No approving human PR review is recorded here.
-- Repository rulesets previously returned no configured rulesets, and classic branch-protection visibility was not available to the connected GitHub App.
-
-Production promotion remains blocked until main-branch protection/review policy is confirmed and the required staging acceptance gates are executed with prepared non-live configuration.
-
-## Exact next pickup
-1. Wait for CI on this handoff-update SHA and record the resulting run.
-2. If available, verify a fresh CodeQL/code-scanning check on the latest branch SHA; otherwise carry forward the explicit CodeQL limitation above.
-3. Decide whether PR #6 can leave draft and merge into `design/enterprise-trading-event-core` for staging acceptance.
-4. Do not merge `main`.
-5. Do not enable live broker execution.
-6. Prepare Gate 4 Mkety access assertion staging configuration and align any stale `ZITADEL_*` naming in gate docs/workflows before real auth smoke.
-7. Prepare Gate 5/6/7 non-live/demo source and destination credentials.
-8. Run external staging gates with exact evidence and keep `BROKER_EXECUTION_ENABLED=false` unless a later owner-approved live-execution plan explicitly changes it.
+1. Resolve the GitHub CodeQL default-vs-advanced configuration conflict and obtain fresh CodeQL success.
+2. Configure Gate 4 Mkety access/identity acceptance values.
+3. Configure Gate 5 dedicated non-production Telegram/MTProto source observation values.
+4. Configure Gate 6 verified demo MT5/cTrader connectivity and source-only acceptance values.
+5. Configure Gate 7 demo destination values only after independently confirming accounts are demo-only.
+6. Confirm `main` branch protection or equivalent required-review/status-check policy.
+7. Run staging acceptance gates with all real-money execution controls disabled unless a specific demo-only gate deliberately requires bounded demo orders.
 
 ## Do not restart these debates
 - Do not redesign Trading as a complex team SaaS.
