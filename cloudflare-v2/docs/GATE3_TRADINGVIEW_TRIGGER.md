@@ -42,3 +42,4 @@ Diagnostic rerun triggered only after exact-head run `33729980857` passed all ma
 
 Read-only Gate 3 zone inspection trigger: 2026-09-06 after Gate 2 staging deploy and acceptance passed.
 Read-only Gate 3 zone inspection trigger: 2026-09-06 final production path after Gate 2 acceptance success.
+Bounded Gate 3 TradingView certificate probe trigger: 2026-09-06 final production path after successful Gate 3 zone inspection.
