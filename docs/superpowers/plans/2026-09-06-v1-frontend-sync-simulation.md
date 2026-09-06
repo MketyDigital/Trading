@@ -1,6 +1,6 @@
 # Trading V1 Frontend Synchronization & Safe Simulation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Synchronize the real Trading frontend with V1 API/database contracts and add a server-owned, no-network simulation mode for end-to-end MT5/cTrader/Telegram acceptance.
 
@@ -18,157 +18,129 @@
 - Preserve workspace isolation, Mkety assertion authorization, Supabase final authorization/revocation, server-owned broker config, risk/kill checks, broker-authoritative validation and persistent idempotency.
 - Synthetic identity and fake adapters are test/server-owned only and cannot be selected by caller payload.
 
-## Current progress
-
-Current branch: `fix/v1-frontend-sync-simulation`  
-Current verified Task 7 SHA before this plan update: `f38189dd6a23a9e663796650e85eb88ec62cb894`  
-Verified CI: Trading V1 CI run `34057441296` — success.
-
-Completed commits in this continuation:
-- `922f09d777fa68322a2b0148220d617a3e164ad5` — added focused full-stack simulation acceptance coverage.
-- `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095` — added duplicate/idempotency and audit-readback Task 6 coverage.
-- `f38189dd6a23a9e663796650e85eb88ec62cb894` — added `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`.
-
 ---
 
-### Task 1: Frontend Contract Guard — COMPLETE
+### Task 1: Frontend Contract Guard — DONE
 
 **Files:**
-- `cloudflare-v2/tests/v1_dashboard_contract.test.mjs`
-- `cloudflare-v2/src/dashboard.js`
-
-Completion evidence:
-- Dashboard no longer references retired Trading admin endpoints.
-- Protected frontend calls target `/api/v1/admin/*` and include bearer/workspace headers.
-- Settings UI no longer reports fake successful saves.
-
-- [x] Write failing test that asserts rendered dashboard does not contain retired Trading endpoints.
-- [x] Write failing test asserting protected frontend calls target `/api/v1/admin/` and include both `Authorization: Bearer ...` and `X-Mkety-Workspace-Id` headers.
-- [x] Run focused test and confirm RED against legacy dashboard before implementation.
-- [x] Implement minimal V1 browser client and remove retired Trading API calls.
-- [x] Run focused test and full test suite.
-- [x] Commit `test/feat: synchronize dashboard with v1 api contract`.
-
-### Task 2: V1 Overview, Members, Sources, Accounts and Hostnames Views — COMPLETE
-
-**Files:**
-- `cloudflare-v2/src/dashboard.js`
-- `cloudflare-v2/tests/v1_dashboard_views.test.mjs`
-
-Completion evidence:
-- Workspace, members, sources, accounts and hostnames use V1 admin endpoints.
-- Source credential replacement/default selection and account credential replacement are covered.
-- Lifecycle mutations refresh canonical server state instead of optimistic browser-only state.
-
-- [x] Write failing tests for supported tabs, endpoint paths, canonical refresh and absence of legacy CRUD.
-- [x] Implement workspace overview and resource list/create/edit/lifecycle controls using exact V1 contracts.
-- [x] Ensure forms repopulate from server responses and display loading/empty/error states.
-- [x] Run focused tests plus full suite.
-- [x] Commit `feat: wire core trading views to v1 admin api`.
-
-### Task 3: Operations, Event Audit, Risk/Execution and Settings — COMPLETE
-
-**Files:**
-- `cloudflare-v2/src/dashboard.js`
-- `cloudflare-v2/tests/v1_dashboard_operations.test.mjs`
-
-Completion evidence:
-- Operations view reads `/api/v1/admin/operations`.
-- Event audit drill-down reads `/api/v1/admin/events/{eventId}/audit`.
-- Account execution and kill-switch controls use supported backend lifecycle endpoints.
-- Deployment/security settings are explicitly read-only.
-
-- [x] Write failing tests for operations endpoint, event audit endpoint, supported execution lifecycle actions and removal of fake AI settings success alert.
-- [x] Implement operations/audit rendering and supported action controls.
-- [x] Make unsupported/read-only settings explicitly read-only.
-- [x] Run focused and full tests.
-- [x] Commit `feat: synchronize operations audit and settings ui`.
-
-### Task 4: Server-Owned Safe Simulation Adapter Boundary — COMPLETE
-
-**Files:**
-- `cloudflare-v2/src/adapters/simulation_execution_adapters.js`
-- `cloudflare-v2/tests/simulation_execution_adapters.test.mjs`
-- execution factory/boundary changes required by tests
-
-Completion evidence:
-- Fake MT5, cTrader and Telegram destination adapters return production-shaped outcomes.
-- Fake adapters perform zero external network calls.
-- Caller payload cannot select simulation transport; only trusted Worker configuration/dependency injection can.
-
-- [x] Write tests proving fake adapters return canonical results and perform zero external network calls.
-- [x] Write test proving caller input such as `simulation=true` cannot select simulation transport.
-- [x] Implement minimal adapters and server-owned adapter selection seam.
-- [x] Run focused and full tests.
-- [x] Commit `feat: add server-owned safe execution simulation adapters`.
-
-### Task 5: Synthetic Mkety Identity Acceptance Seam — COMPLETE
-
-**Files:**
-- `cloudflare-v2/tests/v1_synthetic_identity_acceptance.test.mjs`
-- test/dependency-injection seams around `src/http/v1_admin.js` / `src/security/mkety_access_assertion.js` where required
-
-Completion evidence:
-- Acceptance tests exercise V1 admin authorization with synthetic owner identity and real membership/workspace store behavior.
-- Production verifier still fails closed with `MKETY_ACCESS_GATE_NOT_CONFIGURED` when issuer/audience/JWKS are missing.
-
-- [x] Write acceptance test exercising V1 admin authorization with synthetic owner identity and real membership/workspace store behavior.
-- [x] Assert production verifier still returns `MKETY_ACCESS_GATE_NOT_CONFIGURED` when issuer/audience/JWKS are missing.
-- [x] Implement fixtures/helpers only where necessary.
-- [x] Run focused and full tests.
-- [x] Commit `test: add synthetic mkety identity acceptance coverage`.
-
-### Task 6: End-to-End Synthetic Source-to-Destination Acceptance — COMPLETE
-
-**Files:**
-- `cloudflare-v2/tests/v1_full_stack_simulation.test.mjs`
-- `cloudflare-v2/tests/v1_full_stack_simulation_idempotency_audit.test.mjs`
-
-Completion evidence:
-- Commit `922f09d777fa68322a2b0148220d617a3e164ad5` proved signed V1 event request -> ingest -> simulation planning -> safe execution-stage handoff without selecting real broker dependencies.
-- Commit `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095` proved duplicate source events do not execute destinations twice and simulated provider/account events remain visible through event audit.
-- CI run `34057104517` passed Worker/trading-core, MT5 bridge and MTProto Python steps at `b63265ccd0bfbd9a5b94a0d39eb01804bca8d095`.
-
-- [x] Write RED scenario A.
-- [x] Implement minimal wiring to GREEN.
-- [x] Write RED scenario B and make idempotency GREEN without weakening production rules.
-- [x] Write RED scenario C and make event/audit readback GREEN.
-- [x] Run full suite.
-- [x] Commit `test: prove full stack trading simulation path`.
-
-### Task 7: Frontend/API/Schema Audit Matrix — COMPLETE
-
-**Files:**
-- `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
-
-Completion evidence:
-- Commit `f38189dd6a23a9e663796650e85eb88ec62cb894` added the page-by-page/action-by-action matrix.
-- Audit maps every visible dashboard control to endpoint, method, permission, persistence and resulting UI state.
-- It documents removed/blocked legacy surfaces: generic DB proxy, bot authorize shortcut, bank decision route, legacy signal webhook, fake settings save and browser-selected simulation.
-- CI run `34057441296` passed Worker/trading-core, MT5 bridge and MTProto Python steps.
-
-- [x] Inventory every visible tab/button/form in `dashboard.js`.
-- [x] Map each to exact V1 endpoint and backend handler.
-- [x] Map each backend operation to persisted Trading table/lifecycle state.
-- [x] Remove or block unmapped UI controls; no new code change was required during audit.
-- [x] Document PASS/BLOCKED/REMOVED for each item.
-- [x] Run full suite and commit `docs: record v1 frontend api schema audit`.
-
-### Task 8: Verification and CI — IN PROGRESS / NEXT
-
-**Files:**
-- No production changes unless a verification failure requires a test-first fix.
+- Create: `cloudflare-v2/tests/v1_dashboard_contract.test.mjs`
+- Modify: `cloudflare-v2/src/dashboard.js`
 
 **Interfaces:**
-- Produces exact verified feature-branch SHA and CI evidence.
+- Consumes: `renderDashboard(env)`.
+- Produces: dashboard HTML using only supported `/api/v1/*` Trading endpoints and an internal V1 request helper.
 
-- [ ] Run/trigger complete Worker/trading-core tests, MT5 tests and MTProto tests on the final SHA.
-- [ ] Verify CodeQL on the final code-bearing SHA.
-- [ ] Confirm grep/contract tests contain no retired Trading frontend endpoint references.
-- [ ] Confirm no real provider credentials or real-execution defaults were added.
-- [ ] Confirm `main` remains untouched and feature branch remains isolated.
-- [ ] Update production handoff classification based on evidence; do not claim staging external gates passed.
+- [x] Wrote coverage that asserts rendered dashboard does not contain `/api/admin/data/proxy`, `/api/admin/bot/authorize`, `/api/admin/bank/decision`, or other retired Trading admin endpoints.
+- [x] Wrote coverage asserting protected frontend calls target `/api/v1/admin/` and include both `Authorization: Bearer ...` and `X-Mkety-Workspace-Id` headers.
+- [x] Implemented the V1 browser client and removed retired Trading API calls from the real dashboard.
+- [x] Verified through Trading V1 CI.
 
-## Next pickup
+### Task 2: V1 Overview, Members, Sources, Accounts and Hostnames Views — DONE
 
-Continue with Task 8 only. Do not redesign. Do not modify MkSaaS. Do not merge to `main`. Do not enable live broker execution. The next worker should verify final CI/CodeQL/status evidence, update `AGENTS.md` and production handoff, then decide whether PR #6 can leave draft or merge into the staging feature branch only.
+**Files:**
+- Modify: `cloudflare-v2/src/dashboard.js`
+- Create: `cloudflare-v2/tests/v1_dashboard_views.test.mjs`
+- Read/verify contracts: `src/http/v1_admin.js`, `v1_admin_members.js`, `v1_admin_sources.js`, `v1_admin_accounts.js`, `v1_admin_hostnames.js`
+
+**Interfaces:**
+- Consumes: V1 browser client from Task 1.
+- Produces: real UI flows for `/workspace`, `/members`, `/sources`, `/accounts`, `/hostnames`.
+
+- [x] Added supported tab/endpoint/canonical refresh coverage.
+- [x] Implemented workspace overview and resource list/create/edit/lifecycle controls using exact V1 contracts.
+- [x] Forms repopulate from server responses and display loading/empty/error states.
+- [x] Verified through Trading V1 CI.
+
+### Task 3: Operations, Event Audit, Risk/Execution and Settings — DONE
+
+**Files:**
+- Modify: `cloudflare-v2/src/dashboard.js`
+- Create: `cloudflare-v2/tests/v1_dashboard_operations.test.mjs`
+- Read/verify contracts: `src/http/v1_admin_operations.js` and account/source policy modules.
+
+**Interfaces:**
+- Consumes: V1 browser client.
+- Produces: operations/event audit display, execution-state controls supported by backend, and truthful settings UI.
+
+- [x] Added operations endpoint, event audit endpoint, supported execution lifecycle and settings truthfulness coverage.
+- [x] Implemented operations/audit rendering and supported action controls.
+- [x] Unsupported/read-only settings are explicitly read-only.
+- [x] Verified through Trading V1 CI.
+
+### Task 4: Server-Owned Safe Simulation Adapter Boundary — DONE
+
+**Files:**
+- Create: `cloudflare-v2/src/adapters/simulation_execution_adapters.js`
+- Create: `cloudflare-v2/tests/simulation_execution_adapters.test.mjs`
+- Modify only the smallest existing execution factory/boundary required after reading `src/execution/*` and `src/destinations/*`.
+
+**Interfaces:**
+- Produces: fake MT5, cTrader and Telegram destination adapters returning production-shaped outcomes without `fetch`, sockets or real credentials.
+- Selection: trusted env/dependency injection only, never request payload.
+
+- [x] Added fake adapter coverage proving canonical outcomes and zero external network calls.
+- [x] Added coverage proving caller input such as `simulation=true` cannot select simulation transport.
+- [x] Implemented minimal adapters and server-owned adapter selection seam.
+- [x] Verified through Trading V1 CI.
+
+### Task 5: Synthetic Mkety Identity Acceptance Seam — DONE
+
+**Files:**
+- Create: `cloudflare-v2/tests/v1_synthetic_identity_acceptance.test.mjs`
+- Modify only test/dependency-injection seams around `src/http/v1_admin.js` / `src/security/mkety_access_assertion.js` if required.
+
+**Interfaces:**
+- Consumes: existing `authenticateFn` injection in `handleV1AdminRequest`.
+- Produces: repository acceptance fixtures that return the same authorization shape as a valid Mkety assertion without creating a production fallback.
+
+- [x] Added acceptance coverage exercising V1 admin authorization with synthetic owner identity and real membership/workspace store behavior.
+- [x] Asserted production verifier still returns `MKETY_ACCESS_GATE_NOT_CONFIGURED` when issuer/audience/JWKS are missing.
+- [x] Verified through Trading V1 CI.
+
+### Task 6: End-to-End Synthetic Source-to-Destination Acceptance — DONE
+
+**Files:**
+- Create: `cloudflare-v2/tests/v1_full_stack_simulation.test.mjs`
+- Create: `cloudflare-v2/tests/v1_full_stack_simulation_idempotency_audit.test.mjs`
+- Modify: execution/orchestration factory seams only as demanded by RED tests.
+
+**Interfaces:**
+- Scenario A: synthetic Telegram/MTProto source event -> canonical event -> persistence -> risk -> simulated cTrader/MT5 result -> audit.
+- Scenario B: duplicate source event -> same persistent identity/no duplicate destination execution.
+- Scenario C: simulated provider/account event -> persisted event/audit state consumable by frontend operations/event views.
+
+- [x] Scenario A covered by `v1_full_stack_simulation.test.mjs`.
+- [x] Scenario B covered by `v1_full_stack_simulation_idempotency_audit.test.mjs`.
+- [x] Scenario C covered by `v1_full_stack_simulation_idempotency_audit.test.mjs`.
+- [x] Verified through Trading V1 CI run `34057104517` and later full runs.
+
+### Task 7: Frontend/API/Schema Audit Matrix — DONE
+
+**Files:**
+- Create: `cloudflare-v2/docs/V1_FRONTEND_SYNC_AUDIT.md`
+- Create or modify tests only for concrete gaps found.
+
+**Interfaces:**
+- Produces a page-by-page/action-by-action matrix of UI control -> API -> permission -> store/table -> resulting UI state.
+
+- [x] Inventoried visible tabs/buttons/forms in `dashboard.js`.
+- [x] Mapped controls to exact V1 endpoint and backend handler.
+- [x] Mapped backend operation to persisted Trading table/lifecycle state.
+- [x] Documented PASS/BLOCKED/REMOVED for each item.
+- [x] Verified through Trading V1 CI run `34057441296` and later full runs.
+
+### Task 8: Verification and CI — DONE / CODEQL SETTINGS BLOCKED
+
+**Files:**
+- `cloudflare-v2/docs/PRODUCTION_FAST_PATH_HANDOFF.md`
+
+**Interfaces:**
+- Produces: exact verified feature-branch SHA and CI evidence.
+
+- [x] Ran/triggered complete Worker/trading-core tests, MT5 tests and MTProto tests.
+- [x] Confirmed Trading V1 CI success for latest verified PR #6 head `6da2232f666ae8129f9909f7604128a5e86e823d` with run `34058536767`, job `101554777002`.
+- [x] Confirmed grep/contract coverage contains no retired Trading frontend endpoint references through dashboard contract tests.
+- [x] Confirmed no real provider credentials or real-execution defaults were added; rollout fuses remain false in repo config.
+- [x] Confirmed `main` remains untouched and PR #6 remains isolated against `design/enterprise-trading-event-core`.
+- [x] Updated production handoff classification based on evidence.
+- [ ] CodeQL fresh success is blocked by repository Code Security configuration, not by a confirmed runtime code finding. Default CodeQL run `34058536874` failed Python and JavaScript/TypeScript SARIF processing because GitHub reports default setup conflicts with advanced configuration. Resolve the repository CodeQL default-vs-advanced settings conflict, then rerun CodeQL.
