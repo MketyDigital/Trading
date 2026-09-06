@@ -71,7 +71,7 @@ function createSupabase(accounts = []) {
 }
 
 async function request(path, { method = 'GET', role = 'admin', body, supabase } = {}) {
-  return handleV1AdminRequest(new Request(`https://trade.test${path}`, {
+  return handleV1AdminRequest(new Request(`https://trade.mkety.com${path}`, {
     method,
     headers: {
       'X-Mkety-Workspace-Id': 'ws-1',
