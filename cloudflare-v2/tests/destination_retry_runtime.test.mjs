@@ -90,19 +90,25 @@ test('one recovery failure is isolated and does not block claimed siblings', asy
   assert.equal(result.status, 'PARTIAL_FAILURE');
 });
 
-test('runtime rejects malformed due rows before recovery dispatch', async () => {
+test('runtime rejects malformed due rows before atomic claim so they cannot be stranded PENDING', async () => {
+  let claimCalls = 0;
   let recoveryCalls = 0;
-  const malformed = row({ workspace_id: '', request_payload: null });
+  const malformed = row({ request_payload: null });
   const runtime = createDestinationRetryRuntime({
     supabaseFactory: async () => ({}),
     listDueFn: async () => [malformed],
-    claimFn: async ({ delivery }) => ({ claimed: true, row: delivery }),
+    claimFn: async ({ delivery }) => {
+      claimCalls += 1;
+      return { claimed: true, row: { ...delivery, status: 'PENDING' } };
+    },
     recoverFn: async () => { recoveryCalls += 1; },
   });
 
   const result = await runtime({ BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  assert.equal(claimCalls, 0);
   assert.equal(recoveryCalls, 0);
-  assert.equal(result.claimed, 1);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.claimed, 0);
   assert.equal(result.dispatched, 0);
   assert.equal(result.failed, 1);
 });
