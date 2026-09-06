@@ -224,6 +224,13 @@ export function createProductionDestinationRetryRuntime({
         }
 
         if (accountResult.status === 'BLOCKED') {
+          if (accountResult.blockReason === 'BROKER_RISK_CONTEXT_UNAVAILABLE') {
+            await markRetryableFailure(baseStore, delivery, {
+              code: 'RETRY_RISK_CONTEXT_UNAVAILABLE',
+              message: 'authoritative broker risk context is temporarily unavailable',
+            }, { now, retryDelayMs: safeRetryDelayMs });
+            return { status: 'FAILED' };
+          }
           return terminalFail(baseStore, delivery, 'RETRY_EXECUTION_AUTHORITY_REVOKED');
         }
 
