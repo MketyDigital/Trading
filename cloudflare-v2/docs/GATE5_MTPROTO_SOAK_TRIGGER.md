@@ -79,3 +79,5 @@ source: accept mtproto gate 5
 The protected workflow first runs the ordinary Node/MT5/MTProto regression suite. Only if it passes, the exact branch/message marker matches, and the GitHub `staging` environment allows the job will the real observation-only MTProto acceptance runner execute.
 
 Merely adding or editing this workflow, runner, package command, or runbook does not authorize or trigger a real Gate 5 soak.
+
+Acceptance attempt: 2026-09-06 production-readiness audit with Trading access and broker execution disabled.
