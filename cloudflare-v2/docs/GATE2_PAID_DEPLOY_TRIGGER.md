@@ -26,3 +26,4 @@ Paid staging deployment trigger: 2026-09-06 after successful read-only inspectio
 Post-deploy Gate 2 acceptance trigger: 2026-09-06 after successful paid staging deploy; ephemeral simulation and rollback only.
 Read-only staging inspection trigger: 2026-09-06 final production path Gate 2 dry-run before paid staging deploy.
 Paid staging deployment trigger: 2026-09-06 final production path after successful Gate 2 inspect; execution fuses remain false.
+Post-deploy Gate 2 acceptance trigger: 2026-09-06 final production path after successful paid staging deploy; ephemeral simulation and rollback only.
