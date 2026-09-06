@@ -17,7 +17,7 @@ function request(path, { method = 'GET', body, workspaceId = 'ws-1' } = {}) {
     Authorization: 'Bearer token',
   });
   if (body !== undefined) headers.set('Content-Type', 'application/json');
-  return new Request(`https://trade.test${path}`, {
+  return new Request(`https://trade.mkety.com${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
