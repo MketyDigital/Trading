@@ -122,3 +122,46 @@ test('duplicate reservation returns persisted event without inventing interpreta
   assert.equal(result.event.text, 'BUY XAUUSD');
   assert.equal(result.event.thread.thread_id, 'original-thread');
 });
+
+test('duplicate reservation treats RECEIVED as incomplete so recovery can reinterpret the persisted event', async () => {
+  let phase = 'insert';
+  const supabase = {
+    from() {
+      if (phase === 'insert') {
+        return {
+          insert() { return this; },
+          select() { return this; },
+          single: async () => {
+            phase = 'lookup';
+            return { data: null, error: { code: '23505' } };
+          },
+        };
+      }
+      return {
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle: async () => ({
+          data: { ...persistedRow, processing_status: 'RECEIVED', canonical_intent: null, error_code: null },
+          error: null,
+        }),
+      };
+    },
+  };
+
+  const { eventStore } = createSupabaseIngestStores(supabase, {
+    masterKey: 'master',
+    decryptFn: async () => 'secret',
+  });
+  const result = await eventStore.reserve({
+    workspace_id: 'ws-1',
+    source_connection_id: 'src-1',
+    external_event_id: 'native-1',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicate, true);
+  assert.equal(result.eventId, 'evt-existing');
+  assert.equal(result.interpretation, undefined);
+  assert.equal(result.event.text, 'BUY XAUUSD');
+  assert.equal(result.event.thread.thread_id, 'original-thread');
+});
