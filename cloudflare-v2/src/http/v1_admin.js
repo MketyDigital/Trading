@@ -86,15 +86,6 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     return { ok: false, status: 403, reason: 'TRADING_HOSTNAME_WORKSPACE_MISMATCH' };
   }
 
-  const { data: workspace, error } = await supabase
-    .from('trading_workspace_access')
-    .select('*')
-    .eq('id', String(workspaceId))
-    .maybeSingle();
-
-  if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
-  if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
-
   const issuer = env.MKETY_ACCESS_ISSUER;
   const audience = env.MKETY_ACCESS_AUDIENCE;
   const jwksUrl = env.MKETY_ACCESS_JWKS_URL;
@@ -107,7 +98,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     issuer,
     audience,
     jwksUrl,
-    requestedWorkspaceId: workspace.id,
+    requestedWorkspaceId: String(workspaceId),
   });
 
   if (!auth?.ok) {
@@ -118,6 +109,19 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     ];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
+
+  if (String(auth.workspaceId) !== String(workspaceId)) {
+    return { ok: false, status: 403, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
+  }
+
+  const { data: workspace, error } = await supabase
+    .from('trading_workspace_access')
+    .select('*')
+    .eq('id', String(workspaceId))
+    .maybeSingle();
+
+  if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
+  if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
 
   let membershipStore;
   try {
