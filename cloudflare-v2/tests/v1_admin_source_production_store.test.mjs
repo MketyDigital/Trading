@@ -38,7 +38,7 @@ test('production admin router passes server env into source-store factory', asyn
   };
   let receivedEnv = null;
 
-  const response = await handleV1AdminRequest(new Request('https://trade.test/api/v1/admin/sources', {
+  const response = await handleV1AdminRequest(new Request('https://trade.mkety.com/api/v1/admin/sources', {
     headers: {
       'X-Mkety-Workspace-Id': '11111111-1111-4111-8111-111111111111',
       Authorization: 'Bearer fixture',
