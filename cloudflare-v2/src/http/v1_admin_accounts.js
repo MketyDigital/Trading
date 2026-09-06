@@ -198,9 +198,13 @@ export function createAdminAccountStore(supabase) {
     },
 
     async setActive(workspaceId, accountId, enabled) {
+      const active = Boolean(enabled);
+      const update = active
+        ? { is_active: true }
+        : { is_active: false, execution_enabled: false };
       const { data, error } = await supabase
         .from('trade_accounts')
-        .update({ is_active: Boolean(enabled) })
+        .update(update)
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
         .select(ACCOUNT_SELECT)
