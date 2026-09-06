@@ -8,6 +8,12 @@ function requireKeyMatch(expected, actual) {
   }
 }
 
+function dueTime(row = {}) {
+  const value = row.status === 'PENDING' ? row.lease_expires_at : row.next_attempt_at;
+  const timestamp = new Date(value ?? 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+}
+
 export async function listDueDestinationRetries({
   supabase,
   now,
@@ -17,19 +23,39 @@ export async function listDueDestinationRetries({
   requireSupabase(supabase);
   const normalizedNow = String(now || '');
   if (!normalizedNow) throw new TypeError('now is required');
+  const safeLimit = Math.max(1, Math.trunc(Number(limit) || 20));
 
-  const { data, error } = await supabase
-    .from('destination_deliveries')
-    .select('*')
-    .eq('status', 'RETRYABLE')
-    .lte('next_attempt_at', normalizedNow)
-    .lt('attempt_count', Number(maxAttempts))
-    .or(`lease_expires_at.is.null,lease_expires_at.lt.${normalizedNow}`)
-    .order('next_attempt_at', { ascending: true })
-    .limit(Number(limit));
+  // RETRYABLE rows are new logical retry attempts and remain subject to the
+  // attempt budget. PENDING rows with an expired non-null lease represent a
+  // worker crash after an earlier atomic claim; reclaiming them continues that
+  // same logical attempt rather than consuming a new attempt budget slot.
+  const [retryableResult, expiredClaimResult] = await Promise.all([
+    supabase
+      .from('destination_deliveries')
+      .select('*')
+      .eq('status', 'RETRYABLE')
+      .lte('next_attempt_at', normalizedNow)
+      .lt('attempt_count', Number(maxAttempts))
+      .or(`lease_expires_at.is.null,lease_expires_at.lt.${normalizedNow}`)
+      .order('next_attempt_at', { ascending: true })
+      .limit(safeLimit),
+    supabase
+      .from('destination_deliveries')
+      .select('*')
+      .eq('status', 'PENDING')
+      .lt('lease_expires_at', normalizedNow)
+      .order('lease_expires_at', { ascending: true })
+      .limit(safeLimit),
+  ]);
 
-  if (error) throw new Error(`destination retry scan failed: ${error.message}`);
-  return Array.isArray(data) ? data : [];
+  if (retryableResult?.error) throw new Error(`destination retry scan failed: ${retryableResult.error.message}`);
+  if (expiredClaimResult?.error) throw new Error(`destination retry crash-recovery scan failed: ${expiredClaimResult.error.message}`);
+
+  const retryable = Array.isArray(retryableResult?.data) ? retryableResult.data : [];
+  const expiredClaims = Array.isArray(expiredClaimResult?.data) ? expiredClaimResult.data : [];
+  return [...retryable, ...expiredClaims]
+    .sort((left, right) => dueTime(left) - dueTime(right))
+    .slice(0, safeLimit);
 }
 
 export function createContextualDeliveryStore(baseStore, context = {}) {
