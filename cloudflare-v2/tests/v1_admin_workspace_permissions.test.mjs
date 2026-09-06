@@ -25,7 +25,7 @@ function supabase() {
 }
 
 function request() {
-  return new Request('https://trade.test/api/v1/admin/workspace', {
+  return new Request('https://trade.mkety.com/api/v1/admin/workspace', {
     headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
   });
 }
