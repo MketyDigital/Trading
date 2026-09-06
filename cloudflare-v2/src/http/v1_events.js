@@ -17,12 +17,12 @@ function json(body, status = 200) {
   });
 }
 
-function blockedSimulation(error) {
+function blockedSimulation() {
   return {
     status: 'BLOCKED',
     executionEnabled: false,
     actions: [],
-    error: error instanceof Error ? error.message : String(error),
+    error: 'simulation context unavailable',
   };
 }
 
@@ -111,7 +111,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       }, dependencies);
     } catch (error) {
       console.warn('V1 simulation planning blocked:', error?.message || error);
-      simulation = blockedSimulation(error);
+      simulation = blockedSimulation();
     }
 
     const executionResult = result?.duplicate && allowDuplicateOrchestration
