@@ -17,3 +17,4 @@ Acceptance retry 2: wait for the newly deployed internal transport secret to be 
 Acceptance retry 3: include authorized Telegram native identity on the direct simulation probe.
 Deployment trigger: 2026-09-05 MTProto internal source callback configuration.
 Read-only staging inspection trigger: 2026-09-06 post-completion GREEN verification.
+Paid staging deployment trigger: 2026-09-06 verified completion runtime with fail-closed execution fuses.
