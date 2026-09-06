@@ -41,3 +41,4 @@ Browser, curl, or Postman requests do not count as genuine TradingView evidence.
 Diagnostic rerun triggered only after exact-head run `33729980857` passed all mandatory suites with every Cloudflare action skipped.
 
 Read-only Gate 3 zone inspection trigger: 2026-09-06 after Gate 2 staging deploy and acceptance passed.
+Read-only Gate 3 zone inspection trigger: 2026-09-06 final production path after Gate 2 acceptance success.
