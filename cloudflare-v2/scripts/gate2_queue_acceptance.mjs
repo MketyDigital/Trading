@@ -29,7 +29,7 @@ const sourceId = randomUUID();
 const accountId = randomUUID();
 const ownerEmail = `gate2-${workspaceId}@invalid.local`;
 const queueExternalEventId = 'telegram:-1000000000001:1';
-const directExternalEventId = `gate2-direct-${randomUUID()}`;
+const blockedExternalEventId = `gate2-external-blocked-${randomUUID()}`;
 
 async function requireDb(result, label) {
   if (result?.error) throw new Error(`${label}: ${result.error.message || result.error.code || 'database error'}`);
@@ -143,11 +143,11 @@ async function waitForSingleQueuedEvent() {
   throw new Error('queue consumer did not persist exactly one READY event within 60 seconds');
 }
 
-async function proveDirectSimulation() {
+async function proveExternalTradingAccessFailsClosed() {
   const event = {
     version: '1.0',
     source: { type: 'telegram_mtproto', instance_id: 'gate2-external-mtproto', external_id: 'gate2-account' },
-    external_event_id: directExternalEventId,
+    external_event_id: blockedExternalEventId,
     occurred_at: new Date().toISOString(),
     received_at: new Date().toISOString(),
     text: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
@@ -155,7 +155,7 @@ async function proveDirectSimulation() {
     thread: {},
     metadata: {
       gate2_acceptance: true,
-      direct_simulation_probe: true,
+      external_access_fail_closed_probe: true,
       native_identity: {
         chat_id: '-1000000000001',
         message_id: '2',
@@ -171,15 +171,8 @@ async function proveDirectSimulation() {
   });
   const response = await fetch(request);
   const body = await response.json().catch(() => ({}));
-  assert(response.ok && body?.ok === true && body?.duplicate !== true, `direct simulation ingress failed with HTTP ${response.status}`);
-  assert(body?.simulation?.status === 'SIMULATED', 'simulation status must be SIMULATED');
-  assert(body?.simulation?.executionEnabled === false, 'simulation must report executionEnabled=false');
-  const ready = (Array.isArray(body?.simulation?.accounts) ? body.simulation.accounts : []).filter((account) => account?.status === 'READY');
-  assert(ready.length === 1, 'simulation must produce exactly one READY account');
-  const actions = Array.isArray(ready[0]?.actions) ? ready[0].actions : [];
-  assert(actions.length === 3, 'simulation must produce exactly three TP actions');
-  assert(actions.every((action) => action?.simulated === true), 'every simulation action must be marked simulated=true');
-  assert(body?.simulation?.executionEnabled === false && body?.simulation?.actions?.length !== 1, 'top-level broker execution must remain disabled');
+  assert(response.status === 503, `external Trading access must fail closed with HTTP 503, got ${response.status}`);
+  assert(body?.ok === false && body?.reason === 'TRADING_ACCESS_DISABLED', 'external Trading access must fail closed as TRADING_ACCESS_DISABLED');
 }
 
 async function verifyQueueDeduplication() {
@@ -192,8 +185,18 @@ async function verifyQueueDeduplication() {
   assert(Array.isArray(data) && data.length === 1, 'duplicate queued source event must collapse to exactly one persistent Trading Event');
 }
 
+async function verifyNoBrokerDelivery() {
+  const { data, error } = await supabase
+    .from('destination_deliveries')
+    .select('id,status,destination_type')
+    .eq('workspace_id', workspaceId);
+  if (error) throw new Error(`broker delivery verification query failed: ${error.message}`);
+  assert(Array.isArray(data) && data.length === 0, 'Gate 2 must create zero broker/destination delivery rows while broker execution is disabled');
+}
+
 async function cleanupFixture() {
   const operations = [
+    ['destination_deliveries', supabase.from('destination_deliveries').delete().eq('workspace_id', workspaceId)],
     ['trading_events', supabase.from('trading_events').delete().eq('workspace_id', workspaceId)],
     ['source_connections', supabase.from('source_connections').delete().eq('id', sourceId)],
     ['trade_accounts', supabase.from('trade_accounts').delete().eq('id', accountId)],
@@ -216,12 +219,14 @@ try {
   const queued = await waitForSingleQueuedEvent();
   assert(queued?.source_connection_id === sourceId, 'queued event must remain bound to the temporary source');
   await verifyQueueDeduplication();
-  await proveDirectSimulation();
+  await proveExternalTradingAccessFailsClosed();
+  await verifyNoBrokerDelivery();
   console.log(JSON.stringify({
     ok: true,
     gate: 2,
     queue: { acceptedTwice: true, persistentCount: 1, processingStatus: 'READY' },
-    simulation: { status: 'SIMULATED', executionEnabled: false, readyAccounts: 1, simulatedActions: 3 },
+    externalTradingAccess: { enabled: false, failClosed: true, status: 503 },
+    brokerDelivery: { count: 0, executionEnabled: false },
     brokerExecution: false,
   }));
 } catch (error) {
