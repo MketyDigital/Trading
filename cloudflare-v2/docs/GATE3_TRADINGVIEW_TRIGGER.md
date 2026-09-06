@@ -39,3 +39,5 @@ During the active bounded tail window, fire exactly one genuine TradingView webh
 Browser, curl, or Postman requests do not count as genuine TradingView evidence. If Cloudflare does not expose exactly one stable normalized SHA-256 client-certificate fingerprint, Gate 3 stops without weakening transport authentication.
 
 Diagnostic rerun triggered only after exact-head run `33729980857` passed all mandatory suites with every Cloudflare action skipped.
+
+Read-only Gate 3 zone inspection trigger: 2026-09-06 after Gate 2 staging deploy and acceptance passed.
