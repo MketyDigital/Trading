@@ -44,3 +44,4 @@ Read-only Gate 3 zone inspection trigger: 2026-09-06 after Gate 2 staging deploy
 Read-only Gate 3 zone inspection trigger: 2026-09-06 final production path after Gate 2 acceptance success.
 Bounded Gate 3 TradingView certificate probe trigger: 2026-09-06 final production path after successful Gate 3 zone inspection.
 Bounded Gate 3 TradingView certificate probe retry trigger: 2026-09-06 final production path with custom-domain readiness polling.
+Bounded Gate 3 TradingView certificate probe retry trigger: 2026-09-07 after entrypoint probe-gate fix.
