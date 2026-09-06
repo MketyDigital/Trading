@@ -24,3 +24,5 @@ Required GitHub `staging` environment secrets for cTrader:
 - `CTRADER_ACCOUNT_ID`
 
 Do not place secret values in this file, commits, logs, issues, or chat. The optional demo symbol defaults to `XAUUSD`.
+
+MT5 connectivity probe attempt: 2026-09-06 production-readiness audit; order testing and broker execution remain disabled.
