@@ -163,20 +163,46 @@ export class SupabaseDeliveryStore {
     if (!key) throw new TypeError('idempotencyKey is required');
     const nowIso = requiredTimestamp(now, 'now');
     const leaseIso = requiredTimestamp(leaseUntil, 'leaseUntil');
-    if (new Date(leaseIso).getTime() <= new Date(nowIso).getTime()) {
+    const nowTime = new Date(nowIso).getTime();
+    if (new Date(leaseIso).getTime() <= nowTime) {
       throw new TypeError('leaseUntil must be after now');
     }
 
     const row = await this.find(key);
-    if (!row || row.status !== 'RETRYABLE' || !row.next_attempt_at) return { claimed: false, row: null };
-    if (new Date(row.next_attempt_at).getTime() > new Date(nowIso).getTime()) return { claimed: false, row: null };
+    if (!row) return { claimed: false, row: null };
 
     const attemptCount = Number(row.attempt_count || 0);
-    const { data, error } = await this.supabase
+    const status = String(row.status || '');
+    let nextAttemptCount = attemptCount;
+    let compareField;
+    let compareValue;
+
+    if (status === 'RETRYABLE') {
+      if (!row.next_attempt_at) return { claimed: false, row: null };
+      if (new Date(row.next_attempt_at).getTime() > nowTime) return { claimed: false, row: null };
+      if (row.lease_expires_at && new Date(row.lease_expires_at).getTime() >= nowTime) {
+        return { claimed: false, row: null };
+      }
+      nextAttemptCount = attemptCount + 1;
+      compareField = 'next_attempt_at';
+      compareValue = row.next_attempt_at;
+    } else if (status === 'PENDING') {
+      // Only PENDING rows created by an earlier retry claim carry a lease. An
+      // ordinary first-attempt PENDING reservation has no lease and is never
+      // eligible for automatic replay because its broker outcome may be unknown.
+      if (!row.lease_expires_at) return { claimed: false, row: null };
+      if (new Date(row.lease_expires_at).getTime() >= nowTime) return { claimed: false, row: null };
+      compareField = 'lease_expires_at';
+      compareValue = row.lease_expires_at;
+    } else {
+      return { claimed: false, row: null };
+    }
+
+    let update = this.supabase
       .from('destination_deliveries')
       .update({
         status: 'PENDING',
-        attempt_count: attemptCount + 1,
+        attempt_count: nextAttemptCount,
         last_attempt_at: nowIso,
         lease_expires_at: leaseIso,
         next_attempt_at: null,
@@ -186,11 +212,11 @@ export class SupabaseDeliveryStore {
       })
       .eq('workspace_id', this.workspaceId)
       .eq('idempotency_key', key)
-      .eq('status', 'RETRYABLE')
+      .eq('status', status)
       .eq('attempt_count', attemptCount)
-      .eq('next_attempt_at', row.next_attempt_at)
-      .select('*')
-      .maybeSingle();
+      .eq(compareField, compareValue);
+
+    const { data, error } = await update.select('*').maybeSingle();
     if (error) throw new Error(`delivery retry claim failed: ${error.message}`);
     return data ? { claimed: true, row: data } : { claimed: false, row: null };
   }
