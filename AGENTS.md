@@ -11,7 +11,7 @@ The current repository objective is: **finish the Trading repo V1 completion bra
 - Production PR: #2 `feat: build enterprise trading event core foundation`
 - PR #2 base: `main`
 - PR #2 head branch: `design/enterprise-trading-event-core`
-- Latest checked PR #2 head: `2323354dd4d0951d33d903c334e0902a5bb9c15f`
+- Latest checked PR #2 head: `bc536b6e92740d8ed41f4401b34e98586f0bb192`
 - PR #2 is open, ready for review, and not merged to `main`.
 - PR #6 `fix: synchronize Trading V1 frontend and safe simulation` is merged into the staging feature branch, not `main`.
 - PR #6 merge commit: `7adbe62cb6dd0f721f3dd20933c131cbe20dfd41`.
@@ -19,7 +19,7 @@ The current repository objective is: **finish the Trading repo V1 completion bra
 ## Completed repo/staging evidence
 
 - Trading V1 CI passed on PR #6 final head before the PR #6 staging merge.
-- Production PR #2 CodeQL succeeded on current checked head `2323354dd4d0951d33d903c334e0902a5bb9c15f` with no new alerts in changed code.
+- Production PR #2 CodeQL succeeded on checked head `2323354dd4d0951d33d903c334e0902a5bb9c15f` with no new alerts in changed code. Re-check current-head CodeQL after this AGENTS-only status commit settles.
 - Gate 2 read-only Cloudflare staging inspection passed: run `34060610896`.
 - Gate 2 paid staging deployment passed with fail-closed runtime gates: run `34060662482`.
 - Gate 2 post-deploy acceptance passed: run `34060780169`.
