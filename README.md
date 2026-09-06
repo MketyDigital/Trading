@@ -1,20 +1,14 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Trading
 
-# Run and deploy your AI Studio app
+Mkety Trading runtime repository.
 
-This contains everything you need to run your app locally.
+## PR #6 verification note
 
-View your app in AI Studio: https://ai.studio/apps/5af3bae6-0a06-4f2f-9d4b-8b55436f316e
+The `fix/v1-frontend-sync-simulation` branch has completed the repo-controlled V1 frontend/API/database synchronization and safe simulation workstream.
 
-## Run Locally
+Latest verified runtime/test evidence before this note:
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Trading V1 CI run `34058536767` passed on `6da2232f666ae8129f9909f7604128a5e86e823d`.
+- Worker/trading-core tests, pure MT5 bridge tests and pure MTProto Python tests passed.
+- Fresh CodeQL is blocked by the repository Code Security default-vs-advanced configuration conflict, not by a confirmed runtime code vulnerability.
+- Production promotion, `main` merge, real credentials and real-money execution remain blocked.
