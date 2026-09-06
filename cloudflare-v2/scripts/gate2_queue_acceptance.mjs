@@ -101,31 +101,44 @@ async function setupFixture() {
 }
 
 async function postInternalQueueEvent() {
-  const response = await fetch(`${workerBaseUrl}/api/v1/internal/source-event`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-mkety-internal-source-token': internalToken,
-    },
-    body: JSON.stringify({
-      source_id: sourceId,
-      source_external_id: 'gate2-account',
-      external_event_id: queueExternalEventId,
-      occurred_at: new Date().toISOString(),
-      text: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
-      structured_payload: {},
-      thread: {},
-      metadata: {
-        gate2_acceptance: true,
-        native_identity: {
-          chat_id: '-1000000000001',
-          message_id: '1',
-        },
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const response = await fetch(`${workerBaseUrl}/api/v1/internal/source-event`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-mkety-internal-source-token': internalToken,
       },
-    }),
-  });
-  const body = await response.json().catch(() => ({}));
-  assert(response.status === 202 && body?.ok === true && body?.queued === true, `queue ingress failed with HTTP ${response.status}`);
+      body: JSON.stringify({
+        source_id: sourceId,
+        source_external_id: 'gate2-account',
+        external_event_id: queueExternalEventId,
+        occurred_at: new Date().toISOString(),
+        text: 'BUY XAUUSD 2500 SL 2490 TP 2510 2520 2530',
+        structured_payload: {},
+        thread: {},
+        metadata: {
+          gate2_acceptance: true,
+          native_identity: {
+            chat_id: '-1000000000001',
+            message_id: '1',
+          },
+        },
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+
+    if (response.status === 202 && body?.ok === true && body?.queued === true) {
+      return body;
+    }
+
+    if (response.status === 401 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
+
+    throw new Error(`queue ingress failed: HTTP ${response.status} ${JSON.stringify(body)}`);
+  }
 }
 
 async function waitForSingleQueuedEvent() {
