@@ -1,8 +1,15 @@
 import { decryptSecret } from '../security/secret_box.js';
 
+const TERMINAL_INTERPRETATION_STATUSES = new Set([
+  'READY',
+  'MANAGEMENT',
+  'NO_ACTION',
+  'NEEDS_REVIEW',
+]);
+
 function persistedInterpretation(row = {}) {
   const status = String(row.processing_status ?? '').trim();
-  if (!status) return null;
+  if (!TERMINAL_INTERPRETATION_STATUSES.has(status)) return null;
   const interpretation = { status };
   if (row.canonical_intent && typeof row.canonical_intent === 'object') {
     interpretation.intent = row.canonical_intent;
