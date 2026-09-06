@@ -17,10 +17,6 @@ function json(body, status = 200) {
   });
 }
 
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
-
 function blockedSimulation(error) {
   return {
     status: 'BLOCKED',
@@ -49,6 +45,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   executionStageFn = runV1ProductionExecutionStage,
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
+  orchestrateDuplicates = false,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -87,7 +84,14 @@ export async function handleV1EventsRequest(request, env = {}, {
       }),
     });
 
-    if (!result?.ok || result?.duplicate || !enabled(env.TRADING_V1_SIMULATION)) {
+    // Recovery replay is considered only after normal source authentication and
+    // ingest authorization have succeeded. The marker cannot grant workspace or
+    // source authority. A duplicate is eligible for orchestration only when
+    // ingest rehydrated the canonical event from persisted DB truth.
+    const recoveryReplay = request.headers.get('X-Mkety-Source-Recovery') === '1';
+    const duplicateReplayRequested = orchestrateDuplicates || recoveryReplay;
+    const allowDuplicateOrchestration = duplicateReplayRequested && result?.recoveryReady === true;
+    if (!result?.ok || (result?.duplicate && !allowDuplicateOrchestration)) {
       return json(result, result?.ok ? 200 : Number(result?.status || 500));
     }
 
@@ -110,10 +114,13 @@ export async function handleV1EventsRequest(request, env = {}, {
       simulation = blockedSimulation(error);
     }
 
+    const executionResult = result?.duplicate && allowDuplicateOrchestration
+      ? { ...result, duplicate: false, replayedDuplicate: true }
+      : result;
     const execution = await executionStageFn({
       env,
       supabase,
-      result,
+      result: executionResult,
       simulation,
       executionDepsFactory,
       executeProductionFn,

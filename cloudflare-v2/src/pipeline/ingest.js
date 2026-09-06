@@ -22,6 +22,54 @@ function deriveCanonicalEventId(source, input) {
   }
 }
 
+function recoverPersistedEvent(source, persisted = {}) {
+  if (!persisted || typeof persisted !== 'object' || Array.isArray(persisted)) return null;
+  const normalized = normalizeTradingEvent({
+    version: persisted.version,
+    workspace_hint: source.workspace_id,
+    source: {
+      type: persisted.source_type || persisted.source?.type || source.source_type,
+      instance_id: source.source_instance_id,
+      external_id: persisted.source_external_id ?? persisted.source?.external_id ?? null,
+    },
+    external_event_id: persisted.external_event_id,
+    occurred_at: persisted.occurred_at,
+    received_at: persisted.received_at,
+    text: persisted.text,
+    structured_payload: persisted.structured_payload,
+    thread: persisted.thread,
+    metadata: persisted.metadata,
+  }, { requireIdentity: true });
+  return normalized.ok ? normalized.event : null;
+}
+
+async function interpretAndPersist({
+  source,
+  event,
+  eventId,
+  eventStore,
+  aiRouter,
+  aiRouterFactory,
+  interpretationTimeoutMs,
+}) {
+  // Tenant AI configuration is loaded only after HMAC authentication and
+  // trusted workspace resolution. A client payload cannot select another
+  // workspace's provider credentials.
+  const resolvedAiRouter = aiRouterFactory
+    ? await aiRouterFactory({ source, event })
+    : aiRouter;
+
+  const interpretation = await interpretTradingEvent(event, {
+    aiRouter: resolvedAiRouter,
+    timeoutMs: interpretationTimeoutMs,
+  });
+
+  if (eventStore.updateInterpretation) {
+    await eventStore.updateInterpretation(eventId, interpretation);
+  }
+  return interpretation;
+}
+
 export async function ingestTradingEvent({
   rawBody,
   sourceId,
@@ -103,32 +151,55 @@ export async function ingestTradingEvent({
   const reservation = await eventStore.reserve(reservationRow);
 
   if (reservation?.duplicate) {
+    // A replay body proves only source possession and duplicate identity. It is
+    // never allowed to replace canonical event content already persisted for
+    // that identity. Recovery orchestration can proceed only from DB truth plus
+    // the currently authenticated source/workspace relationship.
+    const persistedEvent = recoverPersistedEvent(source, reservation.event);
+    if (!persistedEvent) {
+      return {
+        ok: true,
+        duplicate: true,
+        recoveryReady: false,
+        eventId: reservation.eventId ?? null,
+        ...(reservation.interpretation ? { interpretation: reservation.interpretation } : {}),
+      };
+    }
+
+    const needsInterpretation = reservation.needsInterpretation === true;
+    const interpretation = !needsInterpretation && reservation.interpretation
+      ? reservation.interpretation
+      : await interpretAndPersist({
+          source,
+          event: persistedEvent,
+          eventId: reservation.eventId,
+          eventStore,
+          aiRouter,
+          aiRouterFactory,
+          interpretationTimeoutMs,
+        });
     return {
       ok: true,
       duplicate: true,
+      recoveryReady: true,
       eventId: reservation.eventId ?? null,
-      event,
+      event: persistedEvent,
+      interpretation,
     };
   }
   if (!reservation?.ok) {
     return { ok: false, status: 503, reason: 'EVENT_RESERVATION_FAILED' };
   }
 
-  // Tenant AI configuration is loaded only after HMAC authentication and
-  // trusted workspace resolution. A client payload cannot select another
-  // workspace's provider credentials.
-  const resolvedAiRouter = aiRouterFactory
-    ? await aiRouterFactory({ source, event })
-    : aiRouter;
-
-  const interpretation = await interpretTradingEvent(event, {
-    aiRouter: resolvedAiRouter,
-    timeoutMs: interpretationTimeoutMs,
+  const interpretation = await interpretAndPersist({
+    source,
+    event,
+    eventId: reservation.eventId,
+    eventStore,
+    aiRouter,
+    aiRouterFactory,
+    interpretationTimeoutMs,
   });
-
-  if (eventStore.updateInterpretation) {
-    await eventStore.updateInterpretation(reservation.eventId, interpretation);
-  }
 
   return {
     ok: true,

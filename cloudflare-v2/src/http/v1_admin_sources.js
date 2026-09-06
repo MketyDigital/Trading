@@ -5,6 +5,7 @@ import {
   validateConnectionCredentials,
 } from '../security/connection_credentials.js';
 import { encryptSecret } from '../security/secret_box.js';
+import { tradingViewTransportReadiness } from '../security/tradingview_transport.js';
 
 const SOURCE_SELECT = [
   'id', 'workspace_id', 'source_type', 'source_instance_id', 'display_name', 'is_active',
@@ -125,6 +126,29 @@ function publicSource(source = {}) {
     credentialsConfigured: credentialConfigured,
     health: publicHealth(source.health || {}),
   };
+}
+
+function sourceActivationReadiness(source = {}, env = {}) {
+  const providerType = String(source.providerType ?? '').trim();
+  const credentialKind = sourceCredentialKind(providerType);
+  const credentialConfigured = Boolean(
+    source.credentialConfigured ?? source.credentialsConfigured ?? source.providerSecretCiphertext,
+  );
+
+  if (credentialKind && !credentialConfigured) {
+    return { ready: false, reason: 'SOURCE_CREDENTIALS_NOT_CONFIGURED' };
+  }
+
+  if (providerType === 'tradingview_webhook') {
+    if (!String(source.publicSourceHandle ?? '').trim()) {
+      return { ready: false, reason: 'TRADINGVIEW_PUBLIC_HANDLE_NOT_CONFIGURED' };
+    }
+    const transport = tradingViewTransportReadiness(env);
+    if (!transport.ready) return { ready: false, reason: transport.reason, transport };
+    return { ready: true, reason: null, transport };
+  }
+
+  return { ready: true, reason: null };
 }
 
 async function readJson(request) {
@@ -580,6 +604,21 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
   }
 
   if (action === 'enable' || action === 'disable') {
+    if (action === 'enable') {
+      let existing;
+      try {
+        existing = await sourceStore.getSource(workspaceId, sourceId);
+      } catch {
+        return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
+      }
+      if (!existing) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
+
+      const readiness = sourceActivationReadiness(existing, env);
+      if (!readiness.ready) {
+        return json({ ok: false, reason: 'SOURCE_NOT_READY', readiness }, 409);
+      }
+    }
+
     try {
       const source = await sourceStore.setSourceEnabled(workspaceId, sourceId, action === 'enable');
       if (!source) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);

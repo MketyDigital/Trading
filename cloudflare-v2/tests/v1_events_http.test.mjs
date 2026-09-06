@@ -39,8 +39,10 @@ test('passes exact raw body and signed source headers into persistent ingest pip
     ingestFn: async (input, dependencies) => {
       captured = { input, dependencies };
       await dependencies.aiRouterFactory({ source: { workspace_id: 'ws-authenticated' } });
-      return { ok: true, duplicate: false, eventId: 'evt-1', interpretation: { status: 'READY' } };
+      return { ok: true, duplicate: false, eventId: 'evt-1', event: {}, interpretation: { status: 'READY' } };
     },
+    simulationDepsFactory: async () => ({ safe: true }),
+    orchestrateFn: async () => ({ status: 'NO_ACTION', executionEnabled: false, actions: [], accounts: [] }),
   });
 
   assert.equal(response.status, 200);
@@ -55,10 +57,11 @@ test('passes exact raw body and signed source headers into persistent ingest pip
   assert.equal(aiFactoryCall[2].circuitBreaker, aiCircuitBreaker);
   const body = await response.json();
   assert.equal(body.eventId, 'evt-1');
-  assert.equal(body.simulation, undefined);
+  assert.equal(body.simulation.status, 'NO_ACTION');
+  assert.equal(body.simulation.executionEnabled, false);
 });
 
-test('simulation flag orchestrates only a successful non-duplicate interpreted event', async () => {
+test('successful non-duplicate interpreted event enters orchestration', async () => {
   let orchestrationInput;
   let depsBuilt = 0;
   const request = new Request('https://trade.test/api/v1/events', {
@@ -92,6 +95,52 @@ test('simulation flag orchestrates only a successful non-duplicate interpreted e
   assert.deepEqual(body.simulation.actions, []);
 });
 
+test('accepted events always enter orchestration even when simulation mode is disabled', async () => {
+  let depsBuilt = 0;
+  let orchestrationInput;
+  const event = { workspace_hint: 'ws-1', external_event_id: 'evt-production-path', source: { instance_id: 'src-1' }, thread: {} };
+  const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST',
+    body: '{"external_event_id":"evt-production-path","text":"BUY XAUUSD 2500"}',
+    headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+    },
+  });
+
+  const response = await handleV1EventsRequest(request, {
+    TRADING_MASTER_KEY: 'master',
+    TRADING_V1_SIMULATION: 'false',
+  }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({ ok: true, duplicate: false, eventId: 'db-event-production', event, interpretation }),
+    simulationDepsFactory: async () => {
+      depsBuilt += 1;
+      return { executionPath: 'production-capable' };
+    },
+    orchestrateFn: async (input, deps) => {
+      orchestrationInput = { input, deps };
+      return { status: 'PROCESSED', executionEnabled: true, actions: [{ accountId: 'acct-test' }], accounts: [] };
+    },
+  });
+
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(depsBuilt, 1);
+  assert.equal(orchestrationInput.input.eventId, 'db-event-production');
+  assert.equal(orchestrationInput.input.event, event);
+  assert.equal(orchestrationInput.input.interpretation, interpretation);
+  assert.deepEqual(orchestrationInput.deps, { executionPath: 'production-capable' });
+  assert.equal(body.simulation.status, 'PROCESSED');
+  assert.equal(body.simulation.executionEnabled, true);
+  assert.equal(body.simulation.actions.length, 1);
+  assert.equal(body.execution.status, 'TRADING_ACCESS_DISABLED');
+  assert.equal(body.execution.executionEnabled, false);
+});
+
 test('duplicate or rejected ingress never enters orchestration', async () => {
   for (const ingestResult of [
     { ok: true, duplicate: true, eventId: 'existing' },
@@ -114,6 +163,75 @@ test('duplicate or rejected ingress never enters orchestration', async () => {
     assert.equal(called, false);
     assert.equal(response.status, ingestResult.ok ? 200 : 401);
   }
+});
+
+test('recovery marker cannot orchestrate duplicate unless ingest rehydrated persisted event', async () => {
+  let called = false;
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{}', headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+      'X-Mkety-Source-Recovery': '1',
+    },
+  });
+  const response = await handleV1EventsRequest(request, { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({}),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({
+      ok: true,
+      duplicate: true,
+      recoveryReady: false,
+      eventId: 'existing',
+      interpretation: { status: 'READY', intent: { side: 'BUY' } },
+    }),
+    simulationDepsFactory: async () => { called = true; return {}; },
+    orchestrateFn: async () => { called = true; return {}; },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(called, false);
+  assert.equal(body.duplicate, true);
+  assert.equal(body.recoveryReady, false);
+});
+
+test('recovery marker orchestrates duplicate only when persisted recovery context is ready', async () => {
+  let orchestrationInput;
+  const persistedEvent = {
+    workspace_hint: 'ws-1', external_event_id: 'existing', source: { instance_id: 'src-1' },
+    thread: { thread_id: 'persisted-thread' },
+  };
+  const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
+  const request = new Request('https://trade.test/api/v1/events', {
+    method: 'POST', body: '{}', headers: {
+      'X-Mkety-Source-Id': 'src-1',
+      'X-Mkety-Timestamp': '1',
+      'X-Mkety-Signature': 'sig',
+      'X-Mkety-Source-Recovery': '1',
+    },
+  });
+  const response = await handleV1EventsRequest(request, { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({
+      ok: true,
+      duplicate: true,
+      recoveryReady: true,
+      eventId: 'existing',
+      event: persistedEvent,
+      interpretation,
+    }),
+    simulationDepsFactory: async () => ({ safe: true }),
+    orchestrateFn: async (input) => {
+      orchestrationInput = input;
+      return { status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [] };
+    },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(orchestrationInput.event, persistedEvent);
+  assert.equal(orchestrationInput.event.thread.thread_id, 'persisted-thread');
+  assert.equal(body.duplicate, true);
 });
 
 test('simulation planning failure is fail-closed diagnostics and cannot turn ingress into live execution', async () => {

@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 
 function request(workspaceId, token = 'token') {
-  return new Request('https://trade.test/api/v1/admin/workspace', {
+  return new Request('https://trade.mkety.com/api/v1/admin/workspace', {
     headers: {
       Authorization: `Bearer ${token}`,
       'X-Mkety-Workspace-Id': workspaceId,
@@ -220,7 +220,7 @@ test('membership provisioning touches membership state only and no source/destin
       return member(workspaceId, subject, role, true);
     },
   };
-  const req = new Request('https://trade.test/api/v1/admin/members', {
+  const req = new Request('https://trade.mkety.com/api/v1/admin/members', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject: 'trading-only-sub', role: 'viewer' }),

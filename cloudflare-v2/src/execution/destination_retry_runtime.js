@@ -6,7 +6,7 @@ function nonEmpty(value) {
   return String(value ?? '').trim().length > 0;
 }
 
-function isValidClaimedDelivery(delivery) {
+function isValidRetryDelivery(delivery) {
   const payload = delivery?.request_payload;
   const action = payload?.action;
   return Boolean(
@@ -67,6 +67,14 @@ export function createDestinationRetryRuntime({
     let failed = 0;
 
     for (const delivery of due) {
+      // Never consume a durable retry lease for structurally invalid work. A row
+      // claimed as PENDING is no longer visible to the RETRYABLE scanner, so
+      // validation must happen before the atomic claim as well as after it.
+      if (!isValidRetryDelivery(delivery)) {
+        failed += 1;
+        continue;
+      }
+
       let claim;
       try {
         claim = await claimFn({ supabase, delivery, now, leaseUntil });
@@ -78,7 +86,7 @@ export function createDestinationRetryRuntime({
       claimed += 1;
 
       const claimedRow = claim.row || delivery;
-      if (!isValidClaimedDelivery(claimedRow)) {
+      if (!isValidRetryDelivery(claimedRow)) {
         failed += 1;
         continue;
       }

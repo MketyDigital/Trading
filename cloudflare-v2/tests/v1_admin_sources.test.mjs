@@ -17,7 +17,7 @@ function request(path, { method = 'GET', body, workspaceId = 'ws-1' } = {}) {
     Authorization: 'Bearer token',
   });
   if (body !== undefined) headers.set('Content-Type', 'application/json');
-  return new Request(`https://trade.test${path}`, {
+  return new Request(`https://trade.mkety.com${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -37,6 +37,7 @@ function source(overrides = {}) {
     isDefault: true,
     priority: 10,
     externalIdentity: 'acct-a',
+    credentialConfigured: true,
     config: { chat_ids: ['-1001'], session_string: 'must-strip', api_hash: 'must-strip' },
     health: { status: 'HEALTHY', lastErrorCode: null, restartCount: 1 },
     secret: 'must-strip',
@@ -144,7 +145,11 @@ test('enable and disable mutate only exact authenticated workspace/source', asyn
 
   const enabled = await authorizedRequest(request('/api/v1/admin/sources/src-a/enable', { method: 'POST' }), store);
   assert.equal(enabled.status, 200);
-  assert.deepEqual(store.calls[1], ['setSourceEnabled', 'ws-1', 'src-a', true]);
+  assert.deepEqual(store.calls, [
+    ['setSourceEnabled', 'ws-1', 'src-a', false],
+    ['getSource', 'ws-1', 'src-a'],
+    ['setSourceEnabled', 'ws-1', 'src-a', true],
+  ]);
 });
 
 test('source admin auth failures from existing V1 gate stop before any source store access', async () => {

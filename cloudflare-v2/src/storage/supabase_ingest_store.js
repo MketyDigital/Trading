@@ -1,5 +1,41 @@
 import { decryptSecret } from '../security/secret_box.js';
 
+const TERMINAL_INTERPRETATION_STATUSES = new Set([
+  'READY',
+  'MANAGEMENT',
+  'NO_ACTION',
+  'NEEDS_REVIEW',
+]);
+
+function persistedInterpretation(row = {}) {
+  const status = String(row.processing_status ?? '').trim();
+  if (!TERMINAL_INTERPRETATION_STATUSES.has(status)) return null;
+  const interpretation = { status };
+  if (row.canonical_intent && typeof row.canonical_intent === 'object') {
+    interpretation.intent = row.canonical_intent;
+  }
+  if (row.error_code) interpretation.reason = String(row.error_code);
+  return interpretation;
+}
+
+function persistedEvent(row = {}) {
+  if (!row?.external_event_id) return null;
+  return {
+    version: String(row.event_version || '1.0'),
+    source_type: row.source_type == null ? null : String(row.source_type),
+    source_external_id: row.source_external_id == null ? null : String(row.source_external_id),
+    external_event_id: String(row.external_event_id),
+    occurred_at: row.occurred_at || row.created_at || null,
+    received_at: row.created_at || row.occurred_at || null,
+    text: String(row.raw_text ?? ''),
+    structured_payload: row.structured_payload && typeof row.structured_payload === 'object'
+      ? row.structured_payload
+      : {},
+    thread: row.thread && typeof row.thread === 'object' ? row.thread : {},
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+  };
+}
+
 export function createSupabaseIngestStores(supabase, {
   masterKey,
   decryptFn = decryptSecret,
@@ -49,7 +85,7 @@ export function createSupabaseIngestStores(supabase, {
       if (error?.code === '23505') {
         let lookup = supabase
           .from('trading_events')
-          .select('id')
+          .select('id,event_version,source_type,source_external_id,external_event_id,occurred_at,created_at,raw_text,structured_payload,thread,metadata,processing_status,canonical_intent,error_code')
           .eq('workspace_id', row.workspace_id);
 
         if (row.canonical_event_id) {
@@ -62,7 +98,15 @@ export function createSupabaseIngestStores(supabase, {
 
         const { data: existing, error: lookupError } = await lookup.maybeSingle();
         if (!lookupError && existing?.id) {
-          return { ok: true, duplicate: true, eventId: existing.id };
+          const event = persistedEvent(existing);
+          const interpretation = persistedInterpretation(existing);
+          return {
+            ok: true,
+            duplicate: true,
+            eventId: existing.id,
+            ...(event ? { event } : {}),
+            ...(interpretation ? { interpretation } : {}),
+          };
         }
       }
 

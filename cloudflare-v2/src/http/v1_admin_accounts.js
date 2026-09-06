@@ -197,6 +197,22 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
+    async setActive(workspaceId, accountId, enabled) {
+      const active = Boolean(enabled);
+      const update = active
+        ? { is_active: true }
+        : { is_active: false, execution_enabled: false };
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update(update)
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_ACTIVE_UPDATE_FAILED');
+      return data || null;
+    },
+
     async setExecutionEnabled(workspaceId, accountId, enabled) {
       const { data, error } = await supabase
         .from('trade_accounts')
@@ -372,7 +388,9 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
 
   try {
     let account;
-    if (action === 'execution') {
+    if (action === 'active') {
+      account = await accountStore.setActive(workspaceId, accountId, body.enabled);
+    } else if (action === 'execution') {
       account = await accountStore.setExecutionEnabled(workspaceId, accountId, body.enabled);
     } else if (action === 'kill-switch') {
       account = await accountStore.setKillSwitch(workspaceId, accountId, body.enabled);

@@ -6,19 +6,23 @@ import {
   createContextualDeliveryStore,
 } from '../src/execution/destination_retry_composition.js';
 
-function queryRecorder(rows = []) {
+function queryRecorder(rowsByStatus = {}) {
   const calls = [];
   const supabase = {
     from(table) {
       assert.equal(table, 'destination_deliveries');
+      let status = null;
       const chain = {
         select(columns) { calls.push(['select', columns]); return chain; },
-        eq(column, value) { calls.push(['eq', column, value]); return chain; },
+        eq(column, value) { calls.push(['eq', column, value]); if (column === 'status') status = value; return chain; },
         lte(column, value) { calls.push(['lte', column, value]); return chain; },
         lt(column, value) { calls.push(['lt', column, value]); return chain; },
         or(value) { calls.push(['or', value]); return chain; },
         order(column, options) { calls.push(['order', column, options]); return chain; },
-        limit(value) { calls.push(['limit', value]); return Promise.resolve({ data: rows, error: null }); },
+        limit(value) {
+          calls.push(['limit', value]);
+          return Promise.resolve({ data: rowsByStatus[status] || [], error: null });
+        },
       };
       return chain;
     },
@@ -26,16 +30,18 @@ function queryRecorder(rows = []) {
   return { supabase, calls };
 }
 
-test('due retry scan is bounded to RETRYABLE rows whose time is due, lease is free, and attempts remain', async () => {
-  const rows = [{ id: 'd1', status: 'RETRYABLE' }];
-  const { supabase, calls } = queryRecorder(rows);
+test('due retry scan includes due RETRYABLE work and expired leased PENDING crash recovery, then bounds the merged batch', async () => {
+  const retryable = [{ id: 'r1', status: 'RETRYABLE', next_attempt_at: '2026-09-03T09:59:00.000Z' }];
+  const expiredPending = [{ id: 'p1', status: 'PENDING', lease_expires_at: '2026-09-03T09:58:00.000Z' }];
+  const { supabase, calls } = queryRecorder({ RETRYABLE: retryable, PENDING: expiredPending });
   const result = await listDueDestinationRetries({
     supabase,
     now: '2026-09-03T10:00:00.000Z',
     limit: 20,
     maxAttempts: 5,
   });
-  assert.deepEqual(result, rows);
+
+  assert.deepEqual(result.map((item) => item.id), ['p1', 'r1']);
   assert.deepEqual(calls, [
     ['select', '*'],
     ['eq', 'status', 'RETRYABLE'],
@@ -44,7 +50,32 @@ test('due retry scan is bounded to RETRYABLE rows whose time is due, lease is fr
     ['or', 'lease_expires_at.is.null,lease_expires_at.lt.2026-09-03T10:00:00.000Z'],
     ['order', 'next_attempt_at', { ascending: true }],
     ['limit', 20],
+    ['select', '*'],
+    ['eq', 'status', 'PENDING'],
+    ['lt', 'lease_expires_at', '2026-09-03T10:00:00.000Z'],
+    ['order', 'lease_expires_at', { ascending: true }],
+    ['limit', 20],
   ]);
+});
+
+test('merged retry scan is globally bounded and orders expired leases with normal due work', async () => {
+  const { supabase } = queryRecorder({
+    RETRYABLE: [
+      { id: 'r-late', status: 'RETRYABLE', next_attempt_at: '2026-09-03T09:59:30.000Z' },
+      { id: 'r-early', status: 'RETRYABLE', next_attempt_at: '2026-09-03T09:57:00.000Z' },
+    ],
+    PENDING: [
+      { id: 'p-mid', status: 'PENDING', lease_expires_at: '2026-09-03T09:58:00.000Z' },
+    ],
+  });
+
+  const result = await listDueDestinationRetries({
+    supabase,
+    now: '2026-09-03T10:00:00.000Z',
+    limit: 2,
+    maxAttempts: 5,
+  });
+  assert.deepEqual(result.map((item) => item.id), ['r-early', 'p-mid']);
 });
 
 test('contextual store persists trusted account/group context around broker action reservation', async () => {

@@ -71,7 +71,7 @@ function createSupabase(accounts = []) {
 }
 
 async function request(path, { method = 'GET', role = 'admin', body, supabase } = {}) {
-  return handleV1AdminRequest(new Request(`https://trade.test${path}`, {
+  return handleV1AdminRequest(new Request(`https://trade.mkety.com${path}`, {
     method,
     headers: {
       'X-Mkety-Workspace-Id': 'ws-1',
@@ -123,6 +123,48 @@ test('account list is exact-workspace and strips credential fields while exposin
   assert.equal(body.accounts[0].killSwitch, true);
   assert.equal(body.accounts[0].api_token_encrypted, undefined);
   assert.equal(body.accounts[0].accountId, '1001');
+});
+
+test('admin can activate an onboarded account without enabling execution or changing the global broker fuse', async () => {
+  const supabase = createSupabase([{
+    id: 'acc-1', workspace_id: 'ws-1', account_label: 'Demo MT5', platform: 'mt5', account_id: '1001',
+    credential_ciphertext: 'cipher-secret', is_active: false, execution_enabled: false,
+    safety_policy: { enabled: true, killSwitch: true, maxLotsPerTrade: 0.1 },
+  }]);
+
+  const response = await request('/api/v1/admin/accounts/acc-1/active', {
+    method: 'POST', body: { enabled: true, executionEnabled: true, BROKER_EXECUTION_ENABLED: true }, supabase,
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.account.active, true);
+  assert.equal(body.account.executionEnabled, false);
+  assert.equal(body.account.killSwitch, true);
+  assert.equal(body.account.credentialConfigured, true);
+  assert.equal(body.account.credential_ciphertext, undefined);
+  assert.equal(body.masterBrokerExecutionEnabled, false);
+  assert.deepEqual(supabase.updates, [{ id: 'acc-1', workspaceId: 'ws-1', value: { is_active: true } }]);
+});
+
+test('account activation control requires a boolean and remains exact-workspace scoped', async () => {
+  const supabase = createSupabase([{
+    id: 'acc-1', workspace_id: 'ws-1', account_label: 'Demo MT5', platform: 'mt5', account_id: '1001',
+    credential_ciphertext: 'cipher-secret', is_active: false, execution_enabled: false,
+    safety_policy: { enabled: true, killSwitch: true },
+  }]);
+
+  const invalid = await request('/api/v1/admin/accounts/acc-1/active', {
+    method: 'POST', body: { enabled: 'true' }, supabase,
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).reason, 'ENABLED_BOOLEAN_REQUIRED');
+  assert.equal(supabase.updates.length, 0);
+
+  const missing = await request('/api/v1/admin/accounts/acc-other/active', {
+    method: 'POST', body: { enabled: true }, supabase,
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(supabase.updates.length, 0);
 });
 
 test('admin can toggle only account execution_enabled inside authenticated workspace without changing global broker fuse', async () => {

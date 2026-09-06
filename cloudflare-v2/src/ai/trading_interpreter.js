@@ -33,7 +33,7 @@ function validationReference(intent) {
 
 function validateGeometry(intent) {
   const reference = validationReference(intent);
-  if (!Number.isFinite(Number(reference))) return { ok: true };
+  if (reference == null || !Number.isFinite(Number(reference))) return { ok: true };
   const ref = Number(reference);
   if (intent.stopLoss != null) {
     if (intent.side === 'BUY' && !(intent.stopLoss < ref)) return { ok: false, reason: 'invalid BUY stop geometry' };

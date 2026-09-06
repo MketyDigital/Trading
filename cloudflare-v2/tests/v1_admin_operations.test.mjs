@@ -43,7 +43,7 @@ function authSupabase() {
 }
 
 async function adminRequest(path, { method = 'GET', role = 'admin', operationsStore } = {}) {
-  return handleV1AdminRequest(new Request(`https://trade.test${path}`, {
+  return handleV1AdminRequest(new Request(`https://trade.mkety.com${path}`, {
     method,
     headers: {
       'X-Mkety-Workspace-Id': 'ws-1',

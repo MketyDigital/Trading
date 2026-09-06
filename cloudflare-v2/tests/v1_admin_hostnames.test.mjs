@@ -144,10 +144,36 @@ test('failed local create performs best-effort cleanup of the newly provisioned 
   assert.deepEqual(deleted, ['cf-host-1']);
 });
 
-test('missing Cloudflare configuration fails closed before store or provider mutation', async () => {
+test('local exact-workspace hostname listing remains available without Cloudflare provider configuration', async () => {
+  let providerCalls = 0;
+  const response = await handleAuthorizedV1AdminHostnamesRequest(
+    new Request('https://trade.mkety.com/api/v1/admin/hostnames', { method: 'GET' }),
+    AUTH,
+    {
+      hostnameStore: {
+        async list(workspaceId) {
+          assert.equal(workspaceId, 'ws-1');
+          return [{ id: 'h-1', workspace_id: 'ws-1', hostname: 'customer.example.com', status: 'pending', verified_at: null }];
+        },
+      },
+      env: {},
+      providerClientFactory: () => { providerCalls += 1; return {}; },
+    },
+  );
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.hostnames.length, 1);
+  assert.equal(body.hostnames[0].hostname, 'customer.example.com');
+  assert.equal(body.hostnames[0].cname, undefined);
+  assert.equal(providerCalls, 0);
+});
+
+test('provider-dependent create still fails closed before mutation when Cloudflare configuration is missing', async () => {
   let calls = 0;
-  const response = await handleAuthorizedV1AdminHostnamesRequest(new Request('https://trade.mkety.com/api/v1/admin/hostnames', { method: 'GET' }), AUTH, {
-    hostnameStore: { async list() { calls += 1; return []; } },
+  const response = await handleAuthorizedV1AdminHostnamesRequest(new Request('https://trade.mkety.com/api/v1/admin/hostnames', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hostname: 'trading.customer.com' }),
+  }), AUTH, {
+    hostnameStore: { async create() { calls += 1; } },
     env: {},
     providerClientFactory: () => { calls += 1; return {}; },
   });

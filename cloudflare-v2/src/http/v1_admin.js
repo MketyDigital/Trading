@@ -57,41 +57,34 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   if (!workspaceId) return { ok: false, status: 400, reason: 'MISSING_WORKSPACE_SELECTOR' };
   if (!supabase?.from) return { ok: false, status: 503, reason: 'ADMIN_DATABASE_UNAVAILABLE' };
 
-  if (enabled(env.TRADING_CUSTOM_HOSTNAMES_ENABLED)) {
-    let hostnameStore;
+  const customHostnamesEnabled = enabled(env.TRADING_CUSTOM_HOSTNAMES_ENABLED);
+  let hostnameStore = null;
+  if (customHostnamesEnabled) {
     try {
       hostnameStore = hostnameStoreFactory(supabase);
     } catch {
       return { ok: false, status: 503, reason: 'TRADING_HOSTNAME_STORE_UNAVAILABLE' };
     }
-
-    const hostname = await resolveHostnameFn(request, {
-      hostnameStore,
-      canonicalHosts: canonicalTradingHostsFromEnv(env),
-    });
-
-    if (!hostname?.ok) {
-      const serviceFailure = ['TRADING_HOSTNAME_STORE_UNAVAILABLE', 'TRADING_HOSTNAME_LOOKUP_FAILED'];
-      return {
-        ok: false,
-        status: serviceFailure.includes(hostname?.reason) ? 503 : hostname?.reason === 'INVALID_TRADING_HOSTNAME' ? 400 : 404,
-        reason: hostname?.reason || 'TRADING_HOSTNAME_NOT_ACTIVE',
-      };
-    }
-
-    if (hostname.kind === 'custom' && String(hostname.workspaceId) !== String(workspaceId)) {
-      return { ok: false, status: 403, reason: 'TRADING_HOSTNAME_WORKSPACE_MISMATCH' };
-    }
   }
 
-  const { data: workspace, error } = await supabase
-    .from('trading_workspace_access')
-    .select('*')
-    .eq('id', String(workspaceId))
-    .maybeSingle();
+  const hostname = await resolveHostnameFn(request, {
+    hostnameStore,
+    canonicalHosts: canonicalTradingHostsFromEnv(env),
+    customHostnamesEnabled,
+  });
 
-  if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
-  if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
+  if (!hostname?.ok) {
+    const serviceFailure = ['TRADING_HOSTNAME_STORE_UNAVAILABLE', 'TRADING_HOSTNAME_LOOKUP_FAILED'];
+    return {
+      ok: false,
+      status: serviceFailure.includes(hostname?.reason) ? 503 : hostname?.reason === 'INVALID_TRADING_HOSTNAME' ? 400 : 404,
+      reason: hostname?.reason || 'TRADING_HOSTNAME_NOT_ACTIVE',
+    };
+  }
+
+  if (hostname.kind === 'custom' && String(hostname.workspaceId) !== String(workspaceId)) {
+    return { ok: false, status: 403, reason: 'TRADING_HOSTNAME_WORKSPACE_MISMATCH' };
+  }
 
   const issuer = env.MKETY_ACCESS_ISSUER;
   const audience = env.MKETY_ACCESS_AUDIENCE;
@@ -105,7 +98,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     issuer,
     audience,
     jwksUrl,
-    requestedWorkspaceId: workspace.id,
+    requestedWorkspaceId: String(workspaceId),
   });
 
   if (!auth?.ok) {
@@ -116,6 +109,19 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     ];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
+
+  if (String(auth.workspaceId) !== String(workspaceId)) {
+    return { ok: false, status: 403, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
+  }
+
+  const { data: workspace, error } = await supabase
+    .from('trading_workspace_access')
+    .select('*')
+    .eq('id', String(workspaceId))
+    .maybeSingle();
+
+  if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
+  if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
 
   let membershipStore;
   try {

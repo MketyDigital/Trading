@@ -51,6 +51,7 @@ export function createTradingHostnameStore(supabase) {
 export async function resolveTradingRequestHostname(request, {
   hostnameStore,
   canonicalHosts = DEFAULT_CANONICAL_HOSTS,
+  customHostnamesEnabled = true,
 } = {}) {
   let hostname;
   try {
@@ -63,6 +64,10 @@ export async function resolveTradingRequestHostname(request, {
 
   if (canonicalHostSet(canonicalHosts).has(hostname)) {
     return { ok: true, kind: 'canonical', hostname, workspaceId: null };
+  }
+
+  if (!customHostnamesEnabled) {
+    return { ok: false, reason: 'TRADING_CUSTOM_HOSTNAMES_DISABLED' };
   }
 
   if (!hostnameStore?.getActiveHostname) {

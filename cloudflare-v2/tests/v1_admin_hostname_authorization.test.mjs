@@ -101,3 +101,37 @@ test('canonical trade.mkety.com stays shared and relies on signed assertion plus
   assert.equal(result.ok, true);
   assert.equal(hostnameLookupCalled, false);
 });
+
+test('custom hostname routing disabled rejects non-canonical hosts before workspace or bearer authorization', async () => {
+  let authenticateCalled = false;
+  let hostnameStoreCreated = false;
+  const request = new Request('https://trade.customer.example/api/v1/admin/workspace', {
+    headers: { 'X-Mkety-Workspace-Id': 'ws-1', Authorization: 'Bearer token' },
+  });
+
+  const result = await authorizeV1AdminRequest(request, {
+    ...env,
+    TRADING_CUSTOM_HOSTNAMES_ENABLED: 'false',
+  }, {
+    supabase: workspaceSupabase({ id: 'ws-1', trading_access_enabled: true }),
+    hostnameStoreFactory: () => {
+      hostnameStoreCreated = true;
+      return {
+        async getActiveHostname() {
+          return { hostname: 'trade.customer.example', workspaceId: 'ws-1', status: 'active' };
+        },
+      };
+    },
+    authenticateFn: async () => {
+      authenticateCalled = true;
+      return { ok: true, subject: 'owner-1', workspaceId: 'ws-1', access: 'owner' };
+    },
+    membershipStoreFactory: () => membershipStore(),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(result.reason, 'TRADING_CUSTOM_HOSTNAMES_DISABLED');
+  assert.equal(hostnameStoreCreated, false);
+  assert.equal(authenticateCalled, false);
+});

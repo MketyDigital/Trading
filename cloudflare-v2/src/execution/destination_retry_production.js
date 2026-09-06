@@ -79,17 +79,54 @@ async function terminalFail(baseStore, delivery, code) {
   return { status: 'FAILED' };
 }
 
-async function retrySetupFailure(baseStore, delivery, error, { now, retryDelayMs }) {
+async function markRetryableFailure(baseStore, delivery, failure, { now, retryDelayMs }) {
   if (typeof baseStore.markRetryable !== 'function') {
-    await baseStore.fail(delivery.idempotency_key, { code: 'RETRY_SETUP_FAILED' });
+    await baseStore.fail(delivery.idempotency_key, { code: failure.code });
     return;
   }
-  await baseStore.markRetryable(delivery.idempotency_key, {
-    code: 'RETRY_SETUP_FAILED',
-    message: error instanceof Error ? error.message : String(error),
-  }, {
+  await baseStore.markRetryable(delivery.idempotency_key, failure, {
     nextAttemptAt: new Date(new Date(now).getTime() + retryDelayMs).toISOString(),
   });
+}
+
+async function retrySetupFailure(baseStore, delivery, error, { now, retryDelayMs }) {
+  return markRetryableFailure(baseStore, delivery, {
+    code: 'RETRY_SETUP_FAILED',
+    message: error instanceof Error ? error.message : String(error),
+  }, { now, retryDelayMs });
+}
+
+async function reconcileCoordinatorFailure(baseStore, delivery, accountResult, { now, retryDelayMs }) {
+  let durable = null;
+  if (typeof baseStore.find === 'function') {
+    try {
+      durable = await baseStore.find(delivery.idempotency_key);
+    } catch {
+      durable = null;
+    }
+  }
+
+  const durableStatus = text(durable?.status).toUpperCase();
+  if (durableStatus === 'SUCCEEDED') {
+    // Broker truth is already terminal; a separate binding-repair path owns any
+    // post-broker Trade State failure and this retry must never resend.
+    return { status: 'SUCCEEDED' };
+  }
+  if (['RETRYABLE', 'UNCERTAIN', 'FAILED'].includes(durableStatus)) {
+    // The broker adapter already classified and persisted the outcome. Preserve
+    // that durable truth rather than overwriting it at the wrapper layer.
+    return { status: 'FAILED' };
+  }
+
+  // No adapter-owned terminal/retry classification exists. This means the
+  // coordinator failed before durable broker outcome persistence (authority
+  // reload, credential/context creation, runtime initialization, etc.). Return
+  // the claimed row to the retry schedule instead of leaving it PENDING.
+  await markRetryableFailure(baseStore, delivery, {
+    code: 'RETRY_EXECUTION_FAILED_BEFORE_DURABLE_OUTCOME',
+    message: text(accountResult?.reason) || 'retry execution failed before durable broker outcome',
+  }, { now, retryDelayMs });
+  return { status: 'FAILED' };
 }
 
 export function createProductionDestinationRetryRuntime({
@@ -187,6 +224,13 @@ export function createProductionDestinationRetryRuntime({
         }
 
         if (accountResult.status === 'BLOCKED') {
+          if (accountResult.blockReason === 'BROKER_RISK_CONTEXT_UNAVAILABLE') {
+            await markRetryableFailure(baseStore, delivery, {
+              code: 'RETRY_RISK_CONTEXT_UNAVAILABLE',
+              message: 'authoritative broker risk context is temporarily unavailable',
+            }, { now, retryDelayMs: safeRetryDelayMs });
+            return { status: 'FAILED' };
+          }
           return terminalFail(baseStore, delivery, 'RETRY_EXECUTION_AUTHORITY_REVOKED');
         }
 
@@ -196,7 +240,10 @@ export function createProductionDestinationRetryRuntime({
         }
 
         if (accountResult.status === 'SUCCEEDED') return { status: 'SUCCEEDED' };
-        return { status: 'FAILED' };
+        return reconcileCoordinatorFailure(baseStore, delivery, accountResult, {
+          now,
+          retryDelayMs: safeRetryDelayMs,
+        });
       },
     });
 
