@@ -1,6 +1,6 @@
 # Gate 2 Paid Staging Deployment Trigger
 
-This documentation-only file exists solely to trigger the one-shot Paid Cloudflare staging deployment gate on the reviewed PR #2 branch.
+This documentation-only file exists solely to trigger the one-shot Paid Cloudflare staging deployment gate on the reviewed staging feature branch.
 
 Safety state for this trigger:
 - TradingView direct ingress disabled.
@@ -16,3 +16,4 @@ Acceptance retry: explicit MTProto allowlist + concrete Container instance non-s
 Acceptance retry 2: wait for the newly deployed internal transport secret to be active before Queue acceptance.
 Acceptance retry 3: include authorized Telegram native identity on the direct simulation probe.
 Deployment trigger: 2026-09-05 MTProto internal source callback configuration.
+Read-only staging inspection trigger: 2026-09-06 post-completion GREEN verification.
