@@ -48,6 +48,10 @@ function configuredCnameTarget(env = {}) {
   return normalizeHostname(env.TRADING_CUSTOM_HOSTNAME_CNAME_TARGET);
 }
 
+function providerConfigured(env = {}, cnameTarget = configuredCnameTarget(env)) {
+  return Boolean(cnameTarget && env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID);
+}
+
 function validateRequestedHostname(value, env = {}) {
   const hostname = normalizeHostname(value);
   if (!hostname) return null;
@@ -140,9 +144,6 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
   }
 
   const cnameTarget = configuredCnameTarget(env);
-  if (!cnameTarget || !env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) {
-    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
-  }
 
   if (url.pathname === prefix) {
     if (request.method === 'GET') {
@@ -160,6 +161,9 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
     if (request.method === 'POST') {
       if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) {
         return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+      }
+      if (!providerConfigured(env, cnameTarget)) {
+        return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
       }
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
@@ -194,6 +198,9 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
   if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  }
+  if (!providerConfigured(env, cnameTarget)) {
+    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
   }
 
   let id;
