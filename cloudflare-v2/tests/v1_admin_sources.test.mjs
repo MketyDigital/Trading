@@ -145,7 +145,11 @@ test('enable and disable mutate only exact authenticated workspace/source', asyn
 
   const enabled = await authorizedRequest(request('/api/v1/admin/sources/src-a/enable', { method: 'POST' }), store);
   assert.equal(enabled.status, 200);
-  assert.deepEqual(store.calls[1], ['setSourceEnabled', 'ws-1', 'src-a', true]);
+  assert.deepEqual(store.calls, [
+    ['setSourceEnabled', 'ws-1', 'src-a', false],
+    ['getSource', 'ws-1', 'src-a'],
+    ['setSourceEnabled', 'ws-1', 'src-a', true],
+  ]);
 });
 
 test('source admin auth failures from existing V1 gate stop before any source store access', async () => {
