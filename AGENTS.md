@@ -11,7 +11,7 @@ The current repository objective is: **finish the Trading repo V1 completion bra
 - Production PR: #2 `feat: build enterprise trading event core foundation`
 - PR #2 base: `main`
 - PR #2 head branch: `design/enterprise-trading-event-core`
-- Latest checked PR #2 head: `717e23eaecddf9943abe4613579f022920d5db90`
+- Latest checked PR #2 head: `8badc1a9a6e13ee97874653ed6beaef01dd757a5`
 - PR #2 is open, ready for review, and not merged to `main`.
 - PR #6 `fix: synchronize Trading V1 frontend and safe simulation` is merged into the staging feature branch, not `main`.
 - PR #6 merge commit: `7adbe62cb6dd0f721f3dd20933c131cbe20dfd41`.
