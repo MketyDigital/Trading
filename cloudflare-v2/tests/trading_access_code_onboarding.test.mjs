@@ -8,8 +8,10 @@ import {
   verifyLocalTradingBearer,
 } from '../src/access/trading_access_codes.js';
 import { handleTradingAccessCodeRedeemRequest } from '../src/http/v1_access_codes.js';
+import { authorizeV1AdminRequest } from '../src/http/v1_admin.js';
 
 const fixedNow = new Date('2026-09-07T12:00:00.000Z');
+const workspaceId = '11111111-1111-4111-8111-111111111111';
 
 function validRecord(overrides = {}) {
   return {
@@ -17,7 +19,7 @@ function validRecord(overrides = {}) {
     code_hash: 'hash',
     product: 'trading',
     status: 'active',
-    workspace_id: '11111111-1111-4111-8111-111111111111',
+    workspace_id: workspaceId,
     workspace_display_name: 'Ace Trading Desk',
     owner_email: 'owner@example.com',
     owner_name: 'Owner Example',
@@ -37,6 +39,31 @@ function validRecord(overrides = {}) {
   };
 }
 
+function fakeWorkspaceSupabase() {
+  return {
+    from(table) {
+      assert.equal(table, 'trading_workspace_access');
+      return {
+        select() { return this; },
+        eq() { return this; },
+        async maybeSingle() {
+          return {
+            data: {
+              id: workspaceId,
+              display_name: 'Ace Trading Desk',
+              owner_email: 'owner@example.com',
+              trading_access_enabled: true,
+              created_at: '2026-09-07T12:00:00.000Z',
+              updated_at: '2026-09-07T12:00:00.000Z',
+            },
+            error: null,
+          };
+        },
+      };
+    },
+  };
+}
+
 test('normalizes Trading Enterprise access codes without changing their authority', () => {
   assert.equal(normalizeTradingAccessCode(' trd-mkty  -  8f7k '), 'TRD-MKTY-8F7K');
 });
@@ -44,7 +71,7 @@ test('normalizes Trading Enterprise access codes without changing their authorit
 test('valid access-code record produces an owner onboarding plan and safe entitlements', () => {
   const result = validateTradingAccessCodeRecord(validRecord(), fixedNow);
   assert.equal(result.ok, true);
-  assert.equal(result.workspace.id, '11111111-1111-4111-8111-111111111111');
+  assert.equal(result.workspace.id, workspaceId);
   assert.equal(result.membership.role, 'owner');
   assert.deepEqual(result.entitlements.brokerModes, ['demo']);
   assert.equal(result.entitlements.liveExecution, false);
@@ -61,22 +88,72 @@ test('invalid access-code records fail closed', () => {
 test('local Trading bearer verifies only for exact workspace and configured secret', async () => {
   const token = await createLocalTradingBearer({
     subject: 'access-code:owner@example.com',
-    workspaceId: '11111111-1111-4111-8111-111111111111',
+    workspaceId,
     access: 'owner',
   }, 'super-secret', 1799313600);
 
   const accepted = await verifyLocalTradingBearer(token, 'super-secret', {
-    requestedWorkspaceId: '11111111-1111-4111-8111-111111111111',
+    requestedWorkspaceId: workspaceId,
     nowSec: 1799313601,
   });
   assert.equal(accepted.ok, true);
   assert.equal(accepted.subject, 'access-code:owner@example.com');
-  assert.equal(accepted.workspaceId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(accepted.workspaceId, workspaceId);
   assert.equal(accepted.access, 'owner');
 
   const rejected = await verifyLocalTradingBearer(token, 'super-secret', {
     requestedWorkspaceId: '22222222-2222-4222-8222-222222222222',
     nowSec: 1799313601,
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'WORKSPACE_ASSERTION_MISMATCH');
+});
+
+test('local Trading bearer satisfies existing admin boundary for the same workspace only', async () => {
+  const token = await createLocalTradingBearer({
+    subject: 'access-code:owner@example.com',
+    workspaceId,
+    access: 'owner',
+  }, 'super-secret', 1799313600);
+  const request = new Request('https://trade.mkety.com/api/v1/admin/workspace', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-Mkety-Workspace-Id': workspaceId,
+    },
+  });
+
+  const authorized = await authorizeV1AdminRequest(request, {
+    TRADING_ACCESS_CODE_SESSION_ENABLED: 'true',
+    TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret',
+  }, {
+    supabase: fakeWorkspaceSupabase(),
+    resolveHostnameFn: async () => ({ ok: true, kind: 'canonical' }),
+    membershipStoreFactory: () => ({
+      getMembership: async () => ({
+        enabled: true,
+        workspaceId,
+        subject: 'access-code:owner@example.com',
+        role: 'owner',
+      }),
+    }),
+  });
+
+  assert.equal(authorized.ok, true);
+  assert.equal(authorized.auth.subject, 'access-code:owner@example.com');
+  assert.equal(authorized.membership.role, 'owner');
+
+  const wrongWorkspace = new Request('https://trade.mkety.com/api/v1/admin/workspace', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-Mkety-Workspace-Id': '22222222-2222-4222-8222-222222222222',
+    },
+  });
+  const rejected = await authorizeV1AdminRequest(wrongWorkspace, {
+    TRADING_ACCESS_CODE_SESSION_ENABLED: 'true',
+    TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret',
+  }, {
+    supabase: fakeWorkspaceSupabase(),
+    resolveHostnameFn: async () => ({ ok: true, kind: 'canonical' }),
   });
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reason, 'WORKSPACE_ASSERTION_MISMATCH');
@@ -125,7 +202,7 @@ test('redeem endpoint returns workspace, owner membership and local bearer witho
   const body = await response.json();
   assert.equal(body.ok, true);
   assert.equal(body.mode, 'access_code_onboarding');
-  assert.equal(body.workspace.id, '11111111-1111-4111-8111-111111111111');
+  assert.equal(body.workspace.id, workspaceId);
   assert.equal(body.membership.role, 'owner');
   assert.equal(body.entitlements.liveExecution, false);
   assert.equal(body.brokerExecutionEnabled, false);
