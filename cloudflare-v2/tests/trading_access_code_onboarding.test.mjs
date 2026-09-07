@@ -64,6 +64,10 @@ function fakeWorkspaceSupabase() {
   };
 }
 
+function fakeAccessCodeSupabase() {
+  return { from: () => { throw new Error('fake store should own access-code persistence'); } };
+}
+
 test('normalizes Trading Enterprise access codes without changing their authority', () => {
   assert.equal(normalizeTradingAccessCode(' trd-mkty  -  8f7k '), 'TRD-MKTY-8F7K');
 });
@@ -187,6 +191,7 @@ test('redeem endpoint returns workspace, owner membership and local bearer witho
   }, {
     now: fixedNow,
     nowSec: 1799313600,
+    supabaseFactory: async () => fakeAccessCodeSupabase(),
     storeFactory: () => ({
       redeem: async (payload) => {
         redeemed = true;
