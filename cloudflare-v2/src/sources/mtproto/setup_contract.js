@@ -27,6 +27,10 @@ function missingCredential(credentials = {}) {
   return null;
 }
 
+function envPlaceholder(name) {
+  return '${' + String(name || 'INTERNAL_SOURCE_TRANSPORT_TOKEN') + '}';
+}
+
 export function createExternalVmMtprotoHandoff({
   sourceConnectionId,
   sourceExternalId,
@@ -46,7 +50,7 @@ export function createExternalVmMtprotoHandoff({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Mkety-Internal-Source-Token': `\${${internalSourceTokenName}}`,
+        'X-Mkety-Internal-Source-Token': envPlaceholder(internalSourceTokenName),
       },
       payloadExample: {
         source_id: sourceId,
