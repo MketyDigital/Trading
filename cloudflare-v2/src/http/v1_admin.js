@@ -1,4 +1,5 @@
 import { authenticateMketyAccessBearer } from '../security/mkety_access_assertion.js';
+import { authenticateLocalTradingAccessBearer } from '../access/trading_access_codes.js';
 import { createTradingMembershipStore } from '../security/trading_membership_store.js';
 import {
   canonicalTradingHostsFromEnv,
@@ -46,9 +47,44 @@ function publicWorkspace(workspace = {}) {
   };
 }
 
+function shouldTryLocalTradingBearer(env = {}) {
+  return enabled(env.TRADING_ACCESS_CODE_SESSION_ENABLED) || enabled(env.TRADING_ACCESS_CODE_REDEMPTION_ENABLED);
+}
+
+function looksLikeLocalTradingBearer(request) {
+  const header = request?.headers?.get?.('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const [encodedHeader] = token.split('.');
+  if (!encodedHeader) return false;
+  try {
+    const normalized = encodedHeader.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+    const parsed = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))));
+    return parsed?.alg === 'HS256' && parsed?.kid === 'trading-access-code-v1';
+  } catch {
+    return false;
+  }
+}
+
+export async function authenticateTradingAccessBearer(request, env = {}, options = {}) {
+  if (shouldTryLocalTradingBearer(env) && env.TRADING_ACCESS_CODE_SESSION_SECRET) {
+    const local = await authenticateLocalTradingAccessBearer(request, env, options);
+    if (local.ok) return local;
+    if (looksLikeLocalTradingBearer(request)) return local;
+  }
+  return authenticateMketyAccessBearer(request, options);
+}
+
+async function authenticateV1AdminRequest(authenticateFn, request, env, options) {
+  if (authenticateFn === authenticateTradingAccessBearer) {
+    return authenticateFn(request, env, options);
+  }
+  return authenticateFn(request, options);
+}
+
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
-  authenticateFn = authenticateMketyAccessBearer,
+  authenticateFn = authenticateTradingAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
   hostnameStoreFactory = createTradingHostnameStore,
   resolveHostnameFn = resolveTradingRequestHostname,
@@ -89,12 +125,13 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   const issuer = env.MKETY_ACCESS_ISSUER;
   const audience = env.MKETY_ACCESS_AUDIENCE;
   const jwksUrl = env.MKETY_ACCESS_JWKS_URL;
-  const usesProductionVerifier = authenticateFn === authenticateMketyAccessBearer;
-  if (usesProductionVerifier && (!issuer || !audience || !jwksUrl)) {
+  const usesDefaultVerifier = authenticateFn === authenticateTradingAccessBearer;
+  const localSessionReady = shouldTryLocalTradingBearer(env) && Boolean(env.TRADING_ACCESS_CODE_SESSION_SECRET);
+  if (usesDefaultVerifier && !localSessionReady && (!issuer || !audience || !jwksUrl)) {
     return { ok: false, status: 503, reason: 'MKETY_ACCESS_GATE_NOT_CONFIGURED' };
   }
 
-  const auth = await authenticateFn(request, {
+  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, {
     issuer,
     audience,
     jwksUrl,
@@ -105,7 +142,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     const unauthorized = [
       'MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED',
       'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND',
-      'JWKS_FETCH_FAILED',
+      'JWKS_FETCH_FAILED', 'LOCAL_TRADING_BEARER_NOT_CONFIGURED',
     ];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
@@ -150,7 +187,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
 
 export async function handleV1AdminRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
-  authenticateFn = authenticateMketyAccessBearer,
+  authenticateFn = authenticateTradingAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
   hostnameStoreFactory = createTradingHostnameStore,
   resolveHostnameFn = resolveTradingRequestHostname,

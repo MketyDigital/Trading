@@ -3,6 +3,7 @@ import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
+import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -105,6 +106,7 @@ export function createTradingV1Entrypoint({
   adminHandler = handleV1AdminRequest,
   internalSourceHandler = handleInternalSourceEventRequest,
   tradingViewHandler = handleTradingViewWebhookRequest,
+  accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
   queueRuntime = null,
   recoveryRuntime = null,
   destinationRetryRuntime = null,
@@ -124,6 +126,12 @@ export function createTradingV1Entrypoint({
         return internalSourceHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/internal/')) {
+        return notFoundResponse();
+      }
+      if (url.pathname === '/api/v1/access/redeem') {
+        return accessCodeRedeemHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/access/')) {
         return notFoundResponse();
       }
 
