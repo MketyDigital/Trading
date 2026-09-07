@@ -75,6 +75,13 @@ export async function authenticateTradingAccessBearer(request, env = {}, options
   return authenticateMketyAccessBearer(request, options);
 }
 
+async function authenticateV1AdminRequest(authenticateFn, request, env, options) {
+  if (authenticateFn === authenticateTradingAccessBearer) {
+    return authenticateFn(request, env, options);
+  }
+  return authenticateFn(request, options);
+}
+
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
   authenticateFn = authenticateTradingAccessBearer,
@@ -124,7 +131,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     return { ok: false, status: 503, reason: 'MKETY_ACCESS_GATE_NOT_CONFIGURED' };
   }
 
-  const auth = await authenticateFn(request, env, {
+  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, {
     issuer,
     audience,
     jwksUrl,
