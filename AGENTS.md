@@ -27,6 +27,8 @@ This file is the highest-priority handoff/source-of-truth for agentic work in `M
 
 Branch: `feature/trading-launch-console-destinations-mtproto`
 
+Draft PR: #8 `feat: complete Trading launch console destinations and MTProto setup`
+
 Goal: complete the business-facing launch console so the owner can test the entire real system end to end without editing Supabase manually for normal setup.
 
 ## Approved launch-completion scope
@@ -109,14 +111,25 @@ Enterprise owner console is for customers to manage their workspace, sources, de
 - 2026-09-07: Owner clarified external VM MTProto must be handoff-only and not collect Telegram credentials.
 - 2026-09-07: Branch `feature/trading-launch-console-destinations-mtproto` created for launch-console completion.
 - 2026-09-07: `AGENTS.md` updated as launch-completion source-of-truth and handoff file.
+- 2026-09-07: Launch-completion design spec and implementation plan added.
+- 2026-09-07: Destination schema migration `0015_trading_destinations_templates_routes.sql` added.
+- 2026-09-07: V1 destination/template/source-route contract tests added and green.
+- 2026-09-07: Deterministic Telegram formatting module added with semantic guard for symbol, side, order, entry, SL, and TP preservation.
+- 2026-09-07: V1 destination admin API added and routed under `/api/v1/admin/destinations`, `/api/v1/admin/templates`, and `/api/v1/admin/routes`.
+- 2026-09-08: Mkety-admin access-code contract tests added.
+- 2026-09-08: MTProto setup contract tests added for external VM handoff-only and Mkety-hosted Container/DO credential boundaries.
+- 2026-09-08: Mkety-admin access-code API added under `/api/v1/mkety-admin/access-codes`, guarded by `MKETY_TRADING_ADMIN_SECRET`/`TRADING_ADMIN_SECRET`.
+- 2026-09-08: MTProto setup contract module added under `src/sources/mtproto/setup_contract.js`.
+- 2026-09-08: Worker entrypoint routed Mkety-admin access-code API outside enterprise owner routes, but still secret-guarded.
 
 ## Next work
 
-1. Add launch-completion design spec and implementation plan.
-2. Add failing tests for destination/template/access-code admin contracts.
-3. Implement DB migration and V1 handlers.
-4. Expand dashboard launch console.
-5. Run CI, open PR, deploy with `BROKER_EXECUTION_ENABLED=false`, then hand over for manual real-system testing.
+1. Run CI for the latest PR #8 head and fix any failures.
+2. Add enterprise dashboard UI tabs for Destinations, Templates, Routes, Access/Launch, MTProto setup, AI formatting, and Risk inventory.
+3. Wire source-to-destination delivery simulation/adapter tests.
+4. Apply migration `0015_trading_destinations_templates_routes.sql` to Supabase after CI is green.
+5. Merge PR #8 only after green checks and deploy with `BROKER_EXECUTION_ENABLED=false`.
+6. Hand over end-to-end manual testing instructions.
 
 ## Safety authorization boundary
 
