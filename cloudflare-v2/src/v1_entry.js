@@ -4,6 +4,7 @@ import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
+import { handleMketyAdminAccessCodesRequest } from './http/v1_mkety_admin_access_codes.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -107,6 +108,7 @@ export function createTradingV1Entrypoint({
   internalSourceHandler = handleInternalSourceEventRequest,
   tradingViewHandler = handleTradingViewWebhookRequest,
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
+  mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
   queueRuntime = null,
   recoveryRuntime = null,
   destinationRetryRuntime = null,
@@ -132,6 +134,12 @@ export function createTradingV1Entrypoint({
         return accessCodeRedeemHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/access/')) {
+        return notFoundResponse();
+      }
+      if (url.pathname === '/api/v1/mkety-admin/access-codes') {
+        return mketyAdminAccessCodesHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/mkety-admin/')) {
         return notFoundResponse();
       }
 
