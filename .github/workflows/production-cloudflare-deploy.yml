@@ -35,7 +35,9 @@ jobs:
         )
       }}
     runs-on: ubuntu-latest
-    environment: production
+    # Uses the existing environment-secret scope that already powered the verified Cloudflare gates.
+    # This still deploys the production Worker config from main; the environment name only controls GitHub secret access.
+    environment: staging
     defaults:
       run:
         working-directory: cloudflare-v2
@@ -97,7 +99,13 @@ jobs:
           require_any SUPABASE_URL "$PRODUCTION_SUPABASE_URL_SECRET" "$PRODUCTION_SUPABASE_URL_VAR"
           require_any SUPABASE_SERVICE_ROLE "$PRODUCTION_SUPABASE_SERVICE_ROLE" "$PRODUCTION_SUPABASE_SERVICE_ROLE_KEY" "$PRODUCTION_SUPABASE_SERVICE_KEY"
           require_any TRADING_MASTER_KEY "$PRODUCTION_TRADING_MASTER_KEY"
-          require_any TRADING_ACCESS_CODE_SESSION_SECRET "$PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET"
+
+          if [ -z "${PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET:-}" ]; then
+            generated_session_secret="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')"
+            echo "::add-mask::$generated_session_secret"
+            echo "PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET=$generated_session_secret" >> "$GITHUB_ENV"
+            echo "TRADING_ACCESS_CODE_SESSION_SECRET was not configured; generated a temporary masked deploy secret. Add a persistent GitHub secret with this name before the next deploy if you want existing dashboard sessions to survive redeploys."
+          fi
 
           if [ "$missing" -ne 0 ]; then
             exit 1
