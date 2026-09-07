@@ -1,4 +1,5 @@
 import legacyWorker from './index.js';
+import { renderTradingLaunchConsole } from './dashboard_launch_console.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
@@ -17,6 +18,13 @@ export { TradeStateNode } from './state/trade_state_node.js';
 export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js';
 
 const MTPROTO_RECOVERY_CRON = '* * * * *';
+
+function htmlResponse(html) {
+  return new Response(html, {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
 
 function retiredLegacyAdminResponse() {
   return new Response(JSON.stringify({
@@ -117,6 +125,10 @@ export function createTradingV1Entrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
+
+      if (url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
+        return htmlResponse(renderTradingLaunchConsole(env));
+      }
 
       // Health and exact internal service routes stay available independently
       // so operators and first-party source handoff can function while tenant
