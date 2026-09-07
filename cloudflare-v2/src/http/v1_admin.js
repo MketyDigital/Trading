@@ -11,6 +11,7 @@ import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
 import { createAdminHostnameStore, handleAuthorizedV1AdminHostnamesRequest } from './v1_admin_hostnames.js';
+import { createAdminDestinationStore, handleAuthorizedV1AdminDestinationsRequest } from './v1_admin_destinations.js';
 import {
   createAdminOperationsStore,
   handleAuthorizedV1AdminOperationsRequest,
@@ -194,6 +195,7 @@ export async function handleV1AdminRequest(request, env = {}, {
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
   adminHostnameStoreFactory = createAdminHostnameStore,
+  destinationStoreFactory = createAdminDestinationStore,
   operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
   let supabase;
@@ -281,6 +283,23 @@ export async function handleV1AdminRequest(request, env = {}, {
       return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503);
     }
     return handleAuthorizedV1AdminAccountsRequest(request, authorization, { accountStore, env });
+  }
+
+  if (
+    url.pathname === '/api/v1/admin/destinations'
+    || url.pathname === '/api/v1/admin/templates'
+    || url.pathname === '/api/v1/admin/routes'
+    || url.pathname.startsWith('/api/v1/admin/destinations/')
+    || url.pathname.startsWith('/api/v1/admin/templates/')
+    || url.pathname.startsWith('/api/v1/admin/routes/')
+  ) {
+    let destinationStore;
+    try {
+      destinationStore = destinationStoreFactory(supabase, env);
+    } catch {
+      return json({ ok: false, reason: 'DESTINATION_STORE_UNAVAILABLE' }, 503);
+    }
+    return handleAuthorizedV1AdminDestinationsRequest(request, authorization, { destinationStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/hostnames' || url.pathname.startsWith('/api/v1/admin/hostnames/')) {
