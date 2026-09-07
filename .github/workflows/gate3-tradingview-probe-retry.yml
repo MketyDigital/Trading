@@ -1,0 +1,156 @@
+name: Gate 3 TradingView Probe Retry
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md'
+      - '.github/workflows/gate3-tradingview-probe-retry.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: probe tradingview gate 3 retry' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+      GATE3_HOSTNAME: trade.mkety.com
+      GATE3_ZONE_ID: 98c7228a0457b1f454881c149e2df6ce
+    steps:
+      - name: Checkout exact probe head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require Cloudflare staging credentials without printing values
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+
+      - name: Verify exact known-good rollback version exists
+        run: npx wrangler deployments list --config wrangler.toml | grep 'c25e85d5-bfe2-4d17-9ab4-5133d88ecec8'
+
+      - name: Check dedicated TradingView hostname conflicts read-only
+        shell: bash
+        run: |
+          domains="$RUNNER_TEMP/gate3-worker-domains.json"
+          dns="$RUNNER_TEMP/gate3-dns.json"
+          curl -fsS -X GET \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/domains?hostname=${GATE3_HOSTNAME}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$domains"
+          curl -fsS -X GET \
+            "https://api.cloudflare.com/client/v4/zones/${GATE3_ZONE_ID}/dns_records?name=${GATE3_HOSTNAME}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$dns"
+          node - "$domains" "$dns" <<'NODE'
+          const fs = require('fs');
+          const domains = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const dns = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          if (domains?.success !== true || dns?.success !== true) throw new Error('Gate 3 hostname conflict inspection failed');
+          const workerDomains = Array.isArray(domains.result) ? domains.result : [];
+          const dnsRecords = Array.isArray(dns.result) ? dns.result : [];
+          const foreignDomain = workerDomains.find((item) => item?.service && item.service !== 'mkety-copier-engine');
+          if (foreignDomain) throw new Error('trade.mkety.com is already attached to another Worker');
+          if (dnsRecords.length && workerDomains.length === 0) throw new Error('trade.mkety.com already has a non-Worker DNS record');
+          console.log(`Gate 3 hostname clear/reusable: workerDomains=${workerDomains.length}, dnsRecords=${dnsRecords.length}`);
+          NODE
+
+      - name: Deploy temporary certificate-probe Worker
+        id: probe_deploy
+        run: >-
+          npx wrangler deploy --config wrangler.toml
+          --domain ${GATE3_HOSTNAME}
+          --containers-rollout none
+          --keep-vars
+          --var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false
+          --var TRADINGVIEW_CERT_PROBE_ENABLED:true
+          --var TRADING_ACCESS_ENABLED:false
+          --var BROKER_EXECUTION_ENABLED:false
+
+      - name: Wait for probe route and run bounded certificate observation
+        shell: bash
+        run: |
+          tail_log="$RUNNER_TEMP/gate3-tail.log"
+          timeout 300s npx wrangler tail mkety-copier-engine --format json > "$tail_log" 2>&1 &
+          tail_pid=$!
+
+          deadline=$((SECONDS + 90))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            body_file="$RUNNER_TEMP/gate3-spoof-body.json"
+            status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+              -X POST "https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe" \
+              -H 'content-type: application/json' \
+              -H 'x-tradingview-client-cert: spoofed-caller-header' \
+              --data '{"event_id":"spoof-only","text":"probe"}' || true)"
+            if [ "$status" = "403" ]; then
+              echo 'Gate 3 spoof rejected with HTTP 403.'
+              break
+            fi
+            if [ "$status" = "503" ] || [ "$status" = "000" ]; then
+              echo "Probe route not ready yet; HTTP $status. Retrying..."
+              sleep 5
+              continue
+            fi
+            echo "Spoof probe expected HTTP 403, got $status" >&2
+            cat "$body_file" >&2 || true
+            kill "$tail_pid" 2>/dev/null || true
+            exit 1
+          done
+
+          if [ "${status:-}" != "403" ]; then
+            echo "Timed out waiting for probe route to return HTTP 403 for spoof rejection; last status ${status:-none}" >&2
+            kill "$tail_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "TRADINGVIEW_CERT_PROBE is active on https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe"
+          wait "$tail_pid" || true
+          node - "$tail_log" <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync(process.argv[2], 'utf8');
+          const lines = text.split(/\r?\n/).filter((line) => line.includes('TRADINGVIEW_CERT_PROBE'));
+          const genuine = lines.filter((line) => /certPresented(?:\\?"|['": ]+)(?:true|1)/i.test(line));
+          const fingerprints = genuine
+            .flatMap((line) => line.toLowerCase().match(/[0-9a-f]{64}/g) || [])
+            .filter((value, index, all) => all.indexOf(value) === index);
+          const probeLogCount = lines.length;
+          const certPresentedCount = genuine.length;
+          const fingerprintCount = fingerprints.length;
+          const expectedSpoofLogs = 1;
+          const additionalProbeLogs = Math.max(0, probeLogCount - expectedSpoofLogs);
+          console.log(`Gate 3 probe diagnostics: totalProbeLogs=${probeLogCount} expectedSpoofLogs=${expectedSpoofLogs} additionalProbeLogs=${additionalProbeLogs} certPresentedCount=${certPresentedCount} fingerprintCount=${fingerprintCount}`);
+          if (fingerprints.length !== 1) {
+            console.error(`Gate 3 genuine TradingView certificate observation requires exactly one stable SHA-256 fingerprint; observed ${fingerprints.length}.`);
+            process.exit(1);
+          }
+          console.log(`TRADINGVIEW_CERT_PROBE genuine=true certPresented=true fingerprintAvailable=true certFingerprintSHA256=${fingerprints[0]}`);
+          NODE
+
+      - name: Roll back certificate probe to known-safe Paid Worker
+        if: ${{ always() && steps.probe_deploy.outcome == 'success' }}
+        run: npx wrangler rollback c25e85d5-bfe2-4d17-9ab4-5133d88ecec8 --config wrangler.toml --message "Gate 3 certificate probe retry rollback"
+
+      - name: Verify safe rollback state
+        if: ${{ always() && steps.probe_deploy.outcome == 'success' }}
+        run: npx wrangler deployments list --config wrangler.toml | head -40

@@ -1,268 +1,127 @@
-# Trading Project Agent Handoff
+# Trading V1 – Operational Source of Truth
 
-This file is the current operational source of truth for `MketyDigital/Trading`. Read it before changing the project. The immediate goal is to finish and production-harden the existing Cloudflare-v2 trading/copier system before starting the broader MkSaaS upgrade in `MketyDigital/Mkety`.
+## Mission
+Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and controlled rollout.
 
-## Repository intent
+The current repository objective is: **finish the Trading repo V1 completion branch, verify safe source-to-destination simulation, then proceed to controlled staging/external acceptance with all real-execution fuses disabled before any production promotion.**
 
-The repository contains two generations of work:
+## Active promotion path
 
-- Root-level `server.js`, `wrangler.toml`, `patch_admin_api.js`, and the old root package are legacy/reference material.
-- **`cloudflare-v2/` is the intended active next-generation project.** New work should stay there unless a deliberate migration plan says otherwise.
+- Repository: `MketyDigital/Trading`
+- Production PR: #2 `feat: build enterprise trading event core foundation`
+- PR #2 base: `main`
+- PR #2 head branch: `design/enterprise-trading-event-core`
+- Latest status-only AGENTS commit at time of documentation: `bed14efd4a4dbc6f9be58e2baf1a5c7af556485d`.
+- PR #2 is open, ready for review, and not merged to `main`.
+- PR #6 `fix: synchronize Trading V1 frontend and safe simulation` is merged into the staging feature branch, not `main`.
+- PR #6 merge commit: `7adbe62cb6dd0f721f3dd20933c131cbe20dfd41`.
 
-The current architecture aims to run the copier/signal/VIP stack without a VPS using Cloudflare Workers, Durable Objects, Supabase/PostgreSQL, Telegram APIs/MTProto, AI provider APIs, and broker/platform adapters.
+## Completed repo/staging evidence
 
-## Intended system components
+- Trading V1 CI passed on PR #6 final head before the PR #6 staging merge.
+- Production PR #2 CodeQL succeeded on checked head `2323354dd4d0951d33d903c334e0902a5bb9c15f` with no new alerts in changed code. Re-check current-head CodeQL after status-only commits settle.
+- Gate 2 read-only Cloudflare staging inspection passed: run `34060610896`.
+- Gate 2 paid staging deployment passed with fail-closed runtime gates: run `34060662482`.
+- Gate 2 post-deploy acceptance passed: run `34060780169`.
+- Gate 3 read-only `trade.mkety.com` zone/hostname inspection passed: run `34060858192`.
 
-### 1. Core Worker — `cloudflare-v2/src/index.js`
+## Gate 2 acceptance evidence
 
-Responsibilities currently include:
+Gate 2 acceptance verified all of the following without enabling real execution:
 
-- Telegram Bot webhook routing.
-- Signal-processing webhook from the MTProto listener.
-- Durable Object listener-control proxying.
-- Admin/data APIs.
-- Signal route lookup and deduplication.
-- AI provider loading and signal transformation.
-- Per-destination branding/formatting.
-- Telegram forwarding and trade-executor dispatch.
-- VIP subscription cron entry point.
-- HTML dashboard rendering through `dashboard.js`.
+- staging credentials were present without printing values;
+- known-good rollback version existed;
+- temporary simulation Worker deployed with `--containers-rollout none`;
+- internal transport secret became active;
+- real Queue path, deduplication, and non-broker simulation succeeded;
+- no new Container instances were created;
+- rollback succeeded to known-safe Paid staging version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`;
+- final Container state verification succeeded.
 
-This file is currently large and contains several responsibilities. Harden behavior first; do not refactor broadly until tests cover the critical flows.
+## Current blockers before production launch
 
-### 2. MTProto listener Durable Object — `src/listener/listener_node.js`
+1. Gate 3 TradingView certificate probe is blocked by Cloudflare custom-domain readiness/routing: `trade.mkety.com` returned HTTP 503 during the spoof-rejection readiness poll even after a 90-second retry window. Probe deploy and rollback both succeeded. Runs: `34060883851`, retry `34061086731`.
+2. Gate 4 identity acceptance is blocked before the read-only matrix by missing staging configuration. First missing value observed: `GATE4_BASE_URL`. Run: `34061213068`.
+3. Gate 5 MTProto soak is blocked before the observation runner by missing staging configuration. First missing value observed: `GATE5_WORKSPACE_ID`. Run: `34061298173`.
+4. Gate 6 MT5 demo connectivity probe is blocked before probe execution by missing staging configuration. First missing value observed: `MT5_BRIDGE_URL`. Run: `34061366745`.
+5. Gate 6 cTrader demo connectivity probe is blocked before probe execution by missing staging configuration. First missing value observed: `CTRADER_CLIENT_ID`. Run: `34061418950`.
+6. Gate 6 source acceptance requires additional prepared source endpoints/secrets. MT5 source acceptance also requires a self-hosted Windows runner labeled `mt5-demo`.
+7. Gate 7 demo lifecycle requires demo broker credentials plus `TRADING_WORKSPACE_ID`; do not run until Gate 6 demo probes are green.
+8. `main` currently appears unprotected through the branch API. Configure required reviews/status checks before final production merge.
 
-Current intent:
+## Controlling product model — approved
 
-- store Telegram MTProto state/session in Durable Object storage;
-- connect with `@mtcute/web`;
-- listen to configured Telegram messages;
-- POST raw messages to the main `/api/webhook/process_signal` router;
-- expose `/start`, `/send_code`, `/stop`, and `/status` controls through the Durable Object stub.
+**One enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
 
-The Worker binding is declared as:
+Do not redesign V1 as a complex collaboration/team SaaS. Existing membership/role primitives may remain for compatibility/future use.
 
-```text
-MTPROTO_LISTENER_NAMESPACE → MTProtoListenerNode
-```
+## Identity / Mkety access boundary
 
-and the current cron is every 15 minutes.
+- Zitadel remains behind Mkety identity.
+- Trading consumes a short-lived signed Mkety Trading assertion; it does not directly authorize from caller-provided workspace/account/provider hints.
+- Required assertion contract: trusted RS256 signature + issuer + audience + time validity + immutable subject + `product=trading` + exact workspace + `access=owner` or valid role contract.
+- The selected workspace ID is bound into bearer verification before the workspace record is read.
+- Trading verifies the exact enabled workspace and exact enabled membership in Trading Supabase.
+- Supabase remains final Trading application authorization/revocation authority.
+- Do not create a Trading-only signer or direct-Zitadel authorization fallback.
 
-Before production use, verify the listener lifecycle against current Cloudflare Durable Object/socket behavior under real idle/resume/restart conditions. Do not assume a long-lived Telegram session is reliable merely because the constructor reconnects.
+## Workspace / hostname boundary
 
-### 3. Universal AI router — `src/ai/universal_ai.js`
+- A Trading workspace is the enterprise isolation boundary for sources, broker accounts, credentials, policies, events, Trade State, retries/recovery and logs.
+- Canonical product entry: `trade.mkety.com`.
+- Customer hostnames are optional routing context only; they never grant authorization.
+- Canonical hostname enforcement always runs.
+- If custom-hostname routing is enabled, only an exact active persisted hostname -> workspace mapping is accepted, and it must match the signed/selected workspace.
+- Do not create a separate backend, identity silo or workspace per hostname.
 
-Current intent:
+## Production execution authority
 
-- priority-based provider cascade;
-- 12-second provider timeout;
-- Gemini support;
-- OpenAI-compatible support for OpenAI/DeepSeek/Groq/custom endpoints;
-- Workers AI adapter;
-- cleanup of generated Telegram HTML.
+Caller-supplied workspace/account/provider/destination/broker/credential/execution hints are never authority.
 
-Known correctness gaps to resolve before production:
+Immediately before broker action, the runtime re-checks persisted workspace/source/account state, global execution fuse, account active/execution/kill state, risk/exposure, server-owned broker configuration, broker-authoritative symbol/economic/volume truth and persistent destination/order idempotency.
 
-- `UniversalAIRouter` expects provider credentials as `api_key_encrypted`, while the checked-in schema currently defines `ai_providers.api_key`.
-- the Workers AI adapter references `env.CLOUDFLARE_ACCOUNT_ID` from a scope where `env` is not currently supplied to the class.
-- provider-secret encryption/decryption is not actually implemented despite field names implying encryption.
-- AI output must never be allowed to place a real trade without deterministic validation of action, symbol, side, price/SL/TP semantics, and account-specific risk rules.
+Repository tests may inject production gates as enabled and fake broker/provider dependencies to exercise the complete path. That is not authorization to connect real accounts or place real orders.
 
-### 4. Trade executors — `src/executors/trade_executors.js`
+## Current external/deployment safety state
 
-Current modules:
+Keep fail-closed through staging acceptance unless the applicable gate explicitly and temporarily requires a narrower non-broker probe:
 
-- Telegram VIP forwarder.
-- Deriv executor.
-- cTrader executor.
-- MT5 webhook executor.
+- `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
+- `TRADINGVIEW_CERT_PROBE_ENABLED=false`
+- `TRADING_ACCESS_ENABLED=false`
+- `BROKER_EXECUTION_ENABLED=false`
+- `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`
 
-Important current limitations:
+Provider/broker credentials remain external deployment secrets; do not commit them.
 
-- the Deriv implementation is presently a short-duration `CALL`/`PUT` proposal/buy flow using stake-style contracts. It is not yet a verified general CFD copier and must not be described as one.
-- the cTrader implementation is a simplified HTTP-shaped request and is not yet a verified implementation of cTrader Open API's actual authenticated Protobuf/WebSocket lifecycle.
-- MT5 depends on an external webhook/EA bridge and therefore is not truly zero-external-runtime unless that bridge is separately hosted and secured.
-- trade-account secrets in the current schema need a real encryption/key-management design before production real-money accounts are stored.
+## Production execution locks
 
-Real-money execution must remain disabled until these adapters have broker-specific integration tests and safety controls.
+Before a broker adapter may be reached, all applicable locks must pass:
 
-### 5. VIP manager — `src/vip/vip_manager.js`
-
-Current capabilities include:
-
-- Telegram Bot commands;
-- 3-day trial flow;
-- one-use invite links;
-- manual receipt upload and admin approval buttons;
-- Telegram Stars/invoice-related code;
-- expiry cron/kick lifecycle.
-
-Known issues to resolve before production:
-
-- `handleWebhookUpdate` checks generic `update.message` before the `successful_payment` case, so successful-payment handling needs to be audited/fixed to ensure it can actually execute.
-- manual admin approval callbacks must verify that the callback is genuinely from the configured admin/verification context before changing payment/subscription state.
-- sample/hard-coded bank/payment copy must be replaced by tenant/workspace configuration rather than product code.
-- billing amounts/plans must come from configuration/database and not assumptions embedded in message handlers.
-- Telegram webhook authenticity/secret-token strategy should be added rather than trusting possession of a URL containing a bot token.
-
-### 6. Database — `cloudflare-v2/db/schema.sql`
-
-Current tables:
-
-- `workspaces`
-- `listener_nodes`
-- `ai_providers`
-- `signal_routes`
-- `trade_accounts`
-- `vip_members`
-- `bank_deposits`
-- `signal_logs`
-
-The current schema is a single bootstrap SQL file, not a production migration history.
-
-Before production:
-
-- introduce numbered/checksummed migrations rather than repeatedly editing one schema file;
-- decide whether Trading owns its own PostgreSQL/Supabase project or shares any data contracts with MkSaaS;
-- implement proper tenant isolation;
-- enable and verify RLS if browser-accessible Supabase credentials will ever be used;
-- avoid storing raw Telegram API hashes, sessions, AI keys, bot tokens, or broker tokens in plaintext database columns;
-- use server/service credentials only in Worker secrets and/or envelope encryption for tenant-managed secrets.
-
-### 7. Admin/auth
-
-The architecture documents describe Zitadel/OIDC protection for `trade.mkety.com`, but the current Worker only checks for the presence of a Bearer token when `ZITADEL_JWKS_URL` is configured. The source explicitly leaves cryptographic JWT/JWKS validation as a future step.
-
-This is a **production blocker**. Before any admin API is exposed:
-
-- verify JWT signature;
-- validate issuer, audience, expiry/not-before;
-- extract the authenticated tenant/workspace from trusted claims/server mapping;
-- enforce workspace scoping on every admin query/write;
-- enforce the required entitlement/role for Trading/copy access;
-- never accept an arbitrary `workspace_id` from the browser as authority by itself.
-
-The current `/api/admin/data/workspaces` path can list/update workspace data and must not be treated as secure until this is fixed.
-
-## Current Cloudflare configuration
-
-`cloudflare-v2/wrangler.toml` currently declares:
-
-```text
-name = mkety-copier-engine
-main = src/index.js
-nodejs_compat
-MTPROTO_LISTENER_NAMESPACE Durable Object
-v1 Durable Object SQLite migration
-*/15 * * * * cron
-```
-
-The compatibility date is currently old relative to the 2026 project work and should be deliberately refreshed only after tests prove the application against the new date.
-
-The project should continue to prefer included/free-tier capabilities whenever usage remains inside provider limits. The owner has upgraded Workers to a paid plan for capacity/safety margin; do not introduce paid-only dependencies merely because the account is paid. Correctness and portability come first, then scale based on measured usage.
-
-## Current package/tooling state
-
-`cloudflare-v2/package.json` currently provides only:
-
-```text
-npm run dev
-npm run deploy
-```
-
-Dependencies are primarily `@mtcute/web`, `@supabase/supabase-js`, and Wrangler.
-
-There is currently no checked-in `.github/workflows` CI suite for this repository and no test script in the Cloudflare-v2 package. Establishing tests/CI is one of the first completion tasks before material production changes.
-
-## Documentation caveat
-
-Existing documents under `cloudflare-v2/` are useful architecture intent, but several statements are aspirational and must not be treated as verified production behavior. Examples include claims that every old fail-safe is preserved, that cTrader/Deriv execution is complete, and that Zitadel JWT verification exists. Always verify the actual source and provider documentation.
-
-The root `README.md` is stale AI-Studio boilerplate and is not the source of truth for the Trading platform.
-
-## Safety rules for the completion pass
-
-1. Never test production order execution with meaningful real capital.
-2. Build deterministic parser/validation and simulation modes before live execution.
-3. Require idempotency keys/durable dedupe for every signal-to-order path.
-4. Separate “signal formatting/forwarding” from “trade authorization/execution.” A message being valid to post on Telegram does not automatically make it valid to place a trade.
-5. Every account must have explicit enable/disable, allowed symbols, max lot/risk, max daily loss/exposure, and kill-switch semantics before live copying.
-6. Broker credentials/tokens are secrets and must never appear in browser responses, logs, or committed configuration.
-7. Admin authentication and workspace scoping must be fixed before exposing configuration APIs.
-8. Do not rely on warm-isolate memory as the only safety lock. Persistent idempotency must remain authoritative.
-9. Fail closed on malformed AI output, ambiguous symbols, missing prices, unsupported instruments, or provider outages.
-10. Keep the Trading repo independent from the later MkSaaS repo upgrade. Define integration contracts first; do not create hidden cross-repo coupling.
-
-## Recommended completion sequence
-
-When implementation begins, start with a design/spec rather than editing all modules at once.
-
-### Phase 1 — production foundation
-
-- add a real test runner and GitHub CI;
-- inventory all env vars/secrets and create an authoritative environment reference;
-- implement verified admin auth/JWT + workspace isolation;
-- create migration tooling/history;
-- correct schema/code naming mismatches and secret handling;
-- add health/config validation endpoints that expose no secrets.
-
-### Phase 2 — signal pipeline correctness
-
-- formalize normalized signal schema;
-- add deterministic parser/validator around AI output;
-- make persistent dedupe/idempotency authoritative;
-- verify per-destination formatting without changing parsed trade semantics;
-- test Telegram listener → router → Telegram forwarder end-to-end in simulation.
-
-### Phase 3 — broker execution adapters
-
-Treat each adapter independently with its own tests and provider contract:
-
-1. Deriv: decide exact products/API path required (Options vs CFDs) and implement only that verified contract.
-2. cTrader: implement the actual Open API auth/account/application/Protobuf/WebSocket flow.
-3. MT5: define the bridge protocol, authentication, replay/idempotency protection, and hosting ownership.
-
-No adapter is production-live until simulation and deliberately tiny controlled execution tests pass.
-
-### Phase 4 — VIP/subscription lifecycle
-
-- fix webhook/update routing;
-- secure admin callbacks;
-- externalize plans/prices/payment details;
-- verify Stars/manual payment lifecycle;
-- verify invite, expiry warning, kick/unban behavior;
-- add idempotent payment/subscription state transitions.
-
-### Phase 5 — deployment/load/resilience
-
-- refresh Cloudflare compatibility date;
-- verify Durable Object listener recovery/hibernation behavior;
-- measure Worker CPU/subrequests/WebSocket/DO/database usage;
-- keep free/included paths where usage permits;
-- use paid-plan headroom only when actually needed;
-- perform controlled production shadow/simulation testing before live copying.
-
-## Relationship to MkSaaS
-
-The intended product relationship is:
-
-- `trade.mkety.com` / this repository: Trading copier/signal/VIP engine.
-- `app.mkety.com` / later `MketyDigital/Mkety` upgrade: broader MkSaaS portal, identities, tenancy, provisioning, billing/entitlements and other products.
-
-Do not start modifying the MkSaaS repo until this Trading project has a stable, documented interface for identity/entitlement/workspace provisioning.
-
-## Exact next starting point
-
-MKLMS can be production-tested independently while Trading work begins.
-
-For Trading, the next session should begin by reading this file, then perform a fresh code/config audit against current Cloudflare/Telegram/Deriv/cTrader/Supabase documentation. The first implementation spec should be **Trading Phase 1 — production foundation**, covering CI/tests, admin authentication/workspace isolation, migrations, secret handling, and configuration validation.
-
-Every meaningful implementation/testing batch must update this file with:
-
-- branch/PR/merge state;
-- what changed;
-- tests/build/provider verification evidence;
-- migrations/config changes;
-- remaining blockers;
-- account-side setup still required;
-- exact next safe starting point.
+1. Worker/user access gate where applicable;
+2. `BROKER_EXECUTION_ENABLED=true`;
+3. exact persisted source remains active/workspace-authoritative;
+4. exact Trading workspace entitlement remains enabled;
+5. exact account belongs to the workspace and is active;
+6. account `execution_enabled=true`;
+7. kill/safety/risk/exposure policy allows the action;
+8. server-owned platform/destination configuration is complete;
+9. broker-authoritative symbol/risk/volume metadata validates the final action;
+10. persistent destination/order idempotency reservation succeeds;
+11. provider-specific production safety requirements also pass.
+
+## Exact next pickup
+
+1. Fix Gate 3 custom-domain 503 on `trade.mkety.com`, then rerun the Gate 3 certificate probe and fire one genuine TradingView webhook during the bounded probe window.
+2. Add Gate 4 staging identity secrets/test tokens, then rerun `identity: accept zitadel gate 4`.
+3. Add Gate 5 staging MTProto workspace/source/health/event secrets, then rerun `source: accept mtproto gate 5`.
+4. Add Gate 6 demo connectivity credentials for MT5 and cTrader, then rerun the MT5/cTrader demo probes.
+5. Prepare Gate 6 source endpoints and self-hosted Windows `mt5-demo` runner where required.
+6. Run Gate 7 demo lifecycle only after Gate 6 demo probes are green.
+7. Re-check current-head CI/CodeQL after all blocker-fix commits settle.
+8. Configure `main` protection before final production merge.
+9. Do not merge `main` or enable live broker execution without explicit final authorization.
+
+## Safety authorization boundary
+
+Repository completion and safe staging/simulation acceptance may use production-shaped code with non-real/ephemeral credentials while all broker execution fuses remain disabled. Never enable real-money execution, connect real broker credentials, merge to `main`, or change customer DNS/custom-host production state without the separate explicit authorization required for that action.

@@ -1,0 +1,99 @@
+name: Gate 6 Real Source Acceptance
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE6_SOURCE_ACCEPTANCE_TRIGGER.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout exact acceptance head
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  mt5-source-gate6:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'source: accept mt5 gate 6' }}
+    runs-on: [self-hosted, windows, mt5-demo]
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      GATE6_MT5_SOURCE_ENDPOINT: ${{ secrets.GATE6_MT5_SOURCE_ENDPOINT }}
+      GATE6_MT5_SOURCE_ID: ${{ secrets.GATE6_MT5_SOURCE_ID }}
+      GATE6_MT5_SOURCE_SECRET: ${{ secrets.GATE6_MT5_SOURCE_SECRET }}
+      GATE6_MT5_ACCOUNT_ID: ${{ secrets.GATE6_MT5_ACCOUNT_ID }}
+      GATE6_MT5_LOOKBACK_MS: ${{ vars.GATE6_MT5_LOOKBACK_MS }}
+      GATE6_MT5_OVERLAP_MS: ${{ vars.GATE6_MT5_OVERLAP_MS }}
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact Gate 6 head
+        uses: actions/checkout@v4
+      - name: Run source-only MT5 deal-history acceptance
+        shell: pwsh
+        run: python bridges/mt5_source_acceptance.py
+
+  ctrader-source-gate6:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'source: accept ctrader gate 6' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      GATE6_CTRADER_CLIENT_ID: ${{ secrets.GATE6_CTRADER_CLIENT_ID }}
+      GATE6_CTRADER_CLIENT_SECRET: ${{ secrets.GATE6_CTRADER_CLIENT_SECRET }}
+      GATE6_CTRADER_ACCESS_TOKEN: ${{ secrets.GATE6_CTRADER_ACCESS_TOKEN }}
+      GATE6_CTRADER_ACCOUNT_ID: ${{ secrets.GATE6_CTRADER_ACCOUNT_ID }}
+      GATE6_CTRADER_SOURCE_ENDPOINT: ${{ secrets.GATE6_CTRADER_SOURCE_ENDPOINT }}
+      GATE6_CTRADER_SOURCE_ID: ${{ secrets.GATE6_CTRADER_SOURCE_ID }}
+      GATE6_CTRADER_SOURCE_SECRET: ${{ secrets.GATE6_CTRADER_SOURCE_SECRET }}
+      GATE6_CTRADER_CAPTURE_TIMEOUT_MS: ${{ vars.GATE6_CTRADER_CAPTURE_TIMEOUT_MS }}
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact Gate 6 head
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run source-only cTrader deal-event acceptance
+        run: npm run accept:ctrader:source:gate6

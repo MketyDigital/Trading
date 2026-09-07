@@ -1,0 +1,97 @@
+name: Gate 5 MTProto Soak Acceptance
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE5_MTPROTO_SOAK_TRIGGER.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout exact acceptance head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  mtproto-soak-gate5:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'source: accept mtproto gate 5' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      GATE5_WORKSPACE_ID: ${{ secrets.GATE5_WORKSPACE_ID }}
+      GATE5_BEARER_TOKEN: ${{ secrets.GATE5_BEARER_TOKEN }}
+      GATE5_CONTAINER_SOURCE_ID: ${{ secrets.GATE5_CONTAINER_SOURCE_ID }}
+      GATE5_CONTAINER_HEALTH_URL: ${{ secrets.GATE5_CONTAINER_HEALTH_URL }}
+      GATE5_CONTAINER_EVENTS_URL: ${{ secrets.GATE5_CONTAINER_EVENTS_URL }}
+      GATE5_DO_SOURCE_ID: ${{ secrets.GATE5_DO_SOURCE_ID }}
+      GATE5_DO_HEALTH_URL: ${{ secrets.GATE5_DO_HEALTH_URL }}
+      GATE5_DO_EVENTS_URL: ${{ secrets.GATE5_DO_EVENTS_URL }}
+      GATE5_EXTERNAL_SOURCE_ID: ${{ secrets.GATE5_EXTERNAL_SOURCE_ID }}
+      GATE5_EXTERNAL_HEALTH_URL: ${{ secrets.GATE5_EXTERNAL_HEALTH_URL }}
+      GATE5_EXTERNAL_EVENTS_URL: ${{ secrets.GATE5_EXTERNAL_EVENTS_URL }}
+      GATE5_SOAK_DURATION_MS: ${{ vars.GATE5_SOAK_DURATION_MS }}
+      GATE5_SOAK_POLL_MS: ${{ vars.GATE5_SOAK_POLL_MS }}
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact Gate 5 head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require Gate 5 configuration by name only
+        shell: bash
+        run: |
+          for name in \
+            GATE5_WORKSPACE_ID GATE5_BEARER_TOKEN \
+            GATE5_CONTAINER_SOURCE_ID GATE5_CONTAINER_HEALTH_URL GATE5_CONTAINER_EVENTS_URL \
+            GATE5_DO_SOURCE_ID GATE5_DO_HEALTH_URL GATE5_DO_EVENTS_URL \
+            GATE5_EXTERNAL_SOURCE_ID GATE5_EXTERNAL_HEALTH_URL GATE5_EXTERNAL_EVENTS_URL; do
+            test -n "${!name:-}" || { echo "Missing GitHub staging secret: ${name}"; exit 1; }
+          done
+
+      - name: Run observation-only Gate 5 MTProto soak acceptance
+        run: npm run accept:mtproto:gate5

@@ -1,0 +1,130 @@
+name: Gate 6 Demo Probes
+
+on:
+  push:
+    branches:
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/docs/GATE6_DEMO_PROBE_TRIGGER.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout exact probe head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  mt5-demo-probe-gate6:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: probe mt5 gate 6' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      MT5_BRIDGE_URL: ${{ secrets.MT5_BRIDGE_URL }}
+      MT5_BRIDGE_SECRET: ${{ secrets.MT5_BRIDGE_SECRET }}
+      MT5_ACCOUNT_ID: ${{ secrets.MT5_ACCOUNT_ID }}
+      MT5_DEMO_SERVER: ${{ secrets.MT5_EXPECTED_DEMO_SERVER }}
+      MT5_DEMO_SYMBOL: XAUUSD
+      MT5_DEMO_ACCEPTANCE_MODE: 'probe'
+      MT5_DEMO_ORDER_TEST: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact MT5 probe head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require MT5 demo probe credentials by name only
+        shell: bash
+        run: |
+          test -n "${MT5_BRIDGE_URL:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_URL'; exit 1; }
+          test -n "${MT5_BRIDGE_SECRET:-}" || { echo 'Missing GitHub staging secret: MT5_BRIDGE_SECRET'; exit 1; }
+          test -n "${MT5_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: MT5_ACCOUNT_ID'; exit 1; }
+          test -n "${MT5_DEMO_SERVER:-}" || { echo 'Missing GitHub staging secret: MT5_EXPECTED_DEMO_SERVER'; exit 1; }
+
+      - name: Run MT5 demo connectivity probe
+        run: npm run accept:mt5:demo
+
+  ctrader-demo-probe-gate6:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: probe ctrader gate 6' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CTRADER_CLIENT_ID: ${{ secrets.CTRADER_CLIENT_ID }}
+      CTRADER_CLIENT_SECRET: ${{ secrets.CTRADER_CLIENT_SECRET }}
+      CTRADER_ACCESS_TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
+      CTRADER_ACCOUNT_ID: ${{ secrets.CTRADER_ACCOUNT_ID }}
+      CTRADER_DEMO_SYMBOL: XAUUSD
+      CTRADER_DEMO_ACCEPTANCE_MODE: 'probe'
+      CTRADER_DEMO_ORDER_TEST: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact cTrader probe head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require cTrader demo probe credentials by name only
+        shell: bash
+        run: |
+          test -n "${CTRADER_CLIENT_ID:-}" || { echo 'Missing GitHub staging secret: CTRADER_CLIENT_ID'; exit 1; }
+          test -n "${CTRADER_CLIENT_SECRET:-}" || { echo 'Missing GitHub staging secret: CTRADER_CLIENT_SECRET'; exit 1; }
+          test -n "${CTRADER_ACCESS_TOKEN:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCESS_TOKEN'; exit 1; }
+          test -n "${CTRADER_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CTRADER_ACCOUNT_ID'; exit 1; }
+
+      - name: Run cTrader demo connectivity probe
+        run: npm run accept:ctrader:demo

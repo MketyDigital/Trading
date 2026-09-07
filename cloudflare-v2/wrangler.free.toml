@@ -1,0 +1,44 @@
+# Cloudflare Free-compatible deployment baseline.
+# This is an alternative deployment target, not a side-by-side consumer of the
+# Paid deployment's queues. It intentionally contains no Container binding.
+name = "mkety-copier-engine-free"
+main = "src/v1_entry.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"
+TRADINGVIEW_CERT_PROBE_ENABLED = "false"
+TRADING_ACCESS_ENABLED = "false"
+BROKER_EXECUTION_ENABLED = "false"
+
+[durable_objects]
+bindings = [
+  { name = "MTPROTO_LISTENER_NAMESPACE", class_name = "MTProtoListenerNode" },
+  { name = "TRADE_STATE_NAMESPACE", class_name = "TradeStateNode" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MTProtoListenerNode"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TradeStateNode"]
+
+[[queues.producers]]
+binding = "SOURCE_EVENT_QUEUE"
+queue = "mkety-trading-source-events-free"
+
+[[queues.consumers]]
+queue = "mkety-trading-source-events-free"
+max_batch_size = 5
+max_batch_timeout = 1
+max_retries = 8
+dead_letter_queue = "mkety-trading-source-events-free-dlq"
+
+# The one-minute recovery cron in the Paid config supervises only the optional
+# Container MTProto runtime, so it is intentionally absent here. Durable Object
+# MTProto recovery remains source-local through its own alarm/runtime behavior.
+[triggers]
+crons = ["*/15 * * * *"]

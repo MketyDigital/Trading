@@ -1,0 +1,534 @@
+name: Trading V1 CI
+
+on:
+  push:
+    branches:
+      - main
+      - design/enterprise-trading-event-core
+    paths:
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - 'cloudflare-v2/bridges/**'
+      - 'cloudflare-v2/containers/**'
+      - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/package.json'
+      - 'cloudflare-v2/package-lock.json'
+      - 'cloudflare-v2/wrangler.toml'
+      - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md'
+      - 'cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md'
+      - '.github/workflows/trading-v1-ci.yml'
+  pull_request:
+    paths:
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - 'cloudflare-v2/bridges/**'
+      - 'cloudflare-v2/containers/**'
+      - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/package.json'
+      - 'cloudflare-v2/package-lock.json'
+      - 'cloudflare-v2/wrangler.toml'
+      - 'cloudflare-v2/wrangler.free.toml'
+      - '.github/workflows/trading-v1-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: >-
+      ${{
+        github.event_name == 'pull_request' ||
+        github.ref == 'refs/heads/main' ||
+        (
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/design/enterprise-trading-event-core' &&
+          (
+            github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' ||
+            github.event.head_commit.message == 'cloudflare: accept staging gate 2' ||
+            github.event.head_commit.message == 'cloudflare: probe tradingview gate 3'
+          )
+        )
+      }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Worker and trading-core tests
+        run: npm run test:ci
+
+      - name: Run pure MT5 bridge tests
+        run: PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v
+
+      - name: Run pure MTProto Python tests
+        run: |
+          PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
+          PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  cloudflare-inspect:
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: inspect staging gate 2' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify Cloudflare authentication
+        run: npx wrangler whoami
+
+      - name: Validate Paid and Free profiles without deployment
+        run: |
+          npx wrangler deploy --dry-run --config wrangler.toml
+          npx wrangler deploy --dry-run --config wrangler.free.toml
+
+      - name: Inventory Cloudflare queues
+        run: npx wrangler queues list
+
+      - name: Inventory Cloudflare Container applications
+        run: npx wrangler containers list
+
+      - name: Inspect Paid Worker deployment history
+        id: paid_deployments
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx wrangler deployments list --config wrangler.toml 2>&1 | tee paid-deployments.log
+
+      - name: Inspect Free Worker deployment history
+        id: free_deployments
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx wrangler deployments list --config wrangler.free.toml 2>&1 | tee free-deployments.log
+
+      - name: Classify Worker deployment state
+        run: |
+          classify() {
+            local outcome="$1"
+            local log_file="$2"
+            local label="$3"
+            if [ "$outcome" = "success" ]; then
+              echo "$label Worker state: deployment history available"
+              return 0
+            fi
+            if grep -Eq 'Worker does not exist on your account|code: 10007' "$log_file"; then
+              echo "$label Worker state: not deployed yet"
+              return 0
+            fi
+            echo "$label Worker inspection failed for an unexpected Cloudflare API reason" >&2
+            exit 1
+          }
+          classify "${{ steps.paid_deployments.outcome }}" paid-deployments.log Paid
+          classify "${{ steps.free_deployments.outcome }}" free-deployments.log Free
+
+  cloudflare-deploy-paid:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: deploy paid staging gate 2' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact deployment head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify Cloudflare authentication
+        run: npx wrangler whoami
+
+      - name: Verify fail-closed Paid Worker runtime gates
+        run: |
+          grep -Eq '^TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^TRADINGVIEW_CERT_PROBE_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^TRADING_ACCESS_ENABLED = "false"$' wrangler.toml
+          grep -Eq '^BROKER_EXECUTION_ENABLED = "false"$' wrangler.toml
+
+      - name: Final Paid pre-deploy dry run
+        run: npx wrangler deploy --dry-run --config wrangler.toml
+
+      - name: Deploy reviewed Paid staging profile
+        run: npx wrangler deploy --config wrangler.toml
+
+      - name: Inspect Paid deployment history after deployment
+        run: npx wrangler deployments list --config wrangler.toml
+
+      - name: Inspect queues after deployment
+        run: npx wrangler queues list
+
+      - name: Inspect Container applications after deployment
+        run: npx wrangler containers list
+
+  cloudflare-accept-gate2:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: accept staging gate 2' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SUPABASE_URL: https://vdblajgxrfndjesoyayy.supabase.co
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      TRADING_V1_WORKER_BASE_URL: https://mkety-copier-engine.dry-glitter-7e16.workers.dev
+      GATE2_CONTAINER_APPLICATION_ID: a03c0bd0-3dab-4578-bab2-88bf5d0d7c1f
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Checkout exact acceptance head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require staging credentials without printing values
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE'; exit 1; }
+
+      - name: Verify exact known-good rollback version exists
+        run: npx wrangler deployments list --config wrangler.toml | grep 'c25e85d5-bfe2-4d17-9ab4-5133d88ecec8'
+
+      - name: Snapshot Container instances before non-Container acceptance
+        run: npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-before.json"
+
+      - name: Generate ephemeral acceptance secrets
+        shell: bash
+        run: |
+          master_key="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')"
+          source_secret="$(openssl rand -hex 32)"
+          internal_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$master_key"
+          echo "::add-mask::$source_secret"
+          echo "::add-mask::$internal_token"
+          {
+            echo "TRADING_MASTER_KEY=$master_key"
+            echo "TRADING_V1_SOURCE_SECRET=$source_secret"
+            echo "INTERNAL_SOURCE_TRANSPORT_TOKEN=$internal_token"
+            echo "TRADE_STATE_INTERNAL_TOKEN=$internal_token"
+          } >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/gate2-secrets.env" <<EOF
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_SERVICE_ROLE=$SUPABASE_SERVICE_ROLE
+          TRADING_MASTER_KEY=$master_key
+          TRADING_V1_SOURCE_SECRET=$source_secret
+          INTERNAL_SOURCE_TRANSPORT_TOKEN=$internal_token
+          TRADE_STATE_INTERNAL_TOKEN=$internal_token
+          TRADING_V1_SIMULATION=true
+          TRADING_V1_SIMULATION_INSTRUMENTS={"XAUUSD":{"tickSize":0.01,"tickValuePerLot":1,"minLots":0.01,"maxLots":100,"stepLots":0.01}}
+          TRADING_V1_SIMULATION_PRICES={"XAUUSD":2500}
+          TRADING_V1_SIMULATION_EXPOSURES={}
+          EOF
+          chmod 600 "$RUNNER_TEMP/gate2-secrets.env"
+
+      - name: Deploy temporary simulation-enabled Worker version without Container rollout
+        id: acceptance_deploy
+        run: npx wrangler deploy --config wrangler.toml --secrets-file "$RUNNER_TEMP/gate2-secrets.env" --containers-rollout none
+
+      - name: Wait for deployed internal transport secret to become active
+        shell: bash
+        run: |
+          deadline=$((SECONDS + 30))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            body_file="$RUNNER_TEMP/gate2-readiness-body.json"
+            status="$(curl -sS -o "$body_file" -w '%{http_code}' \
+              -X POST "$TRADING_V1_WORKER_BASE_URL/api/v1/internal/source-event" \
+              -H 'content-type: application/json' \
+              -H "x-mkety-internal-source-token: $INTERNAL_SOURCE_TRANSPORT_TOKEN" \
+              --data '{}')"
+            if [ "$status" = "400" ] && grep -q 'INVALID_SOURCE_EVENT' "$body_file"; then
+              echo 'New internal transport secret is active at the Worker edge.'
+              exit 0
+            fi
+            if [ "$status" = "401" ]; then
+              sleep 1
+              continue
+            fi
+            echo "Unexpected readiness response: HTTP $status" >&2
+            cat "$body_file" >&2
+            exit 1
+          done
+          echo 'Timed out waiting for newly deployed internal transport secret to become active.' >&2
+          exit 1
+
+      - name: Exercise real Queue path, deduplication, and non-broker simulation
+        run: node scripts/gate2_queue_acceptance.mjs
+
+      - name: Prove non-Container simulation created no Container instances
+        shell: bash
+        run: |
+          npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-after.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const before = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-before.json', 'utf8'));
+          const after = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-after.json', 'utf8'));
+          const beforeIds = new Set(before.map((item) => String(item.id)));
+          const created = after.filter((item) => !beforeIds.has(String(item.id)));
+          if (created.length) {
+            console.error(`Gate 2 Container non-selection failed: ${created.length} new instance(s) appeared.`);
+            process.exit(1);
+          }
+          console.log(`Gate 2 Container non-selection verified: ${before.length} instance record(s) before, ${after.length} after, 0 new instance IDs.`);
+          NODE
+
+      - name: Roll back to first known-good Paid staging version
+        if: ${{ always() && steps.acceptance_deploy.outcome == 'success' }}
+        run: npx wrangler rollback c25e85d5-bfe2-4d17-9ab4-5133d88ecec8 --config wrangler.toml --message "Gate 2 acceptance rollback"
+
+      - name: Verify rollback and final Container state
+        if: ${{ always() && steps.acceptance_deploy.outcome == 'success' }}
+        shell: bash
+        run: |
+          npx wrangler deployments list --config wrangler.toml | head -40
+          npx wrangler containers instances "$GATE2_CONTAINER_APPLICATION_ID" --json > "$RUNNER_TEMP/gate2-containers-final.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const before = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-before.json', 'utf8'));
+          const final = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/gate2-containers-final.json', 'utf8'));
+          const beforeIds = new Set(before.map((item) => String(item.id)));
+          const created = final.filter((item) => !beforeIds.has(String(item.id)));
+          if (created.length) {
+            console.error(`Rollback verification found ${created.length} new Container instance(s).`);
+            process.exit(1);
+          }
+          console.log(`Rollback verified with no new Container instance IDs; final instance records: ${final.length}.`);
+          NODE
+
+  cloudflare-inspect-gate3-zones:
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: inspect tradingview gate 3' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+    steps:
+      - name: Require Cloudflare staging credentials by name only
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+
+      - name: Inventory active Cloudflare zones read-only
+        shell: bash
+        run: |
+          response="$RUNNER_TEMP/gate3-zones.json"
+          curl -fsS -X GET \
+            "https://api.cloudflare.com/client/v4/zones?account.id=${CLOUDFLARE_ACCOUNT_ID}&status=active&per_page=50" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            > "$response"
+          node - "$response" <<'NODE'
+          const fs = require('fs');
+          const path = process.argv[2];
+          const payload = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (payload?.success !== true || !Array.isArray(payload?.result)) {
+            console.error('Cloudflare zone inventory failed.');
+            process.exit(1);
+          }
+          console.log(`Active Cloudflare zones: ${payload.result.length}`);
+          for (const zone of payload.result) {
+            console.log(`ZONE name=${String(zone?.name || '')} id=${String(zone?.id || '')}`);
+          }
+          NODE
+
+  cloudflare-probe-gate3-tradingview:
+    needs: test
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'cloudflare: probe tradingview gate 3' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
+      TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
+      TRADING_ACCESS_ENABLED: 'false'
+      BROKER_EXECUTION_ENABLED: 'false'
+      GATE3_HOSTNAME: trade.mkety.com
+      GATE3_ZONE_ID: 98c7228a0457b1f454881c149e2df6ce
+    steps:
+      - name: Checkout exact probe head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Require Cloudflare staging credentials without printing values
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+
+      - name: Verify exact known-good rollback version exists
+        run: npx wrangler deployments list --config wrangler.toml | grep 'c25e85d5-bfe2-4d17-9ab4-5133d88ecec8'
+
+      - name: Check dedicated TradingView hostname conflicts read-only
+        shell: bash
+        run: |
+          domains="$RUNNER_TEMP/gate3-worker-domains.json"
+          dns="$RUNNER_TEMP/gate3-dns.json"
+          curl -fsS -X GET \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/domains?hostname=${GATE3_HOSTNAME}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$domains"
+          curl -fsS -X GET \
+            "https://api.cloudflare.com/client/v4/zones/${GATE3_ZONE_ID}/dns_records?name=${GATE3_HOSTNAME}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > "$dns"
+          node - "$domains" "$dns" <<'NODE'
+          const fs = require('fs');
+          const domains = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const dns = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          if (domains?.success !== true || dns?.success !== true) throw new Error('Gate 3 hostname conflict inspection failed');
+          const workerDomains = Array.isArray(domains.result) ? domains.result : [];
+          const dnsRecords = Array.isArray(dns.result) ? dns.result : [];
+          const foreignDomain = workerDomains.find((item) => item?.service && item.service !== 'mkety-copier-engine');
+          if (foreignDomain) throw new Error('trade.mkety.com is already attached to another Worker');
+          if (dnsRecords.length && workerDomains.length === 0) throw new Error('trade.mkety.com already has a non-Worker DNS record');
+          console.log(`Gate 3 hostname clear/reusable: workerDomains=${workerDomains.length}, dnsRecords=${dnsRecords.length}`);
+          NODE
+
+      - name: Deploy temporary certificate-probe Worker
+        id: probe_deploy
+        run: >-
+          npx wrangler deploy --config wrangler.toml
+          --domain ${GATE3_HOSTNAME}
+          --containers-rollout none
+          --keep-vars
+          --var TRADINGVIEW_DIRECT_INGRESS_ENABLED:false
+          --var TRADINGVIEW_CERT_PROBE_ENABLED:true
+          --var TRADING_ACCESS_ENABLED:false
+          --var BROKER_EXECUTION_ENABLED:false
+
+      - name: Start bounded real-time certificate probe and prove spoof rejection
+        shell: bash
+        run: |
+          tail_log="$RUNNER_TEMP/gate3-tail.log"
+          timeout 300s npx wrangler tail mkety-copier-engine --format json > "$tail_log" 2>&1 &
+          tail_pid=$!
+          sleep 5
+          status="$(curl -sS -o "$RUNNER_TEMP/gate3-spoof-body.json" -w '%{http_code}' \
+            -X POST "https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe" \
+            -H 'content-type: application/json' \
+            -H 'x-tradingview-client-cert: spoofed-caller-header' \
+            --data '{"event_id":"spoof-only","text":"probe"}')"
+          if [ "$status" != "403" ]; then
+            echo "Spoof probe expected HTTP 403, got $status" >&2
+            kill "$tail_pid" 2>/dev/null || true
+            exit 1
+          fi
+          echo 'Gate 3 spoof rejected with HTTP 403.'
+          echo "TRADINGVIEW_CERT_PROBE is active on https://${GATE3_HOSTNAME}/api/v1/webhooks/tradingview/probe"
+          wait "$tail_pid" || true
+          node - "$tail_log" <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync(process.argv[2], 'utf8');
+          const lines = text.split(/\r?\n/).filter((line) => line.includes('TRADINGVIEW_CERT_PROBE'));
+          const genuine = lines.filter((line) => /certPresented(?:\\?"|['": ]+)(?:true|1)/i.test(line));
+          const fingerprints = genuine
+            .flatMap((line) => line.toLowerCase().match(/[0-9a-f]{64}/g) || [])
+            .filter((value, index, all) => all.indexOf(value) === index);
+          const probeLogCount = lines.length;
+          const certPresentedCount = genuine.length;
+          const fingerprintCount = fingerprints.length;
+          const expectedSpoofLogs = 1;
+          const additionalProbeLogs = Math.max(0, probeLogCount - expectedSpoofLogs);
+          console.log(`Gate 3 probe diagnostics: totalProbeLogs=${probeLogCount} expectedSpoofLogs=${expectedSpoofLogs} additionalProbeLogs=${additionalProbeLogs} certPresentedCount=${certPresentedCount} fingerprintCount=${fingerprintCount}`);
+          if (fingerprints.length !== 1) {
+            console.error(`Gate 3 genuine TradingView certificate observation requires exactly one stable SHA-256 fingerprint; observed ${fingerprints.length}.`);
+            process.exit(1);
+          }
+          console.log(`TRADINGVIEW_CERT_PROBE genuine=true certPresented=true fingerprintAvailable=true certFingerprintSHA256=${fingerprints[0]}`);
+          NODE
+
+      - name: Roll back certificate probe to known-safe Paid Worker
+        if: ${{ always() && steps.probe_deploy.outcome == 'success' }}
+        run: npx wrangler rollback c25e85d5-bfe2-4d17-9ab4-5133d88ecec8 --config wrangler.toml --message "Gate 3 certificate probe rollback"
+
+      - name: Verify safe rollback state
+        if: ${{ always() && steps.probe_deploy.outcome == 'success' }}
+        run: npx wrangler deployments list --config wrangler.toml | head -40
