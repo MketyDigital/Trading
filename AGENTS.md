@@ -3,124 +3,120 @@
 ## Mission
 Launch Mkety Trading as a standalone enterprise Trading workspace product inside the Mkety ecosystem with an independent Trading runtime/data plane, strict workspace isolation, deterministic safety, durable idempotency and controlled rollout.
 
-The current repository objective is: **finish the Trading repo V1 completion branch, verify safe source-to-destination simulation, then proceed to controlled staging/external acceptance with all real-execution fuses disabled before any production promotion.**
+This file is the highest-priority handoff/source-of-truth for agentic work in `MketyDigital/Trading`.
 
-## Active promotion path
+## Hard boundaries
 
-- Repository: `MketyDigital/Trading`
-- Production PR: #2 `feat: build enterprise trading event core foundation`
-- PR #2 base: `main`
-- PR #2 head branch: `design/enterprise-trading-event-core`
-- Latest status-only AGENTS commit at time of documentation: `bed14efd4a4dbc6f9be58e2baf1a5c7af556485d`.
-- PR #2 is open, ready for review, and not merged to `main`.
-- PR #6 `fix: synchronize Trading V1 frontend and safe simulation` is merged into the staging feature branch, not `main`.
-- PR #6 merge commit: `7adbe62cb6dd0f721f3dd20933c131cbe20dfd41`.
+- Work only inside `MketyDigital/Trading`.
+- Do not touch `MketyDigital/mksaas` or any MkSaaS repository, branch, issue, PR, file, deployment, or configuration.
+- Do not enable real-money broker execution during launch-console work.
+- Keep `BROKER_EXECUTION_ENABLED=false` until the owner explicitly approves a separate demo/live broker acceptance gate.
+- Never commit real broker credentials, Telegram sessions, API keys, access tokens, Cloudflare secrets, Supabase service-role keys, or userbot sessions.
+- Do not expose stored secrets back to browser/API responses. Return only booleans such as `credentialConfigured`.
+- Do not let AI formatting alter canonical trading semantics: symbol, side, order type, entry, stop loss, take profits, volume/risk, and management action must remain deterministic/trusted.
 
-## Completed repo/staging evidence
+## Current production baseline
 
-- Trading V1 CI passed on PR #6 final head before the PR #6 staging merge.
-- Production PR #2 CodeQL succeeded on checked head `2323354dd4d0951d33d903c334e0902a5bb9c15f` with no new alerts in changed code. Re-check current-head CodeQL after status-only commits settle.
-- Gate 2 read-only Cloudflare staging inspection passed: run `34060610896`.
-- Gate 2 paid staging deployment passed with fail-closed runtime gates: run `34060662482`.
-- Gate 2 post-deploy acceptance passed: run `34060780169`.
-- Gate 3 read-only `trade.mkety.com` zone/hostname inspection passed: run `34060858192`.
+- `main` contains the enterprise Trading V1 foundation and access-code onboarding.
+- Production Worker has been deployed from `main` with access-code/dashboard access enabled.
+- Production database migration for `trading_access_codes` and `trading_access_code_redemptions` has been applied.
+- Broker execution remains disabled.
+- `trade.mkety.com/api/v1/health` may report `not_ready` while `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, and `MKETY_ACCESS_JWKS_URL` are missing. Access-code local sessions can still be tested when `TRADING_ACCESS_CODE_SESSION_ENABLED=true` and `TRADING_ACCESS_CODE_SESSION_SECRET` is configured.
 
-## Gate 2 acceptance evidence
+## Active launch-completion branch
 
-Gate 2 acceptance verified all of the following without enabling real execution:
+Branch: `feature/trading-launch-console-destinations-mtproto`
 
-- staging credentials were present without printing values;
-- known-good rollback version existed;
-- temporary simulation Worker deployed with `--containers-rollout none`;
-- internal transport secret became active;
-- real Queue path, deduplication, and non-broker simulation succeeded;
-- no new Container instances were created;
-- rollback succeeded to known-safe Paid staging version `c25e85d5-bfe2-4d17-9ab4-5133d88ecec8`;
-- final Container state verification succeeded.
+Goal: complete the business-facing launch console so the owner can test the entire real system end to end without editing Supabase manually for normal setup.
 
-## Current blockers before production launch
+## Approved launch-completion scope
 
-1. Gate 3 TradingView certificate probe is blocked by Cloudflare custom-domain readiness/routing: `trade.mkety.com` returned HTTP 503 during the spoof-rejection readiness poll even after a 90-second retry window. Probe deploy and rollback both succeeded. Runs: `34060883851`, retry `34061086731`.
-2. Gate 4 identity acceptance is blocked before the read-only matrix by missing staging configuration. First missing value observed: `GATE4_BASE_URL`. Run: `34061213068`.
-3. Gate 5 MTProto soak is blocked before the observation runner by missing staging configuration. First missing value observed: `GATE5_WORKSPACE_ID`. Run: `34061298173`.
-4. Gate 6 MT5 demo connectivity probe is blocked before probe execution by missing staging configuration. First missing value observed: `MT5_BRIDGE_URL`. Run: `34061366745`.
-5. Gate 6 cTrader demo connectivity probe is blocked before probe execution by missing staging configuration. First missing value observed: `CTRADER_CLIENT_ID`. Run: `34061418950`.
-6. Gate 6 source acceptance requires additional prepared source endpoints/secrets. MT5 source acceptance also requires a self-hosted Windows runner labeled `mt5-demo`.
-7. Gate 7 demo lifecycle requires demo broker credentials plus `TRADING_WORKSPACE_ID`; do not run until Gate 6 demo probes are green.
-8. `main` currently appears unprotected through the branch API. Configure required reviews/status checks before final production merge.
+1. Mkety-admin access-code manager.
+2. Enterprise launch console.
+3. V1 destination management.
+4. Telegram destination delivery and formatting controls.
+5. AI formatting controls with deterministic fallback.
+6. Source-to-destination routing.
+7. External VM MTProto setup as signed payload handoff only.
+8. Cloudflare Container/DO MTProto setup with encrypted Telegram credentials.
+9. Domain/custom-hostname clarity and setup instructions.
+10. Trading/risk logic inventory visible in the dashboard.
+11. Progress log and handoff docs kept current.
 
-## Controlling product model — approved
+## Correct MTProto model
 
-**One enterprise customer -> one Trading workspace -> one owner -> full workspace control.**
+### External VM MTProto
 
-Do not redesign V1 as a complex collaboration/team SaaS. Existing membership/role primitives may remain for compatibility/future use.
+External VM MTProto supports ready-made/existing userbots. Mkety must not collect Telegram `apiId`, `apiHash`, or `session` for this mode.
 
-## Identity / Mkety access boundary
+Mkety creates/registers:
 
-- Zitadel remains behind Mkety identity.
-- Trading consumes a short-lived signed Mkety Trading assertion; it does not directly authorize from caller-provided workspace/account/provider hints.
-- Required assertion contract: trusted RS256 signature + issuer + audience + time validity + immutable subject + `product=trading` + exact workspace + `access=owner` or valid role contract.
-- The selected workspace ID is bound into bearer verification before the workspace record is read.
-- Trading verifies the exact enabled workspace and exact enabled membership in Trading Supabase.
-- Supabase remains final Trading application authorization/revocation authority.
-- Do not create a Trading-only signer or direct-Zitadel authorization fallback.
+- a source connection;
+- source ID;
+- signing/internal handoff details;
+- expected payload format;
+- destination route mapping.
 
-## Workspace / hostname boundary
+The owner's VM/userbot reads Telegram and sends signed payloads to the Worker. The Worker verifies source identity, parses the signal, routes to destinations, and audits the result.
 
-- A Trading workspace is the enterprise isolation boundary for sources, broker accounts, credentials, policies, events, Trade State, retries/recovery and logs.
-- Canonical product entry: `trade.mkety.com`.
-- Customer hostnames are optional routing context only; they never grant authorization.
-- Canonical hostname enforcement always runs.
-- If custom-hostname routing is enabled, only an exact active persisted hostname -> workspace mapping is accepted, and it must match the signed/selected workspace.
-- Do not create a separate backend, identity silo or workspace per hostname.
+### Mkety-owned MTProto
 
-## Production execution authority
+Cloudflare Container MTProto and Cloudflare Durable Object MTProto are Mkety-hosted runtimes. These modes can collect Telegram `apiId`, `apiHash`, and `session`, encrypt them with `TRADING_MASTER_KEY`, and use runtime recovery/status screens.
 
-Caller-supplied workspace/account/provider/destination/broker/credential/execution hints are never authority.
+## Destination model
 
-Immediately before broker action, the runtime re-checks persisted workspace/source/account state, global execution fuse, account active/execution/kill state, risk/exposure, server-owned broker configuration, broker-authoritative symbol/economic/volume truth and persistent destination/order idempotency.
+A destination is where a processed signal goes.
 
-Repository tests may inject production gates as enabled and fake broker/provider dependencies to exercise the complete path. That is not authorization to connect real accounts or place real orders.
+Required destination types:
 
-## Current external/deployment safety state
+- Telegram channel/group;
+- broker account;
+- internal webhook/API;
+- audit-only.
 
-Keep fail-closed through staging acceptance unless the applicable gate explicitly and temporarily requires a narrower non-broker probe:
+Telegram destination formatting modes:
 
-- `TRADINGVIEW_DIRECT_INGRESS_ENABLED=false`
-- `TRADINGVIEW_CERT_PROBE_ENABLED=false`
-- `TRADING_ACCESS_ENABLED=false`
-- `BROKER_EXECUTION_ENABLED=false`
-- `TRADING_CUSTOM_HOSTNAMES_ENABLED=false`
+- `none`: send source text almost unchanged;
+- `clean`: remove footer/source branding/links according to owner rules, without changing trade numbers;
+- `template`: deterministic branded layout;
+- `ai_then_fallback`: AI may rewrite presentation, but fallback deterministic template must be used if AI fails/slow/unsafe.
 
-Provider/broker credentials remain external deployment secrets; do not commit them.
+## Mkety admin vs enterprise owner
 
-## Production execution locks
+Mkety admin panel is for Mkety staff to create enterprise owner access codes, list/revoke them, and view redemption state.
 
-Before a broker adapter may be reached, all applicable locks must pass:
+Enterprise owner console is for customers to manage their workspace, sources, destinations, AI formatting, accounts/risk, domains, MTProto setup, and audit.
 
-1. Worker/user access gate where applicable;
-2. `BROKER_EXECUTION_ENABLED=true`;
-3. exact persisted source remains active/workspace-authoritative;
-4. exact Trading workspace entitlement remains enabled;
-5. exact account belongs to the workspace and is active;
-6. account `execution_enabled=true`;
-7. kill/safety/risk/exposure policy allows the action;
-8. server-owned platform/destination configuration is complete;
-9. broker-authoritative symbol/risk/volume metadata validates the final action;
-10. persistent destination/order idempotency reservation succeeds;
-11. provider-specific production safety requirements also pass.
+## Existing trading/risk logic to preserve and expose
 
-## Exact next pickup
+- Signal classification: new signal, management, non-actionable/needs review.
+- Sides: BUY, SELL, LONG, SHORT.
+- Orders: MARKET, LIMIT, STOP, STOP_LIMIT.
+- Entries: market, fixed price, range, fast/incomplete.
+- Signal fields: symbol, entry, stop loss, TP1/TP2/TP3+, fast entry, incomplete signal.
+- Management: move SL to breakeven, close half/50%, cancel pending, close all, close position.
+- Risk sizing: fixed lots, risk percent, fixed risk amount.
+- Risk inputs: equity, balance, entry, stop loss, tick size, tick value per lot, min/max/step lot, number of targets.
+- Account policy: account disabled, kill switch, allowed symbols, max lots per trade, max risk percent, max daily loss percent, max open risk percent.
+- Risk-reducing actions may remain available during drawdown locks unless kill switch is on.
+- New accounts must default inactive, execution disabled, kill switch on.
+- Event ingest must verify source, signature, timestamp, database workspace authority, external MTProto policy, duplicate reservation, and only then parse/AI/orchestrate.
+- Caller-supplied workspace/account/provider/destination hints are never authority.
 
-1. Fix Gate 3 custom-domain 503 on `trade.mkety.com`, then rerun the Gate 3 certificate probe and fire one genuine TradingView webhook during the bounded probe window.
-2. Add Gate 4 staging identity secrets/test tokens, then rerun `identity: accept zitadel gate 4`.
-3. Add Gate 5 staging MTProto workspace/source/health/event secrets, then rerun `source: accept mtproto gate 5`.
-4. Add Gate 6 demo connectivity credentials for MT5 and cTrader, then rerun the MT5/cTrader demo probes.
-5. Prepare Gate 6 source endpoints and self-hosted Windows `mt5-demo` runner where required.
-6. Run Gate 7 demo lifecycle only after Gate 6 demo probes are green.
-7. Re-check current-head CI/CodeQL after all blocker-fix commits settle.
-8. Configure `main` protection before final production merge.
-9. Do not merge `main` or enable live broker execution without explicit final authorization.
+## Progress log
+
+- 2026-09-07: Production foundation merged/deployed from `main`; Supabase access-code migration applied; broker execution disabled.
+- 2026-09-07: Owner clarified external VM MTProto must be handoff-only and not collect Telegram credentials.
+- 2026-09-07: Branch `feature/trading-launch-console-destinations-mtproto` created for launch-console completion.
+- 2026-09-07: `AGENTS.md` updated as launch-completion source-of-truth and handoff file.
+
+## Next work
+
+1. Add launch-completion design spec and implementation plan.
+2. Add failing tests for destination/template/access-code admin contracts.
+3. Implement DB migration and V1 handlers.
+4. Expand dashboard launch console.
+5. Run CI, open PR, deploy with `BROKER_EXECUTION_ENABLED=false`, then hand over for manual real-system testing.
 
 ## Safety authorization boundary
 
