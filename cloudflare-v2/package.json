@@ -13,6 +13,7 @@
     "accept:ctrader:demo": "node scripts/ctrader_demo_acceptance.mjs",
     "accept:mt5:demo": "node scripts/mt5_demo_acceptance.mjs",
     "accept:v1:simulation": "node scripts/v1_simulation_acceptance.mjs",
+    "accept:access-code:preflight": "node --test tests/trading_access_code_onboarding.test.mjs",
     "soak:mtproto:container": "node scripts/mtproto_container_soak.mjs"
   },
   "dependencies": {
