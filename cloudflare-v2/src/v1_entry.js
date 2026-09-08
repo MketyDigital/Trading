@@ -1,5 +1,4 @@
 import legacyWorker from './index.js';
-import { renderTradingLaunchConsole } from './dashboard_launch_console.js';
 import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
@@ -23,10 +22,12 @@ export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js'
 const MTPROTO_RECOVERY_CRON = '* * * * *';
 
 function htmlResponse(html) {
-  return new Response(html, {
-    status: 200,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+
+function withPublicBrandingBootstrap(html) {
+  const script = `<script>(function(){fetch('/api/v1/public/branding',{headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).then(function(x){if(!x||!x.ok||!x.branding)return;var b=x.branding||{};var title=(b.brandName||'Mkety')+' '+(b.productName||'Trading');var t=document.getElementById('brandTitle');if(t)t.textContent=title;document.title=title;if(b.accentColor)document.documentElement.style.setProperty('--accent',b.accentColor);var logo=document.getElementById('brandLogo');if(logo&&b.logoUrl){logo.src=b.logoUrl;logo.classList.remove('hidden')}var sub=document.getElementById('brandSubtitle');if(sub&&x.kind==='white_label')sub.textContent='Enterprise trading automation workspace.'}).catch(function(){})})();</script>`;
+  return String(html).replace('</body>', `${script}</body>`);
 }
 
 async function publicSupabase(env = {}) {
@@ -38,24 +39,15 @@ async function publicSupabase(env = {}) {
 }
 
 function retiredLegacyAdminResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_ADMIN_API_RETIRED', replacement: '/api/v1/admin/*' }), {
-    status: 410,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_ADMIN_API_RETIRED', replacement: '/api/v1/admin/*' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 function retiredLegacySignalResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED', replacement: '/api/v1/internal/source-event or /api/v1/events' }), {
-    status: 410,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED', replacement: '/api/v1/internal/source-event or /api/v1/events' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 function notFoundResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), {
-    status: 404,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), { status: 404, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 function enabled(value) {
@@ -67,32 +59,12 @@ function isTradingViewCertificateProbeRequest(url, env = {}) {
 }
 
 function healthResponse(request, env = {}) {
-  if (request.method !== 'GET') {
-    return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', Allow: 'GET' },
-    });
-  }
+  if (request.method !== 'GET') return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), { status: 405, headers: { 'Content-Type': 'application/json; charset=utf-8', Allow: 'GET' } });
   const core = validateStagingReadiness(env);
   const simulation = validateStagingReadiness(env, { requireSimulation: true });
   const mtprotoContainer = validateStagingReadiness(env, { requireMtprotoContainer: true });
   const status = !core.ready ? 'not_ready' : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
-  return new Response(JSON.stringify({
-    ok: true,
-    service: 'mkety-trading-v1',
-    status,
-    ready: core.ready,
-    simulationReady: simulation.ready,
-    mtprotoContainerReady: mtprotoContainer.ready,
-    missing: core.missing,
-    simulationMissing: simulation.missing,
-    mtprotoContainerMissing: mtprotoContainer.missing,
-    optionalMissing: core.optionalMissing,
-    features: core.features,
-  }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  return new Response(JSON.stringify({ ok: true, service: 'mkety-trading-v1', status, ready: core.ready, simulationReady: simulation.ready, mtprotoContainerReady: mtprotoContainer.ready, missing: core.missing, simulationMissing: simulation.missing, mtprotoContainerMissing: mtprotoContainer.missing, optionalMissing: core.optionalMissing, features: core.features }), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 export function createTradingV1Entrypoint({
@@ -112,13 +84,9 @@ export function createTradingV1Entrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
-
-      if (url.pathname === '/' || url.pathname === '') return htmlResponse(renderEnterpriseTradingPortal(env));
-      if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
-        return new Response(null, { status: 302, headers: { Location: '/' } });
-      }
+      if (url.pathname === '/' || url.pathname === '') return htmlResponse(withPublicBrandingBootstrap(renderEnterpriseTradingPortal(env)));
+      if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
-
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
       if (url.pathname === '/api/v1/public/branding') {
         const supabase = await publicSupabase(env);
@@ -130,7 +98,6 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
       if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')) return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
-
       if (url.pathname === '/api/v1/events') {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return eventsHandler(request, env, { ctx });
@@ -148,20 +115,16 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/admin/')) return retiredLegacyAdminResponse();
       return legacy.fetch(request, env, ctx);
     },
-
     async queue(batch, env, ctx) {
       const runtime = queueRuntime || createSourceQueueRuntime();
       return runtime(batch, env, { ctx });
     },
-
     async scheduled(event, env, ctx) {
       if (event?.cron === MTPROTO_RECOVERY_CRON) {
         const mtprotoRuntime = recoveryRuntime || createMtprotoRecoveryRuntime();
         const retryRuntime = destinationRetryRuntime || createProductionDestinationRetryRuntime();
         const repairRuntime = bindingRepairRuntime || runScheduledBindingRepairs;
-        const [mtprotoResult, retryResult, bindingRepairResult] = await Promise.allSettled([
-          mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }),
-        ]);
+        const [mtprotoResult, retryResult, bindingRepairResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx })]);
         return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status };
       }
       if (typeof legacy.scheduled === 'function') return legacy.scheduled(event, env, ctx);
