@@ -18,16 +18,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: a-c
-            pattern: 'tests/[a-c]*.test.mjs'
-          - name: d-f
-            pattern: 'tests/[d-f]*.test.mjs'
-          - name: g-l
-            pattern: 'tests/[g-l]*.test.mjs'
-          - name: m-r
-            pattern: 'tests/[m-r]*.test.mjs'
-          - name: s-z
-            pattern: 'tests/[s-z]*.test.mjs'
+          - name: d
+            pattern: 'tests/d*.test.mjs'
+          - name: e
+            pattern: 'tests/e*.test.mjs'
+          - name: f
+            pattern: 'tests/f*.test.mjs'
     name: node-${{ matrix.name }}
     defaults:
       run:
