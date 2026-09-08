@@ -33,6 +33,10 @@ function withPublicBrandingBootstrap(html) {
   return String(html).replace('</body>', `${script}</body>`);
 }
 
+function normalizeEnterprisePortalHtml(html) {
+  return String(html).replace('placeholder="gpt-5-mini"', 'placeholder="Enter the current provider model ID"');
+}
+
 async function publicSupabase(env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
@@ -90,7 +94,7 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
       if (url.pathname === '/' || url.pathname === '') {
-        const portal = withEnterpriseConnectionEnhancements(renderEnterpriseTradingPortal(env));
+        const portal = withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env)));
         return htmlResponse(withPublicBrandingBootstrap(portal));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
