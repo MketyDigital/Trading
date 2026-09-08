@@ -18,12 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: d
-            pattern: 'tests/d*.test.mjs'
-          - name: e
-            pattern: 'tests/e*.test.mjs'
-          - name: f
-            pattern: 'tests/f*.test.mjs'
+          - name: enterprise-old
+            pattern: 'tests/enterprise_single_entry.test.mjs tests/entry_materializer.test.mjs'
+          - name: execution-old
+            pattern: 'tests/execution_binding_repair.test.mjs tests/execution_commands.test.mjs tests/execution_plan.test.mjs'
+          - name: external-old
+            pattern: 'tests/external_mtproto_ci_contract.test.mjs tests/external_mtproto_replay_acceptance.test.mjs tests/external_mtproto_tenant_isolation.test.mjs'
+          - name: enterprise-new
+            pattern: 'tests/enterprise_connections_sync.test.mjs tests/enterprise_destination_contracts.test.mjs tests/enterprise_portal_controls.test.mjs'
     name: node-${{ matrix.name }}
     defaults:
       run:
