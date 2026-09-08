@@ -197,7 +197,7 @@ test('redeem endpoint is fail-closed unless access-code onboarding is explicitly
   const response = await handleTradingAccessCodeRedeemRequest(new Request('https://trade.mkety.com/api/v1/access/redeem', {
     method: 'POST',
     body: JSON.stringify({ code: 'TRD-MKTY-8F7K', ownerEmail: 'owner@example.com' }),
-  }), {}, {
+  }), { TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret' }, {
     storeFactory: () => ({ redeem: async () => { throw new Error('store must not be called'); } }),
   });
   assert.equal(response.status, 503);
