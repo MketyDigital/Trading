@@ -1,5 +1,5 @@
 name: Production Cloudflare Deploy
-# Production deployment trigger marker; enterprise single-entry rollout.
+# Production deployment trigger marker; enterprise auth hardening rollout.
 
 on:
   workflow_dispatch:
