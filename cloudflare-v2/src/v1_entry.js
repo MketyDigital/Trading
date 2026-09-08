@@ -1,8 +1,10 @@
 import legacyWorker from './index.js';
 import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
+import { withEnterpriseConnectionEnhancements } from './dashboard_enterprise_enhancements.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
+import { handleV1AdminSourceIngressSecretRequest } from './http/v1_admin_source_ingress_secret.js';
 import { handlePublicBrandingRequest } from './http/v1_branding.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
@@ -71,6 +73,7 @@ export function createTradingV1Entrypoint({
   legacy = legacyWorker,
   eventsHandler = handleV1EventsRequest,
   adminHandler = handleV1AdminRequest,
+  sourceIngressSecretHandler = handleV1AdminSourceIngressSecretRequest,
   internalSourceHandler = handleInternalSourceEventRequest,
   tradingViewHandler = handleTradingViewWebhookRequest,
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
@@ -84,7 +87,10 @@ export function createTradingV1Entrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
-      if (url.pathname === '/' || url.pathname === '') return htmlResponse(withPublicBrandingBootstrap(renderEnterpriseTradingPortal(env)));
+      if (url.pathname === '/' || url.pathname === '') {
+        const portal = withEnterpriseConnectionEnhancements(renderEnterpriseTradingPortal(env));
+        return htmlResponse(withPublicBrandingBootstrap(portal));
+      }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
@@ -101,6 +107,10 @@ export function createTradingV1Entrypoint({
       if (url.pathname === '/api/v1/events') {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return eventsHandler(request, env, { ctx });
+      }
+      if (/^\/api\/v1\/admin\/sources\/[^/]+\/ingress-secret$/.test(url.pathname)) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return sourceIngressSecretHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/admin/')) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
