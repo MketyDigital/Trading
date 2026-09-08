@@ -1,5 +1,5 @@
 name: Production Cloudflare Deploy
-# Production deployment trigger marker; no runtime behavior change.
+# Production deployment trigger marker; enterprise single-entry rollout.
 
 on:
   workflow_dispatch:
@@ -36,8 +36,6 @@ jobs:
         )
       }}
     runs-on: ubuntu-latest
-    # Uses the existing environment-secret scope that already powered the verified Cloudflare gates.
-    # This still deploys the production Worker config from main; the environment name only controls GitHub secret access.
     environment: staging
     defaults:
       run:
@@ -94,23 +92,18 @@ jobs:
               missing=1
             fi
           }
-
           require_any CLOUDFLARE_API_TOKEN "$CLOUDFLARE_API_TOKEN"
           require_any CLOUDFLARE_ACCOUNT_ID "$CLOUDFLARE_ACCOUNT_ID"
           require_any SUPABASE_URL "$PRODUCTION_SUPABASE_URL_SECRET" "$PRODUCTION_SUPABASE_URL_VAR"
           require_any SUPABASE_SERVICE_ROLE "$PRODUCTION_SUPABASE_SERVICE_ROLE" "$PRODUCTION_SUPABASE_SERVICE_ROLE_KEY" "$PRODUCTION_SUPABASE_SERVICE_KEY"
           require_any TRADING_MASTER_KEY "$PRODUCTION_TRADING_MASTER_KEY"
-
           if [ -z "${PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET:-}" ]; then
             generated_session_secret="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')"
             echo "::add-mask::$generated_session_secret"
             echo "PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET=$generated_session_secret" >> "$GITHUB_ENV"
             echo "TRADING_ACCESS_CODE_SESSION_SECRET was not configured; generated a temporary masked deploy secret. Add a persistent GitHub secret with this name before the next deploy if you want existing dashboard sessions to survive redeploys."
           fi
-
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
+          if [ "$missing" -ne 0 ]; then exit 1; fi
 
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
@@ -128,31 +121,18 @@ jobs:
             BROKER_EXECUTION_ENABLED: 'false',
             TRADING_CUSTOM_HOSTNAMES_ENABLED: 'false',
           };
-
           let output = source;
           for (const [key, value] of Object.entries(requiredReplacements)) {
             const pattern = new RegExp(`^${key} = ".*"$`, 'm');
-            if (!pattern.test(output)) {
-              throw new Error(`Missing expected Wrangler var: ${key}`);
-            }
+            if (!pattern.test(output)) throw new Error(`Missing expected Wrangler var: ${key}`);
             output = output.replace(pattern, `${key} = "${value}"`);
           }
-
-          if (!/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = /m.test(output)) {
-            output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"\n');
-          } else {
-            output = output.replace(/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"');
-          }
-
-          if (!/^TRADING_ACCESS_CODE_SESSION_ENABLED = /m.test(output)) {
-            output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_SESSION_ENABLED = "true"\n');
-          } else {
-            output = output.replace(/^TRADING_ACCESS_CODE_SESSION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_SESSION_ENABLED = "true"');
-          }
-
+          if (!/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = /m.test(output)) output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"\n');
+          else output = output.replace(/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"');
+          if (!/^TRADING_ACCESS_CODE_SESSION_ENABLED = /m.test(output)) output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_SESSION_ENABLED = "true"\n');
+          else output = output.replace(/^TRADING_ACCESS_CODE_SESSION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_SESSION_ENABLED = "true"');
           fs.writeFileSync('wrangler.production.generated.toml', output, { mode: 0o600 });
           NODE
-
           grep -Eq '^TRADING_ACCESS_ENABLED = "true"$' wrangler.production.generated.toml
           grep -Eq '^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"$' wrangler.production.generated.toml
           grep -Eq '^TRADING_ACCESS_CODE_SESSION_ENABLED = "true"$' wrangler.production.generated.toml
@@ -168,23 +148,15 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
-
           const supabaseUrl = process.env.PRODUCTION_SUPABASE_URL_SECRET || process.env.PRODUCTION_SUPABASE_URL_VAR;
-          const serviceRole = process.env.PRODUCTION_SUPABASE_SERVICE_ROLE ||
-            process.env.PRODUCTION_SUPABASE_SERVICE_ROLE_KEY ||
-            process.env.PRODUCTION_SUPABASE_SERVICE_KEY;
-
+          const serviceRole = process.env.PRODUCTION_SUPABASE_SERVICE_ROLE || process.env.PRODUCTION_SUPABASE_SERVICE_ROLE_KEY || process.env.PRODUCTION_SUPABASE_SERVICE_KEY;
           const payload = {
             SUPABASE_URL: supabaseUrl,
             SUPABASE_SERVICE_ROLE: serviceRole,
             TRADING_MASTER_KEY: process.env.PRODUCTION_TRADING_MASTER_KEY,
             TRADING_ACCESS_CODE_SESSION_SECRET: process.env.PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET,
           };
-
-          for (const [key, value] of Object.entries(payload)) {
-            if (!value) throw new Error(`Missing required secret payload value: ${key}`);
-          }
-
+          for (const [key, value] of Object.entries(payload)) if (!value) throw new Error(`Missing required secret payload value: ${key}`);
           const target = path.join(process.env.RUNNER_TEMP, 'mkety-trading-production-secrets.json');
           fs.writeFileSync(target, JSON.stringify(payload), { mode: 0o600 });
           NODE
