@@ -92,9 +92,8 @@ test('external MTProto endpoint rejects a wrong opaque endpoint token before V1 
   assert.equal(called, false);
 });
 
-test('enterprise AI setup uses explicit provider model IDs and contains no stale fallback model defaults', async () => {
+test('enterprise AI setup requires explicit provider model IDs and contains no stale fallback model defaults', async () => {
   const html = await portalHtml();
-  assert.match(html, /gpt-5\.6-(?:luna|sol)/i);
   assert.match(html, /Enter the current provider model ID/i);
   assert.doesNotMatch(html, /gpt-4o-mini/i);
   assert.doesNotMatch(html, /gpt-5-mini/i);
