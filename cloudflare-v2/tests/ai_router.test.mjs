@@ -67,3 +67,17 @@ test('passes Cloudflare account id through router env instead of undefined globa
   assert.equal(result.success, true);
   assert.match(requestedUrl, /accounts\/acct-123\/ai\/run/);
 });
+
+test('does not silently fall back to stale provider model names', async () => {
+  let fetchCalls = 0;
+  const fetchFn = async () => {
+    fetchCalls += 1;
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) };
+  };
+  const router = new UniversalAIRouter([
+    { provider_name: 'openai', api_key: 'token', is_active: true },
+  ], { fetchFn });
+  const result = await router.processSignal('x', 'y', { timeoutMs: 100 });
+  assert.equal(result.success, false);
+  assert.equal(fetchCalls, 0);
+});
