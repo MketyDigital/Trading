@@ -18,8 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: a-f
-            pattern: 'tests/[a-f]*.test.mjs'
+          - name: a-c
+            pattern: 'tests/[a-c]*.test.mjs'
+          - name: d-f
+            pattern: 'tests/[d-f]*.test.mjs'
           - name: g-l
             pattern: 'tests/[g-l]*.test.mjs'
           - name: m-r
