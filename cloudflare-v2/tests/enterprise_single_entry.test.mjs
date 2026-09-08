@@ -42,6 +42,20 @@ test('enterprise entry persists one shared tenant session after access-code rede
   assert.match(html, /sessionStorage/);
 });
 
+test('enterprise portal filters child controls using safe workspace entitlements', async () => {
+  const response = await worker().fetch(new Request('https://trade.mkety.com/'), {
+    TRADING_ACCESS_ENABLED: 'true',
+    BROKER_EXECUTION_ENABLED: 'false',
+  }, {});
+  const html = await response.text();
+  assert.match(html, /applyEntitlementsToFrame/);
+  assert.match(html, /telegramDestination/);
+  assert.match(html, /tradingExecutionDestination/);
+  assert.match(html, /customHostname/);
+  assert.match(html, /destinationType/);
+  assert.match(html, /data-tab=["']hostnames["']/);
+});
+
 test('staff access-code manager remains isolated from enterprise customer session', async () => {
   const response = await worker().fetch(new Request('https://trade.mkety.com/mkety-admin/access-codes'), {}, {});
   const html = await response.text();

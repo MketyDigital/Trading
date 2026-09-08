@@ -1,4 +1,19 @@
-# Mkety Trading Launch Console — Manual E2E Runbook
+# Mkety Trading Enterprise Portal — Manual E2E Runbook
+
+## Customer entry model
+
+The only customer-facing entry is `https://trade.mkety.com/`.
+
+Customers do not manually open `/launch-console`, copy a workspace ID, or paste a bearer token. The root enterprise portal authenticates once, stores the short-lived Trading session in the browser, and opens the internal workspace/launch views automatically.
+
+Two tenant authentication methods are supported by architecture:
+
+1. **Access-code authentication (active now):** the customer enters the Mkety-issued access code and owner email at `trade.mkety.com`; Trading validates the code against Supabase and creates a short-lived local Trading bearer.
+2. **Mkety signed authentication (alternate path):** when `MKETY_ACCESS_ISSUER`, `MKETY_ACCESS_AUDIENCE`, and `MKETY_ACCESS_JWKS_URL` are configured, a valid Mkety-signed Trading assertion can authenticate the same tenant.
+
+Both methods converge on the same Trading-owned Supabase workspace, membership and entitlement checks. They must never create parallel customer workspaces or duplicate authorization models.
+
+`/mkety-admin/access-codes` is a separate Mkety-staff surface and is not part of the tenant session.
 
 ## Safety gates
 
@@ -6,15 +21,14 @@ Before any test:
 
 - `BROKER_EXECUTION_ENABLED=false`.
 - Do not use real broker credentials or authorize live-money execution.
-- Migration `0015_trading_destinations_templates_routes.sql` must be applied only after the branch is approved for deployment.
 - Never paste Telegram account credentials into External VM MTProto setup. External VM is handoff-only.
 - Hosted Cloudflare Container/DO MTProto credentials are submitted only through the protected source API and must never be returned by list/read APIs.
 
-## 1. Create an enterprise access code
+## 1. Create an enterprise access code — Mkety staff
 
-Open `/mkety-admin/access-codes` as Mkety staff.
+Open `/mkety-admin/access-codes` as authorized Mkety staff.
 
-Enter the staff secret for the current page session, then choose one preset or a custom capability combination:
+Choose one preset or a custom capability combination:
 
 - **Trading Only** — trading execution destination available; Telegram, custom subdomain and custom hostname unavailable.
 - **Trading + Telegram** — trading execution and Telegram destinations available; custom subdomain and hostname unavailable.
@@ -23,30 +37,48 @@ Enter the staff secret for the current page session, then choose one preset or a
 
 Create the code and copy the plaintext value immediately. It is shown once. Listing and revocation never return plaintext or a code hash.
 
-## 2. Redeem the access code
+## 2. Customer signs in at trade.mkety.com
 
-Redeem through `POST /api/v1/access/redeem` with the intended owner email/workspace data.
+Open `https://trade.mkety.com/`.
+
+Enter:
+
+- enterprise access code;
+- owner email;
+- optional owner name;
+- optional workspace display name.
+
+Select **Continue with access code**.
 
 Expected:
 
-- response contains the exact workspace and safe entitlements;
-- bearer is short-lived and workspace-bound;
-- `brokerExecutionEnabled` is `false`;
-- a requested subdomain is rejected unless `customSubdomain=true`;
-- live execution is never granted by the access code.
+- the portal calls `POST /api/v1/access/redeem` internally;
+- the customer is not shown or asked to copy a bearer token;
+- the customer is not asked to copy a workspace UUID;
+- one shared browser session is established automatically;
+- the same session is used by the workspace and launch views;
+- the workspace and safe entitlements are displayed;
+- `brokerExecutionEnabled` remains `false`;
+- live execution is never granted by an access code.
 
-## 3. Connect the enterprise launch console
+Reload the page and verify the active short-lived session restores automatically. Sign out and verify the browser session is cleared.
 
-Open `/launch-console` and provide:
+## 3. Verify entitlement-aware portal controls
 
-- the redeemed workspace ID;
-- the short-lived Trading bearer.
+Use the capabilities selected for the access code.
 
-Verify `BROKER_EXECUTION_ENABLED=false` is visible before continuing.
+Expected UI and server behavior:
+
+- `audit_only` remains available;
+- Telegram destination controls are available only when `telegramDestination=true`;
+- broker-account/internal-webhook destination controls are available only when `tradingExecutionDestination=true`;
+- custom-hostname controls are hidden when `customHostname=false`;
+- UI filtering is convenience only — server-side entitlement checks remain authoritative;
+- broker destination records may be configured when entitled but cannot execute while the global broker fuse is off.
 
 ## 4. Create a source
 
-Choose one test path.
+From the authenticated enterprise workspace choose one test path.
 
 ### Fast signed API path
 
@@ -75,8 +107,6 @@ Expected:
 - runtime readiness/recovery is handled by the Mkety-hosted MTProto runtime.
 
 ## 5. Create destinations
-
-Use the access-code capability selected in step 1.
 
 Expected entitlement behavior for access-code-provisioned workspaces:
 
@@ -111,7 +141,7 @@ Verify:
 
 ## 8. Send a test signal
 
-Use a deterministic test signal with known values, for example a synthetic/demo-only signal containing symbol, side, entry, stop and take profits.
+Use a deterministic demo-only signal with known symbol, side, entry, stop and take-profit values.
 
 Expected pipeline:
 
@@ -126,13 +156,13 @@ Expected pipeline:
 
 ## 9. Verify Telegram delivery
 
-When the access code grants Telegram and the destination credentials are valid, verify the formatted message reaches the configured Telegram target once.
+When the access code grants Telegram and destination credentials are valid, verify the formatted message reaches the configured Telegram target once.
 
-Then resend the same idempotent event and confirm the system does not produce an unintended duplicate delivery.
+Resend the same idempotent event and confirm the system does not produce an unintended duplicate delivery.
 
 ## 10. Verify operations and audit
 
-Check:
+Check the portal's operations/audit controls, backed by:
 
 - `GET /api/v1/admin/operations`
 - `GET /api/v1/admin/events/{eventId}/audit`
@@ -141,14 +171,24 @@ Confirm source receive, parse, route, formatting, destination delivery/retry and
 
 ## 11. Verify hostname capability
 
-For an access-code-provisioned workspace without `customHostname`, `/api/v1/admin/hostnames` must return `TRADING_ENTITLEMENT_REQUIRED` before touching the hostname store.
+For an access-code-provisioned workspace without `customHostname`, hostname controls should not be presented and `/api/v1/admin/hostnames` must still return `TRADING_ENTITLEMENT_REQUIRED` before touching the hostname store.
 
 For a code with `customHostname=true`, continue only if `TRADING_CUSTOM_HOSTNAMES_ENABLED=true` and Cloudflare hostname provider configuration is intentionally enabled. DNS/customer production changes require separate authorization.
 
-## 12. Final acceptance checklist
+## 12. Verify alternate Mkety authentication boundary
 
-- Access code create/list/revoke works and plaintext is shown once only.
-- All four capability switches behave independently.
+When central Mkety auth is configured, verify that a Mkety-signed Trading bearer enters the same workspace authorization path and still requires the exact enabled Trading workspace and membership in Supabase.
+
+The access-code method must continue to work independently. Enabling central auth must not disable, duplicate, migrate or fork access-code workspaces.
+
+## 13. Final acceptance checklist
+
+- Customer uses only `trade.mkety.com` for normal access.
+- Access-code login requires no bearer/workspace copying.
+- One tenant session spans workspace and launch features.
+- Session survives ordinary redeployment while the signing root remains unchanged.
+- Sign out clears the tenant browser session.
+- All four capability switches behave independently in UI and server authorization.
 - External VM MTProto has no Telegram credential path.
 - Hosted MTProto stores credentials encrypted and never returns them.
 - Telegram destination delivery works when entitled/configured.
@@ -156,5 +196,7 @@ For a code with `customHostname=true`, continue only if `TRADING_CUSTOM_HOSTNAME
 - AI formatting cannot alter canonical trade semantics.
 - Source-to-destination routing is workspace-scoped.
 - Audit shows the complete event path.
+- Mkety staff admin remains isolated from tenant authentication.
+- Access-code auth and Mkety-signed auth converge on one Supabase authorization model.
 - `BROKER_EXECUTION_ENABLED=false` throughout.
 - No real-money execution occurs.
