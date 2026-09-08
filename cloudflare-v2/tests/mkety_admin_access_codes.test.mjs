@@ -14,7 +14,7 @@ function fakeStore() {
   return {
     calls,
     async createAccessCode(plan) {
-      calls.push(plan);
+      calls.push({ operation: 'create', plan });
       return {
         id: 'code-row-1',
         workspace_id: plan.workspace.id,
@@ -45,6 +45,25 @@ function fakeStore() {
         metadata: { label: 'first code' },
         created_at: fixedNow.toISOString(),
       }];
+    },
+    async revokeAccessCode(accessCodeId) {
+      calls.push({ operation: 'revoke', accessCodeId });
+      if (accessCodeId !== 'code-row-1') return null;
+      return {
+        id: 'code-row-1',
+        workspace_id: 'workspace-1',
+        workspace_display_name: 'Starpips Trading',
+        owner_email: 'owner@example.com',
+        owner_name: 'Owner Example',
+        status: 'revoked',
+        max_redemptions: 1,
+        redeemed_count: 0,
+        expires_at: '2026-09-15T00:00:00.000Z',
+        entitlements: { liveExecution: false, brokerModes: ['demo'] },
+        metadata: { label: 'first code' },
+        created_at: fixedNow.toISOString(),
+        updated_at: fixedNow.toISOString(),
+      };
     },
   };
 }
@@ -95,7 +114,7 @@ test('Mkety admin access-code creation requires Mkety admin secret and never exp
   assert.equal(body.accessCode.plainCode, 'TRD-MKETY-OWNER-001');
   assert.equal(body.accessCode.codeHash, undefined);
   assert.equal(body.accessCode.workspaceId, 'workspace-1');
-  assert.equal(store.calls[0].record.code_hash, await hashTradingAccessCode(normalizeTradingAccessCode('TRD-MKETY-OWNER-001')));
+  assert.equal(store.calls[0].plan.record.code_hash, await hashTradingAccessCode(normalizeTradingAccessCode('TRD-MKETY-OWNER-001')));
 });
 
 test('Mkety admin access-code list does not reveal hashes or plain codes', async () => {
@@ -110,4 +129,21 @@ test('Mkety admin access-code list does not reveal hashes or plain codes', async
   assert.equal(body.accessCodes[0].workspaceDisplayName, 'Starpips Trading');
   assert.equal(body.accessCodes[0].plainCode, undefined);
   assert.equal(body.accessCodes[0].codeHash, undefined);
+});
+
+test('Mkety admin can revoke an access code without exposing hash or plain code', async () => {
+  const store = fakeStore();
+  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes/code-row-1/revoke', {
+    method: 'POST',
+    headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
+  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow });
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.accessCode.id, 'code-row-1');
+  assert.equal(body.accessCode.status, 'revoked');
+  assert.equal(body.accessCode.plainCode, undefined);
+  assert.equal(body.accessCode.codeHash, undefined);
+  assert.deepEqual(store.calls.at(-1), { operation: 'revoke', accessCodeId: 'code-row-1' });
 });
