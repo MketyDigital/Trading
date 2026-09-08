@@ -17,12 +17,12 @@ const SOURCE_SELECT = [
 const SOURCE_CREDENTIAL_KIND_BY_PROVIDER = Object.freeze({
   cloudflare_container_mtproto: 'mtproto',
   cloudflare_do_mtproto: 'mtproto',
-  external_mtproto: 'mtproto',
   mt5_source_bridge: 'mt5',
   ctrader_source: 'ctrader',
 });
 
 const NON_CREDENTIAL_ONBOARDING_PROVIDERS = new Set([
+  'external_mtproto',
   'tradingview_webhook',
   'custom_signed_api',
 ]);
@@ -522,6 +522,10 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
     }
     if (!existing) {
       return json({ ok: false, reason: 'SOURCE_PROVIDER_UNSUPPORTED_FOR_ONBOARDING' }, 400);
+    }
+
+    if (existing.providerType === 'external_mtproto') {
+      return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400);
     }
 
     if (existing.providerType === 'custom_signed_api') {
