@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeTradingAccessCode,
   validateTradingAccessCodeRecord,
+  classifyTradingAccessCodeUse,
   createLocalTradingBearer,
   verifyLocalTradingBearer,
 } from '../src/access/trading_access_codes.js';
@@ -87,6 +88,35 @@ test('invalid access-code records fail closed', () => {
   assert.equal(validateTradingAccessCodeRecord(validRecord({ status: 'disabled' }), fixedNow).reason, 'ACCESS_CODE_NOT_ACTIVE');
   assert.equal(validateTradingAccessCodeRecord(validRecord({ redeemed_count: 1 }), fixedNow).reason, 'ACCESS_CODE_REDEMPTION_LIMIT_REACHED');
   assert.equal(validateTradingAccessCodeRecord(validRecord({ expires_at: '2026-09-06T12:00:00.000Z' }), fixedNow).reason, 'ACCESS_CODE_EXPIRED');
+});
+
+test('active redeemed owner code becomes fallback login for the same bound owner and workspace', () => {
+  const result = classifyTradingAccessCodeUse(validRecord({ redeemed_count: 1 }), 'OWNER@example.com', fixedNow);
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'access_code_login');
+  assert.equal(result.workspace.id, workspaceId);
+  assert.equal(result.membership.subject, 'access-code:owner@example.com');
+});
+
+test('fallback owner code rejects a different email and still honors expiry/revocation', () => {
+  assert.equal(
+    classifyTradingAccessCodeUse(validRecord({ redeemed_count: 1 }), 'intruder@example.com', fixedNow).reason,
+    'ACCESS_CODE_OWNER_EMAIL_MISMATCH',
+  );
+  assert.equal(
+    classifyTradingAccessCodeUse(validRecord({ redeemed_count: 1, expires_at: '2026-09-06T12:00:00.000Z' }), 'owner@example.com', fixedNow).reason,
+    'ACCESS_CODE_EXPIRED',
+  );
+  assert.equal(
+    classifyTradingAccessCodeUse(validRecord({ redeemed_count: 1, status: 'disabled' }), 'owner@example.com', fixedNow).reason,
+    'ACCESS_CODE_NOT_ACTIVE',
+  );
+});
+
+test('unredeemed owner code remains an onboarding credential', () => {
+  const result = classifyTradingAccessCodeUse(validRecord(), 'owner@example.com', fixedNow);
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'access_code_onboarding');
 });
 
 test('local Trading bearer verifies only for exact workspace and configured secret', async () => {
@@ -218,6 +248,35 @@ test('redeem endpoint returns workspace, owner membership and local bearer witho
     nowSec: 1799313601,
   });
   assert.equal(verified.ok, true);
+});
+
+test('redeem endpoint reports fallback access-code login mode without reprovisioning', async () => {
+  const response = await handleTradingAccessCodeRedeemRequest(new Request('https://trade.mkety.com/api/v1/access/redeem', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: 'TRD-MKTY-8F7K', ownerEmail: 'owner@example.com' }),
+  }), {
+    TRADING_ACCESS_CODE_REDEMPTION_ENABLED: 'true',
+    TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret',
+  }, {
+    now: fixedNow,
+    nowSec: 1799313600,
+    supabaseFactory: async () => fakeAccessCodeSupabase(),
+    storeFactory: () => ({
+      redeem: async () => ({
+        ...classifyTradingAccessCodeUse(validRecord({ redeemed_count: 1 }), 'owner@example.com', fixedNow),
+        mode: 'access_code_login',
+      }),
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.mode, 'access_code_login');
+  assert.equal(body.workspace.id, workspaceId);
+  assert.equal(typeof body.bearer, 'string');
+  assert.match(response.headers.get('set-cookie') || '', /mkety_trading_refresh=/);
 });
 
 test('access-code migration creates hashed code and redemption audit tables with service-role-only access', async () => {
