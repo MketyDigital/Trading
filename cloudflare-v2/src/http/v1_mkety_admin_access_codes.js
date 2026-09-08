@@ -2,6 +2,7 @@ import {
   hashTradingAccessCode,
   normalizeTradingAccessCode,
 } from '../access/trading_access_codes.js';
+import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -48,16 +49,14 @@ function text(value) {
 
 function normalizeEntitlements(entitlements = {}) {
   const sourceTypes = Array.isArray(entitlements.sourceTypes) ? entitlements.sourceTypes.map(String) : ['telegram', 'tradingview'];
-  const brokerModes = Array.isArray(entitlements.brokerModes) ? entitlements.brokerModes.map(String) : ['demo'];
-  return {
-    customSubdomain: Boolean(entitlements.customSubdomain),
-    customHostname: Boolean(entitlements.customHostname),
+  const destinations = Array.isArray(entitlements.destinations) ? entitlements.destinations.map(String) : ['telegram', 'audit_only'];
+  return normalizeTradingEntitlements({
+    ...entitlements,
     sourceTypes,
-    brokerModes: brokerModes.includes('live') ? ['demo'] : brokerModes,
+    destinations,
+    brokerModes: ['demo'],
     liveExecution: false,
-    maxTeamMembers: Math.max(1, Number.parseInt(entitlements.maxTeamMembers ?? 1, 10) || 1),
-    destinations: Array.isArray(entitlements.destinations) ? entitlements.destinations.map(String) : ['telegram', 'audit_only'],
-  };
+  });
 }
 
 function safePublicAccessCode(row = {}, plainCode = undefined) {
@@ -71,7 +70,7 @@ function safePublicAccessCode(row = {}, plainCode = undefined) {
     maxRedemptions: row.max_redemptions ?? row.maxRedemptions,
     redeemedCount: row.redeemed_count ?? row.redeemedCount,
     expiresAt: row.expires_at ?? row.expiresAt ?? null,
-    entitlements: row.entitlements || {},
+    entitlements: normalizeEntitlements(row.entitlements || {}),
     metadata: row.metadata || {},
     createdAt: row.created_at ?? row.createdAt ?? null,
   };
