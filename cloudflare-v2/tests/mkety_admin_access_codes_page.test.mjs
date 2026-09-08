@@ -7,7 +7,7 @@ import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 test('Mkety staff access-code page is separate, secret-safe, and supports create/list/revoke', () => {
   const html = renderMketyAdminAccessCodesPage();
 
-  assert.match(html, /Mkety Staff Access Codes/);
+  assert.match(html, /Mkety Staff Trading Admin/);
   assert.match(html, /\/api\/v1\/mkety-admin\/access-codes/);
   assert.match(html, /Create access code/);
   assert.match(html, /Revoke/);
@@ -38,6 +38,6 @@ test('Trading V1 entrypoint serves Mkety staff access-code page without enabling
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') || '', /text\/html/);
-  assert.match(await response.text(), /Mkety Staff Access Codes/);
+  assert.match(await response.text(), /Mkety Staff Trading Admin/);
   assert.equal(legacyCalls, 0);
 });
