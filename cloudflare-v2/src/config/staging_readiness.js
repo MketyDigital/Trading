@@ -28,15 +28,23 @@ export function validateStagingReadiness(
 ) {
   const missing = [];
   const accessEnabled = enabled(env.TRADING_ACCESS_ENABLED);
+  const localAccessCodeAuthEnabled = enabled(env.TRADING_ACCESS_CODE_SESSION_ENABLED);
+  const centralAccessAuthEnabled = present(env.MKETY_ACCESS_ISSUER)
+    && present(env.MKETY_ACCESS_AUDIENCE)
+    && present(env.MKETY_ACCESS_JWKS_URL);
 
   if (!present(env.SUPABASE_URL)) missing.push('SUPABASE_URL');
   if (!hasServiceRole(env)) missing.push('SUPABASE_SERVICE_ROLE');
   if (!present(env.TRADING_MASTER_KEY)) missing.push('TRADING_MASTER_KEY');
 
   if (accessEnabled) {
-    if (!present(env.MKETY_ACCESS_ISSUER)) missing.push('MKETY_ACCESS_ISSUER');
-    if (!present(env.MKETY_ACCESS_AUDIENCE)) missing.push('MKETY_ACCESS_AUDIENCE');
-    if (!present(env.MKETY_ACCESS_JWKS_URL)) missing.push('MKETY_ACCESS_JWKS_URL');
+    if (localAccessCodeAuthEnabled) {
+      if (!present(env.TRADING_ACCESS_CODE_SESSION_SECRET)) missing.push('TRADING_ACCESS_CODE_SESSION_SECRET');
+    } else if (!centralAccessAuthEnabled) {
+      if (!present(env.MKETY_ACCESS_ISSUER)) missing.push('MKETY_ACCESS_ISSUER');
+      if (!present(env.MKETY_ACCESS_AUDIENCE)) missing.push('MKETY_ACCESS_AUDIENCE');
+      if (!present(env.MKETY_ACCESS_JWKS_URL)) missing.push('MKETY_ACCESS_JWKS_URL');
+    }
   }
 
   if (requireSimulation) {
@@ -59,6 +67,8 @@ export function validateStagingReadiness(
     optionalMissing: OPTIONAL_KEYS.filter((key) => !present(env[key])),
     features: {
       accessEnabled,
+      localAccessCodeAuthEnabled,
+      centralAccessAuthEnabled,
       simulationRequested: Boolean(requireSimulation),
       mtprotoContainerRequested: Boolean(requireMtprotoContainer),
       simulationEnabled: enabled(env.TRADING_V1_SIMULATION),
