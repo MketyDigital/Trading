@@ -1,15 +1,21 @@
 import {
+  clearTradingRefreshCookie,
   createLocalTradingBearer,
+  createTradingRefreshToken,
   normalizeTradingAccessCode,
+  readTradingRefreshCookie,
+  tradingRefreshCookie,
+  verifyTradingRefreshToken,
 } from '../access/trading_access_codes.js';
 import { createTradingAccessCodeStore } from '../persistence/supabase_access_code_store.js';
 
-function json(body, status = 200) {
+function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
+      ...extraHeaders,
     },
   });
 }
@@ -34,20 +40,94 @@ async function parseJson(request) {
   }
 }
 
+async function createStore(env, supabaseFactory, storeFactory) {
+  const supabase = await supabaseFactory(env);
+  return storeFactory(supabase, env);
+}
+
+async function issueSession(result, env, nowSec, mode, { includeRefreshCookie = false } = {}) {
+  const bearer = await createLocalTradingBearer({
+    subject: result.membership.subject,
+    workspaceId: result.workspace.id,
+    access: 'owner',
+  }, env.TRADING_ACCESS_CODE_SESSION_SECRET, nowSec);
+
+  const headers = {};
+  if (includeRefreshCookie) {
+    const refreshToken = await createTradingRefreshToken({
+      subject: result.membership.subject,
+      workspaceId: result.workspace.id,
+    }, env.TRADING_ACCESS_CODE_SESSION_SECRET, nowSec);
+    headers['Set-Cookie'] = tradingRefreshCookie(refreshToken);
+  }
+
+  return json({
+    ok: true,
+    mode,
+    workspace: result.workspace,
+    membership: {
+      role: result.membership.role,
+      enabled: true,
+    },
+    entitlements: result.entitlements,
+    brokerExecutionEnabled: enabled(env.BROKER_EXECUTION_ENABLED),
+    bearer,
+  }, 200, headers);
+}
+
 export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   storeFactory = createTradingAccessCodeStore,
   now = new Date(),
   nowSec = Math.floor(Date.now() / 1000),
+  refreshVerifier = verifyTradingRefreshToken,
 } = {}) {
+  const url = new URL(request.url);
+
+  if (url.pathname === '/api/v1/access/logout') {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
+    return json({ ok: true }, 200, { 'Set-Cookie': clearTradingRefreshCookie() });
+  }
+
+  if (!env.TRADING_ACCESS_CODE_SESSION_SECRET) {
+    return json({ ok: false, reason: 'ACCESS_CODE_SESSION_NOT_CONFIGURED' }, 503);
+  }
+
+  if (url.pathname === '/api/v1/access/session') {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
+    const refreshToken = readTradingRefreshCookie(request);
+    if (!refreshToken) return json({ ok: false, reason: 'RETURNING_SESSION_NOT_FOUND' }, 401);
+    const verified = await refreshVerifier(refreshToken, env.TRADING_ACCESS_CODE_SESSION_SECRET, { nowSec });
+    if (!verified?.ok) {
+      return json({ ok: false, reason: verified?.reason || 'RETURNING_SESSION_INVALID' }, 401, { 'Set-Cookie': clearTradingRefreshCookie() });
+    }
+
+    let store;
+    try {
+      store = await createStore(env, supabaseFactory, storeFactory);
+    } catch {
+      return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
+    }
+
+    let result;
+    try {
+      result = await store.restoreSession({ workspaceId: verified.workspaceId, subject: verified.subject });
+    } catch {
+      return json({ ok: false, reason: 'RETURNING_SESSION_LOOKUP_FAILED' }, 503);
+    }
+    if (!result?.ok) {
+      return json({ ok: false, reason: result?.reason || 'RETURNING_SESSION_DENIED' }, result?.status || 403, { 'Set-Cookie': clearTradingRefreshCookie() });
+    }
+
+    return issueSession(result, env, nowSec, 'returning_session', { includeRefreshCookie: true });
+  }
+
+  if (url.pathname !== '/api/v1/access/redeem') return json({ ok: false, reason: 'ACCESS_ROUTE_NOT_FOUND' }, 404);
   if (!enabled(env.TRADING_ACCESS_CODE_REDEMPTION_ENABLED)) {
     return json({ ok: false, reason: 'ACCESS_CODE_REDEMPTION_DISABLED' }, 503);
   }
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
-  }
-  if (!env.TRADING_ACCESS_CODE_SESSION_SECRET) {
-    return json({ ok: false, reason: 'ACCESS_CODE_SESSION_NOT_CONFIGURED' }, 503);
   }
 
   const body = await parseJson(request);
@@ -62,8 +142,7 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
   let store;
   try {
-    const supabase = await supabaseFactory(env);
-    store = storeFactory(supabase, env);
+    store = await createStore(env, supabaseFactory, storeFactory);
   } catch {
     return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
   }
@@ -86,22 +165,5 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
     return json({ ok: false, reason: result?.reason || 'ACCESS_CODE_REDEMPTION_DENIED' }, result?.status || 403);
   }
 
-  const bearer = await createLocalTradingBearer({
-    subject: result.membership.subject,
-    workspaceId: result.workspace.id,
-    access: 'owner',
-  }, env.TRADING_ACCESS_CODE_SESSION_SECRET, nowSec);
-
-  return json({
-    ok: true,
-    mode: 'access_code_onboarding',
-    workspace: result.workspace,
-    membership: {
-      role: result.membership.role,
-      enabled: true,
-    },
-    entitlements: result.entitlements,
-    brokerExecutionEnabled: enabled(env.BROKER_EXECUTION_ENABLED),
-    bearer,
-  });
+  return issueSession(result, env, nowSec, result.mode || 'access_code_onboarding', { includeRefreshCookie: true });
 }

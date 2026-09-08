@@ -2,6 +2,7 @@ import { createProductionExecutionDependencies } from '../execution/production_e
 import { createSafeSimulationExecutionDependencies } from '../execution/safe_simulation_execution_deps.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';
+import { resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
 
 function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
@@ -64,6 +65,7 @@ export async function runV1ProductionExecutionStage({
   safeSimulationDepsFactory = createSafeSimulationExecutionDependencies,
   bindingRepairRecorderFactory = createProductionBindingRepairRecorder,
   executeProductionFn = executeProductionPlan,
+  brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
 } = {}) {
   if (!result?.ok || result?.duplicate) {
     return null;
@@ -83,6 +85,19 @@ export async function runV1ProductionExecutionStage({
 
   if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
     return summary('NOT_EXECUTABLE', { transportMode });
+  }
+
+  let runtimeControl;
+  try {
+    runtimeControl = await brokerExecutionControlResolver({ env, supabase });
+  } catch {
+    runtimeControl = { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' };
+  }
+  if (!runtimeControl?.ok) {
+    return summary('BROKER_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
+  }
+  if (runtimeControl.enabled !== true) {
+    return summary('BROKER_OWNER_SWITCH_OFF', { blocked: accountPlans.length, transportMode });
   }
 
   const workspaceId = String(result?.event?.workspace_hint || '').trim();

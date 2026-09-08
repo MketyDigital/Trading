@@ -90,6 +90,11 @@ test('V1 production-shaped path executes exactly once through real coordinator w
         }],
       };
     },
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: true,
+      reason: 'TEST_ENABLED',
+    }),
     executionDepsFactory: async ({ workspaceId, tradingEventId }) => {
       assert.equal(workspaceId, 'ws-trusted');
       assert.equal(tradingEventId, 'db-event-1');

@@ -54,6 +54,11 @@ test('safe simulation explicitly exposes its synthetic transport mode', async ()
     supabase: { from() {} },
     result,
     simulation: readySimulation(),
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: true,
+      reason: 'TEST_ENABLED',
+    }),
     safeSimulationDepsFactory: async () => ({ synthetic: true }),
     bindingRepairRecorderFactory: () => ({}),
     executeProductionFn: async (_input, deps) => {

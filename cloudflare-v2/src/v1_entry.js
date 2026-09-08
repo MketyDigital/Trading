@@ -2,6 +2,7 @@ import legacyWorker from './index.js';
 import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { withEnterpriseConnectionEnhancements } from './dashboard_enterprise_enhancements.js';
+import { withReturningOwnerSession } from './dashboard_returning_session.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
@@ -95,7 +96,7 @@ export function createTradingV1Entrypoint({
       const url = new URL(request.url);
       if (url.pathname === '/' || url.pathname === '') {
         const portal = normalizeEnterprisePortalHtml(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env))));
-        return htmlResponse(withPublicBrandingBootstrap(portal));
+        return htmlResponse(withPublicBrandingBootstrap(withReturningOwnerSession(portal)));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
@@ -106,9 +107,9 @@ export function createTradingV1Entrypoint({
       }
       if (url.pathname === '/api/v1/internal/source-event') return internalSourceHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
-      if (url.pathname === '/api/v1/access/redeem') return accessCodeRedeemHandler(request, env, { ctx });
+      if (['/api/v1/access/redeem', '/api/v1/access/session', '/api/v1/access/logout'].includes(url.pathname)) return accessCodeRedeemHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
-      if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')) return mketyAdminAccessCodesHandler(request, env, { ctx });
+      if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
       if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
