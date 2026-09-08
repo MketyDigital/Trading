@@ -1,6 +1,6 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
-# rollout trigger: enterprise console launch 2026-09-08
+# rollout trigger: enterprise console launch 2026-09-08 v2
 
 on:
   workflow_dispatch:
@@ -54,7 +54,7 @@ jobs:
       PRODUCTION_HEALTH_URL: ${{ vars.TRADING_PRODUCTION_HEALTH_URL }}
       TRADING_SAAS_ZONE: mkety.com
       TRADING_SAAS_FALLBACK_ORIGIN: saas-origin.mkety.com
-      TRADING_CUSTOM_HOSTNAME_CNAME_TARGET: customers.mkety.com
+      TRADING_CUSTOM_HOSTNAME_CNAME_TARGET: trading-customers.mkety.com
       TRADING_WORKER_SCRIPT_NAME: mkety-copier-engine
 
     steps:
