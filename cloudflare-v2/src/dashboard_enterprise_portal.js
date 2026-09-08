@@ -1,0 +1,45 @@
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+export function renderEnterpriseTradingPortal(env = {}) {
+  const runtime = {
+    tradingAccess: enabled(env.TRADING_ACCESS_ENABLED),
+    brokerExecution: enabled(env.BROKER_EXECUTION_ENABLED),
+    centralAuthConfigured: Boolean(env.MKETY_ACCESS_ISSUER && env.MKETY_ACCESS_AUDIENCE && env.MKETY_ACCESS_JWKS_URL),
+  };
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mkety Trading</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui;color:#0f172a;background:#f6f8fc}*{box-sizing:border-box}body{margin:0}.shell{max-width:1320px;margin:auto;padding:22px}.hero{background:#0f172a;color:#fff;border-radius:18px;padding:22px;margin-bottom:14px}.hero h1{margin:0 0 6px}.muted{color:#64748b}.hero .muted{color:#cbd5e1}.card{background:#fff;border:1px solid #dbe3ef;border-radius:14px;padding:18px;box-shadow:0 3px 14px rgba(15,23,42,.05)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field label{display:block;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:5px}.field input{width:100%;padding:11px;border:1px solid #cbd5e1;border-radius:9px}.btn{border:0;border-radius:9px;padding:10px 13px;font-weight:750;cursor:pointer}.primary{background:#0f172a;color:#fff}.secondary{background:#eef2f7;color:#1e293b}.notice{padding:11px 13px;border-radius:10px;margin:10px 0;font-size:13px}.info{background:#eff6ff;color:#1e40af}.error{background:#fef2f2;color:#991b1b}.success{background:#ecfdf5;color:#065f46}.hidden{display:none!important}.toolbar,.nav{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.nav{justify-content:flex-start;margin:12px 0}.tab{border:0;border-radius:9px;padding:9px 12px;font-weight:750;background:#e9eef6}.tab.active{background:#0f172a;color:#fff}.pill{display:inline-block;border-radius:999px;padding:4px 8px;background:#eef2ff;font-size:11px;font-weight:750;margin-right:5px}.frame{width:100%;height:calc(100vh - 245px);min-height:680px;border:1px solid #dbe3ef;border-radius:14px;background:#fff}.auth-choice{padding-top:8px}.small{font-size:13px;line-height:1.55}@media(max-width:760px){.shell{padding:12px}.grid{grid-template-columns:1fr}.frame{min-height:760px}}
+</style></head><body><main class="shell">
+<section class="hero"><h1>Mkety Trading</h1><div class="muted">One secure enterprise workspace for sources, routing, Telegram delivery, formatting, risk controls and audit.</div></section>
+<section id="authCard" class="card"><h2>Access your Trading workspace</h2><p class="muted small">Enter the enterprise access code issued by Mkety. Your browser will establish a short-lived Trading session automatically; you will never need to copy a bearer token or workspace ID between pages.</p>
+<div class="grid"><div class="field"><label>Access code</label><input id="accessCode" autocomplete="one-time-code" placeholder="TRD-MKETY-..."></div><div class="field"><label>Email</label><input id="ownerEmail" type="email" autocomplete="email" placeholder="you@company.com"></div><div class="field"><label>Name</label><input id="ownerName" autocomplete="name" placeholder="Your name (optional)"></div><div class="field"><label>Workspace name</label><input id="workspaceName" placeholder="Company Trading Workspace (optional)"></div></div>
+<div class="auth-choice"><button id="redeemBtn" class="btn primary">Continue with access code</button></div>
+<div id="centralAuth" class="notice info">Mkety account sign-in is ${runtime.centralAuthConfigured ? 'available to configured identity clients' : 'prepared as the alternate authentication path and will activate when the Mkety identity issuer is configured'}. Both authentication methods use the same Trading workspace, membership and entitlement authority.</div>
+<div id="authMessage"></div></section>
+<section id="workspaceShell" class="hidden"><div class="card toolbar"><div><strong id="workspaceTitle">Trading workspace</strong><div id="entitlementSummary" class="muted small"></div></div><button id="logoutBtn" class="btn secondary">Sign out</button></div>
+<div class="nav"><button class="tab active" data-view="workspace">Workspace</button><button class="tab" data-view="launch">Destinations & Launch</button></div>
+<iframe id="workspaceFrame" class="frame" title="Mkety Trading workspace" src="about:blank"></iframe></section>
+</main><script>
+(function(){'use strict';
+var runtime=${JSON.stringify(runtime)};
+var KEYS={workspace:'mketyTradingWorkspace',bearer:'mketyTradingBearer',entitlements:'mketyTradingEntitlements',workspaceName:'mketyTradingWorkspaceName'};
+var authCard=document.getElementById('authCard'),shell=document.getElementById('workspaceShell'),frame=document.getElementById('workspaceFrame');
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function message(t,k){document.getElementById('authMessage').innerHTML=t?'<div class="notice '+(k||'info')+'">'+esc(t)+'</div>':''}
+function readSession(){var w=sessionStorage.getItem(KEYS.workspace)||localStorage.getItem('mketyTradingWorkspaceId')||'';var b=sessionStorage.getItem(KEYS.bearer)||sessionStorage.getItem('mketyTradingBearer')||'';var e={};try{e=JSON.parse(sessionStorage.getItem(KEYS.entitlements)||'{}')}catch(_){e={}}return{workspace:w,bearer:b,entitlements:e,name:sessionStorage.getItem(KEYS.workspaceName)||''}}
+function saveSession(body){var w=String(body.workspace&&body.workspace.id||'');var b=String(body.bearer||'');var e=body.entitlements||{};sessionStorage.setItem(KEYS.workspace,w);sessionStorage.setItem(KEYS.bearer,b);sessionStorage.setItem(KEYS.entitlements,JSON.stringify(e));sessionStorage.setItem(KEYS.workspaceName,String(body.workspace&&body.workspace.name||''));localStorage.setItem('mketyTradingWorkspaceId',w);sessionStorage.setItem('mketyTradingBearer',b);sessionStorage.setItem('mketyLaunchBearer',b);localStorage.setItem('mketyLaunchWorkspace',w);}
+function clearSession(){Object.values(KEYS).forEach(function(k){sessionStorage.removeItem(k)});sessionStorage.removeItem('mketyTradingBearer');sessionStorage.removeItem('mketyLaunchBearer');localStorage.removeItem('mketyTradingWorkspaceId');localStorage.removeItem('mketyLaunchWorkspace');}
+function entitlementText(e){var values=[];if(e.telegramDestination)values.push('Telegram');if(e.tradingExecutionDestination)values.push('Trading destinations');if(e.customSubdomain)values.push('Custom subdomain');if(e.customHostname)values.push('Custom hostname');if(!values.length)values.push('Core workspace + audit');return values.join(' • ')}
+function injectSessionIntoFrame(){var s=readSession();var d=frame.contentDocument;if(!d)return;var w=d.getElementById('workspaceId'),b=d.getElementById('bearer'),c=d.getElementById('connectBtn');if(w)w.value=s.workspace;if(b)b.value=s.bearer;if(w&&b&&c){var auth=d.querySelector('.auth');if(auth)auth.style.display='none';try{c.click()}catch(_){}}}
+function loadView(view){frame.onload=injectSessionIntoFrame;frame.src=view==='launch'?'/launch-console?embedded=1':'/workspace-console?embedded=1';document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active',x.dataset.view===view)})}
+function showWorkspace(){var s=readSession();if(!s.workspace||!s.bearer){authCard.classList.remove('hidden');shell.classList.add('hidden');return}authCard.classList.add('hidden');shell.classList.remove('hidden');document.getElementById('workspaceTitle').textContent=s.name||'Trading workspace';document.getElementById('entitlementSummary').textContent=entitlementText(s.entitlements)+' • Broker execution '+(runtime.brokerExecution?'ON':'OFF');loadView('workspace')}
+async function redeem(){var code=document.getElementById('accessCode').value.trim(),email=document.getElementById('ownerEmail').value.trim(),name=document.getElementById('ownerName').value.trim(),workspaceName=document.getElementById('workspaceName').value.trim();if(!code){message('Access code is required.','error');return}if(!email){message('Email is required.','error');return}message('Verifying enterprise access...','info');try{var r=await fetch('/api/v1/access/redeem',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({code:code,ownerEmail:email,ownerName:name||undefined,workspaceName:workspaceName||undefined})});var body=await r.json();if(!r.ok||body.ok===false)throw new Error(body.reason||('HTTP_'+r.status));saveSession(body);showWorkspace()}catch(e){message('Access failed: '+e.message,'error')}}
+document.getElementById('redeemBtn').addEventListener('click',redeem);document.getElementById('logoutBtn').addEventListener('click',function(){clearSession();frame.src='about:blank';showWorkspace()});document.querySelectorAll('.tab').forEach(function(x){x.addEventListener('click',function(){loadView(x.dataset.view)})});showWorkspace();
+})();
+</script></body></html>`;
+}
