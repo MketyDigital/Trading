@@ -126,7 +126,7 @@ export function renderMketyAdminAccessCodesPage() {
         customSubdomain: $('customSubdomain').checked,
         customHostname: $('customHostname').checked,
         destinations: [
-          ...($('tradingExecutionDestination').checked ? ['trading_execution'] : []),
+          ...($('tradingExecutionDestination').checked ? ['broker_account'] : []),
           ...($('telegramDestination').checked ? ['telegram'] : []),
           'audit_only'
         ],
