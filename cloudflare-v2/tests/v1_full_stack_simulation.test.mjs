@@ -116,6 +116,11 @@ test('V1 event request performs ingest, simulation planning and safe execution-s
       assert.equal(typeof deps.accountProvider, 'function');
       return structuredClone(simulatedPlan);
     },
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: true,
+      reason: 'TEST_ENABLED',
+    }),
     executionDepsFactory: async () => {
       calls.realDeps += 1;
       throw new Error('real broker dependency factory must not be selected in simulation transport mode');
