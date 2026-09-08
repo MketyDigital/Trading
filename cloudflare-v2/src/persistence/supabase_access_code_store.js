@@ -90,9 +90,11 @@ export function createTradingAccessCodeStore(supabase) {
       }
 
       const nextRedeemedCount = Number(record.redeemed_count || 0) + 1;
+      const effectiveOwnerEmail = String(record.owner_email || payload.ownerEmail || '').trim().toLowerCase();
       const { data: redeemedRecord, error: redeemError } = await supabase
         .from('trading_access_codes')
         .update({
+          owner_email: effectiveOwnerEmail,
           redeemed_count: nextRedeemedCount,
           last_redeemed_at: new Date(payload.now || Date.now()).toISOString(),
           updated_at: new Date(payload.now || Date.now()).toISOString(),
@@ -108,7 +110,7 @@ export function createTradingAccessCodeStore(supabase) {
       const workspaceRow = {
         id: plan.workspace.id,
         display_name: payload.workspaceName || record.workspace_display_name || plan.workspace.name,
-        owner_email: payload.ownerEmail || record.owner_email || plan.workspace.owner_email,
+        owner_email: effectiveOwnerEmail,
         trading_access_enabled: true,
         metadata: safeMetadata(record, payload, plan.entitlements),
         updated_at: new Date(payload.now || Date.now()).toISOString(),
@@ -149,7 +151,7 @@ export function createTradingAccessCodeStore(supabase) {
           access_code_id: record.id,
           workspace_id: workspace.id,
           zitadel_subject: plan.membership.subject,
-          owner_email: payload.ownerEmail || record.owner_email || null,
+          owner_email: effectiveOwnerEmail,
           status: 'redeemed',
           metadata: {
             requestedSubdomain: payload.requestedSubdomain || null,
