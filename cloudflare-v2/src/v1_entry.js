@@ -94,7 +94,7 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
       if (url.pathname === '/' || url.pathname === '') {
-        const portal = withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env)));
+        const portal = normalizeEnterprisePortalHtml(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env))));
         return htmlResponse(withPublicBrandingBootstrap(portal));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
