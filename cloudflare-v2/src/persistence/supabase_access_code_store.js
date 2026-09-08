@@ -2,6 +2,7 @@ import {
   hashTradingAccessCode,
   validateTradingAccessCodeRecord,
 } from '../access/trading_access_codes.js';
+import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
 
 function requireSupabase(supabase) {
   if (!supabase?.from) throw new Error('SUPABASE_CLIENT_REQUIRED');
@@ -113,6 +114,47 @@ export function createTradingAccessCodeStore(supabase) {
           name: workspace.display_name || plan.workspace.name,
           owner_email: workspace.owner_email || plan.workspace.owner_email,
         },
+      };
+    },
+
+    async restoreSession({ workspaceId, subject } = {}) {
+      const wid = String(workspaceId || '').trim();
+      const sub = String(subject || '').trim();
+      if (!wid || !sub) return { ok: false, status: 401, reason: 'RETURNING_SESSION_INVALID' };
+
+      const { data: workspace, error: workspaceError } = await supabase
+        .from('trading_workspace_access')
+        .select('id,display_name,owner_email,trading_access_enabled,metadata')
+        .eq('id', wid)
+        .maybeSingle();
+      if (workspaceError || !workspace?.id) return { ok: false, status: 401, reason: 'WORKSPACE_ACCESS_NOT_FOUND' };
+      if (workspace.trading_access_enabled !== true) return { ok: false, status: 403, reason: 'TRADING_WORKSPACE_DISABLED' };
+
+      const { data: membership, error: membershipError } = await supabase
+        .from('trading_workspace_memberships')
+        .select('workspace_id,zitadel_subject,trading_role,membership_enabled,metadata')
+        .eq('workspace_id', wid)
+        .eq('zitadel_subject', sub)
+        .maybeSingle();
+      if (membershipError || !membership) return { ok: false, status: 401, reason: 'TRADING_MEMBERSHIP_NOT_FOUND' };
+      if (membership.membership_enabled !== true || String(membership.trading_role || '') !== 'owner') {
+        return { ok: false, status: 403, reason: 'TRADING_OWNER_MEMBERSHIP_REQUIRED' };
+      }
+
+      const rawEntitlements = membership.metadata?.entitlements || workspace.metadata?.entitlements || {};
+      return {
+        ok: true,
+        workspace: {
+          id: workspace.id,
+          name: workspace.display_name || null,
+          owner_email: workspace.owner_email || null,
+        },
+        membership: {
+          subject: sub,
+          role: 'owner',
+          enabled: true,
+        },
+        entitlements: normalizeTradingEntitlements(rawEntitlements),
       };
     },
   };
