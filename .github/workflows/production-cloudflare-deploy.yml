@@ -1,5 +1,5 @@
 name: Production Cloudflare Deploy
-# Production deployment trigger marker; enterprise auth hardening rollout.
+# Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
 
 on:
   workflow_dispatch:
@@ -51,6 +51,10 @@ jobs:
       PRODUCTION_TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
       PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET: ${{ secrets.TRADING_ACCESS_CODE_SESSION_SECRET }}
       PRODUCTION_HEALTH_URL: ${{ vars.TRADING_PRODUCTION_HEALTH_URL }}
+      TRADING_SAAS_ZONE: mkety.com
+      TRADING_SAAS_FALLBACK_ORIGIN: saas-origin.mkety.com
+      TRADING_CUSTOM_HOSTNAME_CNAME_TARGET: customers.mkety.com
+      TRADING_WORKER_SCRIPT_NAME: mkety-copier-engine
 
     steps:
       - name: Checkout main
@@ -83,9 +87,7 @@ jobs:
             shift
             local present=0
             for value in "$@"; do
-              if [ -n "$value" ]; then
-                present=1
-              fi
+              if [ -n "$value" ]; then present=1; fi
             done
             if [ "$present" -ne 1 ]; then
               echo "Missing production configuration: $label"
@@ -102,11 +104,7 @@ jobs:
           const crypto = require('node:crypto');
           const master = process.env.PRODUCTION_TRADING_MASTER_KEY;
           if (!master) process.exit(1);
-          process.stdout.write(
-            crypto.createHmac('sha256', master)
-              .update('mkety-trading-access-code-session-v1')
-              .digest('base64url')
-          );
+          process.stdout.write(crypto.createHmac('sha256', master).update('mkety-trading-access-code-session-v1').digest('base64url'));
           NODE
           )"
             echo "::add-mask::$derived_session_secret"
@@ -118,38 +116,101 @@ jobs:
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
 
+      - name: Configure Cloudflare for SaaS white-label foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          auth=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json")
+          zone_response="$(curl -fsS "${auth[@]}" "$api/zones?name=$TRADING_SAAS_ZONE&status=active")"
+          zone_id="$(ZONE_RESPONSE="$zone_response" node <<'NODE'
+          const body = JSON.parse(process.env.ZONE_RESPONSE || '{}');
+          const row = Array.isArray(body.result) ? body.result.find(x => x && x.name === process.env.TRADING_SAAS_ZONE) : null;
+          if (!body.success || !row?.id) process.exit(1);
+          process.stdout.write(String(row.id));
+          NODE
+          )"
+          echo "CLOUDFLARE_ZONE_ID=$zone_id" >> "$GITHUB_ENV"
+
+          ensure_dns() {
+            local type="$1" name="$2" content="$3"
+            local response count existing_content existing_proxied payload
+            response="$(curl -fsS "${auth[@]}" "$api/zones/$zone_id/dns_records?type=$type&name=$name")"
+            count="$(DNS_RESPONSE="$response" node -e "const b=JSON.parse(process.env.DNS_RESPONSE);process.stdout.write(String((b.result||[]).length))")"
+            if [ "$count" = "0" ]; then
+              payload="$(TYPE="$type" NAME="$name" CONTENT="$content" node -e "process.stdout.write(JSON.stringify({type:process.env.TYPE,name:process.env.NAME,content:process.env.CONTENT,proxied:true,ttl:1}))")"
+              curl -fsS "${auth[@]}" -X POST "$api/zones/$zone_id/dns_records" --data "$payload" >/dev/null
+              echo "Created managed DNS record: $name"
+              return
+            fi
+            existing_content="$(DNS_RESPONSE="$response" node -e "const r=JSON.parse(process.env.DNS_RESPONSE).result[0];process.stdout.write(String(r.content||''))")"
+            existing_proxied="$(DNS_RESPONSE="$response" node -e "const r=JSON.parse(process.env.DNS_RESPONSE).result[0];process.stdout.write(String(Boolean(r.proxied)))")"
+            if [ "${existing_content,,}" != "${content,,}" ] || [ "$existing_proxied" != "true" ]; then
+              echo "Refusing to overwrite conflicting Cloudflare DNS record $name (expected $type -> $content, proxied)." >&2
+              exit 1
+            fi
+            echo "Managed DNS record already correct: $name"
+          }
+
+          # An originless proxied record is the documented Worker-as-fallback pattern.
+          ensure_dns AAAA "$TRADING_SAAS_FALLBACK_ORIGIN" "100::"
+          ensure_dns CNAME "$TRADING_CUSTOM_HOSTNAME_CNAME_TARGET" "$TRADING_SAAS_FALLBACK_ORIGIN"
+
+          fallback_payload="$(node -e "process.stdout.write(JSON.stringify({origin:process.env.TRADING_SAAS_FALLBACK_ORIGIN}))")"
+          curl -fsS "${auth[@]}" -X PUT "$api/zones/$zone_id/custom_hostnames/fallback_origin" --data "$fallback_payload" >/dev/null
+
+          fallback_status=""
+          for attempt in $(seq 1 15); do
+            response="$(curl -fsS "${auth[@]}" "$api/zones/$zone_id/custom_hostnames/fallback_origin")"
+            fallback_status="$(CF_RESPONSE="$response" node -e "const b=JSON.parse(process.env.CF_RESPONSE);process.stdout.write(String(b.result?.status||''))")"
+            [ "$fallback_status" = "active" ] && break
+            sleep 2
+          done
+          if [ "$fallback_status" != "active" ]; then
+            echo "Cloudflare for SaaS fallback origin did not become active (status=$fallback_status). Ensure token has Zone Read, DNS Edit, SSL and Certificates Edit, and Workers Routes Edit permissions." >&2
+            exit 1
+          fi
+          echo "Cloudflare for SaaS fallback is active."
+
       - name: Build temporary production Wrangler config with safe runtime gates
         shell: bash
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const source = fs.readFileSync('wrangler.toml', 'utf8');
-          const requiredReplacements = {
+          const replacements = {
             TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false',
             TRADINGVIEW_CERT_PROBE_ENABLED: 'false',
             TRADING_ACCESS_ENABLED: 'true',
             BROKER_EXECUTION_ENABLED: 'false',
-            TRADING_CUSTOM_HOSTNAMES_ENABLED: 'false',
+            TRADING_CUSTOM_HOSTNAMES_ENABLED: 'true',
           };
           let output = source;
-          for (const [key, value] of Object.entries(requiredReplacements)) {
+          for (const [key, value] of Object.entries(replacements)) {
             const pattern = new RegExp(`^${key} = ".*"$`, 'm');
             if (!pattern.test(output)) throw new Error(`Missing expected Wrangler var: ${key}`);
             output = output.replace(pattern, `${key} = "${value}"`);
           }
-          if (!/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = /m.test(output)) output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"\n');
-          else output = output.replace(/^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"');
-          if (!/^TRADING_ACCESS_CODE_SESSION_ENABLED = /m.test(output)) output = output.replace('[vars]\n', '[vars]\nTRADING_ACCESS_CODE_SESSION_ENABLED = "true"\n');
-          else output = output.replace(/^TRADING_ACCESS_CODE_SESSION_ENABLED = ".*"$/m, 'TRADING_ACCESS_CODE_SESSION_ENABLED = "true"');
+          const extra = {
+            TRADING_ACCESS_CODE_REDEMPTION_ENABLED: 'true',
+            TRADING_ACCESS_CODE_SESSION_ENABLED: 'true',
+            CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID,
+            TRADING_CUSTOM_HOSTNAME_CNAME_TARGET: process.env.TRADING_CUSTOM_HOSTNAME_CNAME_TARGET,
+            TRADING_WORKER_SCRIPT_NAME: process.env.TRADING_WORKER_SCRIPT_NAME,
+            TRADING_CANONICAL_HOSTS: 'trade.mkety.com',
+          };
+          for (const [key, value] of Object.entries(extra)) {
+            const line = `${key} = ${JSON.stringify(String(value))}`;
+            const pattern = new RegExp(`^${key} = ".*"$`, 'm');
+            output = pattern.test(output) ? output.replace(pattern, line) : output.replace('[vars]\n', `[vars]\n${line}\n`);
+          }
           fs.writeFileSync('wrangler.production.generated.toml', output, { mode: 0o600 });
           NODE
           grep -Eq '^TRADING_ACCESS_ENABLED = "true"$' wrangler.production.generated.toml
           grep -Eq '^TRADING_ACCESS_CODE_REDEMPTION_ENABLED = "true"$' wrangler.production.generated.toml
           grep -Eq '^TRADING_ACCESS_CODE_SESSION_ENABLED = "true"$' wrangler.production.generated.toml
           grep -Eq '^BROKER_EXECUTION_ENABLED = "false"$' wrangler.production.generated.toml
-          grep -Eq '^TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"$' wrangler.production.generated.toml
-          grep -Eq '^TRADINGVIEW_CERT_PROBE_ENABLED = "false"$' wrangler.production.generated.toml
-          grep -Eq '^TRADING_CUSTOM_HOSTNAMES_ENABLED = "false"$' wrangler.production.generated.toml
+          grep -Eq '^TRADING_CUSTOM_HOSTNAMES_ENABLED = "true"$' wrangler.production.generated.toml
 
       - name: Build temporary production secrets file
         shell: bash
@@ -165,6 +226,7 @@ jobs:
             SUPABASE_SERVICE_ROLE: serviceRole,
             TRADING_MASTER_KEY: process.env.PRODUCTION_TRADING_MASTER_KEY,
             TRADING_ACCESS_CODE_SESSION_SECRET: process.env.PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET,
+            CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
           };
           for (const [key, value] of Object.entries(payload)) if (!value) throw new Error(`Missing required secret payload value: ${key}`);
           const target = path.join(process.env.RUNNER_TEMP, 'mkety-trading-production-secrets.json');
@@ -174,7 +236,7 @@ jobs:
       - name: Final production dry-run
         run: npx wrangler deploy --dry-run --config wrangler.production.generated.toml
 
-      - name: Deploy production Paid Worker with access-code dashboard enabled and broker execution disabled
+      - name: Deploy production Trading Worker with broker execution disabled
         run: npx wrangler deploy --config wrangler.production.generated.toml --secrets-file "$RUNNER_TEMP/mkety-trading-production-secrets.json"
 
       - name: Remove temporary production secrets file
@@ -186,14 +248,9 @@ jobs:
         shell: bash
         run: |
           health_url="${PRODUCTION_HEALTH_URL:-https://trade.mkety.com/api/v1/health}"
-          echo "Probing $health_url"
           body_file="$RUNNER_TEMP/production-health-body.json"
           status="$(curl -sS -o "$body_file" -w '%{http_code}' "$health_url")"
-          if [ "$status" != "200" ]; then
-            echo "Production health probe failed with HTTP $status" >&2
-            cat "$body_file" >&2
-            exit 1
-          fi
+          if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
           cat "$body_file"
 
       - name: Record production safety posture
@@ -201,9 +258,8 @@ jobs:
         run: |
           echo "Production deploy completed from main."
           echo "Trading access: enabled"
-          echo "Access-code redemption: enabled"
-          echo "Access-code local session: enabled"
+          echo "Access-code redemption/session: enabled"
+          echo "Cloudflare for SaaS custom hostnames: enabled"
+          echo "White-label CNAME target: $TRADING_CUSTOM_HOSTNAME_CNAME_TARGET"
           echo "TradingView direct ingress: disabled"
-          echo "TradingView certificate probe: disabled"
-          echo "Custom hostnames: disabled"
           echo "Broker execution: disabled"
