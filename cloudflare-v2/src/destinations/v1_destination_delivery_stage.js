@@ -75,6 +75,88 @@ function stageSummary(outcomes = []) {
   return { status, succeeded, failed, rejected, blocked, outcomes };
 }
 
+function canonicalWebhookPayload({ workspaceId, sourceId, event, interpretation }) {
+  return {
+    version: 1,
+    type: 'mkety.trading.signal',
+    workspaceId: text(workspaceId),
+    sourceId: text(sourceId),
+    eventId: event?.external_event_id ?? event?.externalEventId ?? null,
+    interpretationStatus: interpretation?.status ?? null,
+    intent: interpretation?.intent ?? null,
+  };
+}
+
+function isHttpsUrl(value) {
+  try {
+    return new URL(String(value)).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function hmacSha256Hex(secret, message) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(String(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(String(message)));
+  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sendSignedWebhookDestination({
+  url,
+  workspaceId,
+  sourceId,
+  signingSecret,
+  payload,
+  fetchFn = globalThis.fetch,
+  timeoutMs = 8000,
+} = {}) {
+  if (!isHttpsUrl(url)) return { ok: false, status: 0, errorCode: 'WEBHOOK_HTTPS_REQUIRED' };
+  if (!text(signingSecret)) return { ok: false, status: 0, errorCode: 'WEBHOOK_SIGNING_SECRET_MISSING' };
+  if (typeof fetchFn !== 'function') return { ok: false, status: 0, errorCode: 'WEBHOOK_TRANSPORT_UNAVAILABLE' };
+
+  const body = JSON.stringify(payload ?? {});
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = await hmacSha256Hex(signingSecret, `${timestamp}.${body}`);
+  const timeout = Math.max(250, Math.min(30000, Number(timeoutMs) || 8000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetchFn(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Mkety-Webhook-Version': '1',
+        'X-Mkety-Timestamp': timestamp,
+        'X-Mkety-Signature': `sha256=${signature}`,
+        'X-Mkety-Workspace-Id': text(workspaceId),
+        'X-Mkety-Source-Id': text(sourceId),
+      },
+      body,
+      signal: controller.signal,
+      redirect: 'error',
+    });
+    if (!response?.ok) {
+      return { ok: false, status: Number(response?.status) || 0, errorCode: 'WEBHOOK_HTTP_ERROR' };
+    }
+    return {
+      ok: true,
+      status: Number(response.status) || 200,
+      deliveryRef: text(response.headers?.get?.('X-Mkety-Delivery-Id')) || null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      errorCode: error?.name === 'AbortError' ? 'WEBHOOK_TIMEOUT' : 'WEBHOOK_TRANSPORT_FAILED',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createV1DestinationDeliveryStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
@@ -147,7 +229,13 @@ async function safeRecord(destinationStore, workspaceId, destination, outcome) {
   }
 }
 
-async function deliverTelegram({ workspaceId, destination, event, interpretation, env }, deps) {
+async function credentialsForDestination(destination, env, deps) {
+  if (!destination.credential_ciphertext) throw new Error('DESTINATION_CREDENTIALS_MISSING');
+  const plaintext = await deps.decryptCredentials(destination.credential_ciphertext, env.TRADING_MASTER_KEY);
+  return normalizeCredentialEnvelope(plaintext);
+}
+
+async function deliverTelegram({ destination, event, interpretation, env }, deps) {
   if (!destination.credential_ciphertext) {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_MISSING' });
   }
@@ -157,8 +245,7 @@ async function deliverTelegram({ workspaceId, destination, event, interpretation
 
   let credentials;
   try {
-    const plaintext = await deps.decryptCredentials(destination.credential_ciphertext, env.TRADING_MASTER_KEY);
-    credentials = normalizeCredentialEnvelope(plaintext);
+    credentials = await credentialsForDestination(destination, env, deps);
   } catch {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_INVALID' });
   }
@@ -195,6 +282,40 @@ async function deliverTelegram({ workspaceId, destination, event, interpretation
   });
 }
 
+async function deliverInternalWebhook({ workspaceId, sourceId, destination, event, interpretation, env }, deps) {
+  const url = text(destination.destination_ref);
+  if (!isHttpsUrl(url)) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_HTTPS_REQUIRED' });
+
+  let credentials;
+  try {
+    credentials = await credentialsForDestination(destination, env, deps);
+  } catch {
+    return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_INVALID' });
+  }
+  const signingSecret = text(credentials.signingSecret ?? credentials.signing_secret);
+  if (!signingSecret) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_SIGNING_SECRET_MISSING' });
+
+  const result = await deps.sendWebhook({
+    url,
+    workspaceId,
+    sourceId,
+    signingSecret,
+    payload: canonicalWebhookPayload({ workspaceId, sourceId, event, interpretation }),
+    fetchFn: deps.fetchFn,
+    timeoutMs: destination?.settings?.timeoutMs,
+  });
+  if (!result?.ok) {
+    return publicOutcome(destination, 'FAILED', {
+      errorCode: sanitizeErrorCode(result?.errorCode, 'WEBHOOK_DELIVERY_FAILED'),
+      statusCode: Number(result?.status) || 0,
+    });
+  }
+  return publicOutcome(destination, 'SUCCEEDED', {
+    statusCode: Number(result.status) || 200,
+    ...(result.deliveryRef ? { deliveryRef: text(result.deliveryRef) } : {}),
+  });
+}
+
 async function deliverOne(input, deps) {
   const { workspaceId, destination, env } = input;
   if (!destinationId(destination)) return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_ID_REQUIRED' });
@@ -205,6 +326,7 @@ async function deliverOne(input, deps) {
 
   const type = destinationType(destination);
   if (type === 'telegram') return deliverTelegram(input, deps);
+  if (type === 'internal_webhook') return deliverInternalWebhook(input, deps);
   if (type === 'audit_only') return publicOutcome(destination, 'SUCCEEDED', { deliveryRef: 'audit-only' });
   if (type === 'broker_account') {
     return publicOutcome(destination, 'BLOCKED', {
@@ -213,7 +335,6 @@ async function deliverOne(input, deps) {
         : 'BROKER_EXECUTION_DISABLED',
     });
   }
-  if (type === 'internal_webhook') return publicOutcome(destination, 'BLOCKED', { errorCode: 'INTERNAL_WEBHOOK_NOT_WIRED' });
   return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_TYPE_UNSUPPORTED' });
 }
 
@@ -227,6 +348,7 @@ export async function runV1DestinationDeliveryStage({
   destinationStore,
   decryptCredentials = decryptSecret,
   sendTelegram = sendTelegramDestination,
+  sendWebhook = sendSignedWebhookDestination,
   formatTelegram = formatTelegramDestinationMessage,
   fetchFn = globalThis.fetch,
 } = {}) {
@@ -253,11 +375,12 @@ export async function runV1DestinationDeliveryStage({
     try {
       outcome = await deliverOne({
         workspaceId: trustedWorkspaceId,
+        sourceId: trustedSourceId,
         destination,
         event,
         interpretation,
         env,
-      }, { decryptCredentials, sendTelegram, formatTelegram, fetchFn });
+      }, { decryptCredentials, sendTelegram, sendWebhook, formatTelegram, fetchFn });
     } catch {
       outcome = publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_DELIVERY_FAILED' });
     }
