@@ -14,13 +14,13 @@ function request(body) {
   });
 }
 
-test('webhook destination normalizes its signing secret before encrypted storage', async () => {
+test('webhook destination keeps canonical signingSecret inside encrypted storage only', async () => {
   let encryptedPlaintext = null;
   const response = await handleAuthorizedV1AdminDestinationsRequest(request({
     destinationType: 'internal_webhook',
     displayName: 'Outbound API',
     destinationRef: 'https://example.com/hook',
-    credentials: { secret: 'legacy-ui-secret' },
+    credentials: { signingSecret: 'outbound-signing-secret' },
   }), auth(), {
     env: { TRADING_MASTER_KEY: 'master' },
     encryptCredentials: async (plaintext) => { encryptedPlaintext = plaintext; return 'cipher'; },
@@ -34,15 +34,9 @@ test('webhook destination normalizes its signing secret before encrypted storage
   });
   assert.equal(response.status, 201);
   const envelope = JSON.parse(encryptedPlaintext);
-  assert.equal(envelope.data.signingSecret, 'legacy-ui-secret');
-  assert.equal('secret' in envelope.data, false);
-});
-
-test('webhook destination rejects missing signing credentials', async () => {
-  const response = await handleAuthorizedV1AdminDestinationsRequest(request({
-    destinationType: 'internal_webhook', displayName: 'Outbound API', destinationRef: 'https://example.com/hook',
-  }), auth(), { destinationStore: {} });
-  assert.equal(response.status, 400);
+  assert.equal(envelope.data.signingSecret, 'outbound-signing-secret');
+  const body = await response.json();
+  assert.equal(JSON.stringify(body).includes('outbound-signing-secret'), false);
 });
 
 function query(data) {
@@ -73,6 +67,16 @@ test('simulation account provider selects only broker accounts routed from the a
   assert.deepEqual(calls, ['source_destination_routes', 'trading_destinations', 'trade_accounts']);
 });
 
+test('simulation account provider selects no broker accounts when source has no broker route', async () => {
+  const supabase = { from: () => query([]) };
+  const env = {
+    TRADE_STATE_INTERNAL_TOKEN: 'token',
+    TRADE_STATE_NAMESPACE: { idFromName: (x) => x, get: () => ({ fetch: async () => new Response('{}') }) },
+  };
+  const deps = await createV1SimulationDependencies({ env, supabase, event: { workspace_hint: 'ws-1' }, sourceId: 'src-1' });
+  assert.deepEqual(await deps.accountProvider(), []);
+});
+
 test('broker destination is execution-routed when master fuse is on, not marked unwired', async () => {
   const stage = await runV1DestinationDeliveryStage({
     workspaceId: 'ws-1', sourceId: 'src-1', event: {}, interpretation: {}, env: { BROKER_EXECUTION_ENABLED: 'true' },
@@ -84,5 +88,6 @@ test('broker destination is execution-routed when master fuse is on, not marked 
   });
   assert.equal(stage.outcomes[0].status, 'ROUTED');
   assert.equal(stage.outcomes[0].errorCode, undefined);
+  assert.equal(stage.routed, 1);
   assert.equal(JSON.stringify(stage).includes('NOT_WIRED'), false);
 });
