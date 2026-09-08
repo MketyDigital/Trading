@@ -135,13 +135,15 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
   };
 }
 
+const ACCESS_CODE_PUBLIC_SELECT = 'id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at';
+
 export function createMketyAdminAccessCodeStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listAccessCodes() {
       const { data, error } = await supabase
         .from('trading_access_codes')
-        .select('id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at')
+        .select(ACCESS_CODE_PUBLIC_SELECT)
         .order('created_at', { ascending: false });
       if (error) throw new Error('ACCESS_CODE_LIST_FAILED');
       return data || [];
@@ -163,12 +165,29 @@ export function createMketyAdminAccessCodeStore(supabase) {
       const { data, error } = await supabase
         .from('trading_access_codes')
         .insert(plan.record)
-        .select('id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at')
+        .select(ACCESS_CODE_PUBLIC_SELECT)
         .maybeSingle();
       if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
       return data;
     },
+    async revokeAccessCode(id) {
+      const accessCodeId = text(id);
+      if (!accessCodeId) throw new Error('ACCESS_CODE_ID_REQUIRED');
+      const { data, error } = await supabase
+        .from('trading_access_codes')
+        .update({ status: 'revoked', updated_at: new Date().toISOString() })
+        .eq('id', accessCodeId)
+        .select(ACCESS_CODE_PUBLIC_SELECT)
+        .maybeSingle();
+      if (error || !data) throw new Error('ACCESS_CODE_REVOKE_FAILED');
+      return data;
+    },
   };
+}
+
+function revokeIdFromPath(pathname) {
+  const match = String(pathname || '').match(/^\/api\/v1\/mkety-admin\/access-codes\/([^/]+)\/revoke$/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
@@ -190,6 +209,18 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
   }
 
   const url = new URL(request.url);
+  const revokeId = revokeIdFromPath(url.pathname);
+  if (revokeId) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (typeof accessStore.revokeAccessCode !== 'function') return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_UNAVAILABLE' }, 503);
+    try {
+      const row = await accessStore.revokeAccessCode(revokeId);
+      return json({ ok: true, accessCode: safePublicAccessCode(row) });
+    } catch {
+      return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_FAILED' }, 503);
+    }
+  }
+
   if (url.pathname !== '/api/v1/mkety-admin/access-codes') {
     return json({ ok: false, reason: 'MKETY_ADMIN_ROUTE_NOT_FOUND' }, 404);
   }
