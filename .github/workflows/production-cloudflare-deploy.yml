@@ -1,4 +1,5 @@
 name: Production Cloudflare Deploy
+# Production deployment trigger marker; no runtime behavior change.
 
 on:
   workflow_dispatch:
