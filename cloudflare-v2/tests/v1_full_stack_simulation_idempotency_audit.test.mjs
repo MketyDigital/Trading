@@ -74,6 +74,11 @@ test('duplicate source event keeps one persistent identity and does not run dest
     },
     simulationDepsFactory: async () => ({}),
     orchestrateFn: async () => structuredClone(simulatedPlan),
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: true,
+      reason: 'TEST_ENABLED',
+    }),
     executionStageFn: async (stageInput) => runV1ProductionExecutionStage({
       ...stageInput,
       safeSimulationDepsFactory: async () => ({ safeSimulationOnly: true }),
