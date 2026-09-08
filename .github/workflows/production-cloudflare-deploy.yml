@@ -1,5 +1,6 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
+# rollout trigger: enterprise console launch 2026-09-08
 
 on:
   workflow_dispatch:
@@ -152,7 +153,6 @@ jobs:
             echo "Managed DNS record already correct: $name"
           }
 
-          # An originless proxied record is the documented Worker-as-fallback pattern.
           ensure_dns AAAA "$TRADING_SAAS_FALLBACK_ORIGIN" "100::"
           ensure_dns CNAME "$TRADING_CUSTOM_HOSTNAME_CNAME_TARGET" "$TRADING_SAAS_FALLBACK_ORIGIN"
 
