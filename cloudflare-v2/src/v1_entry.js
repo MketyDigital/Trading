@@ -1,5 +1,6 @@
 import legacyWorker from './index.js';
 import { renderTradingLaunchConsole } from './dashboard_launch_console.js';
+import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
@@ -128,6 +129,9 @@ export function createTradingV1Entrypoint({
 
       if (url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
         return htmlResponse(renderTradingLaunchConsole(env));
+      }
+      if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') {
+        return htmlResponse(renderMketyAdminAccessCodesPage());
       }
 
       // Health and exact internal service routes stay available independently
