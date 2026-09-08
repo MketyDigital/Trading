@@ -148,7 +148,10 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/v1/access/')) {
         return notFoundResponse();
       }
-      if (url.pathname === '/api/v1/mkety-admin/access-codes') {
+      if (
+        url.pathname === '/api/v1/mkety-admin/access-codes'
+        || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')
+      ) {
         return mketyAdminAccessCodesHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) {
