@@ -53,6 +53,17 @@ test('Mkety admin access-code plan stores only hash authority and preserves safe
   assert.deepEqual(plan.entitlements.destinations, ['broker_account', 'audit_only']);
 });
 
+test('Mkety admin access-code plan can use the native default randomUUID generator', async () => {
+  const plan = await createMketyAdminAccessCodePlan({
+    ownerEmail: 'owner@example.com',
+    workspaceName: 'Native UUID Workspace',
+  }, { now: fixedNow });
+
+  assert.equal(plan.ok, true);
+  assert.match(plan.plainCode, /^TRD-MKETY-[A-Z0-9]+$/);
+  assert.match(plan.workspace.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+});
+
 test('Mkety admin access-code creation requires Mkety admin secret and never exposes code hashes', async () => {
   const store = fakeStore();
   const denied = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerEmail: 'owner@example.com', workspaceName: 'Starpips Trading' }) }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow, randomUUID: () => 'workspace-1' });
