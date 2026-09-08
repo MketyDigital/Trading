@@ -151,10 +151,19 @@ export function classifyTradingAccessCodeUse(record, ownerEmail, now = new Date(
     return { ok: false, status: 403, reason: 'ACCESS_CODE_OWNER_EMAIL_MISMATCH' };
   }
 
+  const effectiveOwnerEmail = boundEmail || suppliedEmail;
   const maxRedemptions = Math.max(1, Number.parseInt(record.max_redemptions ?? 1, 10) || 1);
   const redeemedCount = Math.max(0, Number.parseInt(record.redeemed_count ?? 0, 10) || 0);
   return {
     ...plan,
+    workspace: {
+      ...plan.workspace,
+      owner_email: effectiveOwnerEmail,
+    },
+    membership: {
+      ...plan.membership,
+      subject: `access-code:${effectiveOwnerEmail}`,
+    },
     mode: redeemedCount >= maxRedemptions ? 'access_code_login' : 'access_code_onboarding',
   };
 }
