@@ -1,6 +1,7 @@
 import legacyWorker from './index.js';
 import { renderTradingLaunchConsole } from './dashboard_launch_console.js';
 import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
+import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
@@ -127,6 +128,14 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
 
+      if (url.pathname === '/' || url.pathname === '') {
+        return htmlResponse(renderEnterpriseTradingPortal(env));
+      }
+      if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/') {
+        const internalUrl = new URL(request.url);
+        internalUrl.pathname = '/';
+        return legacy.fetch(new Request(internalUrl, request), env, ctx);
+      }
       if (url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
         return htmlResponse(renderTradingLaunchConsole(env));
       }
@@ -134,9 +143,6 @@ export function createTradingV1Entrypoint({
         return htmlResponse(renderMketyAdminAccessCodesPage());
       }
 
-      // Health and exact internal service routes stay available independently
-      // so operators and first-party source handoff can function while tenant
-      // Trading access is globally disabled.
       if (url.pathname === '/api/v1/health') {
         return healthResponse(request, env);
       }
@@ -162,8 +168,6 @@ export function createTradingV1Entrypoint({
         return notFoundResponse();
       }
 
-      // Externally reachable V1 Trading application APIs require an explicit
-      // Worker-wide access opt-in. Missing configuration fails closed.
       if (url.pathname === '/api/v1/events') {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return eventsHandler(request, env, { ctx });
@@ -182,17 +186,10 @@ export function createTradingV1Entrypoint({
         return notFoundResponse();
       }
 
-      // The unauthenticated legacy signal processor included broker-capable
-      // execution and is no longer a supported first-party transport. Current
-      // MTProto providers use SOURCE_EVENT_QUEUE or the authenticated internal
-      // source-event handoff, so this public route must never reach legacy code.
       if (url.pathname === '/api/webhook/process_signal') {
         return retiredLegacySignalResponse();
       }
 
-      // The old admin implementation includes unscoped workspace listing and a
-      // generic DB proxy. Cryptographic login alone cannot make that tenant-safe,
-      // therefore every legacy admin API is retired instead of delegated.
       if (url.pathname.startsWith('/api/admin/')) {
         return retiredLegacyAdminResponse();
       }
