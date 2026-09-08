@@ -1,6 +1,6 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
-# rollout trigger: enterprise console launch 2026-09-08 v3 readiness hotfix
+# rollout trigger: enterprise console launch 2026-09-08 PR12 verified head f2e50e5b
 
 on:
   workflow_dispatch:
