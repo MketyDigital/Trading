@@ -23,9 +23,6 @@ export function normalizeTradingEntitlements(input = {}) {
     (type) => destinationEntitlementForType(type) === 'telegramDestination',
   );
 
-  const requestedBrokerModes = strings(input.brokerModes, ['demo']);
-  const brokerModes = requestedBrokerModes.some((mode) => mode.toLowerCase() === 'demo') ? ['demo'] : ['demo'];
-
   return {
     customSubdomain: Boolean(input.customSubdomain),
     customHostname: Boolean(input.customHostname),
@@ -36,7 +33,7 @@ export function normalizeTradingEntitlements(input = {}) {
       ? Boolean(input.telegramDestination)
       : inferredTelegramDestination,
     sourceTypes: strings(input.sourceTypes),
-    brokerModes,
+    brokerModes: ['demo'],
     liveExecution: false,
     maxTeamMembers: Math.max(1, Number.parseInt(input.maxTeamMembers ?? 1, 10) || 1),
     destinations,
@@ -51,6 +48,19 @@ export function entitlementsFromTradingAuth(auth = {}) {
   );
 }
 
+export function isAccessCodeProvisionedWorkspace(auth = {}) {
+  return Boolean(auth?.workspace?.metadata?.accessCodeProvisioned);
+}
+
 export function hasTradingEntitlement(auth, entitlement) {
   return Boolean(entitlementsFromTradingAuth(auth)[entitlement]);
+}
+
+export function requiresTradingEntitlement(auth, entitlement) {
+  return isAccessCodeProvisionedWorkspace(auth) && !hasTradingEntitlement(auth, entitlement);
+}
+
+export function canUseDestinationType(auth, type) {
+  const entitlement = destinationEntitlementForType(type);
+  return !entitlement || !requiresTradingEntitlement(auth, entitlement);
 }
