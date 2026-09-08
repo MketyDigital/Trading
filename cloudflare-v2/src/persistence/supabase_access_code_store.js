@@ -1,6 +1,6 @@
 import {
+  classifyTradingAccessCodeUse,
   hashTradingAccessCode,
-  validateTradingAccessCodeRecord,
 } from '../access/trading_access_codes.js';
 import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
 
@@ -22,6 +22,47 @@ function safeMetadata(record = {}, payload = {}, entitlements = record.entitleme
 export function createTradingAccessCodeStore(supabase) {
   requireSupabase(supabase);
 
+  async function restoreSession({ workspaceId, subject } = {}) {
+    const wid = String(workspaceId || '').trim();
+    const sub = String(subject || '').trim();
+    if (!wid || !sub) return { ok: false, status: 401, reason: 'RETURNING_SESSION_INVALID' };
+
+    const { data: workspace, error: workspaceError } = await supabase
+      .from('trading_workspace_access')
+      .select('id,display_name,owner_email,trading_access_enabled,metadata')
+      .eq('id', wid)
+      .maybeSingle();
+    if (workspaceError || !workspace?.id) return { ok: false, status: 401, reason: 'WORKSPACE_ACCESS_NOT_FOUND' };
+    if (workspace.trading_access_enabled !== true) return { ok: false, status: 403, reason: 'TRADING_WORKSPACE_DISABLED' };
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('trading_workspace_memberships')
+      .select('workspace_id,zitadel_subject,trading_role,membership_enabled,metadata')
+      .eq('workspace_id', wid)
+      .eq('zitadel_subject', sub)
+      .maybeSingle();
+    if (membershipError || !membership) return { ok: false, status: 401, reason: 'TRADING_MEMBERSHIP_NOT_FOUND' };
+    if (membership.membership_enabled !== true || String(membership.trading_role || '') !== 'owner') {
+      return { ok: false, status: 403, reason: 'TRADING_OWNER_MEMBERSHIP_REQUIRED' };
+    }
+
+    const rawEntitlements = membership.metadata?.entitlements || workspace.metadata?.entitlements || {};
+    return {
+      ok: true,
+      workspace: {
+        id: workspace.id,
+        name: workspace.display_name || null,
+        owner_email: workspace.owner_email || null,
+      },
+      membership: {
+        subject: sub,
+        role: 'owner',
+        enabled: true,
+      },
+      entitlements: normalizeTradingEntitlements(rawEntitlements),
+    };
+  }
+
   return {
     async redeem(payload = {}) {
       const codeHash = await hashTradingAccessCode(payload.normalizedCode);
@@ -33,8 +74,17 @@ export function createTradingAccessCodeStore(supabase) {
 
       if (error) return { ok: false, status: 503, reason: 'ACCESS_CODE_LOOKUP_FAILED' };
 
-      const plan = validateTradingAccessCodeRecord(record, payload.now || new Date());
+      const plan = classifyTradingAccessCodeUse(record, payload.ownerEmail, payload.now || new Date());
       if (!plan.ok) return plan;
+
+      if (plan.mode === 'access_code_login') {
+        const restored = await restoreSession({
+          workspaceId: plan.workspace.id,
+          subject: plan.membership.subject,
+        });
+        return restored.ok ? { ...restored, mode: 'access_code_login' } : restored;
+      }
+
       if (payload.requestedSubdomain && !plan.entitlements.customSubdomain) {
         return { ok: false, status: 403, reason: 'CUSTOM_SUBDOMAIN_ENTITLEMENT_REQUIRED' };
       }
@@ -109,6 +159,7 @@ export function createTradingAccessCodeStore(supabase) {
 
       return {
         ...plan,
+        mode: 'access_code_onboarding',
         workspace: {
           id: workspace.id,
           name: workspace.display_name || plan.workspace.name,
@@ -117,45 +168,6 @@ export function createTradingAccessCodeStore(supabase) {
       };
     },
 
-    async restoreSession({ workspaceId, subject } = {}) {
-      const wid = String(workspaceId || '').trim();
-      const sub = String(subject || '').trim();
-      if (!wid || !sub) return { ok: false, status: 401, reason: 'RETURNING_SESSION_INVALID' };
-
-      const { data: workspace, error: workspaceError } = await supabase
-        .from('trading_workspace_access')
-        .select('id,display_name,owner_email,trading_access_enabled,metadata')
-        .eq('id', wid)
-        .maybeSingle();
-      if (workspaceError || !workspace?.id) return { ok: false, status: 401, reason: 'WORKSPACE_ACCESS_NOT_FOUND' };
-      if (workspace.trading_access_enabled !== true) return { ok: false, status: 403, reason: 'TRADING_WORKSPACE_DISABLED' };
-
-      const { data: membership, error: membershipError } = await supabase
-        .from('trading_workspace_memberships')
-        .select('workspace_id,zitadel_subject,trading_role,membership_enabled,metadata')
-        .eq('workspace_id', wid)
-        .eq('zitadel_subject', sub)
-        .maybeSingle();
-      if (membershipError || !membership) return { ok: false, status: 401, reason: 'TRADING_MEMBERSHIP_NOT_FOUND' };
-      if (membership.membership_enabled !== true || String(membership.trading_role || '') !== 'owner') {
-        return { ok: false, status: 403, reason: 'TRADING_OWNER_MEMBERSHIP_REQUIRED' };
-      }
-
-      const rawEntitlements = membership.metadata?.entitlements || workspace.metadata?.entitlements || {};
-      return {
-        ok: true,
-        workspace: {
-          id: workspace.id,
-          name: workspace.display_name || null,
-          owner_email: workspace.owner_email || null,
-        },
-        membership: {
-          subject: sub,
-          role: 'owner',
-          enabled: true,
-        },
-        entitlements: normalizeTradingEntitlements(rawEntitlements),
-      };
-    },
+    restoreSession,
   };
 }
