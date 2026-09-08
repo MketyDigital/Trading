@@ -4,6 +4,7 @@ import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
+import { handlePublicBrandingRequest } from './http/v1_branding.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
@@ -28,41 +29,32 @@ function htmlResponse(html) {
   });
 }
 
+async function publicSupabase(env = {}) {
+  const url = env.SUPABASE_URL;
+  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) return null;
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(url, key);
+}
+
 function retiredLegacyAdminResponse() {
-  return new Response(JSON.stringify({
-    ok: false,
-    reason: 'LEGACY_ADMIN_API_RETIRED',
-    replacement: '/api/v1/admin/*',
-  }), {
+  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_ADMIN_API_RETIRED', replacement: '/api/v1/admin/*' }), {
     status: 410,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
 function retiredLegacySignalResponse() {
-  return new Response(JSON.stringify({
-    ok: false,
-    reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED',
-    replacement: '/api/v1/internal/source-event or /api/v1/events',
-  }), {
+  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED', replacement: '/api/v1/internal/source-event or /api/v1/events' }), {
     status: 410,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
 function notFoundResponse() {
   return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), {
     status: 404,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
@@ -71,8 +63,7 @@ function enabled(value) {
 }
 
 function isTradingViewCertificateProbeRequest(url, env = {}) {
-  return url.pathname === '/api/v1/webhooks/tradingview/probe'
-    && enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED);
+  return url.pathname === '/api/v1/webhooks/tradingview/probe' && enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED);
 }
 
 function healthResponse(request, env = {}) {
@@ -82,14 +73,10 @@ function healthResponse(request, env = {}) {
       headers: { 'Content-Type': 'application/json; charset=utf-8', Allow: 'GET' },
     });
   }
-
   const core = validateStagingReadiness(env);
   const simulation = validateStagingReadiness(env, { requireSimulation: true });
   const mtprotoContainer = validateStagingReadiness(env, { requireMtprotoContainer: true });
-  const status = !core.ready
-    ? 'not_ready'
-    : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
-
+  const status = !core.ready ? 'not_ready' : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
   return new Response(JSON.stringify({
     ok: true,
     service: 'mkety-trading-v1',
@@ -104,10 +91,7 @@ function healthResponse(request, env = {}) {
     features: core.features,
   }), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
@@ -119,6 +103,7 @@ export function createTradingV1Entrypoint({
   tradingViewHandler = handleTradingViewWebhookRequest,
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
   mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
+  publicBrandingHandler = handlePublicBrandingRequest,
   queueRuntime = null,
   recoveryRuntime = null,
   destinationRetryRuntime = null,
@@ -128,45 +113,23 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
 
-      if (url.pathname === '/' || url.pathname === '') {
-        return htmlResponse(renderEnterpriseTradingPortal(env));
+      if (url.pathname === '/' || url.pathname === '') return htmlResponse(renderEnterpriseTradingPortal(env));
+      if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
+        return new Response(null, { status: 302, headers: { Location: '/' } });
       }
-      if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/') {
-        const internalUrl = new URL(request.url);
-        internalUrl.pathname = '/';
-        return legacy.fetch(new Request(internalUrl, request), env, ctx);
-      }
-      if (url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
-        return htmlResponse(renderTradingLaunchConsole(env));
-      }
-      if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') {
-        return htmlResponse(renderMketyAdminAccessCodesPage());
-      }
+      if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
 
-      if (url.pathname === '/api/v1/health') {
-        return healthResponse(request, env);
+      if (url.pathname === '/api/v1/health') return healthResponse(request, env);
+      if (url.pathname === '/api/v1/public/branding') {
+        const supabase = await publicSupabase(env);
+        return publicBrandingHandler(request, env, { supabase });
       }
-      if (url.pathname === '/api/v1/internal/source-event') {
-        return internalSourceHandler(request, env, { ctx });
-      }
-      if (url.pathname.startsWith('/api/v1/internal/')) {
-        return notFoundResponse();
-      }
-      if (url.pathname === '/api/v1/access/redeem') {
-        return accessCodeRedeemHandler(request, env, { ctx });
-      }
-      if (url.pathname.startsWith('/api/v1/access/')) {
-        return notFoundResponse();
-      }
-      if (
-        url.pathname === '/api/v1/mkety-admin/access-codes'
-        || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')
-      ) {
-        return mketyAdminAccessCodesHandler(request, env, { ctx });
-      }
-      if (url.pathname.startsWith('/api/v1/mkety-admin/')) {
-        return notFoundResponse();
-      }
+      if (url.pathname === '/api/v1/internal/source-event') return internalSourceHandler(request, env, { ctx });
+      if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
+      if (url.pathname === '/api/v1/access/redeem') return accessCodeRedeemHandler(request, env, { ctx });
+      if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
+      if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')) return mketyAdminAccessCodesHandler(request, env, { ctx });
+      if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
 
       if (url.pathname === '/api/v1/events') {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
@@ -177,23 +140,12 @@ export function createTradingV1Entrypoint({
         return adminHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/tradingview/')) {
-        if (!isTradingAccessEnabled(env) && !isTradingViewCertificateProbeRequest(url, env)) {
-          return tradingAccessDisabledResponse();
-        }
+        if (!isTradingAccessEnabled(env) && !isTradingViewCertificateProbeRequest(url, env)) return tradingAccessDisabledResponse();
         return tradingViewHandler(request, env, { ctx });
       }
-      if (url.pathname.startsWith('/api/v1/webhooks/')) {
-        return notFoundResponse();
-      }
-
-      if (url.pathname === '/api/webhook/process_signal') {
-        return retiredLegacySignalResponse();
-      }
-
-      if (url.pathname.startsWith('/api/admin/')) {
-        return retiredLegacyAdminResponse();
-      }
-
+      if (url.pathname.startsWith('/api/v1/webhooks/')) return notFoundResponse();
+      if (url.pathname === '/api/webhook/process_signal') return retiredLegacySignalResponse();
+      if (url.pathname.startsWith('/api/admin/')) return retiredLegacyAdminResponse();
       return legacy.fetch(request, env, ctx);
     },
 
@@ -208,19 +160,11 @@ export function createTradingV1Entrypoint({
         const retryRuntime = destinationRetryRuntime || createProductionDestinationRetryRuntime();
         const repairRuntime = bindingRepairRuntime || runScheduledBindingRepairs;
         const [mtprotoResult, retryResult, bindingRepairResult] = await Promise.allSettled([
-          mtprotoRuntime(env, { ctx }),
-          retryRuntime(env, { ctx }),
-          repairRuntime(env, { ctx }),
+          mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }),
         ]);
-        return {
-          mtprotoRecovery: mtprotoResult.status,
-          destinationRetryRecovery: retryResult.status,
-          bindingRepairRecovery: bindingRepairResult.status,
-        };
+        return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status };
       }
-      if (typeof legacy.scheduled === 'function') {
-        return legacy.scheduled(event, env, ctx);
-      }
+      if (typeof legacy.scheduled === 'function') return legacy.scheduled(event, env, ctx);
     },
   };
 }
