@@ -1,4 +1,6 @@
 const EXTERNAL_MTPROTO_PROVIDER = 'external_mtproto';
+const HOSTED_MTPROTO_PROVIDERS = new Set(['cloudflare_container_mtproto', 'cloudflare_do_mtproto']);
+const MTPROTO_PROVIDERS = new Set([EXTERNAL_MTPROTO_PROVIDER, ...HOSTED_MTPROTO_PROVIDERS]);
 const ALLOWLIST_MODE = 'allowlist';
 const ALL_VISIBLE_MODE = 'all_visible';
 
@@ -15,8 +17,29 @@ function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object, key);
 }
 
-export function authorizeExternalMtprotoEvent({ source, input } = {}) {
-  if (source?.provider_type !== EXTERNAL_MTPROTO_PROVIDER) {
+function sourceAllowedChatIds(source) {
+  const config = source.config || {};
+  if (source.provider_type === EXTERNAL_MTPROTO_PROVIDER) {
+    const mode = clean(config.chat_acceptance_mode) || ALLOWLIST_MODE;
+    if (mode !== ALLOWLIST_MODE && mode !== ALL_VISIBLE_MODE) {
+      return { ok: false, reason: 'MTPROTO_SOURCE_POLICY_INVALID' };
+    }
+    if (config.allowed_chat_ids !== null && config.allowed_chat_ids !== undefined
+        && !Array.isArray(config.allowed_chat_ids)) {
+      return { ok: false, reason: 'MTPROTO_SOURCE_POLICY_INVALID' };
+    }
+    if (mode === ALL_VISIBLE_MODE) return { ok: true, allVisible: true, ids: [] };
+    return { ok: true, allVisible: false, ids: config.allowed_chat_ids || [] };
+  }
+
+  if (config.chat_ids !== null && config.chat_ids !== undefined && !Array.isArray(config.chat_ids)) {
+    return { ok: false, reason: 'MTPROTO_SOURCE_POLICY_INVALID' };
+  }
+  return { ok: true, allVisible: false, ids: config.chat_ids || [] };
+}
+
+export function authorizeMtprotoEvent({ source, input } = {}) {
+  if (!MTPROTO_PROVIDERS.has(source?.provider_type)) {
     return { ok: true };
   }
 
@@ -44,30 +67,18 @@ export function authorizeExternalMtprotoEvent({ source, input } = {}) {
     return reject(400, 'MTPROTO_SOURCE_POLICY_INVALID');
   }
 
-  const config = source.config || {};
-  const mode = clean(config.chat_acceptance_mode) || ALLOWLIST_MODE;
-  if (mode !== ALLOWLIST_MODE && mode !== ALL_VISIBLE_MODE) {
-    return reject(400, 'MTPROTO_SOURCE_POLICY_INVALID');
-  }
+  const policy = sourceAllowedChatIds(source);
+  if (!policy.ok) return reject(400, policy.reason);
+  if (policy.allVisible) return { ok: true };
 
-  if (config.allowed_chat_ids !== null && config.allowed_chat_ids !== undefined
-      && !Array.isArray(config.allowed_chat_ids)) {
-    return reject(400, 'MTPROTO_SOURCE_POLICY_INVALID');
-  }
-
-  if (mode === ALL_VISIBLE_MODE) {
-    return { ok: true };
-  }
-
-  const allowedChatIds = new Set(
-    (config.allowed_chat_ids || [])
-      .map(clean)
-      .filter(Boolean),
-  );
-
+  const allowedChatIds = new Set(policy.ids.map(clean).filter(Boolean));
   if (!allowedChatIds.has(chatId)) {
     return reject(403, 'MTPROTO_CHAT_NOT_AUTHORIZED');
   }
 
   return { ok: true };
+}
+
+export function authorizeExternalMtprotoEvent(input) {
+  return authorizeMtprotoEvent(input);
 }

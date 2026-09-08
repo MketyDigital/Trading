@@ -35,7 +35,12 @@ function normalizeCredentialEnvelope(plaintext) {
   if (parsed?.version !== 1 || parsed?.kind !== 'destination' || !parsed?.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
     throw new Error('DESTINATION_CREDENTIALS_INVALID');
   }
-  return parsed.data;
+  const data = { ...parsed.data };
+  if (!data.signingSecret && !data.signing_secret && data.secret) {
+    data.signingSecret = data.secret;
+    delete data.secret;
+  }
+  return data;
 }
 
 function destinationId(row = {}) {
@@ -65,14 +70,15 @@ function publicOutcome(destination, status, extra = {}) {
 
 function stageSummary(outcomes = []) {
   const succeeded = outcomes.filter((item) => item.status === 'SUCCEEDED').length;
+  const routed = outcomes.filter((item) => item.status === 'ROUTED').length;
   const failed = outcomes.filter((item) => item.status === 'FAILED').length;
   const rejected = outcomes.filter((item) => item.status === 'REJECTED').length;
   const blocked = outcomes.filter((item) => item.status === 'BLOCKED').length;
   let status = 'NO_DESTINATIONS';
-  if (succeeded && !failed && !rejected && !blocked) status = 'DELIVERED';
-  else if (succeeded) status = 'PARTIAL_FAILURE';
+  if ((succeeded || routed) && !failed && !rejected && !blocked) status = succeeded ? 'DELIVERED' : 'ROUTED';
+  else if (succeeded || routed) status = 'PARTIAL_FAILURE';
   else if (failed || rejected || blocked) status = failed ? 'FAILED' : 'BLOCKED';
-  return { status, succeeded, failed, rejected, blocked, outcomes };
+  return { status, succeeded, routed, failed, rejected, blocked, outcomes };
 }
 
 function canonicalWebhookPayload({ workspaceId, sourceId, event, interpretation }) {
@@ -205,7 +211,7 @@ export function createV1DestinationDeliveryStore(supabase) {
     },
 
     async recordDestinationOutcome(workspaceId, id, outcome = {}) {
-      const succeeded = outcome.status === 'SUCCEEDED';
+      const succeeded = outcome.status === 'SUCCEEDED' || outcome.status === 'ROUTED';
       const patch = {
         health_status: succeeded ? 'HEALTHY' : outcome.status === 'BLOCKED' ? 'BLOCKED' : 'DEGRADED',
         last_error_code: succeeded ? null : text(outcome.errorCode) || outcome.status,
@@ -225,7 +231,6 @@ async function safeRecord(destinationStore, workspaceId, destination, outcome) {
   try {
     await destinationStore?.recordDestinationOutcome?.(workspaceId, destinationId(destination), outcome);
   } catch {
-    // Delivery telemetry must never change delivery outcome or break ingress.
   }
 }
 
@@ -292,7 +297,7 @@ async function deliverInternalWebhook({ workspaceId, sourceId, destination, even
   } catch {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_INVALID' });
   }
-  const signingSecret = text(credentials.signingSecret ?? credentials.signing_secret);
+  const signingSecret = text(credentials.signingSecret ?? credentials.signing_secret ?? credentials.secret);
   if (!signingSecret) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_SIGNING_SECRET_MISSING' });
 
   const result = await deps.sendWebhook({
@@ -329,11 +334,10 @@ async function deliverOne(input, deps) {
   if (type === 'internal_webhook') return deliverInternalWebhook(input, deps);
   if (type === 'audit_only') return publicOutcome(destination, 'SUCCEEDED', { deliveryRef: 'audit-only' });
   if (type === 'broker_account') {
-    return publicOutcome(destination, 'BLOCKED', {
-      errorCode: String(env.BROKER_EXECUTION_ENABLED ?? '').toLowerCase() === 'true'
-        ? 'BROKER_DESTINATION_EXECUTION_NOT_WIRED'
-        : 'BROKER_EXECUTION_DISABLED',
-    });
+    if (String(env.BROKER_EXECUTION_ENABLED ?? '').toLowerCase() !== 'true') {
+      return publicOutcome(destination, 'BLOCKED', { errorCode: 'BROKER_EXECUTION_DISABLED' });
+    }
+    return publicOutcome(destination, 'ROUTED', { deliveryRef: text(destination.destination_ref) });
   }
   return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_TYPE_UNSUPPORTED' });
 }
@@ -355,17 +359,17 @@ export async function runV1DestinationDeliveryStage({
   const trustedWorkspaceId = text(workspaceId);
   const trustedSourceId = text(sourceId);
   if (!trustedWorkspaceId || !trustedSourceId) {
-    return { status: 'BLOCKED', succeeded: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_AUTHORITY_MISSING' };
+    return { status: 'BLOCKED', succeeded: 0, routed: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_AUTHORITY_MISSING' };
   }
   if (!destinationStore?.listRoutedDestinations) {
-    return { status: 'BLOCKED', succeeded: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_STORE_UNAVAILABLE' };
+    return { status: 'BLOCKED', succeeded: 0, routed: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_STORE_UNAVAILABLE' };
   }
 
   let destinations;
   try {
     destinations = await destinationStore.listRoutedDestinations(trustedWorkspaceId, trustedSourceId);
   } catch {
-    return { status: 'BLOCKED', succeeded: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_ROUTE_LIST_FAILED' };
+    return { status: 'BLOCKED', succeeded: 0, routed: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_ROUTE_LIST_FAILED' };
   }
   if (!Array.isArray(destinations) || destinations.length === 0) return stageSummary([]);
 

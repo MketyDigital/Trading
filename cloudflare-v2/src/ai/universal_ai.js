@@ -51,18 +51,9 @@ export class UniversalAIRouter {
             const resolved = await this.credentialResolver(provider);
             if (resolved) return resolved;
         }
-        // Transitional compatibility only. Production migrations should move
-        // tenant credentials to encrypted storage and inject a resolver.
         return provider?.resolved_api_key || provider?.api_key_encrypted || provider?.api_key || null;
     }
 
-    /**
-     * Attempts formatting/interpretation using providers in configured order.
-     * `timeoutMs` is per provider, allowing Telegram formatting to use a much
-     * smaller latency budget than non-urgent interpretation work. Circuit
-     * identity is derived only from this router's trusted workspace binding
-     * and the exact database provider row currently being attempted.
-     */
     async processSignal(rawText, systemPrompt, { timeoutMs = 12000, purpose = 'ai' } = {}) {
         if (!this.providers.length) {
             return { success: false, error: 'No AI providers configured in database.' };
@@ -129,6 +120,12 @@ export class UniversalAIRouter {
         }
     }
 
+    requireModel(provider) {
+        const model = String(provider?.model_name ?? '').trim();
+        if (!model) throw new Error('AI_MODEL_NOT_CONFIGURED');
+        return model;
+    }
+
     async executeProviderCall(provider, rawText, systemPrompt, signal) {
         const pType = String(provider.provider_name || '').toLowerCase();
         if (pType.includes('gemini') || pType.includes('google')) {
@@ -141,7 +138,7 @@ export class UniversalAIRouter {
     }
 
     async callGemini(provider, rawText, systemPrompt, signal) {
-        const model = provider.model_name || 'gemini-2.5-flash';
+        const model = this.requireModel(provider);
         const key = provider.resolved_api_key;
         if (!key) throw new Error('Gemini credential missing');
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
@@ -171,8 +168,7 @@ export class UniversalAIRouter {
         if (!baseUrl.endsWith('/chat/completions')) {
             baseUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
         }
-        const providerName = String(provider.provider_name || '');
-        const model = provider.model_name || (providerName.includes('deepseek') ? 'deepseek-chat' : 'gpt-4o-mini');
+        const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
             method: 'POST',
             headers: {
@@ -201,7 +197,7 @@ export class UniversalAIRouter {
         const key = provider.resolved_api_key;
         if (!accountId) throw new Error('Cloudflare account id missing');
         if (!key) throw new Error('Cloudflare AI credential missing');
-        const model = provider.model_name || '@cf/meta/llama-3.3-70b-instruct';
+        const model = this.requireModel(provider);
         const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
         const res = await this.fetchFn(url, {
             method: 'POST',

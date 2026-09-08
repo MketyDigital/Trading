@@ -15,6 +15,7 @@ const SOURCES = {
     source_family: 'telegram',
     provider_type: 'cloudflare_container_mtproto',
     external_identity: 'telegram-account-42',
+    config: { chat_ids: ['-10012345'] },
     secret: 'container-secret',
   },
   'src-do': {
@@ -25,6 +26,7 @@ const SOURCES = {
     source_family: 'telegram',
     provider_type: 'cloudflare_do_mtproto',
     external_identity: 'telegram-account-42',
+    config: { chat_ids: ['-10012345'] },
     secret: 'do-secret',
   },
 };
