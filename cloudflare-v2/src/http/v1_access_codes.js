@@ -165,5 +165,5 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
     return json({ ok: false, reason: result?.reason || 'ACCESS_CODE_REDEMPTION_DENIED' }, result?.status || 403);
   }
 
-  return issueSession(result, env, nowSec, 'access_code_onboarding', { includeRefreshCookie: true });
+  return issueSession(result, env, nowSec, result.mode || 'access_code_onboarding', { includeRefreshCookie: true });
 }
