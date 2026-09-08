@@ -7,6 +7,8 @@ import { executeProductionPlan } from '../execution/production_execution_coordin
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
 import { createProviderCircuitBreaker } from '../resilience/provider_circuit_breaker.js';
+import { decryptSecret } from '../security/secret_box.js';
+import { normalizeDestinationCredentialPlaintext } from '../destinations/destination_credentials_compat.js';
 import {
   createV1DestinationDeliveryStore,
   runV1DestinationDeliveryStage,
@@ -61,6 +63,11 @@ async function defaultSupabaseFactory(env) {
   return createClient(url, key);
 }
 
+async function decryptDestinationCredentialsCompat(ciphertext, masterKey) {
+  const plaintext = await decryptSecret(ciphertext, masterKey);
+  return normalizeDestinationCredentialPlaintext(plaintext);
+}
+
 export async function handleV1EventsRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   storesFactory = createSupabaseIngestStores,
@@ -113,10 +120,6 @@ export async function handleV1EventsRequest(request, env = {}, {
       }),
     });
 
-    // Recovery replay is considered only after normal source authentication and
-    // ingest authorization have succeeded. The marker cannot grant workspace or
-    // source authority. A duplicate is eligible for orchestration only when
-    // ingest rehydrated the canonical event from persisted DB truth.
     const recoveryReplay = request.headers.get('X-Mkety-Source-Recovery') === '1';
     const duplicateReplayRequested = orchestrateDuplicates || recoveryReplay;
     const allowDuplicateOrchestration = duplicateReplayRequested && result?.recoveryReady === true;
@@ -127,11 +130,6 @@ export async function handleV1EventsRequest(request, env = {}, {
       return json(responseBody, result?.ok ? 200 : Number(result?.status || 500));
     }
 
-    // External destinations are deliberately separated from broker execution.
-    // Workspace authority comes from the normalized event, which ingest derived
-    // from the authenticated source registry. Payload destination hints are never
-    // consulted. Duplicate recovery may re-run simulation/execution diagnostics,
-    // but it must not re-send external destinations.
     let destinations = skippedDuplicateDestinationStage();
     if (!result?.duplicate) {
       try {
@@ -142,7 +140,7 @@ export async function handleV1EventsRequest(request, env = {}, {
           event: result.event,
           interpretation: result.interpretation,
           env,
-        }, { destinationStore });
+        }, { destinationStore, decryptCredentials: decryptDestinationCredentialsCompat });
       } catch {
         destinations = blockedDestinationStage();
       }
