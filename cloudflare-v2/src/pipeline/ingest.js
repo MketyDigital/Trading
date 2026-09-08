@@ -2,7 +2,7 @@ import { verifySignedSourcePayload } from '../security/source_auth.js';
 import { normalizeTradingEvent } from '../events/trading_event.js';
 import { interpretTradingEvent } from '../ai/trading_interpreter.js';
 import { buildCanonicalSourceEventId } from '../sources/canonical_event_id.js';
-import { authorizeExternalMtprotoEvent } from '../sources/mtproto/external_policy.js';
+import { authorizeMtprotoEvent } from '../sources/mtproto/external_policy.js';
 
 function deriveCanonicalEventId(source, input) {
   if (!source?.source_family || !source?.external_identity) return null;
@@ -16,8 +16,6 @@ function deriveCanonicalEventId(source, input) {
       nativeIdentity,
     });
   } catch {
-    // Backward compatibility: older/custom providers without a complete native
-    // identity continue to use the existing source-scoped external_event_id.
     return null;
   }
 }
@@ -52,9 +50,6 @@ async function interpretAndPersist({
   aiRouterFactory,
   interpretationTimeoutMs,
 }) {
-  // Tenant AI configuration is loaded only after HMAC authentication and
-  // trusted workspace resolution. A client payload cannot select another
-  // workspace's provider credentials.
   const resolvedAiRouter = aiRouterFactory
     ? await aiRouterFactory({ source, event })
     : aiRouter;
@@ -109,14 +104,12 @@ export async function ingestTradingEvent({
     return { ok: false, status: 400, reason: 'INVALID_JSON' };
   }
 
-  // External MTProto authorization is server-owned and runs only after source
-  // HMAC authentication, but before normalization, reservation, AI or trading
-  // work. Local VM filtering is an optimization and never an authority.
-  const sourcePolicy = authorizeExternalMtprotoEvent({ source, input });
+  // Every MTProto transport is a listener only. The authenticated source row
+  // remains authoritative for account scope and accepted Telegram chats, even
+  // for Mkety-hosted Container/DO listeners.
+  const sourcePolicy = authorizeMtprotoEvent({ source, input });
   if (!sourcePolicy.ok) return sourcePolicy;
 
-  // Source identity and workspace authority come from the authenticated source
-  // registry, never from client-controlled payload fields.
   const normalizedInput = {
     ...input,
     workspace_hint: source.workspace_id,
@@ -151,10 +144,6 @@ export async function ingestTradingEvent({
   const reservation = await eventStore.reserve(reservationRow);
 
   if (reservation?.duplicate) {
-    // A replay body proves only source possession and duplicate identity. It is
-    // never allowed to replace canonical event content already persisted for
-    // that identity. Recovery orchestration can proceed only from DB truth plus
-    // the currently authenticated source/workspace relationship.
     const persistedEvent = recoverPersistedEvent(source, reservation.event);
     if (!persistedEvent) {
       return {
