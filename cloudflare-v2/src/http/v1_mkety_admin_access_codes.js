@@ -196,7 +196,7 @@ function revokeIdFromPath(pathname) {
 
 async function runtimeControlResponse(runtimeStore, env) {
   const current = await runtimeStore.getBrokerExecutionEnabled();
-  if (!current?.ok && current?.enabled !== false) throw new Error('RUNTIME_CONTROL_UNAVAILABLE');
+  if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');
   const ownerEnabled = current?.enabled === true;
   const capabilityEnabled = enabled(env.BROKER_EXECUTION_ENABLED);
   return {
