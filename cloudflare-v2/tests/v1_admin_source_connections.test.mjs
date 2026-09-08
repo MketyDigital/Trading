@@ -27,9 +27,9 @@ function mtprotoBody(overrides = {}) {
 }
 
 function externalMtprotoBody(overrides = {}) {
-  const body = mtprotoBody({ providerType: 'external_mtproto', ...overrides });
+  const body = mtprotoBody({ providerType: 'external_mtproto' });
   delete body.credentials;
-  return body;
+  return { ...body, ...overrides };
 }
 
 function request(path, method, body) {
