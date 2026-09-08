@@ -46,7 +46,40 @@ function canonicalSymbol(intent = {}) {
   return String(intent?.symbol?.canonical || intent?.symbol || '').toUpperCase();
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {} } = {}) {
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
+  const trustedSourceId = String(sourceId || '').trim();
+  if (!trustedSourceId) return [];
+
+  const { data: routes, error: routeError } = await supabase
+    .from('source_destination_routes')
+    .select('destination_id,priority')
+    .eq('workspace_id', workspaceId)
+    .eq('source_connection_id', trustedSourceId)
+    .eq('is_active', true)
+    .order('priority', { ascending: true });
+  if (routeError) throw new Error('failed to load source broker routes');
+
+  const destinationIds = (routes || []).map((row) => String(row.destination_id || '').trim()).filter(Boolean);
+  if (!destinationIds.length) return [];
+
+  const { data: destinations, error: destinationError } = await supabase
+    .from('trading_destinations')
+    .select('id,destination_ref,destination_type,is_active')
+    .eq('workspace_id', workspaceId)
+    .eq('destination_type', 'broker_account')
+    .eq('is_active', true)
+    .in('id', destinationIds);
+  if (destinationError) throw new Error('failed to load broker destinations');
+
+  const byDestination = new Map((destinations || []).map((row) => [String(row.id), row]));
+  return destinationIds
+    .map((id) => byDestination.get(id))
+    .filter(Boolean)
+    .map((row) => String(row.destination_ref || '').trim())
+    .filter(Boolean);
+}
+
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, sourceId } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -59,13 +92,17 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   return {
     ...state,
     async accountProvider() {
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId);
+      if (!accountIds.length) return [];
       const { data, error } = await supabase
         .from('trade_accounts')
         .select('*')
         .eq('workspace_id', workspaceId)
-        .eq('is_active', true);
-      if (error) throw new Error(`failed to load simulation accounts: ${error.message || 'database error'}`);
-      return data || [];
+        .eq('is_active', true)
+        .in('id', accountIds);
+      if (error) throw new Error(`failed to load routed execution accounts: ${error.message || 'database error'}`);
+      const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
+      return accountIds.map((id) => accountMap.get(id)).filter(Boolean);
     },
     async instrumentProvider(_account, intent) {
       const symbol = canonicalSymbol(intent);
