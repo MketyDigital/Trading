@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { handleTradingAccessCodeRedeemRequest } from '../src/http/v1_access_codes.js';
 import { renderEnterpriseTradingPortal } from '../src/dashboard_enterprise_portal.js';
+import { withReturningOwnerSession } from '../src/dashboard_returning_session.js';
 import { runV1ProductionExecutionStage } from '../src/pipeline/v1_execution_stage.js';
 import { handleMketyAdminAccessCodesRequest } from '../src/http/v1_mkety_admin_access_codes.js';
 
@@ -84,8 +85,8 @@ test('logout clears the refresh cookie', async () => {
   assert.match(response.headers.get('Set-Cookie') || '', /Max-Age=0/i);
 });
 
-test('enterprise portal attempts returning-session restoration automatically before showing onboarding', () => {
-  const html = renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' });
+test('enterprise entry surface attempts returning-session restoration automatically before onboarding', () => {
+  const html = withReturningOwnerSession(renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }));
   assert.match(html, /\/api\/v1\/access\/session/);
   assert.match(html, /credentials\s*:\s*['"]include['"]/);
   assert.match(html, /\/api\/v1\/access\/logout/);
@@ -121,21 +122,26 @@ test('broker execution fails closed when persisted runtime control cannot be rea
 test('Mkety admin can read and update the broker owner switch through the secret-guarded admin API', async () => {
   let enabled = false;
   const runtimeStore = {
-    async getBrokerExecutionEnabled() { return { enabled }; },
-    async setBrokerExecutionEnabled(next) { enabled = Boolean(next); return { enabled }; },
+    async getBrokerExecutionEnabled() { return { ok: true, enabled }; },
+    async setBrokerExecutionEnabled(next) { enabled = Boolean(next); return { ok: true, enabled }; },
   };
 
   const read = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {
     headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store: {}, runtimeStore });
+  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret', BROKER_EXECUTION_ENABLED: 'true' }, { store: {}, runtimeStore });
   assert.equal(read.status, 200);
-  assert.equal((await read.json()).brokerExecutionEnabled, false);
+  const first = await read.json();
+  assert.equal(first.brokerExecutionCapabilityEnabled, true);
+  assert.equal(first.brokerExecutionEnabled, false);
+  assert.equal(first.effectiveBrokerExecutionEnabled, false);
 
   const update = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Mkety-Admin-Secret': 'admin-secret' },
     body: JSON.stringify({ brokerExecutionEnabled: true }),
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store: {}, runtimeStore });
+  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret', BROKER_EXECUTION_ENABLED: 'true' }, { store: {}, runtimeStore });
   assert.equal(update.status, 200);
-  assert.equal((await update.json()).brokerExecutionEnabled, true);
+  const second = await update.json();
+  assert.equal(second.brokerExecutionEnabled, true);
+  assert.equal(second.effectiveBrokerExecutionEnabled, true);
 });
