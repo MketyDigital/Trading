@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS public.trading_destinations (
     CONSTRAINT trading_destinations_workspace_template_fk
         FOREIGN KEY (workspace_id, template_id)
         REFERENCES public.trading_destination_templates(workspace_id, id)
-        ON DELETE SET NULL
+        ON DELETE SET NULL (template_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_trading_destinations_workspace
