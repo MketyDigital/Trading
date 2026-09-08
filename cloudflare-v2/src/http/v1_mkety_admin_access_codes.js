@@ -3,12 +3,17 @@ import {
   normalizeTradingAccessCode,
 } from '../access/trading_access_codes.js';
 import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
+import { createTradingRuntimeControlStore } from '../persistence/supabase_runtime_control_store.js';
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extraHeaders },
   });
+}
+
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
 }
 
 function bearerOrHeaderSecret(request) {
@@ -189,14 +194,64 @@ function revokeIdFromPath(pathname) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+async function runtimeControlResponse(runtimeStore, env) {
+  const current = await runtimeStore.getBrokerExecutionEnabled();
+  if (!current?.ok && current?.enabled !== false) throw new Error('RUNTIME_CONTROL_UNAVAILABLE');
+  const ownerEnabled = current?.enabled === true;
+  const capabilityEnabled = enabled(env.BROKER_EXECUTION_ENABLED);
+  return {
+    ok: true,
+    brokerExecutionCapabilityEnabled: capabilityEnabled,
+    brokerExecutionEnabled: ownerEnabled,
+    effectiveBrokerExecutionEnabled: capabilityEnabled && ownerEnabled,
+    updatedAt: current?.updatedAt || null,
+    updatedBy: current?.updatedBy || null,
+  };
+}
+
 export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   store = null,
+  runtimeStore = null,
   now = new Date(),
   randomUUID = crypto.randomUUID,
 } = {}) {
   const auth = authorizeMketyAdmin(request, env);
   if (!auth.ok) return json({ ok: false, reason: auth.reason }, auth.status);
+
+  const url = new URL(request.url);
+
+  if (url.pathname === '/api/v1/mkety-admin/runtime-controls') {
+    let controls = runtimeStore;
+    if (!controls) {
+      try {
+        controls = createTradingRuntimeControlStore(await supabaseFactory(env));
+      } catch {
+        return json({ ok: false, reason: 'MKETY_ADMIN_RUNTIME_CONTROL_STORE_UNAVAILABLE' }, 503);
+      }
+    }
+    if (request.method === 'GET') {
+      try {
+        return json(await runtimeControlResponse(controls, env));
+      } catch {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }, 503);
+      }
+    }
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+      if (typeof body.brokerExecutionEnabled !== 'boolean') {
+        return json({ ok: false, reason: 'BROKER_EXECUTION_BOOLEAN_REQUIRED' }, 400);
+      }
+      try {
+        await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+        return json(await runtimeControlResponse(controls, env));
+      } catch {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503);
+      }
+    }
+    return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, PATCH' });
+  }
 
   let accessStore = store;
   if (!accessStore) {
@@ -207,7 +262,6 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     }
   }
 
-  const url = new URL(request.url);
   const revokeId = revokeIdFromPath(url.pathname);
   if (revokeId) {
     if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
