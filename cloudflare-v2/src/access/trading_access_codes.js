@@ -1,3 +1,5 @@
+import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -52,17 +54,6 @@ export async function hashTradingAccessCode(code) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function normalizeEntitlements(entitlements = {}) {
-  return {
-    customSubdomain: Boolean(entitlements.customSubdomain),
-    customHostname: Boolean(entitlements.customHostname),
-    sourceTypes: Array.isArray(entitlements.sourceTypes) ? entitlements.sourceTypes.map(String) : [],
-    brokerModes: Array.isArray(entitlements.brokerModes) ? entitlements.brokerModes.map(String) : ['demo'],
-    liveExecution: Boolean(entitlements.liveExecution),
-    maxTeamMembers: Math.max(1, Number.parseInt(entitlements.maxTeamMembers ?? 1, 10) || 1),
-  };
-}
-
 export function validateTradingAccessCodeRecord(record, now = new Date()) {
   if (!record) return { ok: false, status: 404, reason: 'ACCESS_CODE_NOT_FOUND' };
   if (String(record.product ?? '') !== 'trading') {
@@ -100,7 +91,7 @@ export function validateTradingAccessCodeRecord(record, now = new Date()) {
       role: 'owner',
       enabled: true,
     },
-    entitlements: normalizeEntitlements(record.entitlements),
+    entitlements: normalizeTradingEntitlements(record.entitlements),
   };
 }
 
