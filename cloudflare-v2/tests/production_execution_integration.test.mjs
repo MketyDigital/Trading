@@ -17,6 +17,7 @@ function baseDeps(overrides = {}) {
     simulationDepsFactory: async () => ({ safe: true }),
     orchestrateFn: async () => ({ status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [{ accountId: 'acct-1', status: 'READY', groupId: 'group-1', actions: [{ type: 'OPEN_POSITION', legId: 'leg-1', symbol: 'XAUUSD', lots: 0.01, idempotencyKey: 'group-1:leg:1', simulated: true }] }] }),
     ingestFn: async () => baseResult(),
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     ...overrides,
   };
 }
