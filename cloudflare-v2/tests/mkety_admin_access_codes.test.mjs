@@ -16,66 +16,27 @@ function fakeStore() {
     async createAccessCode(plan) {
       calls.push({ operation: 'create', plan });
       return {
-        id: 'code-row-1',
-        workspace_id: plan.workspace.id,
-        workspace_display_name: plan.workspace.displayName,
-        owner_email: plan.owner.email,
-        owner_name: plan.owner.name,
-        status: 'active',
-        max_redemptions: plan.maxRedemptions,
-        redeemed_count: 0,
-        expires_at: plan.expiresAt,
-        entitlements: plan.entitlements,
-        metadata: plan.metadata,
-        created_at: fixedNow.toISOString(),
+        id: 'code-row-1', workspace_id: plan.workspace.id, workspace_display_name: plan.workspace.displayName,
+        owner_email: plan.owner.email, owner_name: plan.owner.name, status: 'active',
+        max_redemptions: plan.maxRedemptions, redeemed_count: 0, expires_at: plan.expiresAt,
+        entitlements: plan.entitlements, metadata: plan.metadata, created_at: fixedNow.toISOString(),
       };
     },
     async listAccessCodes() {
-      return [{
-        id: 'code-row-1',
-        workspace_id: 'workspace-1',
-        workspace_display_name: 'Starpips Trading',
-        owner_email: 'owner@example.com',
-        owner_name: 'Owner Example',
-        status: 'active',
-        max_redemptions: 1,
-        redeemed_count: 0,
-        expires_at: '2026-09-15T00:00:00.000Z',
-        entitlements: { liveExecution: false, brokerModes: ['demo'] },
-        metadata: { label: 'first code' },
-        created_at: fixedNow.toISOString(),
-      }];
+      return [{ id: 'code-row-1', workspace_id: 'workspace-1', workspace_display_name: 'Starpips Trading', owner_email: 'owner@example.com', owner_name: 'Owner Example', status: 'active', max_redemptions: 1, redeemed_count: 0, expires_at: '2026-09-15T00:00:00.000Z', entitlements: { liveExecution: false, brokerModes: ['demo'] }, metadata: { label: 'first code' }, created_at: fixedNow.toISOString() }];
     },
     async revokeAccessCode(accessCodeId) {
       calls.push({ operation: 'revoke', accessCodeId });
       if (accessCodeId !== 'code-row-1') return null;
-      return {
-        id: 'code-row-1',
-        workspace_id: 'workspace-1',
-        workspace_display_name: 'Starpips Trading',
-        owner_email: 'owner@example.com',
-        owner_name: 'Owner Example',
-        status: 'revoked',
-        max_redemptions: 1,
-        redeemed_count: 0,
-        expires_at: '2026-09-15T00:00:00.000Z',
-        entitlements: { liveExecution: false, brokerModes: ['demo'] },
-        metadata: { label: 'first code' },
-        created_at: fixedNow.toISOString(),
-        updated_at: fixedNow.toISOString(),
-      };
+      return { id: 'code-row-1', workspace_id: 'workspace-1', workspace_display_name: 'Starpips Trading', owner_email: 'owner@example.com', owner_name: 'Owner Example', status: 'revoked', max_redemptions: 1, redeemed_count: 0, expires_at: '2026-09-15T00:00:00.000Z', entitlements: { liveExecution: false, brokerModes: ['demo'] }, metadata: { label: 'first code' }, created_at: fixedNow.toISOString(), updated_at: fixedNow.toISOString() };
     },
   };
 }
 
-test('Mkety admin access-code plan stores only hash authority and returns the plain code once', async () => {
+test('Mkety admin access-code plan stores only hash authority and preserves safe capability flags', async () => {
   const plan = await createMketyAdminAccessCodePlan({
-    code: ' trd mkety launch 001 ',
-    ownerEmail: 'OWNER@EXAMPLE.COM',
-    ownerName: 'Owner Example',
-    workspaceName: 'Starpips Trading',
-    expiresAt: '2026-09-15T00:00:00.000Z',
-    entitlements: { sourceTypes: ['telegram'], brokerModes: ['demo'], liveExecution: true },
+    code: ' trd mkety launch 001 ', ownerEmail: 'OWNER@EXAMPLE.COM', ownerName: 'Owner Example', workspaceName: 'Starpips Trading', expiresAt: '2026-09-15T00:00:00.000Z',
+    entitlements: { sourceTypes: ['telegram'], brokerModes: ['demo', 'live'], liveExecution: true, tradingExecutionDestination: true, telegramDestination: false, customSubdomain: true, customHostname: false, destinations: ['broker_account', 'audit_only'] },
   }, { now: fixedNow, randomUUID: () => 'workspace-1' });
 
   assert.equal(plan.ok, true);
@@ -83,30 +44,21 @@ test('Mkety admin access-code plan stores only hash authority and returns the pl
   assert.equal(plan.record.code_hash, await hashTradingAccessCode('TRDMKETYLAUNCH001'));
   assert.equal(plan.record.code, undefined);
   assert.equal(plan.record.rawCode, undefined);
-  assert.equal(plan.entitlements.liveExecution, false, 'admin code creation must not grant live execution by default');
+  assert.equal(plan.entitlements.liveExecution, false);
   assert.deepEqual(plan.entitlements.brokerModes, ['demo']);
+  assert.equal(plan.entitlements.tradingExecutionDestination, true);
+  assert.equal(plan.entitlements.telegramDestination, false);
+  assert.equal(plan.entitlements.customSubdomain, true);
+  assert.equal(plan.entitlements.customHostname, false);
+  assert.deepEqual(plan.entitlements.destinations, ['broker_account', 'audit_only']);
 });
 
 test('Mkety admin access-code creation requires Mkety admin secret and never exposes code hashes', async () => {
   const store = fakeStore();
-  const denied = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerEmail: 'owner@example.com', workspaceName: 'Starpips Trading' }),
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow, randomUUID: () => 'workspace-1' });
+  const denied = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerEmail: 'owner@example.com', workspaceName: 'Starpips Trading' }) }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow, randomUUID: () => 'workspace-1' });
   assert.equal(denied.status, 401);
 
-  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer admin-secret' },
-    body: JSON.stringify({
-      code: 'TRD-MKETY-OWNER-001',
-      ownerEmail: 'owner@example.com',
-      ownerName: 'Owner Example',
-      workspaceName: 'Starpips Trading',
-      expiresAt: '2026-09-15T00:00:00.000Z',
-    }),
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow, randomUUID: () => 'workspace-1' });
+  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer admin-secret' }, body: JSON.stringify({ code: 'TRD-MKETY-OWNER-001', ownerEmail: 'owner@example.com', ownerName: 'Owner Example', workspaceName: 'Starpips Trading', expiresAt: '2026-09-15T00:00:00.000Z' }) }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow, randomUUID: () => 'workspace-1' });
 
   assert.equal(response.status, 201);
   const body = await response.json();
@@ -118,11 +70,7 @@ test('Mkety admin access-code creation requires Mkety admin secret and never exp
 });
 
 test('Mkety admin access-code list does not reveal hashes or plain codes', async () => {
-  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', {
-    method: 'GET',
-    headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store: fakeStore(), now: fixedNow });
-
+  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes', { method: 'GET', headers: { 'X-Mkety-Admin-Secret': 'admin-secret' } }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store: fakeStore(), now: fixedNow });
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.ok, true);
@@ -133,11 +81,7 @@ test('Mkety admin access-code list does not reveal hashes or plain codes', async
 
 test('Mkety admin can revoke an access code without exposing hash or plain code', async () => {
   const store = fakeStore();
-  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes/code-row-1/revoke', {
-    method: 'POST',
-    headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
-  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow });
-
+  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes/code-row-1/revoke', { method: 'POST', headers: { 'X-Mkety-Admin-Secret': 'admin-secret' } }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' }, { store, now: fixedNow });
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.ok, true);
