@@ -17,6 +17,8 @@ import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from '.
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
 import { createAdminHostnameStore, handleAuthorizedV1AdminHostnamesRequest } from './v1_admin_hostnames.js';
 import { createAdminDestinationStore, handleAuthorizedV1AdminDestinationsRequest } from './v1_admin_destinations.js';
+import { createAdminAIStore, handleAuthorizedV1AdminAIRequest } from './v1_admin_ai.js';
+import { createBrandingStore, handleAuthorizedBrandingRequest } from './v1_branding.js';
 import {
   createAdminOperationsStore,
   handleAuthorizedV1AdminOperationsRequest,
@@ -226,6 +228,8 @@ export async function handleV1AdminRequest(request, env = {}, {
   accountStoreFactory = createAdminAccountStore,
   adminHostnameStoreFactory = createAdminHostnameStore,
   destinationStoreFactory = createAdminDestinationStore,
+  aiStoreFactory = createAdminAIStore,
+  brandingStoreFactory = createBrandingStore,
   operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
   let supabase;
@@ -239,6 +243,20 @@ export async function handleV1AdminRequest(request, env = {}, {
   if (url.pathname === '/api/v1/admin/workspace' && request.method === 'GET') {
     if (!hasTradingPermission(authorization.membership?.role, 'workspace.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
     return json({ ok: true, subject: authorization.auth.subject, workspace: publicWorkspace(authorization.workspace) });
+  }
+
+  if (url.pathname === '/api/v1/admin/branding') {
+    let brandingStore;
+    try { brandingStore = brandingStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'BRANDING_STORE_UNAVAILABLE' }, 503); }
+    return handleAuthorizedBrandingRequest(request, authorization, { brandingStore });
+  }
+
+  if (url.pathname === '/api/v1/admin/ai-providers' || url.pathname.startsWith('/api/v1/admin/ai-providers/')) {
+    let aiStore;
+    try { aiStore = aiStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'AI_PROVIDER_STORE_UNAVAILABLE' }, 503); }
+    return handleAuthorizedV1AdminAIRequest(request, authorization, { aiStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/operations') {
