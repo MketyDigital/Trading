@@ -6,10 +6,7 @@ import { requiresTradingEntitlement } from '../security/trading_entitlements.js'
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
@@ -38,6 +35,7 @@ function publicHostname(row = {}, provider = null, cnameTarget = null) {
       provider: {
         hostnameStatus: provider.hostnameStatus ?? null,
         sslStatus: provider.sslStatus ?? null,
+        workerRouteConfigured: provider.workerRouteConfigured !== false,
         verificationErrors: provider.verificationErrors || [],
       },
       validation: provider.validation || { ownership: null, ownershipHttp: null, sslRecords: [] },
@@ -66,63 +64,30 @@ async function readJson(request) {
   try {
     const value = await request.json();
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export function createAdminHostnameStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async list(workspaceId) {
-      const { data, error } = await supabase
-        .from('trading_workspace_hostnames')
-        .select('*')
-        .eq('workspace_id', String(workspaceId))
-        .order('created_at', { ascending: true });
+      const { data, error } = await supabase.from('trading_workspace_hostnames').select('*').eq('workspace_id', String(workspaceId)).order('created_at', { ascending: true });
       if (error) throw new Error('CUSTOM_HOSTNAME_LIST_FAILED');
       return data || [];
     },
-
     async get(workspaceId, id) {
-      const { data, error } = await supabase
-        .from('trading_workspace_hostnames')
-        .select('*')
-        .eq('workspace_id', String(workspaceId))
-        .eq('id', String(id))
-        .maybeSingle();
+      const { data, error } = await supabase.from('trading_workspace_hostnames').select('*').eq('workspace_id', String(workspaceId)).eq('id', String(id)).maybeSingle();
       if (error) throw new Error('CUSTOM_HOSTNAME_READ_FAILED');
       return data || null;
     },
-
     async create(workspaceId, hostname) {
-      const { data, error } = await supabase
-        .from('trading_workspace_hostnames')
-        .insert({
-          workspace_id: String(workspaceId),
-          hostname: String(hostname),
-          status: 'pending',
-          verified_at: null,
-        })
-        .select('*')
-        .maybeSingle();
+      const { data, error } = await supabase.from('trading_workspace_hostnames').insert({ workspace_id: String(workspaceId), hostname: String(hostname), status: 'pending', verified_at: null }).select('*').maybeSingle();
       if (error || !data) throw new Error('CUSTOM_HOSTNAME_CREATE_FAILED');
       return data;
     },
-
     async syncVerification(workspaceId, id, active) {
       const now = new Date().toISOString();
-      const { data, error } = await supabase
-        .from('trading_workspace_hostnames')
-        .update({
-          status: active ? 'active' : 'pending',
-          verified_at: active ? now : null,
-          updated_at: now,
-        })
-        .eq('workspace_id', String(workspaceId))
-        .eq('id', String(id))
-        .select('*')
-        .maybeSingle();
+      const { data, error } = await supabase.from('trading_workspace_hostnames').update({ status: active ? 'active' : 'pending', verified_at: active ? now : null, updated_at: now }).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select('*').maybeSingle();
       if (error) throw new Error('CUSTOM_HOSTNAME_UPDATE_FAILED');
       return data || null;
     },
@@ -136,39 +101,26 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
 } = {}) {
   const workspaceId = String(authorization?.workspace?.id ?? '').trim();
   if (!workspaceId) return json({ ok: false, reason: 'ADMIN_WORKSPACE_AUTHORITY_MISSING' }, 403);
-  if (requiresTradingEntitlement(authorization, 'customHostname')) {
-    return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
-  }
+  if (requiresTradingEntitlement(authorization, 'customHostname')) return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
   if (!hostnameStore) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503);
 
   const url = new URL(request.url);
   const prefix = '/api/v1/admin/hostnames';
-  if (url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) {
-    return json({ ok: false, reason: 'ADMIN_HOSTNAME_ROUTE_NOT_FOUND' }, 404);
-  }
-
+  if (url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return json({ ok: false, reason: 'ADMIN_HOSTNAME_ROUTE_NOT_FOUND' }, 404);
   const cnameTarget = configuredCnameTarget(env);
 
   if (url.pathname === prefix) {
     if (request.method === 'GET') {
-      if (!hasTradingPermission(authorization.membership?.role, 'hostnames.read')) {
-        return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
-      }
+      if (!hasTradingPermission(authorization.membership?.role, 'hostnames.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
       try {
         const rows = await hostnameStore.list(workspaceId);
         return json({ ok: true, workspaceId, hostnames: rows.map((row) => publicHostname(row, null, cnameTarget)) });
-      } catch {
-        return json({ ok: false, reason: 'CUSTOM_HOSTNAME_LIST_FAILED' }, 503);
-      }
+      } catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_LIST_FAILED' }, 503); }
     }
 
     if (request.method === 'POST') {
-      if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) {
-        return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
-      }
-      if (!providerConfigured(env, cnameTarget)) {
-        return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
-      }
+      if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+      if (!providerConfigured(env, cnameTarget)) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
       const hostname = validateRequestedHostname(body.hostname, env);
@@ -179,68 +131,46 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
       try {
         providerClient = providerClientFactory(env);
         provider = await providerClient.create(hostname);
-      } catch {
-        return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_CREATE_FAILED' }, 503);
-      }
+      } catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_CREATE_FAILED' }, 503); }
 
       try {
         const row = await hostnameStore.create(workspaceId, hostname);
         return json({ ok: true, workspaceId, hostname: publicHostname(row, provider, cnameTarget) }, 201);
       } catch {
         if (provider?.providerId && providerClient?.delete) {
-          try { await providerClient.delete(provider.providerId); } catch { /* best-effort orphan cleanup */ }
+          try { await providerClient.delete(provider.providerId, hostname); } catch { /* best-effort orphan cleanup */ }
         }
         return json({ ok: false, reason: 'CUSTOM_HOSTNAME_CREATE_FAILED' }, 409);
       }
     }
-
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
   }
 
   const rest = url.pathname.slice(prefix.length + 1).split('/').filter(Boolean);
   if (rest.length !== 2 || rest[1] !== 'verify') return json({ ok: false, reason: 'ADMIN_HOSTNAME_ROUTE_NOT_FOUND' }, 404);
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
-  if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) {
-    return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
-  }
-  if (!providerConfigured(env, cnameTarget)) {
-    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
-  }
+  if (!hasTradingPermission(authorization.membership?.role, 'hostnames.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  if (!providerConfigured(env, cnameTarget)) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_CONFIGURED' }, 503);
 
   let id;
   try { id = decodeURIComponent(rest[0]); } catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_ID_INVALID' }, 400); }
   if (!String(id).trim()) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_ID_INVALID' }, 400);
 
   let row;
-  try {
-    row = await hostnameStore.get(workspaceId, id);
-  } catch {
-    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_READ_FAILED' }, 503);
-  }
+  try { row = await hostnameStore.get(workspaceId, id); }
+  catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_READ_FAILED' }, 503); }
   if (!row) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_NOT_FOUND' }, 404);
 
   let provider;
-  try {
-    const providerClient = providerClientFactory(env);
-    provider = await providerClient.getByHostname(row.hostname);
-  } catch {
-    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_READ_FAILED' }, 503);
-  }
+  try { provider = await providerClientFactory(env).getByHostname(row.hostname); }
+  catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_READ_FAILED' }, 503); }
   if (!provider) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_FOUND' }, 409);
 
-  const active = provider.hostnameStatus === 'active' && provider.sslStatus === 'active';
+  const active = provider.hostnameStatus === 'active' && provider.sslStatus === 'active' && provider.workerRouteConfigured !== false;
   let updated;
-  try {
-    updated = await hostnameStore.syncVerification(workspaceId, id, active);
-  } catch {
-    return json({ ok: false, reason: 'CUSTOM_HOSTNAME_UPDATE_FAILED' }, 503);
-  }
+  try { updated = await hostnameStore.syncVerification(workspaceId, id, active); }
+  catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_UPDATE_FAILED' }, 503); }
   if (!updated) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_NOT_FOUND' }, 404);
 
-  return json({
-    ok: true,
-    workspaceId,
-    verified: active,
-    hostname: publicHostname(updated, provider, cnameTarget),
-  });
+  return json({ ok: true, workspaceId, verified: active, hostname: publicHostname(updated, provider, cnameTarget) });
 }
