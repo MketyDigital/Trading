@@ -154,6 +154,7 @@ export async function handleV1EventsRequest(request, env = {}, {
         event: result.event,
         interpretation: result.interpretation,
         eventId: result.eventId,
+        sourceId,
       });
       simulation = await orchestrateFn({
         event: result.event,
