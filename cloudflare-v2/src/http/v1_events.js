@@ -7,6 +7,10 @@ import { executeProductionPlan } from '../execution/production_execution_coordin
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
 import { createProviderCircuitBreaker } from '../resilience/provider_circuit_breaker.js';
+import {
+  createV1DestinationDeliveryStore,
+  runV1DestinationDeliveryStage,
+} from '../destinations/v1_destination_delivery_stage.js';
 
 const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
 
@@ -23,6 +27,29 @@ function blockedSimulation() {
     executionEnabled: false,
     actions: [],
     error: 'simulation context unavailable',
+  };
+}
+
+function blockedDestinationStage() {
+  return {
+    status: 'BLOCKED',
+    succeeded: 0,
+    failed: 0,
+    rejected: 0,
+    blocked: 0,
+    outcomes: [],
+    errorCode: 'DESTINATION_STAGE_FAILED',
+  };
+}
+
+function skippedDuplicateDestinationStage() {
+  return {
+    status: 'SKIPPED_DUPLICATE',
+    succeeded: 0,
+    failed: 0,
+    rejected: 0,
+    blocked: 0,
+    outcomes: [],
   };
 }
 
@@ -45,6 +72,8 @@ export async function handleV1EventsRequest(request, env = {}, {
   executionStageFn = runV1ProductionExecutionStage,
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
+  destinationStoreFactory = createV1DestinationDeliveryStore,
+  destinationStageFn = runV1DestinationDeliveryStage,
   orchestrateDuplicates = false,
 } = {}) {
   if (request.method !== 'POST') {
@@ -92,7 +121,31 @@ export async function handleV1EventsRequest(request, env = {}, {
     const duplicateReplayRequested = orchestrateDuplicates || recoveryReplay;
     const allowDuplicateOrchestration = duplicateReplayRequested && result?.recoveryReady === true;
     if (!result?.ok || (result?.duplicate && !allowDuplicateOrchestration)) {
-      return json(result, result?.ok ? 200 : Number(result?.status || 500));
+      const responseBody = result?.ok && result?.duplicate
+        ? { ...result, destinations: skippedDuplicateDestinationStage() }
+        : result;
+      return json(responseBody, result?.ok ? 200 : Number(result?.status || 500));
+    }
+
+    // External destinations are deliberately separated from broker execution.
+    // Workspace authority comes from the normalized event, which ingest derived
+    // from the authenticated source registry. Payload destination hints are never
+    // consulted. Duplicate recovery may re-run simulation/execution diagnostics,
+    // but it must not re-send external destinations.
+    let destinations = skippedDuplicateDestinationStage();
+    if (!result?.duplicate) {
+      try {
+        const destinationStore = destinationStoreFactory(supabase, { masterKey });
+        destinations = await destinationStageFn({
+          workspaceId: result?.event?.workspace_hint,
+          sourceId,
+          event: result.event,
+          interpretation: result.interpretation,
+          env,
+        }, { destinationStore });
+      } catch {
+        destinations = blockedDestinationStage();
+      }
     }
 
     let simulation;
@@ -126,7 +179,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       executeProductionFn,
     });
 
-    return json({ ...result, simulation, ...(execution ? { execution } : {}) }, 200);
+    return json({ ...result, destinations, simulation, ...(execution ? { execution } : {}) }, 200);
   } catch (error) {
     console.error('V1 event ingress failed:', error);
     return json({ ok: false, reason: 'V1_INGRESS_INTERNAL_ERROR' }, 500);
