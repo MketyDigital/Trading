@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 
 import { handleAuthorizedV1AdminHostnamesRequest } from '../src/http/v1_admin_hostnames.js';
 
-function auth(entitlements) {
+function auth(entitlements, { accessCodeProvisioned = true } = {}) {
   return {
-    workspace: { id: 'ws-1', metadata: { entitlements } },
+    workspace: { id: 'ws-1', metadata: { accessCodeProvisioned, entitlements } },
     membership: { role: 'owner' },
   };
 }
@@ -37,4 +37,14 @@ test('custom hostname admin API remains available when hostname capability is gr
 
   assert.equal(response.status, 200);
   assert.equal((await response.json()).ok, true);
+});
+
+test('existing non-access-code enterprise workspace keeps current hostname behavior', async () => {
+  const response = await handleAuthorizedV1AdminHostnamesRequest(
+    new Request('https://trade.mkety.com/api/v1/admin/hostnames'),
+    auth({}, { accessCodeProvisioned: false }),
+    { hostnameStore: { async list() { return []; } }, env: {} },
+  );
+
+  assert.equal(response.status, 200);
 });
