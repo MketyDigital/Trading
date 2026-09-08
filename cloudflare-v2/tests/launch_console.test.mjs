@@ -19,7 +19,7 @@ test('launch console exposes the approved setup surfaces without secret values',
   assert.match(html, /MTProto Setup/);
   assert.match(html, /Domains/);
   assert.match(html, /Risk Inventory/);
-  assert.match(html, /Operations & Audit/);
+  assert.match(html, /Operations &amp; Audit/);
   assert.match(html, /\/api\/v1\/mkety-admin\/access-codes/);
   assert.match(html, /\/api\/v1\/admin\/destinations/);
   assert.match(html, /\/api\/v1\/admin\/templates/);
