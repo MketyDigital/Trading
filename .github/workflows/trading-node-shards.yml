@@ -1,0 +1,41 @@
+name: Trading Node Shards
+
+on:
+  pull_request:
+    paths:
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - '.github/workflows/trading-node-shards.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: a-f
+            pattern: 'tests/[a-f]*.test.mjs'
+          - name: g-l
+            pattern: 'tests/[g-l]*.test.mjs'
+          - name: m-r
+            pattern: 'tests/[m-r]*.test.mjs'
+          - name: s-z
+            pattern: 'tests/[s-z]*.test.mjs'
+    name: node-${{ matrix.name }}
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Run shard
+        shell: bash
+        run: node --test ${{ matrix.pattern }}
