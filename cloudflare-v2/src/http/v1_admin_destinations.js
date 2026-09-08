@@ -123,6 +123,20 @@ function parseDestinationInput(body = {}) {
   };
 }
 
+function parseDestinationUpdateInput(body = {}) {
+  const displayName = text(body.displayName ?? body.display_name);
+  if (!displayName) return { ok: false, reason: 'DESTINATION_NAME_REQUIRED' };
+  return {
+    ok: true,
+    input: {
+      displayName,
+      destinationRef: text(body.destinationRef ?? body.destination_ref),
+      templateId: text(body.templateId ?? body.template_id),
+      settings: safeObject(body.settings),
+    },
+  };
+}
+
 function parseTemplateInput(body = {}) {
   const templateName = text(body.templateName ?? body.template_name);
   const formattingMode = text(body.formattingMode ?? body.formatting_mode) || 'template';
@@ -168,9 +182,27 @@ function parseRouteInput(body = {}) {
 }
 
 async function encryptCredentialPayload(credentials, masterKey, encryptCredentials) {
-  if (credentials == null) return null;
+  if (credentials == null || typeof credentials !== 'object' || Array.isArray(credentials)) {
+    throw new Error('DESTINATION_CREDENTIALS_INVALID');
+  }
   if (!masterKey) throw new Error('DESTINATION_ENCRYPTION_NOT_CONFIGURED');
   return encryptCredentials(JSON.stringify({ version: 1, kind: 'destination', data: credentials }), masterKey);
+}
+
+function destinationItemMatch(pathname) {
+  return pathname.match(/^\/api\/v1\/admin\/destinations\/([^/]+)$/);
+}
+
+function destinationActionMatch(pathname) {
+  return pathname.match(/^\/api\/v1\/admin\/destinations\/([^/]+)\/(enable|disable|credentials)$/);
+}
+
+function templateItemMatch(pathname) {
+  return pathname.match(/^\/api\/v1\/admin\/templates\/([^/]+)$/);
+}
+
+function routeActionMatch(pathname) {
+  return pathname.match(/^\/api\/v1\/admin\/routes\/([^/]+)\/(enable|disable)$/);
 }
 
 export function createAdminDestinationStore(supabase) {
@@ -197,6 +229,29 @@ export function createAdminDestinationStore(supabase) {
       if (error || !data) throw new Error('DESTINATION_CREATE_FAILED');
       return data;
     },
+    async updateDestination(workspaceId, id, input) {
+      const patch = {
+        display_name: input.displayName,
+        destination_ref: input.destinationRef,
+        template_id: input.templateId || null,
+        settings: input.settings || {},
+      };
+      const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
+      if (error) throw new Error('DESTINATION_UPDATE_FAILED');
+      return data || null;
+    },
+    async setDestinationEnabled(workspaceId, id, enabled) {
+      const patch = { is_active: Boolean(enabled), health_status: enabled ? 'PENDING' : 'DISABLED' };
+      const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
+      if (error) throw new Error('DESTINATION_UPDATE_FAILED');
+      return data || null;
+    },
+    async replaceDestinationCredentials(workspaceId, id, credentialCiphertext) {
+      const patch = { credential_ciphertext: credentialCiphertext, health_status: 'PENDING' };
+      const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
+      if (error) throw new Error('DESTINATION_CREDENTIALS_UPDATE_FAILED');
+      return data || null;
+    },
     async listTemplates(workspaceId) {
       const { data, error } = await supabase.from('trading_destination_templates').select(TEMPLATE_SELECT).eq('workspace_id', String(workspaceId)).order('created_at', { ascending: true });
       if (error) throw new Error('TEMPLATE_LIST_FAILED');
@@ -221,6 +276,24 @@ export function createAdminDestinationStore(supabase) {
       if (error || !data) throw new Error('TEMPLATE_CREATE_FAILED');
       return data;
     },
+    async updateTemplate(workspaceId, id, input) {
+      const patch = {
+        template_name: input.templateName,
+        formatting_mode: input.formattingMode,
+        parse_mode: input.parseMode,
+        brand_name: input.brandName,
+        header: input.header,
+        footer: input.footer,
+        disclaimer: input.disclaimer,
+        emoji_style: input.emojiStyle,
+        cleanup_rules: input.cleanupRules || {},
+        layout: input.layout || {},
+        is_default: Boolean(input.isDefault),
+      };
+      const { data, error } = await supabase.from('trading_destination_templates').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(TEMPLATE_SELECT).maybeSingle();
+      if (error) throw new Error('TEMPLATE_UPDATE_FAILED');
+      return data || null;
+    },
     async listRoutes(workspaceId) {
       const { data, error } = await supabase.from('source_destination_routes').select(ROUTE_SELECT).eq('workspace_id', String(workspaceId)).order('priority', { ascending: true });
       if (error) throw new Error('ROUTE_LIST_FAILED');
@@ -239,6 +312,11 @@ export function createAdminDestinationStore(supabase) {
       const { data, error } = await supabase.from('source_destination_routes').insert(row).select(ROUTE_SELECT).maybeSingle();
       if (error || !data) throw new Error('ROUTE_CREATE_FAILED');
       return data;
+    },
+    async setRouteEnabled(workspaceId, id, enabled) {
+      const { data, error } = await supabase.from('source_destination_routes').update({ is_active: Boolean(enabled) }).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(ROUTE_SELECT).maybeSingle();
+      if (error) throw new Error('ROUTE_UPDATE_FAILED');
+      return data || null;
     },
   };
 }
@@ -270,7 +348,9 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       const parsed = parseDestinationInput(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
       let cipher = null;
-      try { cipher = await encryptCredentialPayload(parsed.credentials, env.TRADING_MASTER_KEY, encryptCredentials); } catch { return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_INVALID' }, 400); }
+      if (parsed.credentials != null) {
+        try { cipher = await encryptCredentialPayload(parsed.credentials, env.TRADING_MASTER_KEY, encryptCredentials); } catch { return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_INVALID' }, 400); }
+      }
       try {
         const row = await destinationStore.createDestination(workspaceId, parsed.input, cipher);
         return json({ ok: true, workspaceId, destination: publicDestination(row) }, 201);
@@ -279,6 +359,52 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       }
     }
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
+  }
+
+  const destinationItem = destinationItemMatch(url.pathname);
+  if (destinationItem) {
+    if (request.method !== 'PUT') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'PUT' });
+    if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    const body = await readJson(request);
+    if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+    const parsed = parseDestinationUpdateInput(body);
+    if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    try {
+      const row = await destinationStore.updateDestination(workspaceId, decodeURIComponent(destinationItem[1]), parsed.input);
+      if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, destination: publicDestination(row) });
+    } catch {
+      return json({ ok: false, reason: 'DESTINATION_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  const destinationAction = destinationActionMatch(url.pathname);
+  if (destinationAction) {
+    const id = decodeURIComponent(destinationAction[1]);
+    const action = destinationAction[2];
+    if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    if (action === 'credentials') {
+      if (request.method !== 'PUT') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'PUT' });
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+      let cipher;
+      try { cipher = await encryptCredentialPayload(body.credentials, env.TRADING_MASTER_KEY, encryptCredentials); } catch { return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_INVALID' }, 400); }
+      try {
+        const row = await destinationStore.replaceDestinationCredentials(workspaceId, id, cipher);
+        if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
+        return json({ ok: true, workspaceId, destination: publicDestination(row) });
+      } catch {
+        return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_UPDATE_FAILED' }, 503);
+      }
+    }
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    try {
+      const row = await destinationStore.setDestinationEnabled(workspaceId, id, action === 'enable');
+      if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, destination: publicDestination(row) });
+    } catch {
+      return json({ ok: false, reason: 'DESTINATION_UPDATE_FAILED' }, 503);
+    }
   }
 
   if (url.pathname === '/api/v1/admin/templates') {
@@ -307,6 +433,23 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
   }
 
+  const templateItem = templateItemMatch(url.pathname);
+  if (templateItem) {
+    if (request.method !== 'PUT') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'PUT' });
+    if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    const body = await readJson(request);
+    if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+    const parsed = parseTemplateInput(body);
+    if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    try {
+      const row = await destinationStore.updateTemplate(workspaceId, decodeURIComponent(templateItem[1]), parsed.input);
+      if (!row) return json({ ok: false, reason: 'TEMPLATE_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, template: publicTemplate(row) });
+    } catch {
+      return json({ ok: false, reason: 'TEMPLATE_UPDATE_FAILED' }, 503);
+    }
+  }
+
   if (url.pathname === '/api/v1/admin/routes') {
     if (request.method === 'GET') {
       if (!can(authorization, 'sources.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
@@ -331,6 +474,19 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       }
     }
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
+  }
+
+  const routeAction = routeActionMatch(url.pathname);
+  if (routeAction) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    try {
+      const row = await destinationStore.setRouteEnabled(workspaceId, decodeURIComponent(routeAction[1]), routeAction[2] === 'enable');
+      if (!row) return json({ ok: false, reason: 'ROUTE_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, route: publicRoute(row) });
+    } catch {
+      return json({ ok: false, reason: 'ROUTE_UPDATE_FAILED' }, 503);
+    }
   }
 
   return json({ ok: false, reason: 'ADMIN_DESTINATION_ROUTE_NOT_FOUND' }, 404);
