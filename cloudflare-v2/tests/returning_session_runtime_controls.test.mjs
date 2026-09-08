@@ -145,3 +145,14 @@ test('Mkety admin can read and update the broker owner switch through the secret
   assert.equal(second.brokerExecutionEnabled, true);
   assert.equal(second.effectiveBrokerExecutionEnabled, true);
 });
+
+test('Mkety admin runtime-control read reports database unavailability instead of masking it as owner switch OFF', async () => {
+  const runtimeStore = {
+    async getBrokerExecutionEnabled() { return { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }; },
+  };
+  const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {
+    headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
+  }), { MKETY_TRADING_ADMIN_SECRET: 'admin-secret', BROKER_EXECUTION_ENABLED: 'true' }, { store: {}, runtimeStore });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).reason, 'RUNTIME_CONTROL_UNAVAILABLE');
+});
