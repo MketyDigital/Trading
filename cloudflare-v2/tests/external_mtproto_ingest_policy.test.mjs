@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { authorizeExternalMtprotoEvent } from '../src/sources/mtproto/external_policy.js';
+import { authorizeExternalMtprotoEvent, authorizeMtprotoEvent } from '../src/sources/mtproto/external_policy.js';
 import { ingestTradingEvent } from '../src/pipeline/ingest.js';
 import { signSourcePayload } from '../src/security/source_auth.js';
 
@@ -23,6 +23,16 @@ function externalSource(overrides = {}) {
     secret: 'ext-secret',
     ...overrides,
   };
+}
+
+function hostedSource(providerType = 'cloudflare_container_mtproto', overrides = {}) {
+  return externalSource({
+    id: providerType === 'cloudflare_do_mtproto' ? 'src-do' : 'src-container',
+    provider_type: providerType,
+    source_instance_id: providerType,
+    config: { chat_ids: ['-10012345'] },
+    ...overrides,
+  });
 }
 
 function telegramInput({ chatId = '-10012345', messageId = '9876', accountScope, metadata = {}, ...overrides } = {}) {
@@ -91,33 +101,39 @@ test('malformed external MTProto source policy fails closed', () => {
   }
 });
 
-test('external MTProto requires native Telegram chat and message identity', () => {
-  for (const input of [
-    telegramInput({ chatId: '' }),
-    telegramInput({ messageId: '' }),
-    { text: 'BUY XAUUSD', metadata: {} },
-  ]) {
-    assertReject(authorizeExternalMtprotoEvent({ source: externalSource(), input }), 400, 'MTPROTO_NATIVE_IDENTITY_REQUIRED');
+test('all MTProto providers require native Telegram chat and message identity', () => {
+  for (const source of [externalSource(), hostedSource(), hostedSource('cloudflare_do_mtproto')]) {
+    for (const input of [
+      telegramInput({ chatId: '' }),
+      telegramInput({ messageId: '' }),
+      { text: 'BUY XAUUSD', metadata: {} },
+    ]) {
+      assertReject(authorizeMtprotoEvent({ source, input }), 400, 'MTPROTO_NATIVE_IDENTITY_REQUIRED');
+    }
   }
 });
 
 test('caller-supplied account scope must match the server-authoritative source scope when present', () => {
-  assert.deepEqual(authorizeExternalMtprotoEvent({
+  assert.deepEqual(authorizeMtprotoEvent({
     source: externalSource(),
     input: telegramInput({ accountScope: 'telegram-account-42' }),
   }), { ok: true });
 
-  assertReject(authorizeExternalMtprotoEvent({
+  assertReject(authorizeMtprotoEvent({
     source: externalSource(),
     input: telegramInput({ accountScope: 'another-telegram-account' }),
   }), 403, 'MTPROTO_ACCOUNT_SCOPE_MISMATCH');
 });
 
-test('non-external providers are not subjected to external MTProto chat policy', () => {
-  assert.deepEqual(authorizeExternalMtprotoEvent({
-    source: externalSource({ provider_type: 'cloudflare_container_mtproto', config: {} }),
-    input: telegramInput({ chatId: '-10099999' }),
-  }), { ok: true });
+test('hosted Container and DO MTProto are re-authorized by the Worker against configured DB chat ids', () => {
+  for (const source of [hostedSource(), hostedSource('cloudflare_do_mtproto')]) {
+    assert.deepEqual(authorizeMtprotoEvent({ source, input: telegramInput() }), { ok: true });
+    assertReject(
+      authorizeMtprotoEvent({ source, input: telegramInput({ chatId: '-10099999' }) }),
+      403,
+      'MTPROTO_CHAT_NOT_AUTHORIZED',
+    );
+  }
 });
 
 async function signedInput(source, payload) {
@@ -154,7 +170,30 @@ test('unauthorized external chat is rejected after HMAC auth but before reservat
   assert.equal(aiLoads, 0);
 });
 
-test('authenticated external source remains the workspace authority even if caller supplies another workspace hint', async () => {
+test('unauthorized hosted chat is rejected by the Worker before reservation or AI', async () => {
+  const source = hostedSource();
+  let reservations = 0;
+  let aiLoads = 0;
+  const state = {
+    sourceStore: { getActiveSource: async () => source },
+    eventStore: {
+      reserve: async () => { reservations += 1; return { ok: true, duplicate: false, eventId: 'should-not-exist' }; },
+      updateInterpretation: async () => {},
+    },
+    aiRouterFactory: async () => { aiLoads += 1; return {}; },
+  };
+
+  const result = await ingestTradingEvent(
+    await signedInput(source, telegramInput({ chatId: '-10099999' })),
+    state,
+  );
+
+  assertReject(result, 403, 'MTPROTO_CHAT_NOT_AUTHORIZED');
+  assert.equal(reservations, 0);
+  assert.equal(aiLoads, 0);
+});
+
+test('authenticated Telegram source remains the workspace authority even if caller supplies another workspace hint', async () => {
   const source = externalSource();
   let reserved;
   const state = {
