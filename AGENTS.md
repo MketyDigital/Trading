@@ -121,15 +121,19 @@ Enterprise owner console is for customers to manage their workspace, sources, de
 - 2026-09-08: Mkety-admin access-code API added under `/api/v1/mkety-admin/access-codes`, guarded by `MKETY_TRADING_ADMIN_SECRET`/`TRADING_ADMIN_SECRET`.
 - 2026-09-08: MTProto setup contract module added under `src/sources/mtproto/setup_contract.js`.
 - 2026-09-08: Worker entrypoint routed Mkety-admin access-code API outside enterprise owner routes, but still secret-guarded.
+- 2026-09-08: PR #8 CI failure was traced to one incorrect launch-console test expectation: safe HTML escaping rendered `Operations &amp; Audit`; the test expected raw `Operations & Audit`. Test-only fix committed and full Trading V1 CI returned green.
+- 2026-09-08: Migration `0015` was hardened before production application with workspace-qualified foreign keys for template/destination/source routes; an isolation contract test was added. Full Trading V1 CI returned green after the hardening.
 
 ## Next work
 
-1. Run CI for the latest PR #8 head and fix any failures.
-2. Add enterprise dashboard UI tabs for Destinations, Templates, Routes, Access/Launch, MTProto setup, AI formatting, and Risk inventory.
-3. Wire source-to-destination delivery simulation/adapter tests.
-4. Apply migration `0015_trading_destinations_templates_routes.sql` to Supabase after CI is green.
-5. Merge PR #8 only after green checks and deploy with `BROKER_EXECUTION_ENABLED=false`.
-6. Hand over end-to-end manual testing instructions.
+1. Finish source-to-destination delivery wiring and Telegram delivery adapter/idempotency integration.
+2. Add enterprise dashboard UI controls for Destinations, Templates, Routes, Access/Launch, MTProto setup, AI formatting, and Risk inventory.
+3. Add Mkety-admin access-code creation/list/revoke UI and complete any missing revoke endpoint behavior.
+4. Add MTProto admin setup/readiness endpoints for external VM handoff and Mkety-hosted Container/DO modes.
+5. Add/update manual launch-console testing documentation.
+6. Apply migration `0015_trading_destinations_templates_routes.sql` to Supabase only after the runtime/control surfaces above are green.
+7. Merge PR #8 only after final green checks and deploy with `BROKER_EXECUTION_ENABLED=false`.
+8. Hand over end-to-end manual testing instructions.
 
 ## Safety authorization boundary
 
