@@ -100,6 +100,6 @@ test('root portal bootstraps public white-label branding before authentication',
 test('staff access-code manager remains isolated from enterprise customer session', async () => {
   const response = await worker().fetch(new Request('https://trade.mkety.com/mkety-admin/access-codes'), {}, {});
   const html = await response.text();
-  assert.match(html, /Mkety Staff Access Codes/);
+  assert.match(html, /Mkety Staff Trading Admin/);
   assert.doesNotMatch(html, /mketyTradingBearer/);
 });
