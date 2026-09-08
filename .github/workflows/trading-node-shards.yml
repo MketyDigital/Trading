@@ -18,12 +18,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: external-ci
-            pattern: 'tests/external_mtproto_ci_contract.test.mjs'
-          - name: external-replay
-            pattern: 'tests/external_mtproto_replay_acceptance.test.mjs'
-          - name: external-tenant
-            pattern: 'tests/external_mtproto_tenant_isolation.test.mjs'
+          - name: a-c
+            pattern: 'tests/[a-c]*.test.mjs'
+          - name: d-f
+            pattern: 'tests/[d-f]*.test.mjs'
+          - name: g-i
+            pattern: 'tests/[g-i]*.test.mjs'
+          - name: j-l
+            pattern: 'tests/[j-l]*.test.mjs'
+          - name: m-o
+            pattern: 'tests/[m-o]*.test.mjs'
+          - name: p-r
+            pattern: 'tests/[p-r]*.test.mjs'
+          - name: s-u
+            pattern: 'tests/[s-u]*.test.mjs'
+          - name: v-x
+            pattern: 'tests/[v-x]*.test.mjs'
+          - name: y-z
+            pattern: 'tests/[y-z]*.test.mjs'
+          - name: full-serial
+            pattern: '--test-concurrency=1 tests/*.test.mjs'
     name: node-${{ matrix.name }}
     defaults:
       run:
