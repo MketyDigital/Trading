@@ -91,18 +91,13 @@ export async function hashTradingAccessCode(code) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export function validateTradingAccessCodeRecord(record, now = new Date()) {
+function validateTradingAccessCodeCredentialRecord(record, now = new Date()) {
   if (!record) return { ok: false, status: 404, reason: 'ACCESS_CODE_NOT_FOUND' };
   if (String(record.product ?? '') !== 'trading') {
     return { ok: false, status: 403, reason: 'ACCESS_CODE_WRONG_PRODUCT' };
   }
   if (String(record.status ?? '') !== 'active') {
     return { ok: false, status: 403, reason: 'ACCESS_CODE_NOT_ACTIVE' };
-  }
-  const maxRedemptions = Math.max(1, Number.parseInt(record.max_redemptions ?? 1, 10) || 1);
-  const redeemedCount = Math.max(0, Number.parseInt(record.redeemed_count ?? 0, 10) || 0);
-  if (redeemedCount >= maxRedemptions) {
-    return { ok: false, status: 409, reason: 'ACCESS_CODE_REDEMPTION_LIMIT_REACHED' };
   }
   if (record.expires_at && new Date(record.expires_at).getTime() <= new Date(now).getTime()) {
     return { ok: false, status: 403, reason: 'ACCESS_CODE_EXPIRED' };
@@ -129,6 +124,38 @@ export function validateTradingAccessCodeRecord(record, now = new Date()) {
       enabled: true,
     },
     entitlements: normalizeTradingEntitlements(record.entitlements),
+  };
+}
+
+export function validateTradingAccessCodeRecord(record, now = new Date()) {
+  const plan = validateTradingAccessCodeCredentialRecord(record, now);
+  if (!plan.ok) return plan;
+  const maxRedemptions = Math.max(1, Number.parseInt(record.max_redemptions ?? 1, 10) || 1);
+  const redeemedCount = Math.max(0, Number.parseInt(record.redeemed_count ?? 0, 10) || 0);
+  if (redeemedCount >= maxRedemptions) {
+    return { ok: false, status: 409, reason: 'ACCESS_CODE_REDEMPTION_LIMIT_REACHED' };
+  }
+  return plan;
+}
+
+export function classifyTradingAccessCodeUse(record, ownerEmail, now = new Date()) {
+  const plan = validateTradingAccessCodeCredentialRecord(record, now);
+  if (!plan.ok) return plan;
+
+  const suppliedEmail = String(ownerEmail ?? '').trim().toLowerCase();
+  const boundEmail = String(record.owner_email ?? '').trim().toLowerCase();
+  if (!suppliedEmail || !suppliedEmail.includes('@')) {
+    return { ok: false, status: 400, reason: 'OWNER_EMAIL_REQUIRED' };
+  }
+  if (boundEmail && suppliedEmail !== boundEmail) {
+    return { ok: false, status: 403, reason: 'ACCESS_CODE_OWNER_EMAIL_MISMATCH' };
+  }
+
+  const maxRedemptions = Math.max(1, Number.parseInt(record.max_redemptions ?? 1, 10) || 1);
+  const redeemedCount = Math.max(0, Number.parseInt(record.redeemed_count ?? 0, 10) || 0);
+  return {
+    ...plan,
+    mode: redeemedCount >= maxRedemptions ? 'access_code_login' : 'access_code_onboarding',
   };
 }
 
