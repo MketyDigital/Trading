@@ -83,6 +83,17 @@ Telegram destination formatting modes:
 - `template`: deterministic branded layout;
 - `ai_then_fallback`: AI may rewrite presentation, but fallback deterministic template must be used if AI fails/slow/unsafe.
 
+## Access-code capabilities
+
+Access-code-provisioned workspaces use independently enforceable capability flags:
+
+- `tradingExecutionDestination` — allows broker-account/internal-webhook destination setup but never enables live broker execution;
+- `telegramDestination` — allows Telegram destinations;
+- `customSubdomain` — allows requested subdomain onboarding;
+- `customHostname` — allows custom hostname admin controls.
+
+Mkety staff UI provides Trading Only, Trading + Telegram, Full Access, and custom combinations. Server-side entitlement checks are authoritative. Existing non-access-code enterprise workspaces retain their prior behavior.
+
 ## Mkety admin vs enterprise owner
 
 Mkety admin panel is for Mkety staff to create enterprise owner access codes, list/revoke them, and view redemption state.
@@ -123,17 +134,19 @@ Enterprise owner console is for customers to manage their workspace, sources, de
 - 2026-09-08: Worker entrypoint routed Mkety-admin access-code API outside enterprise owner routes, but still secret-guarded.
 - 2026-09-08: PR #8 CI failure was traced to one incorrect launch-console test expectation: safe HTML escaping rendered `Operations &amp; Audit`; the test expected raw `Operations & Audit`. Test-only fix committed and full Trading V1 CI returned green.
 - 2026-09-08: Migration `0015` was hardened before production application with workspace-qualified foreign keys for template/destination/source routes; an isolation contract test was added. Full Trading V1 CI returned green after the hardening.
+- 2026-09-08: Destination delivery/event-path integration, Telegram adapter, internal-webhook coverage, enterprise launch-console destination/template/route controls and `MTProto Setup` UI contract were completed and returned green in CI.
+- 2026-09-08: Mkety staff access-code UI added at `/mkety-admin/access-codes`; staff secret remains memory-only, plaintext code is shown once, and list/revoke responses remain secret-safe.
+- 2026-09-08: Access-code capability flags added for trading-execution destinations, Telegram destinations, custom subdomain and custom hostname. Creation/redemption now normalize these flags, force demo-only broker modes and `liveExecution=false`, and expose only safe entitlements.
+- 2026-09-08: Server-side capability enforcement added for custom hostnames, subdomain redemption, destination creation/mutation/enable/credentials and route targeting. Existing non-access-code enterprise workspaces remain backward-compatible.
+- 2026-09-08: External VM MTProto source onboarding corrected to handoff-only: it no longer accepts or stores Telegram account credentials and has no credential-replacement path; hosted Container/DO remain encrypted credential-bearing providers.
+- 2026-09-08: Manual E2E launch runbook added at `docs/trading-launch-console-manual-e2e.md`.
 
 ## Next work
 
-1. Finish source-to-destination delivery wiring and Telegram delivery adapter/idempotency integration.
-2. Add enterprise dashboard UI controls for Destinations, Templates, Routes, Access/Launch, MTProto setup, AI formatting, and Risk inventory.
-3. Add Mkety-admin access-code creation/list/revoke UI and complete any missing revoke endpoint behavior.
-4. Add MTProto admin setup/readiness endpoints for external VM handoff and Mkety-hosted Container/DO modes.
-5. Add/update manual launch-console testing documentation.
-6. Apply migration `0015_trading_destinations_templates_routes.sql` to Supabase only after the runtime/control surfaces above are green.
-7. Merge PR #8 only after final green checks and deploy with `BROKER_EXECUTION_ENABLED=false`.
-8. Hand over end-to-end manual testing instructions.
+1. Run final full CI/security verification on PR #8 head.
+2. Confirm migration `0015_trading_destinations_templates_routes.sql` is ready but leave it unapplied until merge/deploy authorization.
+3. After explicit owner authorization: merge PR #8, apply migration `0015`, deploy with `BROKER_EXECUTION_ENABLED=false`, then execute the manual E2E runbook.
+4. Keep customer DNS/custom-host production state and any real broker execution behind their own separate explicit authorization boundaries.
 
 ## Safety authorization boundary
 
