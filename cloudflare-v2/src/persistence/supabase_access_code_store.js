@@ -7,13 +7,14 @@ function requireSupabase(supabase) {
   if (!supabase?.from) throw new Error('SUPABASE_CLIENT_REQUIRED');
 }
 
-function safeMetadata(record = {}, payload = {}) {
+function safeMetadata(record = {}, payload = {}, entitlements = record.entitlements || {}) {
   return {
     accessCodeId: record.id,
     accessCodeRedeemed: true,
     accessCodeOnboarding: true,
+    accessCodeProvisioned: true,
     requestedSubdomain: payload.requestedSubdomain || null,
-    entitlements: record.entitlements || {},
+    entitlements,
   };
 }
 
@@ -33,6 +34,9 @@ export function createTradingAccessCodeStore(supabase) {
 
       const plan = validateTradingAccessCodeRecord(record, payload.now || new Date());
       if (!plan.ok) return plan;
+      if (payload.requestedSubdomain && !plan.entitlements.customSubdomain) {
+        return { ok: false, status: 403, reason: 'CUSTOM_SUBDOMAIN_ENTITLEMENT_REQUIRED' };
+      }
 
       const nextRedeemedCount = Number(record.redeemed_count || 0) + 1;
       const { data: redeemedRecord, error: redeemError } = await supabase
@@ -55,7 +59,7 @@ export function createTradingAccessCodeStore(supabase) {
         display_name: payload.workspaceName || record.workspace_display_name || plan.workspace.name,
         owner_email: payload.ownerEmail || record.owner_email || plan.workspace.owner_email,
         trading_access_enabled: true,
-        metadata: safeMetadata(record, payload),
+        metadata: safeMetadata(record, payload, plan.entitlements),
         updated_at: new Date(payload.now || Date.now()).toISOString(),
       };
 
@@ -74,7 +78,7 @@ export function createTradingAccessCodeStore(supabase) {
         zitadel_subject: plan.membership.subject,
         trading_role: 'owner',
         membership_enabled: true,
-        metadata: safeMetadata(record, payload),
+        metadata: safeMetadata(record, payload, plan.entitlements),
         updated_at: new Date(payload.now || Date.now()).toISOString(),
       };
 

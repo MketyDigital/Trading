@@ -1,6 +1,7 @@
 import { createCloudflareCustomHostnameClient } from '../security/cloudflare_custom_hostnames.js';
 import { canonicalTradingHostsFromEnv } from '../security/trading_hostname_resolver.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { requiresTradingEntitlement } from '../security/trading_entitlements.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -135,6 +136,9 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
 } = {}) {
   const workspaceId = String(authorization?.workspace?.id ?? '').trim();
   if (!workspaceId) return json({ ok: false, reason: 'ADMIN_WORKSPACE_AUTHORITY_MISSING' }, 403);
+  if (requiresTradingEntitlement(authorization, 'customHostname')) {
+    return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
+  }
   if (!hostnameStore) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503);
 
   const url = new URL(request.url);

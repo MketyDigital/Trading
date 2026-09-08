@@ -1,9 +1,12 @@
 import legacyWorker from './index.js';
+import { renderTradingLaunchConsole } from './dashboard_launch_console.js';
+import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleV1AdminRequest } from './http/v1_admin.js';
 import { handleInternalSourceEventRequest } from './http/internal_source_event.js';
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
+import { handleMketyAdminAccessCodesRequest } from './http/v1_mkety_admin_access_codes.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -16,6 +19,13 @@ export { TradeStateNode } from './state/trade_state_node.js';
 export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js';
 
 const MTPROTO_RECOVERY_CRON = '* * * * *';
+
+function htmlResponse(html) {
+  return new Response(html, {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
 
 function retiredLegacyAdminResponse() {
   return new Response(JSON.stringify({
@@ -107,6 +117,7 @@ export function createTradingV1Entrypoint({
   internalSourceHandler = handleInternalSourceEventRequest,
   tradingViewHandler = handleTradingViewWebhookRequest,
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
+  mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
   queueRuntime = null,
   recoveryRuntime = null,
   destinationRetryRuntime = null,
@@ -115,6 +126,13 @@ export function createTradingV1Entrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
+
+      if (url.pathname === '/launch-console' || url.pathname === '/launch-console/') {
+        return htmlResponse(renderTradingLaunchConsole(env));
+      }
+      if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') {
+        return htmlResponse(renderMketyAdminAccessCodesPage());
+      }
 
       // Health and exact internal service routes stay available independently
       // so operators and first-party source handoff can function while tenant
@@ -132,6 +150,15 @@ export function createTradingV1Entrypoint({
         return accessCodeRedeemHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/access/')) {
+        return notFoundResponse();
+      }
+      if (
+        url.pathname === '/api/v1/mkety-admin/access-codes'
+        || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/')
+      ) {
+        return mketyAdminAccessCodesHandler(request, env, { ctx });
+      }
+      if (url.pathname.startsWith('/api/v1/mkety-admin/')) {
         return notFoundResponse();
       }
 

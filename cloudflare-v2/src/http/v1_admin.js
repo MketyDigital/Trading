@@ -7,10 +7,16 @@ import {
   resolveTradingRequestHostname,
 } from '../security/trading_hostname_resolver.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import {
+  canUseDestinationType,
+  isAccessCodeProvisionedWorkspace,
+  normalizeTradingEntitlements,
+} from '../security/trading_entitlements.js';
 import { handleAuthorizedV1AdminMembersRequest } from './v1_admin_members.js';
 import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from './v1_admin_sources.js';
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
 import { createAdminHostnameStore, handleAuthorizedV1AdminHostnamesRequest } from './v1_admin_hostnames.js';
+import { createAdminDestinationStore, handleAuthorizedV1AdminDestinationsRequest } from './v1_admin_destinations.js';
 import {
   createAdminOperationsStore,
   handleAuthorizedV1AdminOperationsRequest,
@@ -37,7 +43,7 @@ async function defaultSupabaseFactory(env) {
 }
 
 function publicWorkspace(workspace = {}) {
-  return {
+  const out = {
     id: workspace.id,
     name: workspace.display_name ?? null,
     owner_email: workspace.owner_email ?? null,
@@ -45,6 +51,10 @@ function publicWorkspace(workspace = {}) {
     created_at: workspace.created_at,
     updated_at: workspace.updated_at,
   };
+  if (workspace?.metadata?.accessCodeProvisioned) {
+    out.entitlements = normalizeTradingEntitlements(workspace.metadata.entitlements || {});
+  }
+  return out;
 }
 
 function shouldTryLocalTradingBearer(env = {}) {
@@ -82,6 +92,65 @@ async function authenticateV1AdminRequest(authenticateFn, request, env, options)
   return authenticateFn(request, options);
 }
 
+async function readJsonClone(request) {
+  try {
+    const body = await request.clone().json();
+    return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  } catch {
+    return {};
+  }
+}
+
+function destinationIdFromAdminPath(pathname) {
+  const match = String(pathname || '').match(/^\/api\/v1\/admin\/destinations\/([^/]+)(?:\/(?:enable|disable|credentials))?$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+}
+
+async function enforceDestinationEntitlement(request, authorization, destinationStore) {
+  if (!isAccessCodeProvisionedWorkspace(authorization)) return null;
+  const url = new URL(request.url);
+
+  if (url.pathname === '/api/v1/admin/destinations' && request.method === 'POST') {
+    const body = await readJsonClone(request);
+    const type = body.destinationType ?? body.destination_type;
+    if (type && !canUseDestinationType(authorization, type)) {
+      return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
+    }
+    return null;
+  }
+
+  const destinationId = destinationIdFromAdminPath(url.pathname);
+  if (destinationId && request.method !== 'GET') {
+    try {
+      const destinations = await destinationStore.listDestinations(authorization.workspace.id);
+      const destination = destinations.find((item) => String(item.id) === String(destinationId));
+      if (destination && !canUseDestinationType(authorization, destination.destination_type ?? destination.destinationType)) {
+        return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
+      }
+    } catch {
+      return json({ ok: false, reason: 'DESTINATION_LIST_FAILED' }, 503);
+    }
+  }
+
+  if (url.pathname === '/api/v1/admin/routes' && request.method === 'POST') {
+    const body = await readJsonClone(request);
+    const destinationIdValue = body.destinationId ?? body.destination_id;
+    if (destinationIdValue) {
+      try {
+        const destinations = await destinationStore.listDestinations(authorization.workspace.id);
+        const destination = destinations.find((item) => String(item.id) === String(destinationIdValue));
+        if (destination && !canUseDestinationType(authorization, destination.destination_type ?? destination.destinationType)) {
+          return json({ ok: false, reason: 'TRADING_ENTITLEMENT_REQUIRED' }, 403);
+        }
+      } catch {
+        return json({ ok: false, reason: 'DESTINATION_LIST_FAILED' }, 503);
+      }
+    }
+  }
+  return null;
+}
+
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
   authenticateFn = authenticateTradingAccessBearer,
@@ -96,11 +165,8 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   const customHostnamesEnabled = enabled(env.TRADING_CUSTOM_HOSTNAMES_ENABLED);
   let hostnameStore = null;
   if (customHostnamesEnabled) {
-    try {
-      hostnameStore = hostnameStoreFactory(supabase);
-    } catch {
-      return { ok: false, status: 503, reason: 'TRADING_HOSTNAME_STORE_UNAVAILABLE' };
-    }
+    try { hostnameStore = hostnameStoreFactory(supabase); }
+    catch { return { ok: false, status: 503, reason: 'TRADING_HOSTNAME_STORE_UNAVAILABLE' }; }
   }
 
   const hostname = await resolveHostnameFn(request, {
@@ -108,16 +174,10 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     canonicalHosts: canonicalTradingHostsFromEnv(env),
     customHostnamesEnabled,
   });
-
   if (!hostname?.ok) {
     const serviceFailure = ['TRADING_HOSTNAME_STORE_UNAVAILABLE', 'TRADING_HOSTNAME_LOOKUP_FAILED'];
-    return {
-      ok: false,
-      status: serviceFailure.includes(hostname?.reason) ? 503 : hostname?.reason === 'INVALID_TRADING_HOSTNAME' ? 400 : 404,
-      reason: hostname?.reason || 'TRADING_HOSTNAME_NOT_ACTIVE',
-    };
+    return { ok: false, status: serviceFailure.includes(hostname?.reason) ? 503 : hostname?.reason === 'INVALID_TRADING_HOSTNAME' ? 400 : 404, reason: hostname?.reason || 'TRADING_HOSTNAME_NOT_ACTIVE' };
   }
-
   if (hostname.kind === 'custom' && String(hostname.workspaceId) !== String(workspaceId)) {
     return { ok: false, status: 403, reason: 'TRADING_HOSTNAME_WORKSPACE_MISMATCH' };
   }
@@ -131,57 +191,28 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     return { ok: false, status: 503, reason: 'MKETY_ACCESS_GATE_NOT_CONFIGURED' };
   }
 
-  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, {
-    issuer,
-    audience,
-    jwksUrl,
-    requestedWorkspaceId: String(workspaceId),
-  });
-
+  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, { issuer, audience, jwksUrl, requestedWorkspaceId: String(workspaceId) });
   if (!auth?.ok) {
-    const unauthorized = [
-      'MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED',
-      'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND',
-      'JWKS_FETCH_FAILED', 'LOCAL_TRADING_BEARER_NOT_CONFIGURED',
-    ];
+    const unauthorized = ['MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED', 'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND', 'JWKS_FETCH_FAILED', 'LOCAL_TRADING_BEARER_NOT_CONFIGURED'];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
+  if (String(auth.workspaceId) !== String(workspaceId)) return { ok: false, status: 403, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
 
-  if (String(auth.workspaceId) !== String(workspaceId)) {
-    return { ok: false, status: 403, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
-  }
-
-  const { data: workspace, error } = await supabase
-    .from('trading_workspace_access')
-    .select('*')
-    .eq('id', String(workspaceId))
-    .maybeSingle();
-
+  const { data: workspace, error } = await supabase.from('trading_workspace_access').select('*').eq('id', String(workspaceId)).maybeSingle();
   if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
   if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
 
   let membershipStore;
-  try {
-    membershipStore = membershipStoreFactory(supabase);
-  } catch {
-    return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' };
-  }
+  try { membershipStore = membershipStoreFactory(supabase); }
+  catch { return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }; }
 
   let membership;
-  try {
-    membership = await membershipStore.getMembership(workspace.id, auth.subject);
-  } catch {
-    return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_LOOKUP_FAILED' };
-  }
+  try { membership = await membershipStore.getMembership(workspace.id, auth.subject); }
+  catch { return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_LOOKUP_FAILED' }; }
 
-  if (
-    !membership?.enabled ||
-    String(membership.workspaceId) !== String(workspace.id) ||
-    String(membership.subject) !== String(auth.subject)
-  ) {
+  if (!membership?.enabled || String(membership.workspaceId) !== String(workspace.id) || String(membership.subject) !== String(auth.subject)) {
     return { ok: false, status: 403, reason: 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING' };
   }
-
   return { ok: true, workspace, auth, membership };
 }
 
@@ -194,102 +225,78 @@ export async function handleV1AdminRequest(request, env = {}, {
   sourceStoreFactory = createAdminSourceStore,
   accountStoreFactory = createAdminAccountStore,
   adminHostnameStoreFactory = createAdminHostnameStore,
+  destinationStoreFactory = createAdminDestinationStore,
   operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
   let supabase;
-  try {
-    supabase = await supabaseFactory(env);
-  } catch {
-    return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503);
-  }
+  try { supabase = await supabaseFactory(env); }
+  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
 
-  const authorization = await authorizeV1AdminRequest(request, env, {
-    supabase,
-    authenticateFn,
-    membershipStoreFactory,
-    hostnameStoreFactory,
-    resolveHostnameFn,
-  });
+  const authorization = await authorizeV1AdminRequest(request, env, { supabase, authenticateFn, membershipStoreFactory, hostnameStoreFactory, resolveHostnameFn });
   if (!authorization.ok) return json({ ok: false, reason: authorization.reason }, authorization.status);
 
   const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/workspace' && request.method === 'GET') {
-    if (!hasTradingPermission(authorization.membership?.role, 'workspace.read')) {
-      return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
-    }
-    return json({
-      ok: true,
-      subject: authorization.auth.subject,
-      workspace: publicWorkspace(authorization.workspace),
-    });
+    if (!hasTradingPermission(authorization.membership?.role, 'workspace.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    return json({ ok: true, subject: authorization.auth.subject, workspace: publicWorkspace(authorization.workspace) });
   }
 
   if (url.pathname === '/api/v1/admin/operations') {
     let operationsStore;
-    try {
-      operationsStore = operationsStoreFactory(supabase);
-    } catch {
-      return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503);
-    }
+    try { operationsStore = operationsStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminOperationsRequest(request, authorization, { operationsStore });
   }
 
   const eventAuditMatch = url.pathname.match(/^\/api\/v1\/admin\/events\/([^/]+)\/audit$/);
   if (eventAuditMatch) {
     let eventId;
-    try {
-      eventId = decodeURIComponent(eventAuditMatch[1]);
-    } catch {
-      return json({ ok: false, reason: 'INVALID_EVENT_ID' }, 400);
-    }
+    try { eventId = decodeURIComponent(eventAuditMatch[1]); }
+    catch { return json({ ok: false, reason: 'INVALID_EVENT_ID' }, 400); }
     if (!String(eventId).trim()) return json({ ok: false, reason: 'INVALID_EVENT_ID' }, 400);
-
     let operationsStore;
-    try {
-      operationsStore = operationsStoreFactory(supabase);
-    } catch {
-      return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503);
-    }
+    try { operationsStore = operationsStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminEventAuditRequest(request, authorization, { eventId, operationsStore });
   }
 
   if (url.pathname === '/api/v1/admin/members' || url.pathname.startsWith('/api/v1/admin/members/')) {
     let membershipStore;
-    try {
-      membershipStore = membershipStoreFactory(supabase);
-    } catch {
-      return json({ ok: false, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }, 503);
-    }
+    try { membershipStore = membershipStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminMembersRequest(request, authorization, { membershipStore });
   }
 
   if (url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')) {
     let sourceStore;
-    try {
-      sourceStore = sourceStoreFactory(supabase, env);
-    } catch {
-      return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503);
-    }
+    try { sourceStore = sourceStoreFactory(supabase, env); }
+    catch { return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminSourcesRequest(request, authorization, { sourceStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/accounts' || url.pathname.startsWith('/api/v1/admin/accounts/')) {
     let accountStore;
-    try {
-      accountStore = accountStoreFactory(supabase);
-    } catch {
-      return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503);
-    }
+    try { accountStore = accountStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminAccountsRequest(request, authorization, { accountStore, env });
+  }
+
+  if (
+    url.pathname === '/api/v1/admin/destinations' || url.pathname === '/api/v1/admin/templates' || url.pathname === '/api/v1/admin/routes'
+    || url.pathname.startsWith('/api/v1/admin/destinations/') || url.pathname.startsWith('/api/v1/admin/templates/') || url.pathname.startsWith('/api/v1/admin/routes/')
+  ) {
+    let destinationStore;
+    try { destinationStore = destinationStoreFactory(supabase, env); }
+    catch { return json({ ok: false, reason: 'DESTINATION_STORE_UNAVAILABLE' }, 503); }
+    const entitlementFailure = await enforceDestinationEntitlement(request, authorization, destinationStore);
+    if (entitlementFailure) return entitlementFailure;
+    return handleAuthorizedV1AdminDestinationsRequest(request, authorization, { destinationStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/hostnames' || url.pathname.startsWith('/api/v1/admin/hostnames/')) {
     let hostnameStore;
-    try {
-      hostnameStore = adminHostnameStoreFactory(supabase);
-    } catch {
-      return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503);
-    }
+    try { hostnameStore = adminHostnameStoreFactory(supabase); }
+    catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminHostnamesRequest(request, authorization, { hostnameStore, env });
   }
 
