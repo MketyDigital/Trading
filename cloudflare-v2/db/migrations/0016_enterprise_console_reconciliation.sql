@@ -25,6 +25,18 @@ ALTER TABLE public.trade_accounts
   ALTER COLUMN fast_entry_policy SET DEFAULT '{}'::jsonb,
   ALTER COLUMN entry_zone_policy SET DEFAULT '{}'::jsonb;
 
+-- ai_providers predates Trading V1 and was still bound to the legacy workspaces table.
+-- Production currently has no AI provider rows, so the FK can be safely reconciled
+-- before customer self-service AI configuration is enabled.
+ALTER TABLE public.ai_providers
+  DROP CONSTRAINT IF EXISTS ai_providers_workspace_id_fkey;
+
+ALTER TABLE public.ai_providers
+  ADD CONSTRAINT ai_providers_workspace_id_trading_fkey
+  FOREIGN KEY (workspace_id)
+  REFERENCES public.trading_workspace_access(id)
+  ON DELETE CASCADE;
+
 ALTER TABLE public.ai_providers
   ADD COLUMN IF NOT EXISTS api_key_ciphertext TEXT,
   ADD COLUMN IF NOT EXISTS temperature NUMERIC NOT NULL DEFAULT 0.1,
