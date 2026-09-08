@@ -85,6 +85,18 @@ test('enterprise portal filters controls using safe workspace entitlements', asy
   assert.match(html, /applyEntitlements/);
 });
 
+test('root portal bootstraps public white-label branding before authentication', async () => {
+  const response = await worker().fetch(new Request('https://trade.customer.example/'), {
+    TRADING_ACCESS_ENABLED: 'true',
+    TRADING_CUSTOM_HOSTNAMES_ENABLED: 'true',
+    BROKER_EXECUTION_ENABLED: 'false',
+  }, {});
+  const html = await response.text();
+  assert.match(html, /\/api\/v1\/public\/branding/);
+  assert.match(html, /applyBranding/);
+  assert.match(html, /DOMContentLoaded|loadPublicBranding/);
+});
+
 test('staff access-code manager remains isolated from enterprise customer session', async () => {
   const response = await worker().fetch(new Request('https://trade.mkety.com/mkety-admin/access-codes'), {}, {});
   const html = await response.text();
