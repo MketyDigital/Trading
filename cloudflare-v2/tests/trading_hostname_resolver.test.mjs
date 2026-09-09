@@ -95,6 +95,37 @@ test('pending customer hostname auto-activates when the request already reaches 
   ]);
 });
 
+test('parallel first-load request succeeds when another request wins pending hostname activation race', async () => {
+  let activeReads = 0;
+  const store = {
+    async getActiveHostname(hostname) {
+      activeReads += 1;
+      if (activeReads === 1) return null;
+      return { hostname, workspaceId: 'ws-1', status: 'active', verifiedAt: '2026-09-09T12:00:00Z' };
+    },
+    async getHostname(hostname) {
+      return { hostname, workspaceId: 'ws-1', status: 'pending', verifiedAt: null };
+    },
+    async activateHostname() {
+      return null;
+    },
+  };
+
+  const result = await resolveTradingRequestHostname(
+    new Request('https://copier.starpipsforex.com/api/v1/admin/routes'),
+    { hostnameStore: store },
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    kind: 'custom',
+    hostname: 'copier.starpipsforex.com',
+    workspaceId: 'ws-1',
+    autoActivated: true,
+  });
+  assert.equal(activeReads, 2);
+});
+
 test('unknown and disabled customer hostnames still fail closed', async () => {
   for (const row of [null, { hostname: 'customer.example', workspaceId: 'ws-1', status: 'disabled' }]) {
     const store = {
