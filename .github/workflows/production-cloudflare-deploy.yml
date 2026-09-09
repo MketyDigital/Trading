@@ -1,7 +1,7 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
 # Broker execution uses two gates: deployment capability + persisted Mkety owner switch.
-# Release trigger: PR #14 access-code native randomUUID receiver fix.
+# Release trigger: PR #16 entitlement-aware portal loading.
 
 on:
   workflow_dispatch:
