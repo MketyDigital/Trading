@@ -3,8 +3,6 @@ name: Reliability Audit Diagnostic
 on:
   push:
     branches: [fix/full-production-reliability-audit]
-    paths:
-      - '.github/workflows/reliability-audit-diagnostic.yml'
 
 permissions:
   contents: read
@@ -22,6 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Run secret-box regression
+        working-directory: cloudflare-v2
+        run: node --test tests/secret_box.test.mjs
       - name: Verify configured master key can actually encrypt/decrypt
         working-directory: cloudflare-v2
         shell: bash
