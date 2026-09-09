@@ -82,8 +82,12 @@ jobs:
             const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
             const page = await context.newPage();
             const consoleErrors = [];
+            const httpErrors = [];
             page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
             page.on('pageerror', e => consoleErrors.push(String(e)));
+            page.on('response', response => {
+              if (response.status() >= 400) httpErrors.push({ status: response.status(), url: response.url() });
+            });
 
             await page.goto(process.env.E2E_BASE_URL + '/', { waitUntil: 'domcontentloaded' });
             assert.match(await page.title(), /Trading/i);
@@ -163,9 +167,17 @@ jobs:
             await page.locator('#logoutBtn').click();
             await page.locator('#accessCode').waitFor({ state: 'visible', timeout: 15000 });
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await page.locator('#accessCode').waitFor({ state: 'visible', timeout: 15000 });
+            await page.waitForTimeout(1000);
+            assert.equal(await page.locator('#workspaceShell').isVisible(), false, 'server logout must prevent refresh-session restoration');
             console.log('LOGOUT_CLEARED_SESSION=true');
 
-            assert.deepEqual(consoleErrors, [], 'browser console/page errors: ' + consoleErrors.join(' | '));
+            const unexpectedHttpErrors = httpErrors.filter(({ status, url }) => !(status === 401 && url.endsWith('/api/v1/access/session')));
+            assert.deepEqual(unexpectedHttpErrors, [], 'unexpected HTTP errors: ' + JSON.stringify(unexpectedHttpErrors));
+            const expected401ConsoleMessage = 'Failed to load resource: the server responded with a status of 401 ()';
+            const unexpectedConsoleErrors = consoleErrors.filter(message => message !== expected401ConsoleMessage);
+            assert.deepEqual(unexpectedConsoleErrors, [], 'browser console/page errors: ' + unexpectedConsoleErrors.join(' | '));
             await browser.close();
           })().catch(err => { console.error(err); process.exit(1); });
           NODE
