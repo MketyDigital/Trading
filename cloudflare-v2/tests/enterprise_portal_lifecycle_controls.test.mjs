@@ -35,3 +35,9 @@ test('team management is explicitly gated when central authentication is not con
   assert.match(html, /data-team-central-auth-required/);
   assert.doesNotMatch(html, /createMemberBtn/);
 });
+
+test('mobile connection cards allow wide lifecycle tables to scroll without widening the page', () => {
+  const html = renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' });
+  assert.match(html, /\.grid>\*,\.grid3>\*\{min-width:0\}/);
+  assert.match(html, /\.table-wrap\{[^}]*max-width:100%[^}]*overflow:auto/);
+});
