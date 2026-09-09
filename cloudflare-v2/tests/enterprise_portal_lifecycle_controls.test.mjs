@@ -29,12 +29,9 @@ test('enterprise portal exposes destination and route enable-disable controls', 
   assert.match(html, /\/api\/v1\/admin\/routes\/.*\/(?:enable|disable)/);
 });
 
-test('enterprise portal exposes team member add, role and state controls', () => {
+test('team management is explicitly gated when central authentication is not configured', () => {
   const html = renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' });
-  assert.match(html, /memberSubject/);
-  assert.match(html, /memberRole/);
-  assert.match(html, /createMemberBtn/);
-  assert.match(html, /data-member-role/);
-  assert.match(html, /data-member-toggle/);
-  assert.match(html, /\/api\/v1\/admin\/members/);
+  assert.match(html, /Team access requires central authentication/i);
+  assert.match(html, /data-team-central-auth-required/);
+  assert.doesNotMatch(html, /createMemberBtn/);
 });
