@@ -17,66 +17,21 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Playwright
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-
-      - name: Locate production browser syntax error
+      - name: Inspect live portal around browser syntax-error location
         shell: bash
         run: |
+          set -euo pipefail
+          curl -fsS "$BASE_URL/" -o /tmp/page.html
           node - <<'NODE'
-          const { chromium } = require('playwright');
-          (async () => {
-            const browser = await chromium.launch({ headless: true });
-            const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
-            const page = await context.newPage();
-            const cdp = await context.newCDPSession(page);
-            const events = [];
-            const errors = [];
-
-            await cdp.send('Runtime.enable');
-            cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }) => {
-              errors.push('cdp:' + JSON.stringify({
-                text: d.text,
-                url: d.url || '',
-                lineNumber: d.lineNumber,
-                columnNumber: d.columnNumber,
-                description: d.exception && d.exception.description || '',
-              }));
-            });
-            page.on('pageerror', e => errors.push('pageerror:' + (e.stack || String(e))));
-            page.on('console', m => {
-              if (m.type() === 'error') errors.push('console:' + m.text() + ' location=' + JSON.stringify(m.location()));
-            });
-            page.on('request', req => {
-              if (req.url().includes('/api/v1/access/')) events.push('REQUEST ' + req.method() + ' ' + new URL(req.url()).pathname);
-            });
-            page.on('response', async res => {
-              if (!res.url().includes('/api/v1/access/')) return;
-              let body = {};
-              try { body = await res.json(); } catch {}
-              events.push('RESPONSE ' + res.status() + ' ' + new URL(res.url()).pathname + ' ok=' + String(body.ok === true) + ' reason=' + String(body.reason || '') + ' mode=' + String(body.mode || ''));
-            });
-
-            await page.goto(process.env.BASE_URL + '/', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(1000);
-            const scripts = await page.locator('script').evaluateAll(nodes => nodes.map((n, i) => ({ index: i + 1, length: n.textContent.length, head: n.textContent.slice(0, 80) })));
-            console.log('INLINE_SCRIPTS=' + JSON.stringify(scripts));
-
-            await page.locator('#accessCode').fill('TRD-MKETY-DIAG0909A1B2C3');
-            await page.locator('#ownerEmail').fill('diag-redemption@example.test');
-            await page.locator('#ownerName').fill('Diag Redemption');
-            await page.locator('#workspaceName').fill('Diag Redemption Workspace');
-            await page.locator('#redeemBtn').click();
-            await page.waitForTimeout(1500);
-
-            console.log('SHELL_VISIBLE=' + await page.locator('#workspaceShell').isVisible());
-            console.log('AUTH_MESSAGE=' + JSON.stringify((await page.locator('#authMessage').innerText()).trim()));
-            console.log('SESSION_WORKSPACE_PRESENT=' + Boolean(await page.evaluate(() => sessionStorage.getItem('mketyTradingWorkspace'))));
-            for (const event of events) console.log('ACCESS_EVENT=' + event);
-            for (const error of errors) console.log('BROWSER_ERROR=' + error);
-
-            await browser.close();
-          })().catch(err => { console.error(err); process.exit(1); });
+          const fs = require('node:fs');
+          const html = fs.readFileSync('/tmp/page.html', 'utf8');
+          const lines = html.split('\n');
+          const lineNumber = 48; // CDP is zero-based: lineNumber 47
+          const column = 566;
+          const line = lines[lineNumber - 1] || '';
+          console.log('TOTAL_LINES=' + lines.length);
+          console.log('LINE_LENGTH=' + line.length);
+          console.log('CONTEXT=' + JSON.stringify(line.slice(Math.max(0, column - 180), column + 180)));
+          console.log('AT_COLUMN=' + JSON.stringify(line.slice(column - 10, column + 20)));
+          console.log('CHAR_CODES=' + JSON.stringify([...line.slice(Math.max(0, column - 8), column + 8)].map(c => c.codePointAt(0))));
           NODE
