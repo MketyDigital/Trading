@@ -82,6 +82,10 @@ jobs:
             const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
             const page = await context.newPage();
             const consoleErrors = [];
+            const unauthorizedPaths = [];
+            page.on('response', response => {
+              if (response.status() === 401) unauthorizedPaths.push(new URL(response.url()).pathname);
+            });
             page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
             page.on('pageerror', e => consoleErrors.push(String(e)));
 
@@ -165,7 +169,10 @@ jobs:
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
             console.log('LOGOUT_CLEARED_SESSION=true');
 
-            assert.deepEqual(consoleErrors, [], 'browser console/page errors: ' + consoleErrors.join(' | '));
+            assert.ok(unauthorizedPaths.length >= 1, 'expected at least one unauthenticated session probe');
+            assert.deepEqual([...new Set(unauthorizedPaths)], ['/api/v1/access/session'], 'only the returning-session probe may return 401');
+            const unexpectedConsoleErrors = consoleErrors.filter(text => !text.includes('Failed to load resource: the server responded with a status of 401'));
+            assert.deepEqual(unexpectedConsoleErrors, [], 'browser console/page errors: ' + unexpectedConsoleErrors.join(' | '));
             await browser.close();
           })().catch(err => { console.error(err); process.exit(1); });
           NODE
