@@ -2,7 +2,8 @@ name: Reliability Audit Diagnostic
 
 on:
   push:
-    branches: [fix/full-production-reliability-audit]
+    branches:
+      - 'fix/full-production-reliability-audit'
 
 permissions:
   contents: write
@@ -10,9 +11,6 @@ permissions:
 jobs:
   reliability:
     runs-on: ubuntu-latest
-    environment: staging
-    env:
-      TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,88 +18,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply external MTProto onboarding implementation once
-        shell: bash
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-
-          function replaceOnce(path, oldText, newText, marker) {
-            let text = fs.readFileSync(path, 'utf8');
-            if (text.includes(marker)) {
-              console.log(`${path}: implementation already present`);
-              return;
-            }
-            if (!text.includes(oldText)) throw new Error(`${path}: expected source block not found`);
-            text = text.replace(oldText, newText);
-            fs.writeFileSync(path, text);
-            console.log(`${path}: patched`);
-          }
-
-          replaceOnce(
-            'cloudflare-v2/src/http/v1_admin_sources.js',
-            `        if (parsed.input.providerType === 'custom_signed_api') {
-          return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
-        }
-        return json({ ok: true, workspaceId, source: safeSource }, 201);`,
-            `        if (parsed.input.providerType === 'custom_signed_api') {
-          return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
-        }
-        if (parsed.input.providerType === 'external_mtproto') {
-          const configuredCanonical = String(env.TRADING_CANONICAL_HOSTS || 'trade.mkety.com')
-            .split(',')
-            .map((value) => value.trim())
-            .find(Boolean) || 'trade.mkety.com';
-          const canonicalOrigin = /^https?:\\/\\//i.test(configuredCanonical)
-            ? configuredCanonical.replace(/\\/$/, '')
-            : \\`https://\\${configuredCanonical}\\`;
-          const oneTimeEndpointUrl = \\`\\${canonicalOrigin}/api/v1/external/mtproto/\\${encodeURIComponent(source.id)}/\\${encodeURIComponent(ingressSecret)}\\`;
-          return json({ ok: true, workspaceId, source: safeSource, oneTimeEndpointUrl }, 201);
-        }
-        return json({ ok: true, workspaceId, source: safeSource }, 201);`,
-            'oneTimeEndpointUrl',
-          );
-
-          const portal = 'cloudflare-v2/src/dashboard_enterprise_portal.js';
-          let html = fs.readFileSync(portal, 'utf8');
-          if (!html.includes('one-time MTProto endpoint')) {
-            const oldFn = `async function createSource(){try{var d=sourceDefinition(),p=d.providerType,payload={providerType:p,sourceFamily:d.sourceFamily,sourceType:d.sourceType,sourceInstanceId:document.getElementById('sourceInstance').value.trim(),displayName:document.getElementById('sourceName').value.trim(),priority:Number(document.getElementById('sourcePriority').value||0)};var c=sourceCredentials(p);if(c)payload.credentials=c;var r=await api('/api/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});var secret=r.signingSecret||r.ingressSecret||r.secret;if(secret)alert('Copy this one-time signing secret now:\\\n'+secret);await loadAll()}catch(e){msg('workspaceMessage','Source failed: '+friendlyError(e),'error')}}`;
-            const newFn = `async function createSource(){try{var d=sourceDefinition(),p=d.providerType,payload={providerType:p,sourceFamily:d.sourceFamily,sourceType:d.sourceType,sourceInstanceId:document.getElementById('sourceInstance').value.trim(),displayName:document.getElementById('sourceName').value.trim(),priority:Number(document.getElementById('sourcePriority').value||0)};var c=sourceCredentials(p);if(c)payload.credentials=c;var r=await api('/api/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});var endpoint=r.oneTimeEndpointUrl;if(endpoint)alert('Copy this one-time MTProto endpoint now:\\\n'+endpoint);var secret=r.oneTimeSigningSecret||r.signingSecret||r.ingressSecret||r.secret;if(secret)alert('Copy this one-time signing secret now:\\\n'+secret);await loadAll()}catch(e){msg('workspaceMessage','Source failed: '+friendlyError(e),'error')}}`;
-            if (!html.includes(oldFn)) throw new Error(`${portal}: createSource block not found`);
-            html = html.replace(oldFn, newFn);
-            fs.writeFileSync(portal, html);
-            console.log(`${portal}: patched`);
-          } else {
-            console.log(`${portal}: implementation already present`);
-          }
-          NODE
+      - name: Apply MTProto onboarding implementation
+        run: node .github/scripts/apply-reliability-mtproto-fix.mjs
       - name: Install dependencies
         working-directory: cloudflare-v2
         run: npm install --no-audit --no-fund
       - name: Run focused reliability regressions
         working-directory: cloudflare-v2
         run: node --test tests/secret_box.test.mjs tests/returning_session_runtime_controls.test.mjs tests/external_mtproto_onboarding.test.mjs
-      - name: Verify configured master key can actually encrypt/decrypt
-        working-directory: cloudflare-v2
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module - <<'NODE'
-          import { encryptSecret, decryptSecret } from './src/security/secret_box.js';
-          const key = process.env.TRADING_MASTER_KEY || '';
-          console.log('MASTER_KEY_PRESENT=' + Boolean(key));
-          try {
-            const ciphertext = await encryptSecret('reliability-audit-probe', key);
-            const plaintext = await decryptSecret(ciphertext, key);
-            if (plaintext !== 'reliability-audit-probe') throw new Error('round trip mismatch');
-            console.log('MASTER_KEY_ENCRYPTION_READY=true');
-          } catch (error) {
-            console.log('MASTER_KEY_ENCRYPTION_READY=false');
-            console.log('MASTER_KEY_FAILURE_CLASS=' + (error?.name || 'Error'));
-            process.exit(1);
-          }
-          NODE
       - name: Commit implementation when patched
         shell: bash
         run: |
