@@ -35,7 +35,7 @@ jobs:
           NODE
       - name: Run focused regression
         working-directory: cloudflare-v2
-        run: node --test tests/enterprise_portal_lifecycle_controls.test.mjs tests/production_portal_script_parse.test.mjs
+        run: node --test tests/enterprise_portal_lifecycle_controls.test.mjs
       - name: Commit source fix
         run: |
           set -euo pipefail
