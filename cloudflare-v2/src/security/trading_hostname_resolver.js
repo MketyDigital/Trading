@@ -45,6 +45,33 @@ export function createTradingHostnameStore(supabase) {
       const mapping = normalizeMapping(data);
       return mapping.status === 'active' ? mapping : null;
     },
+
+    async getHostname(hostname) {
+      const normalized = normalizeTradingHostname(hostname);
+      if (!normalized) return null;
+      const { data, error } = await supabase
+        .from('trading_workspace_hostnames')
+        .select('hostname,workspace_id,status,verified_at')
+        .eq('hostname', normalized)
+        .maybeSingle();
+      if (error) throw new Error('TRADING_HOSTNAME_LOOKUP_FAILED');
+      return normalizeMapping(data);
+    },
+
+    async activateHostname(hostname) {
+      const normalized = normalizeTradingHostname(hostname);
+      if (!normalized) return null;
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('trading_workspace_hostnames')
+        .update({ status: 'active', verified_at: now, updated_at: now })
+        .eq('hostname', normalized)
+        .eq('status', 'pending')
+        .select('hostname,workspace_id,status,verified_at')
+        .maybeSingle();
+      if (error) throw new Error('TRADING_HOSTNAME_ACTIVATION_FAILED');
+      return normalizeMapping(data);
+    },
   };
 }
 
@@ -82,6 +109,26 @@ export async function resolveTradingRequestHostname(request, {
   }
 
   if (!mapping?.workspaceId || mapping.status !== 'active') {
+    if (hostnameStore?.getHostname && hostnameStore?.activateHostname) {
+      let pending;
+      try { pending = await hostnameStore.getHostname(hostname); }
+      catch { return { ok: false, reason: 'TRADING_HOSTNAME_LOOKUP_FAILED' }; }
+
+      if (pending?.workspaceId && pending.status === 'pending') {
+        let activated;
+        try { activated = await hostnameStore.activateHostname(hostname); }
+        catch { return { ok: false, reason: 'TRADING_HOSTNAME_ACTIVATION_FAILED' }; }
+        if (activated?.workspaceId && activated.status === 'active') {
+          return {
+            ok: true,
+            kind: 'custom',
+            hostname,
+            workspaceId: String(activated.workspaceId),
+            autoActivated: true,
+          };
+        }
+      }
+    }
     return { ok: false, reason: 'TRADING_HOSTNAME_NOT_ACTIVE' };
   }
 
