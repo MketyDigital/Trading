@@ -18,7 +18,7 @@ async function restoreReturningOwner(){
   }catch(_){}
 }
 async function logoutReturningOwner(ev){
-  var target=ev.target&&ev.target.closest?ev.target.closest('#portalLogout'):null;
+  var target=ev.target&&ev.target.closest?ev.target.closest('#portalLogout,#logoutBtn'):null;
   if(!target)return;
   ev.preventDefault();ev.stopImmediatePropagation();
   try{await fetch('/api/v1/access/logout',{method:'POST',credentials:'include'});}catch(_){}
