@@ -1,7 +1,11 @@
 name: Production Frontend E2E
-# Release trigger: PR #16 entitlement-aware portal loading.
+# Release gate: exercise the deployed customer portal in a real browser after production deploys.
 
 on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ['Production Cloudflare Deploy']
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -15,6 +19,7 @@ env:
 
 jobs:
   browser-e2e:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -68,6 +73,7 @@ jobs:
       - name: Exercise real customer frontend in Chromium
         shell: bash
         run: |
+          mkdir -p frontend-e2e-artifacts
           node - <<'NODE'
           const { chromium } = require('playwright');
           const assert = require('node:assert/strict');
@@ -83,6 +89,7 @@ jobs:
             assert.match(await page.title(), /Trading/i);
             await page.locator('#accessCode').waitFor({ state: 'visible' });
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
+            assert.equal(await page.locator('#redeemBtn').isEnabled(), true);
 
             await page.locator('#accessCode').fill(process.env.E2E_ACCESS_CODE);
             await page.locator('#ownerEmail').fill(process.env.E2E_EMAIL);
@@ -99,7 +106,29 @@ jobs:
             console.log('CUSTOMER_RUNTIME_SUMMARY=' + JSON.stringify(runtimeSummary));
             console.log('CUSTOMER_LAUNCH_STATUS=' + JSON.stringify(launchStatus));
 
-            await page.getByRole('button', { name: 'Routing' }).click();
+            const visibleTabs = [
+              ['Overview', '#view-overview'],
+              ['Connections', '#view-connections'],
+              ['Routing', '#view-routing'],
+              ['AI', '#view-ai'],
+              ['Branding', '#view-branding'],
+              ['Operations', '#view-operations'],
+              ['Team', '#view-team'],
+            ];
+            for (const [label, selector] of visibleTabs) {
+              await page.getByRole('button', { name: label, exact: true }).click();
+              assert.equal(await page.locator(selector).isVisible(), true, `${label} view must be visible`);
+            }
+
+            await page.getByRole('button', { name: 'Connections', exact: true }).click();
+            await page.getByText('Signal sources', { exact: true }).waitFor({ state: 'visible' });
+            await page.getByText('Broker connection', { exact: true }).waitFor({ state: 'visible' });
+            assert.equal(await page.locator('#createSourceBtn').isVisible(), true);
+            assert.equal(await page.locator('#createAccountBtn').isVisible(), true);
+
+            await page.getByRole('button', { name: 'Routing', exact: true }).click();
+            assert.equal(await page.locator('#destinationType option[value="telegram"]').isHidden(), false);
+            assert.equal(await page.locator('#destinationType option[value="broker_account"]').isHidden(), false);
             await page.locator('#destinationType').selectOption('audit_only');
             await page.locator('#destinationName').fill('E2E Audit Destination');
             await page.locator('#createDestinationBtn').click();
@@ -111,6 +140,20 @@ jobs:
             await page.locator('#createTemplateBtn').click();
             await page.getByText('E2E Clean Template').waitFor({ state: 'visible', timeout: 15000 });
 
+            await page.getByRole('button', { name: 'Branding', exact: true }).click();
+            assert.equal(await page.locator('[data-entitlement="customHostname"]').isVisible(), false);
+            assert.equal(await page.locator('#saveBrandingBtn').isVisible(), true);
+
+            await page.getByRole('button', { name: 'Overview', exact: true }).click();
+            await page.screenshot({ path: 'frontend-e2e-artifacts/customer-workspace-desktop.png', fullPage: true });
+
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.getByRole('button', { name: 'Connections', exact: true }).click();
+            const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+            assert.ok(overflow <= 1, `mobile page must not horizontally overflow; overflow=${overflow}`);
+            await page.screenshot({ path: 'frontend-e2e-artifacts/customer-workspace-mobile.png', fullPage: true });
+
+            await page.setViewportSize({ width: 1440, height: 1100 });
             await page.reload({ waitUntil: 'domcontentloaded' });
             await page.locator('#workspaceShell').waitFor({ state: 'visible', timeout: 15000 });
             await page.getByText('Workspace loaded successfully.').waitFor({ state: 'visible', timeout: 15000 });
@@ -126,6 +169,14 @@ jobs:
             await browser.close();
           })().catch(err => { console.error(err); process.exit(1); });
           NODE
+      - name: Upload frontend display evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-frontend-display-${{ github.run_id }}
+          path: frontend-e2e-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify staff API is not public
         run: |
           status="$(curl -sS -o /tmp/staff.json -w '%{http_code}' "$E2E_BASE_URL/api/v1/mkety-admin/access-codes")"
