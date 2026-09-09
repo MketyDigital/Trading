@@ -22,7 +22,7 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
-      - name: Exercise public redemption through the real browser page
+      - name: Locate production browser syntax error
         shell: bash
         run: |
           node - <<'NODE'
@@ -31,11 +31,24 @@ jobs:
             const browser = await chromium.launch({ headless: true });
             const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
             const page = await context.newPage();
+            const cdp = await context.newCDPSession(page);
             const events = [];
             const errors = [];
 
-            page.on('pageerror', e => errors.push('pageerror:' + String(e)));
-            page.on('console', m => { if (m.type() === 'error') errors.push('console:' + m.text()); });
+            await cdp.send('Runtime.enable');
+            cdp.on('Runtime.exceptionThrown', ({ exceptionDetails: d }) => {
+              errors.push('cdp:' + JSON.stringify({
+                text: d.text,
+                url: d.url || '',
+                lineNumber: d.lineNumber,
+                columnNumber: d.columnNumber,
+                description: d.exception && d.exception.description || '',
+              }));
+            });
+            page.on('pageerror', e => errors.push('pageerror:' + (e.stack || String(e))));
+            page.on('console', m => {
+              if (m.type() === 'error') errors.push('console:' + m.text() + ' location=' + JSON.stringify(m.location()));
+            });
             page.on('request', req => {
               if (req.url().includes('/api/v1/access/')) events.push('REQUEST ' + req.method() + ' ' + new URL(req.url()).pathname);
             });
@@ -47,19 +60,20 @@ jobs:
             });
 
             await page.goto(process.env.BASE_URL + '/', { waitUntil: 'domcontentloaded' });
-            await page.locator('#accessCode').waitFor({ state: 'visible' });
+            await page.waitForTimeout(1000);
+            const scripts = await page.locator('script').evaluateAll(nodes => nodes.map((n, i) => ({ index: i + 1, length: n.textContent.length, head: n.textContent.slice(0, 80) })));
+            console.log('INLINE_SCRIPTS=' + JSON.stringify(scripts));
+
             await page.locator('#accessCode').fill('TRD-MKETY-DIAG0909A1B2C3');
             await page.locator('#ownerEmail').fill('diag-redemption@example.test');
             await page.locator('#ownerName').fill('Diag Redemption');
             await page.locator('#workspaceName').fill('Diag Redemption Workspace');
             await page.locator('#redeemBtn').click();
-            await page.waitForTimeout(4000);
+            await page.waitForTimeout(1500);
 
             console.log('SHELL_VISIBLE=' + await page.locator('#workspaceShell').isVisible());
-            console.log('AUTH_CARD_VISIBLE=' + await page.locator('#authCard').isVisible());
             console.log('AUTH_MESSAGE=' + JSON.stringify((await page.locator('#authMessage').innerText()).trim()));
             console.log('SESSION_WORKSPACE_PRESENT=' + Boolean(await page.evaluate(() => sessionStorage.getItem('mketyTradingWorkspace'))));
-            console.log('SESSION_BEARER_PRESENT=' + Boolean(await page.evaluate(() => sessionStorage.getItem('mketyTradingBearer'))));
             for (const event of events) console.log('ACCESS_EVENT=' + event);
             for (const error of errors) console.log('BROWSER_ERROR=' + error);
 
