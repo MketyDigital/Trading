@@ -49,12 +49,13 @@ test('customer portal describes deployment broker flag as capability, not an own
   assert.equal(html.includes('Broker capability available'), true);
 });
 
-test('visible customer sign-out clears the server refresh session before local session state', async () => {
+test('visible customer sign-out is intercepted by server refresh-session logout', async () => {
   const html = await renderedPortal();
+  assert.equal(html.includes("closest('#portalLogout,#logoutBtn')"), true);
   assert.equal(html.includes("fetch('/api/v1/access/logout',{method:'POST',credentials:'include'})"), true);
   assert.match(
     html,
-    /logoutBtn[^\n]*access\/logout[^\n]*clearSession\(\)[^\n]*location\.reload\(\)/,
-    'the visible Sign out control must clear the HttpOnly refresh session before browser state and reload',
+    /closest\('#portalLogout,#logoutBtn'\)[\s\S]*?access\/logout[\s\S]*?mketyTradingSessionClear[\s\S]*?location\.reload\(\)/,
+    'the visible Sign out control must clear the HttpOnly refresh session before reloading',
   );
 });
