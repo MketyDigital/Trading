@@ -36,6 +36,6 @@ jobs:
           fi
           git config user.name 'Mkety Reliability Bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add cloudflare-v2/src/http/v1_admin_sources.js cloudflare-v2/src/dashboard_enterprise_portal.js
+          git add cloudflare-v2/src/http/v1_admin_sources.js cloudflare-v2/src/dashboard_enterprise_portal.js cloudflare-v2/tests/returning_session_runtime_controls.test.mjs
           git commit -m 'fix: expose external mtproto onboarding endpoint'
           git push origin HEAD:fix/full-production-reliability-audit
