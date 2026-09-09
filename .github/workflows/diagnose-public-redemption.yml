@@ -17,29 +17,52 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe public redemption endpoint
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Exercise public redemption through the real browser page
         shell: bash
         run: |
-          set -euo pipefail
-          body='{"code":"TRD-MKETY-DIAG0909A1B2C3","ownerEmail":"diag-redemption@example.test","ownerName":"Diag Redemption","workspaceName":"Diag Redemption Workspace"}'
-          status="$(curl -sS -o /tmp/redeem.json -w '%{http_code}' -X POST "$BASE_URL/api/v1/access/redeem" \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json' \
-            --data "$body")"
-          echo "HTTP_STATUS=$status"
           node - <<'NODE'
-          const fs = require('node:fs');
-          const raw = fs.readFileSync('/tmp/redeem.json', 'utf8');
-          let body;
-          try { body = JSON.parse(raw); } catch { console.log('RESPONSE=NON_JSON'); process.exit(1); }
-          const safe = {
-            ok: body.ok === true,
-            reason: body.reason || null,
-            mode: body.mode || null,
-            workspaceIdPresent: Boolean(body.workspace && body.workspace.id),
-            bearerPresent: Boolean(body.bearer),
-            entitlementsPresent: Boolean(body.entitlements),
-          };
-          console.log('SAFE_RESPONSE=' + JSON.stringify(safe));
-          if (!body.ok) process.exitCode = 2;
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
+            const page = await context.newPage();
+            const events = [];
+            const errors = [];
+
+            page.on('pageerror', e => errors.push('pageerror:' + String(e)));
+            page.on('console', m => { if (m.type() === 'error') errors.push('console:' + m.text()); });
+            page.on('request', req => {
+              if (req.url().includes('/api/v1/access/')) events.push('REQUEST ' + req.method() + ' ' + new URL(req.url()).pathname);
+            });
+            page.on('response', async res => {
+              if (!res.url().includes('/api/v1/access/')) return;
+              let body = {};
+              try { body = await res.json(); } catch {}
+              events.push('RESPONSE ' + res.status() + ' ' + new URL(res.url()).pathname + ' ok=' + String(body.ok === true) + ' reason=' + String(body.reason || '') + ' mode=' + String(body.mode || ''));
+            });
+
+            await page.goto(process.env.BASE_URL + '/', { waitUntil: 'domcontentloaded' });
+            await page.locator('#accessCode').waitFor({ state: 'visible' });
+            await page.locator('#accessCode').fill('TRD-MKETY-DIAG0909A1B2C3');
+            await page.locator('#ownerEmail').fill('diag-redemption@example.test');
+            await page.locator('#ownerName').fill('Diag Redemption');
+            await page.locator('#workspaceName').fill('Diag Redemption Workspace');
+            await page.locator('#redeemBtn').click();
+            await page.waitForTimeout(4000);
+
+            console.log('SHELL_VISIBLE=' + await page.locator('#workspaceShell').isVisible());
+            console.log('AUTH_CARD_VISIBLE=' + await page.locator('#authCard').isVisible());
+            console.log('AUTH_MESSAGE=' + JSON.stringify((await page.locator('#authMessage').innerText()).trim()));
+            console.log('SESSION_WORKSPACE_PRESENT=' + Boolean(await page.evaluate(() => sessionStorage.getItem('mketyTradingWorkspace'))));
+            console.log('SESSION_BEARER_PRESENT=' + Boolean(await page.evaluate(() => sessionStorage.getItem('mketyTradingBearer'))));
+            for (const event of events) console.log('ACCESS_EVENT=' + event);
+            for (const error of errors) console.log('BROWSER_ERROR=' + error);
+
+            await browser.close();
+          })().catch(err => { console.error(err); process.exit(1); });
           NODE
