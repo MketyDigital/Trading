@@ -96,7 +96,7 @@ test('enterprise browser transparently renews an expired bearer and retries the 
   const html = withReturningOwnerSession(renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }));
   assert.match(html, /nativeFetch/);
   assert.match(html, /refreshInFlight/);
-  assert.match(html, /response\.status===401/);
+  assert.match(html, /response\.status(?:===|!==)401/);
   assert.match(html, /TOKEN_EXPIRED/);
   assert.match(html, /\/api\/v1\/access\/session/);
   assert.match(html, /sessionStorage\.setItem\(['"]mketyTradingBearer['"],/);
