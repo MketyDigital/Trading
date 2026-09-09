@@ -83,14 +83,18 @@ function safePublicAccessCode(row = {}, plainCode = undefined) {
   return out;
 }
 
-function randomCode(randomUUID = crypto.randomUUID) {
+function nativeRandomUUID() {
+  return crypto.randomUUID();
+}
+
+function randomCode(randomUUID = nativeRandomUUID) {
   const raw = String(randomUUID()).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 16);
   return `TRD-MKETY-${raw}`;
 }
 
 export async function createMketyAdminAccessCodePlan(input = {}, {
   now = new Date(),
-  randomUUID = crypto.randomUUID,
+  randomUUID = nativeRandomUUID,
 } = {}) {
   const ownerEmail = text(input.ownerEmail ?? input.owner_email)?.toLowerCase();
   const ownerName = text(input.ownerName ?? input.owner_name);
@@ -214,7 +218,7 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
   store = null,
   runtimeStore = null,
   now = new Date(),
-  randomUUID = crypto.randomUUID,
+  randomUUID = nativeRandomUUID,
 } = {}) {
   const auth = authorizeMketyAdmin(request, env);
   if (!auth.ok) return json({ ok: false, reason: auth.reason }, auth.status);
