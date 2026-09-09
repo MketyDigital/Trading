@@ -1,4 +1,5 @@
 name: Production Frontend E2E
+# Release trigger: PR #14 access-code native randomUUID receiver fix.
 
 on:
   push:
