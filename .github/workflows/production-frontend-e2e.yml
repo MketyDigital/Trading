@@ -138,7 +138,7 @@ jobs:
             await page.locator('#formattingMode').selectOption('clean');
             await page.locator('#templateBrand').fill('E2E');
             await page.locator('#createTemplateBtn').click();
-            await page.getByText('E2E Clean Template').waitFor({ state: 'visible', timeout: 15000 });
+            await page.locator('#templateList').getByText('E2E Clean Template', { exact: true }).waitFor({ state: 'visible', timeout: 15000 });
 
             await page.getByRole('button', { name: 'Branding', exact: true }).click();
             assert.equal(await page.locator('[data-entitlement="customHostname"]').isVisible(), false);
