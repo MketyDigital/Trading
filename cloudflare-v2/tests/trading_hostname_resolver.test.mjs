@@ -13,6 +13,7 @@ function singleRowQuery(row, { error = null } = {}) {
       const filters = [];
       const chain = {
         select() { return chain; },
+        update() { return chain; },
         eq(column, value) { filters.push([column, value]); return chain; },
         maybeSingle: async () => ({ data: row, error }),
       };
@@ -58,13 +59,48 @@ test('canonical Mkety hostname is shared and does not preselect an enterprise wo
   assert.equal(lookedUp, false);
 });
 
-test('unknown, pending and disabled customer hostnames fail closed', async () => {
-  for (const row of [null, { hostname: 'customer.example', workspaceId: 'ws-1', status: 'pending' }, { hostname: 'customer.example', workspaceId: 'ws-1', status: 'disabled' }]) {
+test('pending customer hostname auto-activates when the request already reaches the Mkety Worker', async () => {
+  const seen = [];
+  const store = {
+    async getActiveHostname(hostname) {
+      seen.push(['active', hostname]);
+      return null;
+    },
+    async getHostname(hostname) {
+      seen.push(['any', hostname]);
+      return { hostname, workspaceId: 'ws-1', status: 'pending', verifiedAt: null };
+    },
+    async activateHostname(hostname) {
+      seen.push(['activate', hostname]);
+      return { hostname, workspaceId: 'ws-1', status: 'active', verifiedAt: '2026-09-09T12:00:00Z' };
+    },
+  };
+
+  const result = await resolveTradingRequestHostname(
+    new Request('https://copier.starpipsforex.com/api/v1/admin/workspace'),
+    { hostnameStore: store },
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    kind: 'custom',
+    hostname: 'copier.starpipsforex.com',
+    workspaceId: 'ws-1',
+    autoActivated: true,
+  });
+  assert.deepEqual(seen, [
+    ['active', 'copier.starpipsforex.com'],
+    ['any', 'copier.starpipsforex.com'],
+    ['activate', 'copier.starpipsforex.com'],
+  ]);
+});
+
+test('unknown and disabled customer hostnames still fail closed', async () => {
+  for (const row of [null, { hostname: 'customer.example', workspaceId: 'ws-1', status: 'disabled' }]) {
     const store = {
-      async getActiveHostname() {
-        if (!row || row.status !== 'active') return null;
-        return row;
-      },
+      async getActiveHostname() { return null; },
+      async getHostname() { return row; },
+      async activateHostname() { throw new Error('must not activate'); },
     };
     const result = await resolveTradingRequestHostname(
       new Request('https://customer.example/api/v1/admin/workspace'),
