@@ -1,0 +1,48 @@
+name: Apply bounded frontend status fix
+
+on:
+  push:
+    branches: [fix-production-frontend-status-e2e]
+    paths:
+      - '.github/workflows/apply-frontend-status-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-production-frontend-status-e2e
+      - name: Apply exact reviewed replacements
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const portalPath = 'cloudflare-v2/src/dashboard_enterprise_portal.js';
+          let portal = fs.readFileSync(portalPath, 'utf8');
+          const oldLaunch = `status.push(runtime.brokerExecution?'<span class="pill danger">Broker master fuse ON</span>':'<span class="pill good">Broker master fuse safely OFF</span>');`;
+          const newLaunch = `status.push(runtime.brokerExecution?'<span class="pill">Broker capability available</span>':'<span class="pill good">Broker capability unavailable</span>');`;
+          const oldSummary = `document.getElementById('runtimeSummary').innerHTML='<span class="pill good">Access ON</span><span class="pill '+(runtime.brokerExecution?'danger':'good')+'">Broker master fuse '+(runtime.brokerExecution?'ON':'OFF')+'</span>';`;
+          const newSummary = `document.getElementById('runtimeSummary').innerHTML='<span class="pill good">Access ON</span><span class="pill">Broker capability '+(runtime.brokerExecution?'available':'unavailable')+'</span>';`;
+          if (!portal.includes(oldLaunch) || !portal.includes(oldSummary)) throw new Error('expected portal strings not found');
+          portal = portal.replace(oldLaunch, newLaunch).replace(oldSummary, newSummary);
+          fs.writeFileSync(portalPath, portal);
+
+          const e2ePath = '.github/workflows/production-frontend-e2e.yml';
+          let e2e = fs.readFileSync(e2ePath, 'utf8');
+          const oldLocator = `await page.getByText('E2E Clean Template').waitFor({ state: 'visible', timeout: 15000 });`;
+          const newLocator = `await page.locator('#templateList').getByText('E2E Clean Template', { exact: true }).waitFor({ state: 'visible', timeout: 15000 });`;
+          if (!e2e.includes(oldLocator)) throw new Error('expected E2E locator not found');
+          e2e = e2e.replace(oldLocator, newLocator);
+          fs.writeFileSync(e2ePath, e2e);
+          NODE
+      - name: Commit bounded replacements
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare-v2/src/dashboard_enterprise_portal.js .github/workflows/production-frontend-e2e.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: align customer broker status and e2e selector"
+          git push origin HEAD:fix-production-frontend-status-e2e
