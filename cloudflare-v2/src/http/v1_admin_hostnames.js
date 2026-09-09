@@ -1,4 +1,5 @@
 import { createCloudflareCustomHostnameClient } from '../security/cloudflare_custom_hostnames.js';
+import { probeCustomHostnameRoute } from '../security/custom_hostname_route_proof.js';
 import { canonicalTradingHostsFromEnv } from '../security/trading_hostname_resolver.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { requiresTradingEntitlement } from '../security/trading_entitlements.js';
@@ -98,6 +99,7 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
   hostnameStore,
   env = {},
   providerClientFactory = createCloudflareCustomHostnameClient,
+  routeProbeFn = probeCustomHostnameRoute,
 } = {}) {
   const workspaceId = String(authorization?.workspace?.id ?? '').trim();
   if (!workspaceId) return json({ ok: false, reason: 'ADMIN_WORKSPACE_AUTHORITY_MISSING' }, 403);
@@ -161,16 +163,29 @@ export async function handleAuthorizedV1AdminHostnamesRequest(request, authoriza
   catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_READ_FAILED' }, 503); }
   if (!row) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_NOT_FOUND' }, 404);
 
-  let provider;
+  let provider = null;
   try { provider = await providerClientFactory(env).getByHostname(row.hostname); }
-  catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_READ_FAILED' }, 503); }
-  if (!provider) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_PROVIDER_NOT_FOUND' }, 409);
+  catch { /* live route proof may still establish safe activation */ }
 
-  const active = provider.hostnameStatus === 'active' && provider.sslStatus === 'active' && provider.workerRouteConfigured !== false;
+  const strictProviderActive = Boolean(provider && provider.hostnameStatus === 'active' && provider.sslStatus === 'active' && provider.workerRouteConfigured !== false);
+  let active = strictProviderActive;
+  let routeProof = null;
+  if (!active) {
+    try { routeProof = await routeProbeFn(row.hostname, workspaceId, env); }
+    catch { routeProof = { ok: false, reason: 'CUSTOM_HOSTNAME_ROUTE_PROBE_FAILED' }; }
+    active = routeProof?.ok === true && String(routeProof.workspaceId) === workspaceId;
+  }
+
   let updated;
   try { updated = await hostnameStore.syncVerification(workspaceId, id, active); }
   catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_UPDATE_FAILED' }, 503); }
   if (!updated) return json({ ok: false, reason: 'CUSTOM_HOSTNAME_NOT_FOUND' }, 404);
 
-  return json({ ok: true, workspaceId, verified: active, hostname: publicHostname(updated, provider, cnameTarget) });
+  return json({
+    ok: true,
+    workspaceId,
+    verified: active,
+    verificationMethod: strictProviderActive ? 'cloudflare' : active ? 'live_route' : 'pending',
+    hostname: publicHostname(updated, provider, cnameTarget),
+  });
 }
