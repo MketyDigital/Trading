@@ -1,0 +1,43 @@
+name: Release PR25
+
+on:
+  push:
+    branches:
+      - ops/deploy-pr25
+    paths:
+      - .github/workflows/release-pr25.yml
+
+permissions:
+  contents: write
+
+jobs:
+  trigger-production:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Update release marker only
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/production-cloudflare-deploy.yml')
+          s = p.read_text()
+          old = '# Release trigger: PR #24 full production reliability audit.'
+          new = '# Release trigger: PR #25 mobile connections overflow containment.'
+          if old not in s:
+              raise SystemExit('expected release marker not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- .github/workflows/production-cloudflare-deploy.yml
+      - name: Push guarded production trigger commit
+        run: |
+          set -euo pipefail
+          git config user.name 'Mkety Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .github/workflows/production-cloudflare-deploy.yml
+          git commit -m 'cloudflare: deploy production access-code dashboard'
+          git push origin HEAD:main
