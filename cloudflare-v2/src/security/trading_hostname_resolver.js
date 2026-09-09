@@ -75,6 +75,16 @@ export function createTradingHostnameStore(supabase) {
   };
 }
 
+function customResolution(hostname, mapping, autoActivated = false) {
+  return {
+    ok: true,
+    kind: 'custom',
+    hostname,
+    workspaceId: String(mapping.workspaceId),
+    ...(autoActivated ? { autoActivated: true } : {}),
+  };
+}
+
 export async function resolveTradingRequestHostname(request, {
   hostnameStore,
   canonicalHosts = DEFAULT_CANONICAL_HOSTS,
@@ -108,36 +118,36 @@ export async function resolveTradingRequestHostname(request, {
     return { ok: false, reason: 'TRADING_HOSTNAME_LOOKUP_FAILED' };
   }
 
-  if (!mapping?.workspaceId || mapping.status !== 'active') {
-    if (hostnameStore?.getHostname && hostnameStore?.activateHostname) {
-      let pending;
-      try { pending = await hostnameStore.getHostname(hostname); }
-      catch { return { ok: false, reason: 'TRADING_HOSTNAME_LOOKUP_FAILED' }; }
-
-      if (pending?.workspaceId && pending.status === 'pending') {
-        let activated;
-        try { activated = await hostnameStore.activateHostname(hostname); }
-        catch { return { ok: false, reason: 'TRADING_HOSTNAME_ACTIVATION_FAILED' }; }
-        if (activated?.workspaceId && activated.status === 'active') {
-          return {
-            ok: true,
-            kind: 'custom',
-            hostname,
-            workspaceId: String(activated.workspaceId),
-            autoActivated: true,
-          };
-        }
-      }
-    }
-    return { ok: false, reason: 'TRADING_HOSTNAME_NOT_ACTIVE' };
+  if (mapping?.workspaceId && mapping.status === 'active') {
+    return customResolution(hostname, mapping);
   }
 
-  return {
-    ok: true,
-    kind: 'custom',
-    hostname,
-    workspaceId: String(mapping.workspaceId),
-  };
+  if (hostnameStore?.getHostname && hostnameStore?.activateHostname) {
+    let pending;
+    try { pending = await hostnameStore.getHostname(hostname); }
+    catch { return { ok: false, reason: 'TRADING_HOSTNAME_LOOKUP_FAILED' }; }
+
+    if (pending?.workspaceId && pending.status === 'pending') {
+      let activated;
+      try { activated = await hostnameStore.activateHostname(hostname); }
+      catch { return { ok: false, reason: 'TRADING_HOSTNAME_ACTIVATION_FAILED' }; }
+      if (activated?.workspaceId && activated.status === 'active') {
+        return customResolution(hostname, activated, true);
+      }
+
+      // A parallel first-load request may have activated the same pending row.
+      // Re-read active state so concurrent dashboard requests do not show a false
+      // TRADING_HOSTNAME_NOT_ACTIVE error on the first branded-domain load.
+      let racedActive;
+      try { racedActive = await hostnameStore.getActiveHostname(hostname); }
+      catch { return { ok: false, reason: 'TRADING_HOSTNAME_LOOKUP_FAILED' }; }
+      if (racedActive?.workspaceId && racedActive.status === 'active') {
+        return customResolution(hostname, racedActive, true);
+      }
+    }
+  }
+
+  return { ok: false, reason: 'TRADING_HOSTNAME_NOT_ACTIVE' };
 }
 
 export function canonicalTradingHostsFromEnv(env = {}) {
