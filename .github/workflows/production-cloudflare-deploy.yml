@@ -1,7 +1,7 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
 # Broker execution uses two gates: deployment capability + persisted Mkety owner switch.
-# Release trigger: PR #20 durable customer logout and production browser assertions.
+# Release trigger: PR #23 cross-account custom-hostname live-route verification.
 
 on:
   workflow_dispatch:
