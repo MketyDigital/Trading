@@ -1,0 +1,41 @@
+name: Enterprise Lifecycle Patch
+
+on:
+  push:
+    branches:
+      - 'fix/full-production-reliability-audit'
+    paths:
+      - '.github/scripts/apply-enterprise-lifecycle-controls.mjs'
+      - '.github/workflows/enterprise-lifecycle-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/full-production-reliability-audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply lifecycle controls
+        run: node .github/scripts/apply-enterprise-lifecycle-controls.mjs
+      - name: Install dependencies
+        working-directory: cloudflare-v2
+        run: npm install --no-audit --no-fund
+      - name: Run lifecycle and portal parse regressions
+        working-directory: cloudflare-v2
+        run: node --test tests/enterprise_portal_lifecycle_controls.test.mjs tests/production_portal_script_parse.test.mjs tests/returning_session_runtime_controls.test.mjs tests/external_mtproto_onboarding.test.mjs
+      - name: Commit lifecycle implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'Mkety Reliability Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare-v2/src/dashboard_enterprise_portal.js
+          git commit -m 'fix: restore enterprise lifecycle controls'
+          git push origin HEAD:fix/full-production-reliability-audit
