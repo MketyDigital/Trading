@@ -52,7 +52,7 @@ test('customer portal describes deployment broker flag as capability, not an own
 test('visible customer sign-out is intercepted by server refresh-session logout', async () => {
   const html = await renderedPortal();
   assert.equal(html.includes("closest('#portalLogout,#logoutBtn')"), true);
-  assert.equal(html.includes("fetch('/api/v1/access/logout',{method:'POST',credentials:'include'})"), true);
+  assert.equal(html.includes("nativeFetch('/api/v1/access/logout',{method:'POST',credentials:'include'})"), true);
   assert.match(
     html,
     /closest\('#portalLogout,#logoutBtn'\)[\s\S]*?access\/logout[\s\S]*?mketyTradingSessionClear[\s\S]*?location\.reload\(\)/,
