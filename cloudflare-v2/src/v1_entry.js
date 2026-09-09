@@ -17,6 +17,7 @@ import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
 import { createProductionDestinationRetryRuntime } from './execution/destination_retry_production.js';
 import { runScheduledBindingRepairs } from './execution/production_binding_repair.js';
+import { handleCustomHostnameRouteProofRequest } from './security/custom_hostname_route_proof.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
@@ -86,6 +87,7 @@ export function createTradingV1Entrypoint({
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
   mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
   publicBrandingHandler = handlePublicBrandingRequest,
+  customHostnameRouteProofHandler = handleCustomHostnameRouteProofRequest,
   queueRuntime = null,
   recoveryRuntime = null,
   destinationRetryRuntime = null,
@@ -101,6 +103,10 @@ export function createTradingV1Entrypoint({
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
+      if (url.pathname === '/api/v1/custom-hostname/probe') {
+        const supabase = await publicSupabase(env);
+        return customHostnameRouteProofHandler(request, env, { supabase });
+      }
       if (url.pathname === '/api/v1/public/branding') {
         const supabase = await publicSupabase(env);
         return publicBrandingHandler(request, env, { supabase });
