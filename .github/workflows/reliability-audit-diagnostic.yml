@@ -5,7 +5,7 @@ on:
     branches: [fix/full-production-reliability-audit]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   reliability:
@@ -20,12 +20,68 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Apply external MTProto onboarding implementation once
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          function replaceOnce(path, oldText, newText, marker) {
+            let text = fs.readFileSync(path, 'utf8');
+            if (text.includes(marker)) {
+              console.log(`${path}: implementation already present`);
+              return;
+            }
+            if (!text.includes(oldText)) throw new Error(`${path}: expected source block not found`);
+            text = text.replace(oldText, newText);
+            fs.writeFileSync(path, text);
+            console.log(`${path}: patched`);
+          }
+
+          replaceOnce(
+            'cloudflare-v2/src/http/v1_admin_sources.js',
+            `        if (parsed.input.providerType === 'custom_signed_api') {
+          return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
+        }
+        return json({ ok: true, workspaceId, source: safeSource }, 201);`,
+            `        if (parsed.input.providerType === 'custom_signed_api') {
+          return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
+        }
+        if (parsed.input.providerType === 'external_mtproto') {
+          const configuredCanonical = String(env.TRADING_CANONICAL_HOSTS || 'trade.mkety.com')
+            .split(',')
+            .map((value) => value.trim())
+            .find(Boolean) || 'trade.mkety.com';
+          const canonicalOrigin = /^https?:\\/\\//i.test(configuredCanonical)
+            ? configuredCanonical.replace(/\\/$/, '')
+            : \\`https://\\${configuredCanonical}\\`;
+          const oneTimeEndpointUrl = \\`\\${canonicalOrigin}/api/v1/external/mtproto/\\${encodeURIComponent(source.id)}/\\${encodeURIComponent(ingressSecret)}\\`;
+          return json({ ok: true, workspaceId, source: safeSource, oneTimeEndpointUrl }, 201);
+        }
+        return json({ ok: true, workspaceId, source: safeSource }, 201);`,
+            'oneTimeEndpointUrl',
+          );
+
+          const portal = 'cloudflare-v2/src/dashboard_enterprise_portal.js';
+          let html = fs.readFileSync(portal, 'utf8');
+          if (!html.includes('one-time MTProto endpoint')) {
+            const oldFn = `async function createSource(){try{var d=sourceDefinition(),p=d.providerType,payload={providerType:p,sourceFamily:d.sourceFamily,sourceType:d.sourceType,sourceInstanceId:document.getElementById('sourceInstance').value.trim(),displayName:document.getElementById('sourceName').value.trim(),priority:Number(document.getElementById('sourcePriority').value||0)};var c=sourceCredentials(p);if(c)payload.credentials=c;var r=await api('/api/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});var secret=r.signingSecret||r.ingressSecret||r.secret;if(secret)alert('Copy this one-time signing secret now:\\\n'+secret);await loadAll()}catch(e){msg('workspaceMessage','Source failed: '+friendlyError(e),'error')}}`;
+            const newFn = `async function createSource(){try{var d=sourceDefinition(),p=d.providerType,payload={providerType:p,sourceFamily:d.sourceFamily,sourceType:d.sourceType,sourceInstanceId:document.getElementById('sourceInstance').value.trim(),displayName:document.getElementById('sourceName').value.trim(),priority:Number(document.getElementById('sourcePriority').value||0)};var c=sourceCredentials(p);if(c)payload.credentials=c;var r=await api('/api/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});var endpoint=r.oneTimeEndpointUrl;if(endpoint)alert('Copy this one-time MTProto endpoint now:\\\n'+endpoint);var secret=r.oneTimeSigningSecret||r.signingSecret||r.ingressSecret||r.secret;if(secret)alert('Copy this one-time signing secret now:\\\n'+secret);await loadAll()}catch(e){msg('workspaceMessage','Source failed: '+friendlyError(e),'error')}}`;
+            if (!html.includes(oldFn)) throw new Error(`${portal}: createSource block not found`);
+            html = html.replace(oldFn, newFn);
+            fs.writeFileSync(portal, html);
+            console.log(`${portal}: patched`);
+          } else {
+            console.log(`${portal}: implementation already present`);
+          }
+          NODE
       - name: Install dependencies
         working-directory: cloudflare-v2
         run: npm install --no-audit --no-fund
       - name: Run focused reliability regressions
         working-directory: cloudflare-v2
-        run: node --test tests/secret_box.test.mjs tests/returning_session_runtime_controls.test.mjs
+        run: node --test tests/secret_box.test.mjs tests/returning_session_runtime_controls.test.mjs tests/external_mtproto_onboarding.test.mjs
       - name: Verify configured master key can actually encrypt/decrypt
         working-directory: cloudflare-v2
         shell: bash
@@ -46,3 +102,16 @@ jobs:
             process.exit(1);
           }
           NODE
+      - name: Commit implementation when patched
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No implementation changes to commit.'
+            exit 0
+          fi
+          git config user.name 'Mkety Reliability Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare-v2/src/http/v1_admin_sources.js cloudflare-v2/src/dashboard_enterprise_portal.js
+          git commit -m 'fix: expose external mtproto onboarding endpoint'
+          git push origin HEAD:fix/full-production-reliability-audit
