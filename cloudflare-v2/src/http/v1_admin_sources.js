@@ -242,6 +242,13 @@ function randomPublicSourceHandle() {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function canonicalTradingOrigin(env = {}) {
+  const configured = String(env?.TRADING_CANONICAL_HOSTS ?? '').split(',').map((value) => value.trim()).filter(Boolean)[0];
+  const rawHost = configured || 'trade.mkety.com';
+  const host = rawHost.replace(/^https?:\/\//i, '').split('/')[0];
+  return `https://${host}`;
+}
+
 export function createAdminSourceStore(supabase, env = {}) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
@@ -469,6 +476,12 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
         });
         if (parsed.input.providerType === 'custom_signed_api') {
           return json({ ok: true, workspaceId, source: safeSource, oneTimeSigningSecret: ingressSecret }, 201);
+        }
+        if (parsed.input.providerType === 'external_mtproto') {
+          const sourceId = encodeURIComponent(String(source.id));
+          const endpointSecret = encodeURIComponent(String(ingressSecret));
+          const oneTimeEndpointUrl = `${canonicalTradingOrigin(env)}/api/v1/external/mtproto/${sourceId}/${endpointSecret}`;
+          return json({ ok: true, workspaceId, source: safeSource, oneTimeEndpointUrl }, 201);
         }
         return json({ ok: true, workspaceId, source: safeSource }, 201);
       } catch {

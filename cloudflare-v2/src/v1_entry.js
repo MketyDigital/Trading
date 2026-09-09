@@ -30,6 +30,58 @@ function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeAccent(value) {
+  const color = String(value ?? '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : null;
+}
+
+function safeHttpsUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch { return null; }
+}
+
+function applyInitialBranding(html, payload = null) {
+  if (!payload?.ok || !payload?.branding) return String(html);
+  const branding = payload.branding || {};
+  const brandName = String(branding.brandName || 'Mkety').trim() || 'Mkety';
+  const productName = String(branding.productName || 'Trading').trim() || 'Trading';
+  const title = `${brandName} ${productName}`.trim();
+  const accent = safeAccent(branding.accentColor);
+  const logoUrl = safeHttpsUrl(branding.logoUrl);
+
+  let output = String(html)
+    .replace('<title>Mkety Trading</title>', `<title>${escapeHtml(title)}</title>`)
+    .replace('<h1 id="brandTitle">Mkety Trading</h1>', `<h1 id="brandTitle">${escapeHtml(title)}</h1>`);
+
+  if (accent) output = output.replace('--accent:#0f172a', `--accent:${accent}`);
+  if (logoUrl) {
+    output = output.replace(
+      '<img id="brandLogo" class="logo hidden" alt="Brand logo">',
+      `<img id="brandLogo" class="logo" src="${escapeHtml(logoUrl)}" alt="Brand logo">`,
+    );
+  }
+  if (payload.kind === 'white_label') {
+    output = output.replace(
+      '<div id="brandSubtitle" class="muted">Enterprise signal automation, routing and execution workspace.</div>',
+      '<div id="brandSubtitle" class="muted">Enterprise trading automation workspace.</div>',
+    );
+  }
+  return output;
+}
+
 function withPublicBrandingBootstrap(html) {
   const script = `<script>(function(){async function loadPublicBranding(){try{var r=await fetch('/api/v1/public/branding',{headers:{Accept:'application/json'}});if(!r.ok)return;var x=await r.json();if(!x||!x.ok||!x.branding)return;var b=x.branding||{};var title=(b.brandName||'Mkety')+' '+(b.productName||'Trading');var t=document.getElementById('brandTitle');if(t)t.textContent=title;document.title=title;if(b.accentColor)document.documentElement.style.setProperty('--accent',b.accentColor);var logo=document.getElementById('brandLogo');if(logo&&b.logoUrl){logo.src=b.logoUrl;logo.classList.remove('hidden')}var sub=document.getElementById('brandSubtitle');if(sub&&x.kind==='white_label')sub.textContent='Enterprise trading automation workspace.'}catch(_){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',loadPublicBranding);else loadPublicBranding()})();</script>`;
   return String(html).replace('</body>', `${script}</body>`);
@@ -45,6 +97,16 @@ async function publicSupabase(env = {}) {
   if (!url || !key) return null;
   const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);
+}
+
+async function resolveInitialBranding(request, env, publicBrandingHandler) {
+  try {
+    const supabase = await publicSupabase(env);
+    const response = await publicBrandingHandler(request, env, { supabase });
+    if (!response?.ok) return null;
+    const payload = await response.json();
+    return payload?.ok && payload?.branding ? payload : null;
+  } catch { return null; }
 }
 
 function retiredLegacyAdminResponse() {
@@ -97,8 +159,9 @@ export function createTradingV1Entrypoint({
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
       if (url.pathname === '/' || url.pathname === '') {
+        const branding = await resolveInitialBranding(request, env, publicBrandingHandler);
         const portal = normalizeEnterprisePortalHtml(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env))));
-        return htmlResponse(withPublicBrandingBootstrap(withReturningOwnerSession(portal)));
+        return htmlResponse(withPublicBrandingBootstrap(withReturningOwnerSession(applyInitialBranding(portal, branding))));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());

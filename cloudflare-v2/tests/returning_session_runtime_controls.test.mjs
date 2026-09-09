@@ -92,6 +92,17 @@ test('enterprise entry surface attempts returning-session restoration automatica
   assert.match(html, /\/api\/v1\/access\/logout/);
 });
 
+test('enterprise browser transparently renews an expired bearer and retries the admin request once', () => {
+  const html = withReturningOwnerSession(renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }));
+  assert.match(html, /nativeFetch/);
+  assert.match(html, /refreshInFlight/);
+  assert.match(html, /response\.status(?:===|!==)401/);
+  assert.match(html, /TOKEN_EXPIRED/);
+  assert.match(html, /\/api\/v1\/access\/session/);
+  assert.match(html, /sessionStorage\.setItem\(['"]mketyTradingBearer['"],/);
+  assert.match(html, /Authorization/);
+});
+
 test('broker execution fails closed when persisted Mkety owner switch is OFF even if deployment capability is ON', async () => {
   let executed = false;
   const execution = await runV1ProductionExecutionStage({

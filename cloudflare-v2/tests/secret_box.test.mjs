@@ -23,10 +23,19 @@ test('encrypts tenant secret with random AES-GCM IV and decrypts only with maste
   await assert.rejects(() => decryptSecret(one, base64url(other)));
 });
 
+test('derives a stable AES key from an existing non-base64url master secret', async () => {
+  const masterKey = 'existing-production-master-secret-value';
+  const encrypted = await encryptSecret('external-mtproto-ingress-secret', masterKey);
+  assert.match(encrypted, /^v1\./);
+  assert.equal(await decryptSecret(encrypted, masterKey), 'external-mtproto-ingress-secret');
+  await assert.rejects(() => decryptSecret(encrypted, masterKey + '-different'));
+});
+
 test('fails closed on malformed or missing encrypted values', async () => {
   const key = new Uint8Array(32);
   crypto.getRandomValues(key);
   const masterKey = base64url(key);
   await assert.rejects(() => decryptSecret('plaintext-secret', masterKey), /encrypted secret/i);
   await assert.rejects(() => encryptSecret('', masterKey), /secret/i);
+  await assert.rejects(() => encryptSecret('secret', ''), /master key/i);
 });
