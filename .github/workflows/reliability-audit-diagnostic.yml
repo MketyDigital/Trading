@@ -1,0 +1,44 @@
+name: Reliability Audit Diagnostic
+
+on:
+  push:
+    branches: [fix/full-production-reliability-audit]
+    paths:
+      - '.github/workflows/reliability-audit-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  encryption-readiness:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/full-production-reliability-audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify configured master key can actually encrypt/decrypt
+        working-directory: cloudflare-v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import { encryptSecret, decryptSecret } from './src/security/secret_box.js';
+          const key = process.env.TRADING_MASTER_KEY || '';
+          console.log('MASTER_KEY_PRESENT=' + Boolean(key));
+          try {
+            const ciphertext = await encryptSecret('reliability-audit-probe', key);
+            const plaintext = await decryptSecret(ciphertext, key);
+            if (plaintext !== 'reliability-audit-probe') throw new Error('round trip mismatch');
+            console.log('MASTER_KEY_ENCRYPTION_READY=true');
+          } catch (error) {
+            console.log('MASTER_KEY_ENCRYPTION_READY=false');
+            console.log('MASTER_KEY_FAILURE_CLASS=' + (error?.name || 'Error'));
+            process.exit(1);
+          }
+          NODE
