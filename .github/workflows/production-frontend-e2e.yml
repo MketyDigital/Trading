@@ -1,2 +1,2 @@
 name: Production Frontend E2E
-# Superseded by PR #20; no further changes intended on this branch.
+# Superseded branch. PR #20 contains the accepted durable logout and browser assertions.
