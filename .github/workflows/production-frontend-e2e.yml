@@ -1,5 +1,5 @@
 name: Production Frontend E2E
-# Release trigger: PR #14 access-code native randomUUID receiver fix.
+# Release trigger: PR #16 entitlement-aware portal loading.
 
 on:
   push:
