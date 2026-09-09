@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  encryption-readiness:
+  reliability:
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -20,9 +20,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run secret-box regression
+      - name: Install dependencies
         working-directory: cloudflare-v2
-        run: node --test tests/secret_box.test.mjs
+        run: npm install --no-audit --no-fund
+      - name: Run focused reliability regressions
+        working-directory: cloudflare-v2
+        run: node --test tests/secret_box.test.mjs tests/returning_session_runtime_controls.test.mjs
       - name: Verify configured master key can actually encrypt/decrypt
         working-directory: cloudflare-v2
         shell: bash
