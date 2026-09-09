@@ -1,0 +1,45 @@
+name: Diagnose Public Redemption
+
+on:
+  push:
+    branches: [diag-portal-script-parse]
+    paths:
+      - '.github/workflows/diagnose-public-redemption.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://trade.mkety.com
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public redemption endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          body='{"code":"TRD-MKETY-DIAG0909A1B2C3","ownerEmail":"diag-redemption@example.test","ownerName":"Diag Redemption","workspaceName":"Diag Redemption Workspace"}'
+          status="$(curl -sS -o /tmp/redeem.json -w '%{http_code}' -X POST "$BASE_URL/api/v1/access/redeem" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$body")"
+          echo "HTTP_STATUS=$status"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const raw = fs.readFileSync('/tmp/redeem.json', 'utf8');
+          let body;
+          try { body = JSON.parse(raw); } catch { console.log('RESPONSE=NON_JSON'); process.exit(1); }
+          const safe = {
+            ok: body.ok === true,
+            reason: body.reason || null,
+            mode: body.mode || null,
+            workspaceIdPresent: Boolean(body.workspace && body.workspace.id),
+            bearerPresent: Boolean(body.bearer),
+            entitlementsPresent: Boolean(body.entitlements),
+          };
+          console.log('SAFE_RESPONSE=' + JSON.stringify(safe));
+          if (!body.ok) process.exitCode = 2;
+          NODE
