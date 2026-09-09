@@ -127,8 +127,8 @@ jobs:
             assert.equal(await page.locator('#createAccountBtn').isVisible(), true);
 
             await page.getByRole('button', { name: 'Routing', exact: true }).click();
-            assert.equal(await page.locator('#destinationType option[value="telegram"]').isHidden(), false);
-            assert.equal(await page.locator('#destinationType option[value="broker_account"]').isHidden(), false);
+            assert.equal(await page.locator('#destinationType option[value="telegram"]').evaluate(option => option.hidden), false);
+            assert.equal(await page.locator('#destinationType option[value="broker_account"]').evaluate(option => option.hidden), false);
             await page.locator('#destinationType').selectOption('audit_only');
             await page.locator('#destinationName').fill('E2E Audit Destination');
             await page.locator('#createDestinationBtn').click();
