@@ -38,7 +38,6 @@ test('team management is explicitly gated when central authentication is not con
 
 test('mobile connection cards allow wide lifecycle tables to scroll without widening the page', () => {
   const html = renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' });
-  assert.match(html, /\.grid>\*\{min-width:0\}/);
-  assert.match(html, /\.grid3>\*\{min-width:0\}/);
+  assert.match(html, /\.grid>\*,\.grid3>\*\{min-width:0\}/);
   assert.match(html, /\.table-wrap\{[^}]*max-width:100%[^}]*overflow:auto/);
 });
