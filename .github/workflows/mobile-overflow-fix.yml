@@ -1,0 +1,47 @@
+name: Mobile Overflow Fix
+
+on:
+  push:
+    branches:
+      - 'fix/mobile-connections-overflow'
+    paths:
+      - '.github/workflows/mobile-overflow-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-connections-overflow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Contain wide lifecycle tables on mobile
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'cloudflare-v2/src/dashboard_enterprise_portal.js';
+          let s = fs.readFileSync(path, 'utf8');
+          const before = '.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}';
+          const after = '.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid>*,.grid3>*{min-width:0}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}';
+          if (!s.includes(before) && !s.includes(after)) throw new Error('grid CSS anchor missing');
+          s = s.replace(before, after);
+          s = s.replace('.table-wrap{overflow:auto}', '.table-wrap{max-width:100%;overflow:auto}');
+          fs.writeFileSync(path, s);
+          NODE
+      - name: Run focused regression
+        working-directory: cloudflare-v2
+        run: node --test tests/enterprise_portal_lifecycle_controls.test.mjs tests/production_portal_script_parse.test.mjs
+      - name: Commit source fix
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'Mkety Reliability Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare-v2/src/dashboard_enterprise_portal.js
+          git commit -m 'fix: contain lifecycle tables on mobile'
+          git push origin HEAD:fix/mobile-connections-overflow
