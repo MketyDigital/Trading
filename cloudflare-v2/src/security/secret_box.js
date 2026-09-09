@@ -1,5 +1,6 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const DERIVATION_CONTEXT = 'mkety-trading-secret-box-v1\0';
 
 function decodeBase64Url(value) {
   const normalized = String(value ?? '').replace(/-/g, '+').replace(/_/g, '/');
@@ -14,9 +15,23 @@ function encodeBase64Url(bytes) {
   return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
+async function masterKeyBytes(masterKey) {
+  const value = String(masterKey ?? '');
+  if (!value) throw new TypeError('master key is required');
+
+  try {
+    const raw = decodeBase64Url(value);
+    if (raw.length === 32) return raw;
+  } catch {
+    // Fall through to deterministic derivation for existing opaque secrets.
+  }
+
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(`${DERIVATION_CONTEXT}${value}`));
+  return new Uint8Array(digest);
+}
+
 async function importMasterKey(masterKey) {
-  const raw = decodeBase64Url(masterKey);
-  if (raw.length !== 32) throw new TypeError('master key must decode to exactly 32 bytes');
+  const raw = await masterKeyBytes(masterKey);
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
