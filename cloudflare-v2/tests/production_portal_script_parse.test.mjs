@@ -42,3 +42,9 @@ test('one-time source secret alert keeps newline escaped inside rendered JavaScr
     'rendered JavaScript must contain a backslash-n escape inside the alert string',
   );
 });
+
+test('customer portal describes deployment broker flag as capability, not an owner master switch', async () => {
+  const html = await renderedPortal();
+  assert.equal(html.includes('Broker master fuse ON'), false);
+  assert.equal(html.includes('Broker capability available'), true);
+});
