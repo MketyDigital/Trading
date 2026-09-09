@@ -52,5 +52,10 @@ if (!text.includes('data-source-enable')) {
   replaceRequired(finalAnchor, lifecycleListener, 'final event listener');
 }
 
+const createSourceFunction = "async function createSource(){try{var d=sourceDefinition(),p=d.providerType,payload={providerType:p,sourceFamily:d.sourceFamily,sourceType:d.sourceType,sourceInstanceId:document.getElementById('sourceInstance').value.trim(),displayName:document.getElementById('sourceName').value.trim(),priority:Number(document.getElementById('sourcePriority').value||0)};var c=sourceCredentials(p);if(c)payload.credentials=c;var r=await api('/api/v1/admin/sources',{method:'POST',body:JSON.stringify(payload)});var endpoint=r.oneTimeEndpointUrl;if(endpoint)alert('Copy this one-time MTProto endpoint now:\\\\n'+endpoint);var secret=r.oneTimeSigningSecret||r.signingSecret||r.ingressSecret||r.secret;if(secret)alert('Copy this one-time signing secret now:\\\\n'+secret);await loadAll()}catch(e){msg('workspaceMessage','Source failed: '+friendlyError(e),'error')}}";
+const sourcePattern = /async function createSource\(\)\{[\s\S]*?\}\nasync function createAccount\(\)/;
+if (!sourcePattern.test(text)) throw new Error('missing createSource function anchor');
+text = text.replace(sourcePattern, createSourceFunction + '\nasync function createAccount()');
+
 fs.writeFileSync(path, text);
-console.log('enterprise lifecycle controls patched');
+console.log('enterprise lifecycle controls and source onboarding alerts patched');
