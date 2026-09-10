@@ -28,6 +28,61 @@ function stableEndpointToken(request) {
   return String(request.headers.get('X-Mkety-Source-Secret') || '').trim();
 }
 
+function cleanIdentityPart(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function identityFromPayload(payload) {
+  const native = payload?.metadata?.native_identity;
+  const nativeChatId = cleanIdentityPart(native?.chat_id);
+  const nativeMessageId = cleanIdentityPart(native?.message_id);
+  if (nativeChatId && nativeMessageId) return { chat_id: nativeChatId, message_id: nativeMessageId };
+
+  let chatId = cleanIdentityPart(payload?.chat_id ?? payload?.chatId ?? payload?.telegram_chat_id ?? payload?.telegramChatId);
+  let messageId = cleanIdentityPart(payload?.message_id ?? payload?.messageId ?? payload?.telegram_message_id ?? payload?.telegramMessageId);
+
+  if (!chatId || !messageId) {
+    const eventId = cleanIdentityPart(payload?.external_event_id);
+    const match = eventId.match(/^telegram:([^:]+):([^:]+)$/);
+    if (match) {
+      chatId = chatId || cleanIdentityPart(match[1]);
+      messageId = messageId || cleanIdentityPart(match[2]);
+    }
+  }
+
+  if (!chatId || !messageId) return null;
+  return { chat_id: chatId, message_id: messageId };
+}
+
+function normalizeExternalMtprotoBody(rawBody) {
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return rawBody;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return rawBody;
+  if (payload.metadata !== undefined && payload.metadata !== null
+      && (typeof payload.metadata !== 'object' || Array.isArray(payload.metadata))) {
+    return rawBody;
+  }
+
+  const identity = identityFromPayload(payload);
+  if (!identity) return rawBody;
+
+  const native = payload.metadata?.native_identity;
+  if (cleanIdentityPart(native?.chat_id) && cleanIdentityPart(native?.message_id)) return rawBody;
+
+  return JSON.stringify({
+    ...payload,
+    metadata: {
+      ...(payload.metadata || {}),
+      native_identity: identity,
+    },
+  });
+}
+
 async function defaultResolveActiveSource(sourceId, env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
@@ -77,7 +132,7 @@ export async function handleExternalMtprotoEndpointRequest(request, env = {}, {
 
   let rawBody;
   try {
-    rawBody = await request.text();
+    rawBody = normalizeExternalMtprotoBody(await request.text());
   } catch {
     return json({ ok: false, reason: 'INVALID_REQUEST_BODY' }, 400);
   }

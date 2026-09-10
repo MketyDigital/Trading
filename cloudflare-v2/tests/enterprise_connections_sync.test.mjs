@@ -69,6 +69,40 @@ test('external MTProto endpoint converts endpoint possession into internal signe
   assert.match(forwarded.body, /BUY XAUUSD/);
 });
 
+test('generated MTProto endpoint normalizes authenticated Telegram identity without fabricating it', async () => {
+  for (const payload of [
+    { external_event_id: 'telegram:-10012345:9876', text: 'BUY XAUUSD' },
+    { external_event_id: 'evt-external', chat_id: '-10012345', message_id: 9876, text: 'BUY XAUUSD' },
+  ]) {
+    let forwardedBody = null;
+    const response = await handleExternalMtprotoEndpointRequest(
+      new Request('https://trade.mkety.com/api/v1/external/mtproto/source-1/opaque-secret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+      { TRADING_MASTER_KEY: 'master' },
+      {
+        resolveActiveSource: async () => ({
+          id: 'source-1',
+          provider_type: 'external_mtproto',
+          secret: 'opaque-secret',
+        }),
+        eventsHandler: async (request) => {
+          forwardedBody = JSON.parse(await request.text());
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        },
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(forwardedBody.metadata.native_identity, {
+      chat_id: '-10012345',
+      message_id: '9876',
+    });
+  }
+});
+
 test('external MTProto endpoint rejects a wrong opaque endpoint token before V1 processing', async () => {
   let called = false;
   const response = await handleExternalMtprotoEndpointRequest(
