@@ -1,0 +1,11 @@
+{
+  admin off
+  email {$ACME_EMAIL}
+}
+
+{$CBOT_PUBLIC_HOST}:25345 {
+  tls {
+    dns cloudflare {$CLOUDFLARE_DNS_API_TOKEN}
+  }
+  reverse_proxy gateway:25346
+}

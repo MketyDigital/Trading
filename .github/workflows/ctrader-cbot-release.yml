@@ -1,0 +1,52 @@
+name: cTrader cBot Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'ctrader-cbot-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+      - name: Restore cTrader Automate SDK
+        run: dotnet restore ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj
+      - name: Build distributable cBot
+        run: dotnet build ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj --configuration Release --no-restore -p:AlgoPublish=false -p:IncludeSource=false -p:IncludeSymbols=false
+      - name: Collect package and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          algo="$(find ctrader-cbot/MketyCloudAutoTrader -type f -name '*.algo' -print -quit)"
+          test -n "$algo" || { echo 'cTrader build did not produce an .algo package'; exit 1; }
+          mkdir -p dist
+          cp "$algo" dist/MketyCloudAutoTrader.algo
+          sha256sum dist/MketyCloudAutoTrader.algo > dist/MketyCloudAutoTrader.algo.sha256
+          test -s dist/MketyCloudAutoTrader.algo
+      - name: Upload verified build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MketyCloudAutoTrader
+          path: |
+            dist/MketyCloudAutoTrader.algo
+            dist/MketyCloudAutoTrader.algo.sha256
+          if-no-files-found: error
+      - name: Publish GitHub Release assets for version tag
+        if: startsWith(github.ref, 'refs/tags/ctrader-cbot-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/MketyCloudAutoTrader.algo \
+            dist/MketyCloudAutoTrader.algo.sha256 \
+            --title "Mkety Cloud Auto Trader ${GITHUB_REF_NAME#ctrader-cbot-v}" \
+            --generate-notes

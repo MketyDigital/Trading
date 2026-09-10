@@ -1,0 +1,109 @@
+name: cTrader cBot CI
+
+on:
+  pull_request:
+    paths:
+      - 'cloudflare-v2/src/adapters/ctrader_cbot_*.js'
+      - 'cloudflare-v2/src/dashboard_ctrader_cbot_connections.js'
+      - 'cloudflare-v2/src/http/v1_admin_ctrader_cbot.js'
+      - 'cloudflare-v2/src/execution/production_execution_deps.js'
+      - 'cloudflare-v2/src/security/connection_credentials.js'
+      - 'cloudflare-v2/tests/ctrader_cbot_*.test.mjs'
+      - 'cloudflare-v2/tests/production_ctrader_cbot_dispatch.test.mjs'
+      - 'cloudflare-v2/tests/connection_operator_setup.test.mjs'
+      - 'ctrader-cbot-gateway/**'
+      - 'ctrader-cbot/**'
+      - '.github/workflows/ctrader-cbot-ci.yml'
+      - '.github/workflows/production-cloudflare-deploy.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-v2/src/adapters/ctrader_cbot_*.js'
+      - 'cloudflare-v2/src/dashboard_ctrader_cbot_connections.js'
+      - 'cloudflare-v2/src/http/v1_admin_ctrader_cbot.js'
+      - 'cloudflare-v2/src/execution/production_execution_deps.js'
+      - 'cloudflare-v2/src/security/connection_credentials.js'
+      - 'cloudflare-v2/tests/ctrader_cbot_*.test.mjs'
+      - 'cloudflare-v2/tests/production_ctrader_cbot_dispatch.test.mjs'
+      - 'cloudflare-v2/tests/connection_operator_setup.test.mjs'
+      - 'ctrader-cbot-gateway/**'
+      - 'ctrader-cbot/**'
+      - '.github/workflows/ctrader-cbot-ci.yml'
+      - '.github/workflows/production-cloudflare-deploy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Run cBot Worker and dashboard regression tests
+        run: >-
+          node --test
+          tests/ctrader_cbot_executor_v2.test.mjs
+          tests/ctrader_cbot_identity_sync.test.mjs
+          tests/ctrader_cbot_onboarding.test.mjs
+          tests/ctrader_cbot_protocol.test.mjs
+          tests/production_ctrader_cbot_dispatch.test.mjs
+          tests/connection_credentials.test.mjs
+          tests/connection_operator_setup.test.mjs
+
+  gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ctrader-cbot-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  deployment-stack:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ctrader-cbot-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gateway container
+        run: docker build -t mkety-ctrader-cbot-gateway:ci .
+      - name: Build TLS edge container
+        run: docker build -f deploy/coolify/Dockerfile.caddy -t mkety-ctrader-cbot-caddy:ci .
+      - name: Validate Coolify Compose model
+        env:
+          CBOT_PUBLIC_HOST: cbot.example.test
+          ACME_EMAIL: ci@example.test
+          CLOUDFLARE_DNS_API_TOKEN: ci-placeholder
+          CBOT_TOKEN_SIGNING_KEY: ci-signing-placeholder
+          CBOT_CONTROL_SECRET: ci-control-placeholder
+        run: docker compose -f deploy/coolify/docker-compose.yml config --quiet
+
+  cbot-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+      - name: Restore cTrader Automate SDK
+        run: dotnet restore ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj
+      - name: Build Mkety Cloud Auto Trader
+        run: dotnet build ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj --configuration Release --no-restore -p:AlgoPublish=false
+      - name: Verify distributable .algo was generated
+        shell: bash
+        run: |
+          algo="$(find ctrader-cbot/MketyCloudAutoTrader -type f -name '*.algo' -print -quit)"
+          test -n "$algo"
+          test -s "$algo"

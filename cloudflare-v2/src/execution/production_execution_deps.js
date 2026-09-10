@@ -3,6 +3,7 @@ import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_st
 import { executeMT5Action } from '../adapters/mt5_executor_v2.js';
 import { signMT5MetadataRequest } from '../adapters/mt5_bridge_protocol.js';
 import { createCTraderRuntime } from '../adapters/ctrader_runtime.js';
+import { executeCTraderCbotAction } from '../adapters/ctrader_cbot_executor_v2.js';
 import { fromMT5Symbols } from '../normalization/symbol_catalog.js';
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
@@ -33,6 +34,14 @@ function accountRef(account = {}) {
 
 function platformOf(account = {}) {
   return text(account.platform).toLowerCase();
+}
+
+function providerModeOf(account = {}) {
+  return text(account.provider_mode ?? account.providerMode).toLowerCase();
+}
+
+function environmentOf(account = {}) {
+  return text(account.environment ?? account.server_name ?? account.serverName).toLowerCase();
 }
 
 function brokerAccountIdOf(account = {}) {
@@ -257,6 +266,7 @@ export function createProductionExecutionDependencies({
   mt5ContextLoader = defaultMt5ContextLoader,
   mt5Executor = executeMT5Action,
   ctraderRuntimeFactory = createCTraderRuntime,
+  ctraderCbotExecutor = executeCTraderCbotAction,
   exposureLoader = null,
   executionSnapshotCache = createRuntimeExecutionSnapshotCache(),
   fetchFn = fetch,
@@ -267,6 +277,7 @@ export function createProductionExecutionDependencies({
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (typeof decryptCredentialsFn !== 'function') throw new TypeError('decryptCredentialsFn is required');
   if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
+  if (typeof ctraderCbotExecutor !== 'function') throw new TypeError('ctraderCbotExecutor is required');
   if (!executionSnapshotCache?.get || !executionSnapshotCache?.put) {
     throw new TypeError('executionSnapshotCache is required');
   }
@@ -341,7 +352,7 @@ export function createProductionExecutionDependencies({
     await Promise.all(entries.map(async (entry) => closeCTraderRuntime(entry?.runtime)));
   }
 
-  async function loadAccountCredentials(account, expectedPlatform) {
+  async function loadAccountCredentials(account, expectedPlatform, credentialKind = expectedPlatform) {
     assertBoundAccount(account, boundWorkspaceId);
     const platform = platformOf(account);
     if (platform !== expectedPlatform) throw new Error('production broker credential platform mismatch');
@@ -351,7 +362,7 @@ export function createProductionExecutionDependencies({
       'trade account credential_ciphertext',
     );
     try {
-      return await decryptCredentialsFn(expectedPlatform, ciphertext, masterKey);
+      return await decryptCredentialsFn(credentialKind, ciphertext, masterKey);
     } catch {
       throw new Error('production broker credentials are unavailable');
     }
@@ -538,6 +549,35 @@ export function createProductionExecutionDependencies({
     });
   }
 
+  async function dispatchCTraderCbot(account, action, groupId) {
+    const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+    const gatewayUrl = required(credentials.gatewayUrl, 'trade account cTrader cBot gatewayUrl');
+    const controlSecret = required(credentials.controlSecret, 'trade account cTrader cBot controlSecret');
+    const environment = environmentOf(account);
+    if (!['demo', 'live'].includes(environment)) {
+      throw new Error('cTrader cBot trade account environment must be demo or live');
+    }
+    if (environment === 'live' && !enabled(env.CTRADER_LIVE_TRADING_ENABLED)) {
+      throw new Error('live cTrader execution is disabled');
+    }
+    const deliveryStore = deliveryStoreFor({
+      factory: deliveryStoreFactory,
+      supabase,
+      workspaceId: boundWorkspaceId,
+      account,
+      tradingEventId: boundTradingEventId || null,
+      groupId,
+    });
+    return ctraderCbotExecutor(action, {
+      workspaceId: boundWorkspaceId,
+      accountRowId: accountRef(account),
+      gatewayUrl,
+      controlSecret,
+      deliveryStore,
+      fetchFn,
+    });
+  }
+
   async function dispatchCTrader(account, action, groupId) {
     const credentials = await loadAccountCredentials(account, 'ctrader');
     const clientId = required(credentials.clientId, 'trade account cTrader clientId');
@@ -547,9 +587,9 @@ export function createProductionExecutionDependencies({
     const numericAccountId = Number(brokerAccountId);
     if (!Number.isInteger(numericAccountId)) throw new Error('trade account account_id must be an integer for cTrader');
 
-    const environment = text(account.server_name).toLowerCase();
+    const environment = environmentOf(account);
     if (!['demo', 'live'].includes(environment)) {
-      throw new Error('cTrader trade account server_name must be demo or live');
+      throw new Error('cTrader trade account environment must be demo or live');
     }
     const allowLiveTrading = environment === 'live' && enabled(env.CTRADER_LIVE_TRADING_ENABLED);
     if (environment === 'live' && !allowLiveTrading) {
@@ -610,6 +650,7 @@ export function createProductionExecutionDependencies({
 
     const platform = platformOf(account);
     if (platform === 'mt5') return dispatchMt5(account, action, groupId);
+    if (platform === 'ctrader' && providerModeOf(account) === 'ctrader_cbot') return dispatchCTraderCbot(account, action, groupId);
     if (platform === 'ctrader') return dispatchCTrader(account, action, groupId);
     throw new Error(`unsupported production broker platform: ${platform || 'unknown'}`);
   }

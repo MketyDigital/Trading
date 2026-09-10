@@ -1,0 +1,89 @@
+const textEncoder = new TextEncoder();
+
+function toHex(bytes) {
+  return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function toBase64Url(value) {
+  const bytes = typeof value === 'string' ? textEncoder.encode(value) : new Uint8Array(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function importHmacKey(secret) {
+  if (!secret) throw new TypeError('shared secret required');
+  return crypto.subtle.importKey(
+    'raw',
+    textEncoder.encode(String(secret)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+}
+
+export async function createCTraderCbotConnectionToken({
+  accountRowId,
+  signingKey,
+  issuedAt = Date.now(),
+  ttlMs = 15 * 60 * 1000,
+  nonce = crypto.randomUUID(),
+} = {}) {
+  const id = String(accountRowId ?? '').trim();
+  const issued = Number(issuedAt);
+  const ttl = Number(ttlMs);
+  if (!id || !signingKey || !Number.isFinite(issued) || !Number.isFinite(ttl) || ttl <= 0) {
+    throw new TypeError('accountRowId, signingKey, issuedAt and positive ttlMs required');
+  }
+  const payload = toBase64Url(JSON.stringify({ v: 1, a: id, e: issued + ttl, n: String(nonce) }));
+  const key = await importHmacKey(signingKey);
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(payload));
+  return `v1.${payload}.${toBase64Url(signature)}`;
+}
+
+export function buildCTraderCbotEnvelope({ commandId, workspaceId, accountId, brokerAccountId, issuedAt = Date.now(), ttlMs = 15000, command } = {}) {
+  if (!commandId || !workspaceId || !accountId || !brokerAccountId || !command?.action) {
+    throw new TypeError('commandId, workspaceId, accountId, brokerAccountId and command.action are required');
+  }
+  const issued = Number(issuedAt);
+  const ttl = Number(ttlMs);
+  if (!Number.isFinite(issued) || !Number.isFinite(ttl) || ttl <= 0) throw new TypeError('valid issuedAt and ttlMs required');
+  return {
+    version: 'mkety.ctrader.cbot.v1',
+    command_id: String(commandId),
+    workspace_id: String(workspaceId),
+    account_id: String(accountId),
+    broker_account_id: String(brokerAccountId),
+    issued_at: issued,
+    expires_at: issued + ttl,
+    command,
+  };
+}
+
+export async function signCTraderCbotBody(rawBody, secret) {
+  const key = await importHmacKey(secret);
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(String(rawBody)));
+  return `v1=${toHex(signature)}`;
+}
+
+export function validateCTraderCbotEnvelope(envelope, { nowMs = Date.now(), expectedAccountId = null, expectedBrokerAccountId = null, maxFutureSkewMs = 30000 } = {}) {
+  if (envelope?.version !== 'mkety.ctrader.cbot.v1') return { ok: false, reason: 'UNSUPPORTED_VERSION' };
+  if (!envelope?.command_id || !envelope?.workspace_id || !envelope?.account_id || !envelope?.broker_account_id || !envelope?.command?.action) {
+    return { ok: false, reason: 'MISSING_SCOPE_OR_COMMAND' };
+  }
+  if (expectedAccountId != null && String(envelope.account_id) !== String(expectedAccountId)) {
+    return { ok: false, reason: 'ACCOUNT_MISMATCH' };
+  }
+  if (expectedBrokerAccountId != null && String(envelope.broker_account_id) !== String(expectedBrokerAccountId)) {
+    return { ok: false, reason: 'BROKER_ACCOUNT_MISMATCH' };
+  }
+  const now = Number(nowMs);
+  const issuedAt = Number(envelope.issued_at);
+  const expiresAt = Number(envelope.expires_at);
+  if (!Number.isFinite(now) || !Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) {
+    return { ok: false, reason: 'INVALID_TIMESTAMPS' };
+  }
+  if (issuedAt > now + Number(maxFutureSkewMs)) return { ok: false, reason: 'ISSUED_IN_FUTURE' };
+  if (expiresAt < now) return { ok: false, reason: 'EXPIRED' };
+  return { ok: true };
+}
