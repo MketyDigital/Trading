@@ -51,7 +51,6 @@ test('Worker creates a gateway-compatible account-bound cBot connection token', 
   });
   const verified = verifyConnectionToken(token, 'gateway-signing-key', 30_000);
   assert.equal(verified.ok, true);
-  assert.equal(verified.payload.a, 'acct-cbot-1');
-  assert.equal(verified.payload.e, 61_000);
-  assert.equal(verified.payload.n, 'nonce-1');
+  assert.equal(verified.accountRowId, 'acct-cbot-1');
+  assert.equal(verified.expiresAt, 61_000);
 });
