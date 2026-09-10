@@ -4,6 +4,13 @@ function toHex(bytes) {
   return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
+function toBase64Url(value) {
+  const bytes = typeof value === 'string' ? textEncoder.encode(value) : new Uint8Array(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 async function importHmacKey(secret) {
   if (!secret) throw new TypeError('shared secret required');
   return crypto.subtle.importKey(
@@ -13,6 +20,25 @@ async function importHmacKey(secret) {
     false,
     ['sign'],
   );
+}
+
+export async function createCTraderCbotConnectionToken({
+  accountRowId,
+  signingKey,
+  issuedAt = Date.now(),
+  ttlMs = 15 * 60 * 1000,
+  nonce = crypto.randomUUID(),
+} = {}) {
+  const id = String(accountRowId ?? '').trim();
+  const issued = Number(issuedAt);
+  const ttl = Number(ttlMs);
+  if (!id || !signingKey || !Number.isFinite(issued) || !Number.isFinite(ttl) || ttl <= 0) {
+    throw new TypeError('accountRowId, signingKey, issuedAt and positive ttlMs required');
+  }
+  const payload = toBase64Url(JSON.stringify({ v: 1, a: id, e: issued + ttl, n: String(nonce) }));
+  const key = await importHmacKey(signingKey);
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(payload));
+  return `v1.${payload}.${toBase64Url(signature)}`;
 }
 
 export function buildCTraderCbotEnvelope({ commandId, workspaceId, accountId, issuedAt = Date.now(), ttlMs = 15000, command } = {}) {
