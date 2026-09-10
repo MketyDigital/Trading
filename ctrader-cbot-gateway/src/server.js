@@ -3,7 +3,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { verifyConnectionToken, validateCommand } from './protocol.js';
 
 const wsPort = Number(process.env.CBOT_WS_PORT || 25345);
+const wsHost = process.env.CBOT_WS_HOST || '0.0.0.0';
 const controlPort = Number(process.env.CBOT_CONTROL_PORT || 8790);
+const controlHost = process.env.CBOT_CONTROL_HOST || '0.0.0.0';
 const signingKey = process.env.CBOT_TOKEN_SIGNING_KEY || '';
 const controlSecret = process.env.CBOT_CONTROL_SECRET || '';
 const commandTimeoutMs = Number(process.env.CBOT_COMMAND_TIMEOUT_MS || 8000);
@@ -63,7 +65,7 @@ function pruneDelivered(now = Date.now()) {
   }
 }
 
-const wsServer = new WebSocketServer({ port: wsPort, path: '/v1/cbot' });
+const wsServer = new WebSocketServer({ port: wsPort, host: wsHost, path: '/v1/cbot' });
 wsServer.on('connection', (socket) => {
   socket.authenticated = false;
 
@@ -159,6 +161,9 @@ const controlServer = http.createServer(async (request, response) => {
     if (!valid.ok) return json(response, 400, { ok: false, reason: valid.reason });
     const session = sessions.get(accountRowId);
     if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 409, { ok: false, reason: 'CBOT_OFFLINE' });
+    if (String(envelope.broker_account_id) !== String(session.identity?.accountNumber ?? '')) {
+      return json(response, 409, { ok: false, reason: 'CBOT_BROKER_ACCOUNT_MISMATCH' });
+    }
 
     const key = commandKey(accountRowId, envelope.command_id);
     pruneDelivered();
@@ -184,10 +189,10 @@ const controlServer = http.createServer(async (request, response) => {
   return json(response, 404, { ok: false, reason: 'NOT_FOUND' });
 });
 
-controlServer.listen(controlPort, '0.0.0.0', () => {
-  console.log(`cBot control API listening on ${controlPort}`);
+controlServer.listen(controlPort, controlHost, () => {
+  console.log(`cBot control API listening on ${controlHost}:${controlPort}`);
 });
-console.log(`cBot WebSocket gateway listening on ${wsPort}`);
+console.log(`cBot WebSocket gateway listening on ${wsHost}:${wsPort}`);
 
 function shutdown() {
   for (const { socket } of sessions.values()) {
