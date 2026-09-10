@@ -11,6 +11,7 @@ TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"
 TRADINGVIEW_CERT_PROBE_ENABLED = "false"
 TRADING_ACCESS_ENABLED = "false"
 BROKER_EXECUTION_ENABLED = "false"
+CTRADER_REDIRECT_URI = "https://trade.mkety.com/api/v1/integrations/ctrader/callback"
 
 [durable_objects]
 bindings = [
