@@ -1,7 +1,7 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
 # Broker execution uses two gates: deployment capability + persisted Mkety owner switch.
-# Release trigger: PR #24 full production reliability audit.
+# Relevant production code merged to main deploys automatically; manual dispatch remains available.
 
 on:
   workflow_dispatch:
@@ -17,6 +17,9 @@ on:
     branches:
       - main
     paths:
+      - 'cloudflare-v2/**'
+      - 'ctrader-cbot-gateway/**'
+      - 'ctrader-cbot/**'
       - '.github/workflows/production-cloudflare-deploy.yml'
 
 permissions:
@@ -31,11 +34,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/main' &&
-          github.event.head_commit.message == 'cloudflare: deploy production access-code dashboard'
-        )
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
     runs-on: ubuntu-latest
     environment: staging
