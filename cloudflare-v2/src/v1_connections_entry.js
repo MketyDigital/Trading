@@ -1,5 +1,6 @@
 import baseWorker from './v1_entry.js';
 import { withUnifiedTradingConnections } from './dashboard_unified_connections.js';
+import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
@@ -18,7 +19,7 @@ async function enhancePortalResponse(response) {
   const html = await response.text();
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
-  return new Response(withUnifiedTradingConnections(html), {
+  return new Response(withCTraderCbotConnections(withUnifiedTradingConnections(html)), {
     status: response.status,
     statusText: response.statusText,
     headers,
