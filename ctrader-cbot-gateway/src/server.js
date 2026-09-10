@@ -127,8 +127,11 @@ wsServer.on('connection', (socket) => {
 });
 
 const controlServer = http.createServer(async (request, response) => {
-  if (!authorizedControl(request)) return json(response, 401, { ok: false, reason: 'CONTROL_AUTH_INVALID' });
   const url = new URL(request.url, 'http://localhost');
+  if (request.method === 'GET' && url.pathname === '/health') {
+    return json(response, 200, { ok: true, service: 'mkety-ctrader-cbot-gateway' });
+  }
+  if (!authorizedControl(request)) return json(response, 401, { ok: false, reason: 'CONTROL_AUTH_INVALID' });
 
   const statusMatch = url.pathname.match(/^\/v1\/connections\/([^/]+)$/);
   if (request.method === 'GET' && statusMatch) {
