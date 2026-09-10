@@ -97,16 +97,11 @@ test('gateway authenticates a cBot, correlates a result, rejects replay, and fai
   assert.equal(firstResponse.status, 200);
   assert.deepEqual(await firstResponse.json(), { type: 'result', commandId: firstCommand.command_id, ok: true, positionId: 77 });
 
-  const replayRequest = fetch(`${controlBase}/v1/commands/${accountRowId}`, {
+  const replayResponse = await fetch(`${controlBase}/v1/commands/${accountRowId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(firstCommand),
   });
-  const replayDelivered = await readMessage(socket);
-  if (replayDelivered?.type === 'command') {
-    socket.send(JSON.stringify({ type: 'result', commandId: firstCommand.command_id, ok: true, positionId: 78 }));
-  }
-  const replayResponse = await replayRequest;
   assert.equal(replayResponse.status, 409);
   assert.equal((await replayResponse.json()).reason, 'COMMAND_ALREADY_DELIVERED');
 
