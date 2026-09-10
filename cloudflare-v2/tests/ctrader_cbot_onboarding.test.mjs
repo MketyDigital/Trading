@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections.js';
+import { handleV1AdminCTraderCbotRequest } from '../src/http/v1_admin_ctrader_cbot.js';
 import { decryptConnectionCredentials } from '../src/security/connection_credentials.js';
 import { verifyConnectionToken } from '../../ctrader-cbot-gateway/src/protocol.js';
 
@@ -16,7 +16,7 @@ function tradeAccountSupabase(capture) {
             select() {
               return {
                 async maybeSingle() {
-                  return { data: { id: row.id || 'acct-cbot-1', created_at: '2026-09-10T14:00:00.000Z', ...row }, error: null };
+                  return { data: { created_at: '2026-09-10T14:00:00.000Z', ...row }, error: null };
                 },
               };
             },
@@ -49,7 +49,7 @@ test('cTrader Cloud Auto Trader onboarding returns one-time setup material and p
     body: JSON.stringify({ label: 'Demo Cloud Auto Trader', roles: ['execution'], environment: 'demo' }),
   });
 
-  const response = await handleV1AdminConnectionsRequest(request, env, {
+  const response = await handleV1AdminCTraderCbotRequest(request, env, {
     supabaseFactory: async () => tradeAccountSupabase(capture),
     authorizeFn: authorizeOwner,
   });
@@ -89,7 +89,7 @@ test('cTrader Cloud Auto Trader onboarding fails closed when gateway configurati
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ label: 'Demo Cloud Auto Trader' }),
   });
-  const response = await handleV1AdminConnectionsRequest(request, {
+  const response = await handleV1AdminCTraderCbotRequest(request, {
     TRADING_MASTER_KEY: 'test-master-key-that-is-long-enough',
   }, {
     supabaseFactory: async () => tradeAccountSupabase({}),
