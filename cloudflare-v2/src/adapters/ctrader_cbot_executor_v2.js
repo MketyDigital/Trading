@@ -49,6 +49,7 @@ async function persistFailure(deliveryStore, key, error, nowMs, retryDelayMs) {
 export async function executeCTraderCbotAction(action, {
   workspaceId,
   accountRowId,
+  brokerAccountId,
   gatewayUrl,
   controlSecret,
   deliveryStore,
@@ -58,6 +59,7 @@ export async function executeCTraderCbotAction(action, {
   retryDelayMs = 15000,
 } = {}) {
   if (!workspaceId || !accountRowId || !controlSecret) throw new TypeError('workspace/account/gateway control configuration required');
+  if (!String(brokerAccountId ?? '').trim()) throw new TypeError('brokerAccountId required for cTrader cBot execution');
   if (!action?.idempotencyKey) throw new TypeError('idempotencyKey required for cTrader cBot execution');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) throw new TypeError('deliveryStore reserve/complete/fail required');
   const baseUrl = normalizeGatewayUrl(gatewayUrl);
@@ -70,6 +72,7 @@ export async function executeCTraderCbotAction(action, {
     commandId: action.idempotencyKey,
     workspaceId,
     accountId: accountRowId,
+    brokerAccountId,
     issuedAt: nowMs,
     ttlMs,
     command: commandFor(action),
@@ -103,6 +106,9 @@ export async function executeCTraderCbotAction(action, {
       }
       if (reason === 'CBOT_RESULT_TIMEOUT') {
         throw classifiedError('cTrader cBot execution result is uncertain', { code: 'CTRADER_CBOT_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN' });
+      }
+      if (reason === 'CBOT_BROKER_ACCOUNT_MISMATCH') {
+        throw classifiedError('cTrader cBot broker account identity mismatch', { code: 'CTRADER_CBOT_BROKER_ACCOUNT_MISMATCH', failureClass: 'TERMINAL' });
       }
       throw classifiedError(reason, { code: 'CTRADER_CBOT_REJECTED', failureClass: 'TERMINAL' });
     }
