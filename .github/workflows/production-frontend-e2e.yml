@@ -132,6 +132,10 @@ jobs:
             assert.equal(await page.locator('#showMt5BridgeBtn').isVisible(), true);
             assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), true);
             assert.equal(await page.locator('#unifiedSourceManager').isVisible(), true);
+            await page.getByText('Direct Connection — Recommended', { exact: false }).waitFor({ state: 'visible' });
+            await page.getByText('Cloud Auto Trader', { exact: false }).waitFor({ state: 'visible' });
+            assert.equal(await page.getByText('Direct Connection — Recommended', { exact: false }).isVisible(), true);
+            assert.equal(await page.getByText('Cloud Auto Trader', { exact: false }).isVisible(), true);
 
             await page.getByRole('button', { name: 'Routing', exact: true }).click();
             assert.equal(await page.locator('#destinationType option[value="telegram"]').evaluate(option => option.hidden), false);
