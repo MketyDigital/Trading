@@ -3,6 +3,7 @@ import { decryptSecret, encryptSecret } from './secret_box.js';
 const ALLOWED_CREDENTIAL_KEYS = Object.freeze({
   mtproto: Object.freeze(['apiId', 'apiHash', 'session']),
   mt5: Object.freeze(['bridgeUrl', 'bridgeSecret']),
+  mt5_cloud: Object.freeze(['login', 'server', 'password']),
   ctrader: Object.freeze(['clientId', 'clientSecret', 'accessToken', 'refreshToken']),
 });
 
