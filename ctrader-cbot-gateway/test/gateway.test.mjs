@@ -67,6 +67,10 @@ test('gateway authenticates a cBot, correlates a result, rejects replay, and fai
   const controlBase = `http://127.0.0.1:${controlPort}`;
   await waitForHttp(`${controlBase}/v1/connections/${accountRowId}`, controlSecret);
 
+  const healthResponse = await fetch(`${controlBase}/health`);
+  assert.equal(healthResponse.status, 200);
+  assert.deepEqual(await healthResponse.json(), { ok: true, service: 'mkety-ctrader-cbot-gateway' });
+
   const token = createConnectionToken({ accountRowId, expiresAt: Date.now() + 60_000 }, signingKey);
   const socket = new WebSocket(`ws://127.0.0.1:${wsPort}/v1/cbot`);
   t.after(() => socket.close());
