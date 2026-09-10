@@ -14,6 +14,7 @@ on:
       - 'ctrader-cbot-gateway/**'
       - 'ctrader-cbot/**'
       - '.github/workflows/ctrader-cbot-ci.yml'
+      - '.github/workflows/production-cloudflare-deploy.yml'
   push:
     branches: [main]
     paths:
@@ -28,6 +29,7 @@ on:
       - 'ctrader-cbot-gateway/**'
       - 'ctrader-cbot/**'
       - '.github/workflows/ctrader-cbot-ci.yml'
+      - '.github/workflows/production-cloudflare-deploy.yml'
 
 permissions:
   contents: read
@@ -68,6 +70,26 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm test
 
+  deployment-stack:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ctrader-cbot-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gateway container
+        run: docker build -t mkety-ctrader-cbot-gateway:ci .
+      - name: Build TLS edge container
+        run: docker build -f deploy/coolify/Dockerfile.caddy -t mkety-ctrader-cbot-caddy:ci .
+      - name: Validate Coolify Compose model
+        env:
+          CBOT_PUBLIC_HOST: cbot.example.test
+          ACME_EMAIL: ci@example.test
+          CLOUDFLARE_DNS_API_TOKEN: ci-placeholder
+          CBOT_TOKEN_SIGNING_KEY: ci-signing-placeholder
+          CBOT_CONTROL_SECRET: ci-control-placeholder
+        run: docker compose -f deploy/coolify/docker-compose.yml config --quiet
+
   cbot-build:
     runs-on: ubuntu-latest
     steps:
@@ -79,3 +101,9 @@ jobs:
         run: dotnet restore ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj
       - name: Build Mkety Cloud Auto Trader
         run: dotnet build ctrader-cbot/MketyCloudAutoTrader/MketyCloudAutoTrader.csproj --configuration Release --no-restore -p:AlgoPublish=false
+      - name: Verify distributable .algo was generated
+        shell: bash
+        run: |
+          algo="$(find ctrader-cbot/MketyCloudAutoTrader -type f -name '*.algo' -print -quit)"
+          test -n "$algo"
+          test -s "$algo"
