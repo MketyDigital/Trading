@@ -67,7 +67,7 @@ test('cTrader cBot destination uses its server-side gateway credentials instead 
 
   assert.equal(result.brokerPositionId, 'cbot-position-1');
   assert.deepEqual(seen.decrypt, {
-    kind: 'ctrader',
+    kind: 'ctrader_cbot',
     ciphertext: 'encrypted-cbot-envelope',
     masterKey: 'master-key',
   });
