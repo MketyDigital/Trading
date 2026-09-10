@@ -41,9 +41,9 @@ export async function createCTraderCbotConnectionToken({
   return `v1.${payload}.${toBase64Url(signature)}`;
 }
 
-export function buildCTraderCbotEnvelope({ commandId, workspaceId, accountId, issuedAt = Date.now(), ttlMs = 15000, command } = {}) {
-  if (!commandId || !workspaceId || !accountId || !command?.action) {
-    throw new TypeError('commandId, workspaceId, accountId and command.action are required');
+export function buildCTraderCbotEnvelope({ commandId, workspaceId, accountId, brokerAccountId, issuedAt = Date.now(), ttlMs = 15000, command } = {}) {
+  if (!commandId || !workspaceId || !accountId || !brokerAccountId || !command?.action) {
+    throw new TypeError('commandId, workspaceId, accountId, brokerAccountId and command.action are required');
   }
   const issued = Number(issuedAt);
   const ttl = Number(ttlMs);
@@ -53,6 +53,7 @@ export function buildCTraderCbotEnvelope({ commandId, workspaceId, accountId, is
     command_id: String(commandId),
     workspace_id: String(workspaceId),
     account_id: String(accountId),
+    broker_account_id: String(brokerAccountId),
     issued_at: issued,
     expires_at: issued + ttl,
     command,
@@ -65,13 +66,16 @@ export async function signCTraderCbotBody(rawBody, secret) {
   return `v1=${toHex(signature)}`;
 }
 
-export function validateCTraderCbotEnvelope(envelope, { nowMs = Date.now(), expectedAccountId = null, maxFutureSkewMs = 30000 } = {}) {
+export function validateCTraderCbotEnvelope(envelope, { nowMs = Date.now(), expectedAccountId = null, expectedBrokerAccountId = null, maxFutureSkewMs = 30000 } = {}) {
   if (envelope?.version !== 'mkety.ctrader.cbot.v1') return { ok: false, reason: 'UNSUPPORTED_VERSION' };
-  if (!envelope?.command_id || !envelope?.workspace_id || !envelope?.account_id || !envelope?.command?.action) {
+  if (!envelope?.command_id || !envelope?.workspace_id || !envelope?.account_id || !envelope?.broker_account_id || !envelope?.command?.action) {
     return { ok: false, reason: 'MISSING_SCOPE_OR_COMMAND' };
   }
   if (expectedAccountId != null && String(envelope.account_id) !== String(expectedAccountId)) {
     return { ok: false, reason: 'ACCOUNT_MISMATCH' };
+  }
+  if (expectedBrokerAccountId != null && String(envelope.broker_account_id) !== String(expectedBrokerAccountId)) {
+    return { ok: false, reason: 'BROKER_ACCOUNT_MISMATCH' };
   }
   const now = Number(nowMs);
   const issuedAt = Number(envelope.issued_at);
