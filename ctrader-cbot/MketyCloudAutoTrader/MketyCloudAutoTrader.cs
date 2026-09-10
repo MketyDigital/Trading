@@ -108,10 +108,16 @@ public class MketyCloudAutoTrader : Robot
     {
         var commandId = Text(envelope, "command_id");
         var accountId = Text(envelope, "account_id");
+        var brokerAccountId = Text(envelope, "broker_account_id");
         var expiresAt = Long(envelope, "expires_at");
         if (string.IsNullOrWhiteSpace(commandId) || string.IsNullOrWhiteSpace(_accountRowId) || accountId != _accountRowId)
         {
             Reply(commandId, false, "ACCOUNT_OR_COMMAND_INVALID");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(brokerAccountId) || brokerAccountId != Account.Number.ToString())
+        {
+            Reply(commandId, false, "BROKER_ACCOUNT_MISMATCH");
             return;
         }
         if (expiresAt < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
