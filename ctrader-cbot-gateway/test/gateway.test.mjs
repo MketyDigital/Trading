@@ -27,12 +27,13 @@ async function waitForHttp(url, secret, timeoutMs = 5000) {
   throw new Error('gateway did not become ready');
 }
 
-function command(id, accountRowId) {
+function command(id, accountRowId, brokerAccountId = '12345678') {
   const now = Date.now();
   return {
     version: 'mkety.ctrader.cbot.v1',
     command_id: id,
     account_id: accountRowId,
+    broker_account_id: brokerAccountId,
     issued_at: now,
     expires_at: now + 30_000,
     command: { action: 'OPEN_POSITION', symbol: 'EURUSD', side: 'BUY', lots: 0.01 },
@@ -44,7 +45,7 @@ async function readMessage(socket) {
   return JSON.parse(data.toString());
 }
 
-test('gateway authenticates a cBot, correlates a result, rejects replay, and fails closed offline', async (t) => {
+test('gateway authenticates a cBot, binds broker identity, correlates a result, rejects replay, and fails closed offline', async (t) => {
   const wsPort = await freePort();
   const controlPort = await freePort();
   const signingKey = 'test-signing-key';
@@ -87,6 +88,14 @@ test('gateway authenticates a cBot, correlates a result, rejects replay, and fai
   assert.equal(auth.type, 'auth_ok');
   assert.equal(auth.accountRowId, accountRowId);
 
+  const mismatchResponse = await fetch(`${controlBase}/v1/commands/${accountRowId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(command('cmd-wrong-account', accountRowId, '87654321')),
+  });
+  assert.equal(mismatchResponse.status, 409);
+  assert.equal((await mismatchResponse.json()).reason, 'CBOT_BROKER_ACCOUNT_MISMATCH');
+
   const firstCommand = command('cmd-e2e-1', accountRowId);
   const firstRequest = fetch(`${controlBase}/v1/commands/${accountRowId}`, {
     method: 'POST',
@@ -96,6 +105,7 @@ test('gateway authenticates a cBot, correlates a result, rejects replay, and fai
   const delivered = await readMessage(socket);
   assert.equal(delivered.type, 'command');
   assert.equal(delivered.envelope.command_id, firstCommand.command_id);
+  assert.equal(delivered.envelope.broker_account_id, '12345678');
   socket.send(JSON.stringify({ type: 'result', commandId: firstCommand.command_id, ok: true, positionId: 77 }));
   const firstResponse = await firstRequest;
   assert.equal(firstResponse.status, 200);
