@@ -3,8 +3,9 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AlgoPublish>false</AlgoPublish>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="cTrader.Automate" Version="1.*" />
+    <PackageReference Include="cTrader.Automate" Version="1.0.19" />
   </ItemGroup>
 </Project>
