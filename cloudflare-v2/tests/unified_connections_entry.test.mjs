@@ -35,6 +35,17 @@ test('portal response receives unified connection management UI while preserving
   assert.match(html, /Remove/);
 });
 
+test('unified connections client script is valid browser JavaScript after HTML composition', async () => {
+  const worker = createTradingConnectionsEntrypoint({
+    base: { fetch: async () => response('<html><body><div id="accountRows"></div></body></html>', 'text/html; charset=utf-8') },
+  });
+  const r = await worker.fetch(new Request('https://trade.mkety.com/'), {}, {});
+  const html = await r.text();
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
+  assert.ok(scripts.length > 0, 'unified connections composition must inject a client script');
+  assert.doesNotThrow(() => new Function(scripts.at(-1)), 'injected unified-connections script must parse as JavaScript');
+});
+
 test('deployment configs keep the broker master execution fuse off through the unified entry', () => {
   for (const filename of ['wrangler.toml', 'wrangler.free.toml']) {
     const toml = fs.readFileSync(path.resolve(here, '..', filename), 'utf8');
