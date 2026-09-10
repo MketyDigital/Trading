@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+import * as cbotProtocol from '../src/adapters/ctrader_cbot_protocol.js';
+import { verifyConnectionToken } from '../../ctrader-cbot-gateway/src/protocol.js';
+
+const {
   buildCTraderCbotEnvelope,
   validateCTraderCbotEnvelope,
   signCTraderCbotBody,
-} from '../src/adapters/ctrader_cbot_protocol.js';
+} = cbotProtocol;
 
 test('cBot command envelope is account-bound and expires', () => {
   const envelope = buildCTraderCbotEnvelope({
@@ -35,4 +38,20 @@ test('cBot command signature is deterministic HMAC', async () => {
   const second = await signCTraderCbotBody(body, 'shared-secret');
   assert.equal(first, second);
   assert.match(first, /^v1=[a-f0-9]{64}$/);
+});
+
+test('Worker creates a gateway-compatible account-bound cBot connection token', async () => {
+  assert.equal(typeof cbotProtocol.createCTraderCbotConnectionToken, 'function');
+  const token = await cbotProtocol.createCTraderCbotConnectionToken({
+    accountRowId: 'acct-cbot-1',
+    signingKey: 'gateway-signing-key',
+    issuedAt: 1_000,
+    ttlMs: 60_000,
+    nonce: 'nonce-1',
+  });
+  const verified = verifyConnectionToken(token, 'gateway-signing-key', 30_000);
+  assert.equal(verified.ok, true);
+  assert.equal(verified.payload.a, 'acct-cbot-1');
+  assert.equal(verified.payload.e, 61_000);
+  assert.equal(verified.payload.n, 'nonce-1');
 });
