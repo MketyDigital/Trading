@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
-import { encryptConnectionCredentials } from '../security/connection_credentials.js';
+import { decryptConnectionCredentials, encryptConnectionCredentials } from '../security/connection_credentials.js';
 import { createCTraderCbotConnectionToken } from '../adapters/ctrader_cbot_protocol.js';
 
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
@@ -174,9 +174,96 @@ async function createConnection(request, authorization, supabase, env) {
   }, 201);
 }
 
+async function syncConnection(accountRowId, authorization, supabase, env, fetchFn) {
+  if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
+    return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  }
+  if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'ACCOUNT_ENCRYPTION_NOT_CONFIGURED' }, 503);
+  const workspaceId = String(authorization.workspace.id);
+  const { data: current, error: readError } = await supabase
+    .from('trade_accounts')
+    .select(ACCOUNT_SELECT)
+    .eq('workspace_id', workspaceId)
+    .eq('id', accountRowId)
+    .maybeSingle();
+  if (readError) return json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503);
+  if (!current) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+  if (String(current.platform || '').toLowerCase() !== 'ctrader' || String(current.provider_mode || '').toLowerCase() !== 'ctrader_cbot') {
+    return json({ ok: false, reason: 'CTRADER_CBOT_ACCOUNT_REQUIRED' }, 409);
+  }
+
+  let credentials;
+  try {
+    credentials = await decryptConnectionCredentials('ctrader_cbot', current.credential_ciphertext, env.TRADING_MASTER_KEY);
+  } catch {
+    return json({ ok: false, reason: 'CTRADER_CBOT_CREDENTIALS_UNAVAILABLE' }, 503);
+  }
+
+  let gatewayUrl;
+  try { gatewayUrl = normalizeHttpsUrl(credentials.gatewayUrl, 'CTRADER_CBOT_GATEWAY_URL'); }
+  catch { return json({ ok: false, reason: 'CTRADER_CBOT_CREDENTIALS_UNAVAILABLE' }, 503); }
+  const controlSecret = text(credentials.controlSecret);
+  if (!controlSecret) return json({ ok: false, reason: 'CTRADER_CBOT_CREDENTIALS_UNAVAILABLE' }, 503);
+
+  let gatewayResponse;
+  try {
+    gatewayResponse = await fetchFn(`${gatewayUrl}/v1/connections/${encodeURIComponent(accountRowId)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch {
+    return json({ ok: false, reason: 'CTRADER_CBOT_GATEWAY_UNAVAILABLE' }, 503);
+  }
+  let gateway;
+  try { gateway = await gatewayResponse.json(); }
+  catch { return json({ ok: false, reason: 'CTRADER_CBOT_GATEWAY_INVALID_RESPONSE' }, 503); }
+  if (!gatewayResponse.ok || gateway?.ok === false || gateway?.online !== true) {
+    return json({ ok: false, reason: gateway?.reason || 'CTRADER_CBOT_OFFLINE' }, gatewayResponse.status === 404 ? 409 : 503);
+  }
+  if (String(gateway.accountRowId || '') !== String(accountRowId)) {
+    return json({ ok: false, reason: 'CTRADER_CBOT_IDENTITY_MISMATCH' }, 409);
+  }
+  const identity = gateway.identity && typeof gateway.identity === 'object' ? gateway.identity : {};
+  const accountNumber = text(identity.accountNumber);
+  if (!accountNumber) return json({ ok: false, reason: 'CTRADER_CBOT_IDENTITY_INCOMPLETE' }, 409);
+  const observedEnvironment = identity.isLive === true ? 'live' : 'demo';
+  if (current.environment && String(current.environment).toLowerCase() !== observedEnvironment) {
+    return json({ ok: false, reason: 'CTRADER_CBOT_ENVIRONMENT_MISMATCH' }, 409);
+  }
+
+  const providerConfig = {
+    ...(current.provider_config && typeof current.provider_config === 'object' ? current.provider_config : {}),
+    status: 'connected',
+    gatewayManaged: true,
+    requiresCustomerVps: false,
+    websocketPort: 25345,
+    brokerName: text(identity.brokerName),
+    cloudInstanceId: text(identity.instanceId),
+    connectedAt: Number.isFinite(Number(gateway.connectedAt)) ? new Date(Number(gateway.connectedAt)).toISOString() : null,
+    lastHeartbeatAt: Number.isFinite(Number(gateway.lastHeartbeatAt)) ? new Date(Number(gateway.lastHeartbeatAt)).toISOString() : null,
+  };
+  const patch = {
+    account_id: accountNumber,
+    environment: observedEnvironment,
+    server_name: observedEnvironment,
+    provider_config: providerConfig,
+  };
+  const { data: updated, error: updateError } = await supabase
+    .from('trade_accounts')
+    .update(patch)
+    .eq('workspace_id', workspaceId)
+    .eq('id', accountRowId)
+    .select(ACCOUNT_SELECT)
+    .maybeSingle();
+  if (updateError || !updated) return json({ ok: false, reason: 'CTRADER_CBOT_SYNC_FAILED' }, 503);
+  return json({ ok: true, account: publicAccount(updated) });
+}
+
 export async function handleV1AdminCTraderCbotRequest(request, env = {}, {
   supabaseFactory = defaultSupabase,
   authorizeFn = authorizeV1AdminRequest,
+  fetchFn = fetch,
 } = {}) {
   let supabase;
   try { supabase = await supabaseFactory(env); }
@@ -190,6 +277,14 @@ export async function handleV1AdminCTraderCbotRequest(request, env = {}, {
   if (url.pathname === '/api/v1/admin/connections/ctrader/cbot') {
     if (request.method === 'POST') return createConnection(request, authorization, supabase, env);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+  }
+  const syncMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/ctrader\/cbot\/([^/]+)\/sync$/);
+  if (syncMatch) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    let accountRowId;
+    try { accountRowId = decodeURIComponent(syncMatch[1]); }
+    catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
+    return syncConnection(accountRowId, authorization, supabase, env, fetchFn);
   }
   return json({ ok: false, reason: 'CTRADER_CBOT_ROUTE_NOT_FOUND' }, 404);
 }
