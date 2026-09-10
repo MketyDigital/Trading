@@ -125,10 +125,13 @@ jobs:
             }
 
             await page.getByRole('button', { name: 'Connections', exact: true }).click();
-            await page.getByText('Signal sources', { exact: true }).waitFor({ state: 'visible' });
-            await page.getByText('Broker connection', { exact: true }).waitFor({ state: 'visible' });
-            assert.equal(await page.locator('#createSourceBtn').isVisible(), true);
-            assert.equal(await page.locator('#createAccountBtn').isVisible(), true);
+            await page.getByText('Trading account connections', { exact: true }).waitFor({ state: 'visible' });
+            await page.getByText('Manage signal inputs', { exact: true }).waitFor({ state: 'visible' });
+            assert.equal(await page.locator('#unifiedConnectionsPanel').isVisible(), true);
+            assert.equal(await page.locator('#connectCTraderBtn').isVisible(), true);
+            assert.equal(await page.locator('#showMt5BridgeBtn').isVisible(), true);
+            assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), true);
+            assert.equal(await page.locator('#unifiedSourceManager').isVisible(), true);
 
             await page.getByRole('button', { name: 'Routing', exact: true }).click();
             assert.equal(await page.locator('#destinationType option[value="telegram"]').evaluate(option => option.hidden), false);
