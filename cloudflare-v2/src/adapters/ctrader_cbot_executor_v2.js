@@ -46,10 +46,46 @@ async function persistFailure(deliveryStore, key, error, nowMs, retryDelayMs) {
   await deliveryStore.fail(key, failure);
 }
 
+async function loadAuthenticatedIdentity({ baseUrl, accountRowId, controlSecret, fetchFn }) {
+  let response;
+  try {
+    response = await fetchFn(`${baseUrl}/v1/connections/${encodeURIComponent(accountRowId)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (cause) {
+    throw classifiedError('cTrader Cloud Auto Trader identity is unavailable', {
+      code: 'CTRADER_CBOT_IDENTITY_UNAVAILABLE', failureClass: 'RETRYABLE', cause,
+    });
+  }
+  let data = {};
+  try { data = await response.json(); }
+  catch (cause) {
+    throw classifiedError('cTrader Cloud Auto Trader identity response unreadable', {
+      code: 'CTRADER_CBOT_IDENTITY_UNAVAILABLE', failureClass: 'RETRYABLE', cause,
+    });
+  }
+  const reason = String(data?.reason || '');
+  if (!response.ok || data?.ok === false || data?.online !== true) {
+    if (reason === 'CBOT_OFFLINE' || response.status === 404) {
+      throw classifiedError('cTrader Cloud Auto Trader is offline', { code: 'CTRADER_CBOT_OFFLINE', failureClass: 'RETRYABLE' });
+    }
+    throw classifiedError('cTrader Cloud Auto Trader identity is unavailable', { code: 'CTRADER_CBOT_IDENTITY_UNAVAILABLE', failureClass: 'RETRYABLE' });
+  }
+  if (String(data?.accountRowId ?? '') !== String(accountRowId)) {
+    throw classifiedError('cTrader cBot gateway returned the wrong Mkety account', { code: 'CTRADER_CBOT_ACCOUNT_MISMATCH', failureClass: 'TERMINAL' });
+  }
+  const brokerAccountId = String(data?.identity?.accountNumber ?? '').trim();
+  if (!brokerAccountId) {
+    throw classifiedError('cTrader Cloud Auto Trader broker identity is missing', { code: 'CTRADER_CBOT_IDENTITY_UNAVAILABLE', failureClass: 'RETRYABLE' });
+  }
+  return brokerAccountId;
+}
+
 export async function executeCTraderCbotAction(action, {
   workspaceId,
   accountRowId,
-  brokerAccountId,
   gatewayUrl,
   controlSecret,
   deliveryStore,
@@ -59,10 +95,10 @@ export async function executeCTraderCbotAction(action, {
   retryDelayMs = 15000,
 } = {}) {
   if (!workspaceId || !accountRowId || !controlSecret) throw new TypeError('workspace/account/gateway control configuration required');
-  if (!String(brokerAccountId ?? '').trim()) throw new TypeError('brokerAccountId required for cTrader cBot execution');
   if (!action?.idempotencyKey) throw new TypeError('idempotencyKey required for cTrader cBot execution');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) throw new TypeError('deliveryStore reserve/complete/fail required');
   const baseUrl = normalizeGatewayUrl(gatewayUrl);
+  const brokerAccountId = await loadAuthenticatedIdentity({ baseUrl, accountRowId, controlSecret, fetchFn });
 
   const reservation = await deliveryStore.reserve(action.idempotencyKey, { destinationType: 'ctrader_cbot', action });
   if (reservation?.duplicate) return { duplicate: true, ...(reservation.result || {}) };
