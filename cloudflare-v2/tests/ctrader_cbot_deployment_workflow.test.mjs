@@ -24,6 +24,23 @@ test('production Worker deploy wires cBot URLs and secrets atomically without en
   assert.doesNotMatch(workflow, /CTRADER_LIVE_TRADING_ENABLED:\s*true/i);
 });
 
+test('production Worker deploy automatically follows relevant main changes instead of a magic commit message', () => {
+  const workflow = read('.github/workflows/production-cloudflare-deploy.yml');
+  assert.match(workflow, /- 'cloudflare-v2\/\*\*'/);
+  assert.match(workflow, /- 'ctrader-cbot-gateway\/\*\*'/);
+  assert.match(workflow, /- 'ctrader-cbot\/\*\*'/);
+  assert.doesNotMatch(workflow, /github\.event\.head_commit\.message\s*==/);
+});
+
+test('production frontend E2E explicitly checks cTrader Direct, Cloud Auto Trader, and MT5 setup controls', () => {
+  const workflow = read('.github/workflows/production-frontend-e2e.yml');
+  assert.match(workflow, /Direct Connection — Recommended/);
+  assert.match(workflow, /Cloud Auto Trader/);
+  assert.match(workflow, /connectCTraderBtn/);
+  assert.match(workflow, /showMt5BridgeBtn/);
+  assert.match(workflow, /showMt5CloudBtn/);
+});
+
 test('Coolify stack keeps control API private and publishes only cTrader Cloud TLS port 25345', () => {
   const compose = read('ctrader-cbot-gateway/deploy/coolify/docker-compose.yml');
   const caddy = read('ctrader-cbot-gateway/deploy/coolify/Caddyfile');
