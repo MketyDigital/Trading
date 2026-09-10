@@ -1,0 +1,46 @@
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      CBOT_WS_HOST: 0.0.0.0
+      CBOT_WS_PORT: 25346
+      CBOT_CONTROL_HOST: 0.0.0.0
+      CBOT_CONTROL_PORT: 8790
+      CBOT_COMMAND_TIMEOUT_MS: ${CBOT_COMMAND_TIMEOUT_MS:-8000}
+      CBOT_TOKEN_SIGNING_KEY: ${CBOT_TOKEN_SIGNING_KEY:?required}
+      CBOT_CONTROL_SECRET: ${CBOT_CONTROL_SECRET:?required}
+    expose:
+      - "25346"
+      - "8790"
+    networks:
+      - cbot
+
+  caddy:
+    build:
+      context: ../..
+      dockerfile: deploy/coolify/Dockerfile.caddy
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      CBOT_PUBLIC_HOST: ${CBOT_PUBLIC_HOST:?required}
+      ACME_EMAIL: ${ACME_EMAIL:?required}
+      CLOUDFLARE_DNS_API_TOKEN: ${CLOUDFLARE_DNS_API_TOKEN:?required}
+    ports:
+      - "25345:25345/tcp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - cbot
+
+networks:
+  cbot:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
