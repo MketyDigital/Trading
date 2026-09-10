@@ -352,7 +352,7 @@ export function createProductionExecutionDependencies({
     await Promise.all(entries.map(async (entry) => closeCTraderRuntime(entry?.runtime)));
   }
 
-  async function loadAccountCredentials(account, expectedPlatform) {
+  async function loadAccountCredentials(account, expectedPlatform, credentialKind = expectedPlatform) {
     assertBoundAccount(account, boundWorkspaceId);
     const platform = platformOf(account);
     if (platform !== expectedPlatform) throw new Error('production broker credential platform mismatch');
@@ -362,7 +362,7 @@ export function createProductionExecutionDependencies({
       'trade account credential_ciphertext',
     );
     try {
-      return await decryptCredentialsFn(expectedPlatform, ciphertext, masterKey);
+      return await decryptCredentialsFn(credentialKind, ciphertext, masterKey);
     } catch {
       throw new Error('production broker credentials are unavailable');
     }
@@ -550,7 +550,7 @@ export function createProductionExecutionDependencies({
   }
 
   async function dispatchCTraderCbot(account, action, groupId) {
-    const credentials = await loadAccountCredentials(account, 'ctrader');
+    const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
     const gatewayUrl = required(credentials.gatewayUrl, 'trade account cTrader cBot gatewayUrl');
     const controlSecret = required(credentials.controlSecret, 'trade account cTrader cBot controlSecret');
     const environment = environmentOf(account);
