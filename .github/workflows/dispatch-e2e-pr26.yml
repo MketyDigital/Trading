@@ -1,4 +1,4 @@
-name: Dispatch Production E2E PR26
+name: Dispatch Production Browser Acceptance
 
 on:
   push:
