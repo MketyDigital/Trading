@@ -15,6 +15,7 @@ if (!signingKey || !controlSecret) {
 
 const sessions = new Map();
 const pending = new Map();
+const delivered = new Map();
 
 function json(response, status, body) {
   const raw = JSON.stringify(body);
@@ -50,6 +51,16 @@ function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
   const current = sessions.get(socket.mketyAccountRowId);
   if (current?.socket === socket) sessions.delete(socket.mketyAccountRowId);
+}
+
+function commandKey(accountRowId, commandId) {
+  return `${accountRowId}:${commandId}`;
+}
+
+function pruneDelivered(now = Date.now()) {
+  for (const [key, expiresAt] of delivered.entries()) {
+    if (expiresAt < now) delivered.delete(key);
+  }
 }
 
 const wsServer = new WebSocketServer({ port: wsPort, path: '/v1/cbot' });
@@ -99,7 +110,7 @@ wsServer.on('connection', (socket) => {
     }
 
     if (message?.type === 'result' && message.commandId) {
-      const key = `${socket.mketyAccountRowId}:${message.commandId}`;
+      const key = commandKey(socket.mketyAccountRowId, message.commandId);
       const waiter = pending.get(key);
       if (!waiter) return;
       pending.delete(key);
@@ -146,9 +157,12 @@ const controlServer = http.createServer(async (request, response) => {
     const session = sessions.get(accountRowId);
     if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 409, { ok: false, reason: 'CBOT_OFFLINE' });
 
-    const key = `${accountRowId}:${envelope.command_id}`;
+    const key = commandKey(accountRowId, envelope.command_id);
+    pruneDelivered();
     if (pending.has(key)) return json(response, 409, { ok: false, reason: 'COMMAND_ALREADY_PENDING' });
+    if (delivered.has(key)) return json(response, 409, { ok: false, reason: 'COMMAND_ALREADY_DELIVERED' });
 
+    delivered.set(key, Number(envelope.expires_at));
     try {
       const result = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
