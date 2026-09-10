@@ -9,6 +9,7 @@ TRADINGVIEW_CERT_PROBE_ENABLED = "false"
 TRADING_ACCESS_ENABLED = "false"
 BROKER_EXECUTION_ENABLED = "false"
 TRADING_CUSTOM_HOSTNAMES_ENABLED = "false"
+CTRADER_REDIRECT_URI = "https://trade.mkety.com/api/v1/integrations/ctrader/callback"
 MTPROTO_INTERNAL_SOURCE_URL = "https://mkety-copier-engine.dry-glitter-7e16.workers.dev/api/v1/internal/source-event"
 
 [[containers]]
