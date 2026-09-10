@@ -22,6 +22,12 @@ function constantTimeEqual(left, right) {
   return diff === 0;
 }
 
+function stableEndpointToken(request) {
+  const bearer = String(request.headers.get('Authorization') || '');
+  if (/^Bearer\s+/i.test(bearer)) return bearer.replace(/^Bearer\s+/i, '').trim();
+  return String(request.headers.get('X-Mkety-Source-Secret') || '').trim();
+}
+
 async function defaultResolveActiveSource(sourceId, env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
@@ -41,18 +47,19 @@ export async function handleExternalMtprotoEndpointRequest(request, env = {}, {
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
 
   const url = new URL(request.url);
-  const match = url.pathname.match(/^\/api\/v1\/external\/mtproto\/([^/]+)\/([^/]+)$/);
+  const match = url.pathname.match(/^\/api\/v1\/external\/mtproto\/([^/]+)(?:\/([^/]+))?$/);
   if (!match) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ROUTE_NOT_FOUND' }, 404);
 
   let sourceId;
   let endpointToken;
   try {
     sourceId = decodeURIComponent(match[1]);
-    endpointToken = decodeURIComponent(match[2]);
+    endpointToken = match[2] ? decodeURIComponent(match[2]) : stableEndpointToken(request);
   } catch {
     return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ENDPOINT_INVALID' }, 400);
   }
-  if (!sourceId || !endpointToken) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ENDPOINT_INVALID' }, 400);
+  if (!sourceId) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ENDPOINT_INVALID' }, 400);
+  if (!endpointToken) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_AUTH_REQUIRED' }, 401);
 
   let source;
   try {
