@@ -134,4 +134,4 @@ if (settings.custom_header) {
 * **If you want to adjust listener connection streams**: Edit only `/cloudflare-v2/src/listener/listener_node.js`.
 * **If you want to adjust API request/response structures**: Edit only `/cloudflare-v2/src/index.js`.
 
-This absolute modularity ensures that any edits you or AI models make in the future will be safely contained within the target module, keeping the rest of the application 100% green and error-free.
+This absolute modularity ensures that any edits you or AI models make in the future will be safely contained within the target module, keeping the rest of the application 100% green and error-free
