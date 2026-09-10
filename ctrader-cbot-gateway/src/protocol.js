@@ -44,7 +44,7 @@ export function verifyConnectionToken(token, signingKey, nowMs = Date.now()) {
 }
 
 export function validateCommand(envelope, expectedAccountId, nowMs = Date.now()) {
-  if (envelope?.version !== 'mkety.ctrader.cbot.v1' || !envelope?.command_id || !envelope?.account_id || !envelope?.command?.action) {
+  if (envelope?.version !== 'mkety.ctrader.cbot.v1' || !envelope?.command_id || !envelope?.account_id || !envelope?.broker_account_id || !envelope?.command?.action) {
     return { ok: false, reason: 'COMMAND_INVALID' };
   }
   if (String(envelope.account_id) !== String(expectedAccountId)) return { ok: false, reason: 'ACCOUNT_MISMATCH' };
