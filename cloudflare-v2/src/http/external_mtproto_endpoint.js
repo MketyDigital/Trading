@@ -72,13 +72,16 @@ function normalizeExternalMtprotoBody(rawBody) {
   if (!identity) return rawBody;
 
   const native = payload.metadata?.native_identity;
-  if (cleanIdentityPart(native?.chat_id) && cleanIdentityPart(native?.message_id)) return rawBody;
+  const hasCanonicalNativeIdentity = cleanIdentityPart(native?.chat_id) && cleanIdentityPart(native?.message_id);
+  const hasExternalEventId = cleanIdentityPart(payload.external_event_id);
+  if (hasCanonicalNativeIdentity && hasExternalEventId) return rawBody;
 
   return JSON.stringify({
     ...payload,
+    ...(hasExternalEventId ? {} : { external_event_id: `telegram:${identity.chat_id}:${identity.message_id}` }),
     metadata: {
       ...(payload.metadata || {}),
-      native_identity: identity,
+      ...(hasCanonicalNativeIdentity ? {} : { native_identity: identity }),
     },
   });
 }
