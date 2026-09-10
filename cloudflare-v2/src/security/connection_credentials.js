@@ -5,7 +5,7 @@ const ALLOWED_CREDENTIAL_KEYS = Object.freeze({
   mt5: Object.freeze(['bridgeUrl', 'bridgeSecret']),
   mt5_cloud: Object.freeze(['login', 'server', 'password']),
   ctrader: Object.freeze(['clientId', 'clientSecret', 'accessToken', 'refreshToken']),
-  ctrader_cbot: Object.freeze(['connectionToken', 'gatewayUrl']),
+  ctrader_cbot: Object.freeze(['connectionToken', 'gatewayUrl', 'controlSecret']),
 });
 
 function normalizeCredentialValue(value) {
