@@ -171,7 +171,7 @@ test('scheduled handler remains delegated to legacy Worker', async () => {
   assert.equal(called, true);
 });
 
-test('Cloudflare entrypoint switches through the V1 wrapper while legacy Worker remains intact', async () => {
+test('Cloudflare entrypoint switches through the unified connections wrapper while V1 remains intact underneath', async () => {
   const wrangler = await fs.readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
-  assert.match(wrangler, /main\s*=\s*["']src\/v1_entry\.js["']/);
+  assert.match(wrangler, /main\s*=\s*["']src\/v1_connections_entry\.js["']/);
 });
