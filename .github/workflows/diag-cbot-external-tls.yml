@@ -1,0 +1,33 @@
+name: Diagnose cBot External TLS
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/diag-cbot-external-tls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify DNS, TCP 25345 and TLS certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'DNS A records:'
+          dig +short A cbot.mkety.com
+          test -n "$(dig +short A cbot.mkety.com | head -1)" || { echo 'No A record for cbot.mkety.com'; exit 1; }
+
+          echo 'TCP connectivity:'
+          timeout 10 bash -c '</dev/tcp/cbot.mkety.com/25345'
+          echo 'TCP 25345 reachable.'
+
+          echo | timeout 15 openssl s_client -connect cbot.mkety.com:25345 -servername cbot.mkety.com -verify_hostname cbot.mkety.com -verify_return_error > /tmp/tls.txt 2>&1
+          grep -E 'Verify return code: 0|Verification: OK' /tmp/tls.txt >/dev/null || { tail -80 /tmp/tls.txt; exit 1; }
+          openssl s_client -connect cbot.mkety.com:25345 -servername cbot.mkety.com </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+          echo 'External TLS on cbot.mkety.com:25345 verified.'
