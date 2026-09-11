@@ -1,0 +1,89 @@
+name: Capture Coolify cBot Live Restart Logs
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/diag-coolify-live-restart-capture.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Restart asynchronously and capture live service logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          uuid="$(python - <<'PY'
+          import json
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
+          print(rows[0]['uuid'])
+          PY
+          )"
+          echo "Application UUID: $uuid"
+
+          : >/tmp/gateway.live
+          : >/tmp/caddy.live
+          : >/tmp/statuses.live
+
+          # Fire restart without blocking the capture loop.
+          (curl -sS -X POST "$api/applications/$uuid/restart" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Accept: application/json' >/tmp/restart-response.json 2>/tmp/restart-error.log || true) &
+          restart_pid=$!
+
+          for attempt in $(seq 1 160); do
+            app_code="$(curl -sS -o /tmp/app-now.json -w '%{http_code}' "$api/applications/$uuid" -H "Authorization: Bearer $COOLIFY_TOKEN" || true)"
+            if [ "$app_code" = 200 ]; then
+              status="$(python -c "import json; print(json.load(open('/tmp/app-now.json')).get('status',''))" 2>/dev/null || true)"
+              echo "$attempt $status" >> /tmp/statuses.live
+            fi
+            for service in gateway caddy; do
+              out="/tmp/${service}.try"
+              code="$(curl -sS -o "$out" -w '%{http_code}' \
+                "$api/applications/$uuid/logs?lines=250&service_name=$service&show_timestamps=true" \
+                -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' || true)"
+              if [ "$code" = 200 ] && [ -s "$out" ]; then
+                python - "$out" "/tmp/${service}.live" <<'PY'
+          import json,sys,pathlib
+          src,dst=sys.argv[1:]
+          try:
+              b=json.load(open(src))
+              text=b.get('logs','') if isinstance(b,dict) else str(b)
+          except Exception:
+              text=pathlib.Path(src).read_text(errors='replace')
+          if text:
+              pathlib.Path(dst).write_text(text)
+          PY
+              fi
+            done
+            sleep 0.15
+          done
+          wait "$restart_pid" || true
+
+          echo '===== observed statuses ====='
+          awk '!seen[$2]++{print}' /tmp/statuses.live
+          for service in gateway caddy; do
+            echo "===== $service live logs ====="
+            python - "/tmp/${service}.live" <<'PY'
+          import pathlib,re,sys
+          p=pathlib.Path(sys.argv[1]); raw=p.read_text(errors='replace') if p.exists() else '<no logs captured>'
+          raw=re.sub(r"(?i)(API\s+token\s+')[^']+(')", r"\1[REDACTED]\2", raw)
+          raw=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+', r'\1[REDACTED]', raw)
+          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+', r'\1\2[REDACTED]', raw)
+          print(raw[-35000:])
+          PY
+          done
