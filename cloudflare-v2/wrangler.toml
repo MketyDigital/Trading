@@ -10,7 +10,12 @@ TRADING_ACCESS_ENABLED = "false"
 BROKER_EXECUTION_ENABLED = "false"
 TRADING_CUSTOM_HOSTNAMES_ENABLED = "false"
 CTRADER_REDIRECT_URI = "https://trade.mkety.com/api/v1/integrations/ctrader/callback"
+CTRADER_CBOT_GATEWAY_URL = "https://cbot.mkety.com:25345"
+CTRADER_CBOT_WS_URL = "wss://cbot.mkety.com:25345/v1/cbot"
 MTPROTO_INTERNAL_SOURCE_URL = "https://mkety-copier-engine.dry-glitter-7e16.workers.dev/api/v1/internal/source-event"
+
+[secrets]
+required = ["CBOT_TOKEN_SIGNING_KEY", "CBOT_CONTROL_SECRET"]
 
 [[containers]]
 class_name = "MtprotoContainerRuntime"
