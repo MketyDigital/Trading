@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS public.trade_accounts (
     account_label TEXT NOT NULL,
     platform TEXT NOT NULL CHECK (platform IN ('deriv', 'ctrader', 'mt5')),
     account_id TEXT NOT NULL,
-    api_token_encrypted TEXT NOT NULL,
+    api_token_encrypted TEXT,
     server_name TEXT,
     lot_sizing_type TEXT DEFAULT 'fixed' CHECK (lot_sizing_type IN ('fixed', 'multiplier', 'risk_percent')),
     lot_value NUMERIC DEFAULT 0.01,
