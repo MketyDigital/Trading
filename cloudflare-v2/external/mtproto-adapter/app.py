@@ -2,16 +2,14 @@ import asyncio
 import os
 
 from adapter import ExternalMtprotoAdapter
-from v1_sink import create_signed_v1_sink
+from v1_sink import create_collector_sink, create_signed_v1_sink
 
 
-REQUIRED_ENV = (
+COMMON_REQUIRED_ENV = (
     'TELEGRAM_API_ID',
     'TELEGRAM_API_HASH',
     'TELEGRAM_SESSION',
     'TRADING_ENDPOINT',
-    'TRADING_SOURCE_ID',
-    'TRADING_SOURCE_SECRET',
 )
 
 
@@ -23,35 +21,68 @@ def _parse_allowed_chat_ids(value):
     }
 
 
-def load_config(env=None):
-    source = os.environ if env is None else env
-    missing = [name for name in REQUIRED_ENV if not str(source.get(name, '')).strip()]
+def _required(source, names):
+    missing = [name for name in names if not str(source.get(name, '')).strip()]
     if missing:
         raise ValueError(f"Missing required configuration: {', '.join(missing)}")
+
+
+def load_config(env=None):
+    source = os.environ if env is None else env
+    _required(source, COMMON_REQUIRED_ENV)
 
     try:
         api_id = int(str(source['TELEGRAM_API_ID']).strip())
     except (TypeError, ValueError) as exc:
         raise ValueError('TELEGRAM_API_ID must be an integer') from exc
 
-    return {
+    collector_token = str(source.get('TRADING_COLLECTOR_TOKEN', '')).strip()
+    source_id = str(source.get('TRADING_SOURCE_ID', '')).strip()
+    source_secret = str(source.get('TRADING_SOURCE_SECRET', ''))
+    has_source_secret = bool(source_secret.strip())
+    allowed_chat_ids = _parse_allowed_chat_ids(source.get('ALLOWED_CHAT_IDS', ''))
+
+    if collector_token:
+        if source_id or has_source_secret:
+            raise ValueError('Use either TRADING_COLLECTOR_TOKEN or TRADING_SOURCE_ID/TRADING_SOURCE_SECRET, not both')
+        if allowed_chat_ids:
+            raise ValueError('ALLOWED_CHAT_IDS must be empty in shared collector mode; channel selection is database-authoritative')
+        transport_mode = 'collector'
+        runtime_source_id = str(source.get('MTPROTO_COLLECTOR_ID', '')).strip() or 'shared-mtproto-collector'
+    else:
+        _required(source, ('TRADING_SOURCE_ID', 'TRADING_SOURCE_SECRET'))
+        transport_mode = 'signed_source'
+        runtime_source_id = source_id
+
+    config = {
         'api_id': api_id,
         'api_hash': str(source['TELEGRAM_API_HASH']),
         'session_string': str(source['TELEGRAM_SESSION']),
         'trading_endpoint': str(source['TRADING_ENDPOINT']).strip(),
-        'source_id': str(source['TRADING_SOURCE_ID']).strip(),
-        'source_secret': str(source['TRADING_SOURCE_SECRET']),
+        'source_id': runtime_source_id,
+        'transport_mode': transport_mode,
         'account_scope': str(source.get('TELEGRAM_ACCOUNT_SCOPE', '')).strip() or None,
-        'allowed_chat_ids': _parse_allowed_chat_ids(source.get('ALLOWED_CHAT_IDS', '')),
+        'allowed_chat_ids': allowed_chat_ids,
     }
+    if transport_mode == 'collector':
+        config['collector_token'] = collector_token
+    else:
+        config['source_secret'] = source_secret
+    return config
 
 
 def build_adapter(config):
-    sink = create_signed_v1_sink(
-        endpoint=config['trading_endpoint'],
-        source_id=config['source_id'],
-        source_secret=config['source_secret'],
-    )
+    if config.get('transport_mode') == 'collector':
+        sink = create_collector_sink(
+            endpoint=config['trading_endpoint'],
+            collector_token=config['collector_token'],
+        )
+    else:
+        sink = create_signed_v1_sink(
+            endpoint=config['trading_endpoint'],
+            source_id=config['source_id'],
+            source_secret=config['source_secret'],
+        )
     return ExternalMtprotoAdapter(
         api_id=config['api_id'],
         api_hash=config['api_hash'],
