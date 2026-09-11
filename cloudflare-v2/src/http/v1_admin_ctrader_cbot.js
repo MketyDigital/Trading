@@ -3,6 +3,7 @@ import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { decryptConnectionCredentials, encryptConnectionCredentials } from '../security/connection_credentials.js';
 import { createCTraderCbotConnectionToken } from '../adapters/ctrader_cbot_protocol.js';
+import { providerConfigWithSymbolCatalog } from '../execution/account_symbol_catalog.js';
 
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
@@ -160,6 +161,7 @@ async function createConnection(request, authorization, supabase, env) {
       gatewayManaged: true,
       requiresCustomerVps: false,
       websocketPort: 25345,
+      symbolCatalog: [],
     },
   };
 
@@ -232,7 +234,7 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
     return json({ ok: false, reason: 'CTRADER_CBOT_ENVIRONMENT_MISMATCH' }, 409);
   }
 
-  const providerConfig = {
+  const baseProviderConfig = {
     ...(current.provider_config && typeof current.provider_config === 'object' ? current.provider_config : {}),
     status: 'connected',
     gatewayManaged: true,
@@ -243,6 +245,9 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
     connectedAt: Number.isFinite(Number(gateway.connectedAt)) ? new Date(Number(gateway.connectedAt)).toISOString() : null,
     lastHeartbeatAt: Number.isFinite(Number(gateway.lastHeartbeatAt)) ? new Date(Number(gateway.lastHeartbeatAt)).toISOString() : null,
   };
+  const providerConfig = providerConfigWithSymbolCatalog(baseProviderConfig, identity.symbols || [], {
+    updatedAt: Number.isFinite(Number(identity.symbolsUpdatedAt)) ? new Date(Number(identity.symbolsUpdatedAt)).toISOString() : new Date().toISOString(),
+  });
   const patch = {
     account_id: accountNumber,
     environment: observedEnvironment,
