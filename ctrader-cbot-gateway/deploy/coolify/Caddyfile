@@ -8,7 +8,7 @@
     dns cloudflare {$CLOUDFLARE_DNS_API_TOKEN}
   }
 
-  @mt5control path /v1/mt5-connections/* /v1/mt5-commands/*
+  @mt5control path /v1/mt5-connections/* /v1/mt5-commands/* /v1/mt5-context/*
   handle @mt5control {
     reverse_proxy gateway:8791
   }
