@@ -50,7 +50,37 @@ test('explicit alias must point to a symbol actually advertised by the connected
   assert.equal(result.reason, 'SYMBOL_ALIAS_TARGET_NOT_FOUND');
 });
 
-test('catalog sanitizer removes secrets/unknown fields, drops invalid rows and bounds size', () => {
+test('catalog sanitizer preserves broker risk economics while removing secrets and unknown fields', () => {
+  const safe = sanitizeAccountSymbolCatalog([{
+    platformSymbol: 'XAUUSD.r',
+    canonical: 'XAUUSD',
+    tradable: true,
+    minVolume: 0.01,
+    maxVolume: 100,
+    stepVolume: 0.01,
+    tickSize: 0.01,
+    tickValue: 1,
+    tickValueLoss: 1.2,
+    tickValueProfit: 0.9,
+    contractSize: 100,
+    currencyBase: 'XAU',
+    currencyProfit: 'USD',
+    currencyMargin: 'USD',
+    password: 'never',
+    token: 'never',
+  }]);
+  assert.equal(safe.length, 1);
+  assert.equal(safe[0].tickValueLoss, 1.2);
+  assert.equal(safe[0].tickValueProfit, 0.9);
+  assert.equal(safe[0].contractSize, 100);
+  assert.equal(safe[0].currencyBase, 'XAU');
+  assert.equal(safe[0].currencyProfit, 'USD');
+  assert.equal(safe[0].currencyMargin, 'USD');
+  assert.equal('password' in safe[0], false);
+  assert.equal('token' in safe[0], false);
+});
+
+test('catalog sanitizer drops invalid rows and bounds size', () => {
   const input = Array.from({ length: 2100 }, (_, index) => ({
     platformSymbol: `SYM${index}`,
     canonical: `SYM${index}`,
@@ -59,14 +89,10 @@ test('catalog sanitizer removes secrets/unknown fields, drops invalid rows and b
     minVolume: 0.01,
     maxVolume: 10,
     stepVolume: 0.01,
-    password: 'never',
-    token: 'never',
   }));
   input.unshift({ platformSymbol: '', canonical: 'INVALID' });
   const safe = sanitizeAccountSymbolCatalog(input);
   assert.equal(safe.length, 2000);
-  assert.equal('password' in safe[0], false);
-  assert.equal('token' in safe[0], false);
   assert.ok(safe.every((item) => item.platformSymbol));
 });
 
