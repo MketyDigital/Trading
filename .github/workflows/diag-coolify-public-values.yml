@@ -1,0 +1,42 @@
+name: Read Coolify cBot Public Values
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/diag-coolify-public-values.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Print only non-secret production values
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          uuid="$(python - <<'PY'
+          import json
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit('app resolution failed')
+          print(rows[0]['uuid'])
+          PY
+          )"
+          curl -fsS "$api/applications/$uuid/envs" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/envs.json
+          python - <<'PY'
+          import json
+          envs=json.load(open('/tmp/envs.json'))
+          def production(key):
+              rows=[e for e in envs if e.get('key')==key and not e.get('is_preview')]
+              if len(rows)!=1: raise SystemExit(f'{key} expected one production row, found {len(rows)}')
+              return rows[0].get('real_value') or rows[0].get('value') or ''
+          print('CBOT_PUBLIC_HOST='+production('CBOT_PUBLIC_HOST'))
+          print('ACME_EMAIL='+production('ACME_EMAIL'))
+          print('CBOT_COMMAND_TIMEOUT_MS='+production('CBOT_COMMAND_TIMEOUT_MS'))
+          PY
