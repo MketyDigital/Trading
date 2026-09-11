@@ -134,6 +134,35 @@ class ConnectorTests(unittest.TestCase):
             self.assertNotIn('account_id', loaded)
             self.assertNotIn('server', loaded)
 
+    def test_successful_pairing_replaces_local_pair_token_with_gateway_reconnect_token(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'connector.json'
+            module.save_local_config(path, {
+                'gateway_url': module.DEFAULT_GATEWAY,
+                'connection_token': 'mt5v1.pair.signature',
+                'connector_instance_id': 'instance-1',
+            })
+            connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, module.load_local_config(path),
+                                                  ledger_path=Path(td) / 'ledger.sqlite', config_path=path)
+            connector.handle_auth_ok({'type': 'auth_ok', 'accountRowId': 'row-1', 'reconnectToken': 'mt5r1.reconnect.signature'})
+            loaded = module.load_local_config(path)
+            self.assertEqual(loaded['connection_token'], 'mt5r1.reconnect.signature')
+            self.assertEqual(connector.config['connection_token'], 'mt5r1.reconnect.signature')
+            self.assertNotIn('mt5v1.pair.signature', path.read_text(encoding='utf-8'))
+
+    def test_reconnect_auth_without_rotation_keeps_existing_local_credential(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'connector.json'
+            module.save_local_config(path, {
+                'gateway_url': module.DEFAULT_GATEWAY,
+                'connection_token': 'mt5r1.reconnect.signature',
+                'connector_instance_id': 'instance-1',
+            })
+            connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, module.load_local_config(path),
+                                                  ledger_path=Path(td) / 'ledger.sqlite', config_path=path)
+            connector.handle_auth_ok({'type': 'auth_ok', 'accountRowId': 'row-1'})
+            self.assertEqual(module.load_local_config(path)['connection_token'], 'mt5r1.reconnect.signature')
+
     def test_envelope_rejects_wrong_broker_account_before_engine(self):
         with tempfile.TemporaryDirectory() as td:
             connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
