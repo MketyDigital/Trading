@@ -17,7 +17,7 @@ function cbotAction(accountId = 'acct-cbot-1') {
   };
 }
 
-test('cTrader cBot destination uses its server-side gateway credentials instead of Open API runtime', async () => {
+test('cTrader cBot destination uses server-side gateway credentials and persisted symbol fallback instead of Open API runtime', async () => {
   const seen = {};
   const account = {
     id: 'acct-cbot-1',
@@ -27,7 +27,11 @@ test('cTrader cBot destination uses its server-side gateway credentials instead 
     account_id: '987654',
     environment: 'demo',
     server_name: null,
-    provider_config: { status: 'connected' },
+    provider_config: {
+      status: 'connected',
+      symbolCatalog: [{ platformSymbol: 'XAUUSD.r', tradable: true }],
+      symbolAliases: { GOLD: 'XAUUSD.r' },
+    },
     credential_ciphertext: 'encrypted-cbot-envelope',
     is_active: true,
     execution_enabled: true,
@@ -81,6 +85,8 @@ test('cTrader cBot destination uses its server-side gateway credentials instead 
   assert.equal(seen.options.controlSecret, 'gateway-control-secret');
   assert.equal(seen.options.deliveryStore != null, true);
   assert.equal(seen.options.fetchFn, fetch);
+  assert.deepEqual(seen.options.symbolCatalog, [{ platformSymbol: 'XAUUSD.r', aliases: [], tradable: true }]);
+  assert.deepEqual(seen.options.symbolAliases, { GOLD: 'XAUUSD.r' });
   assert.deepEqual(seen.action, action);
   assert.deepEqual(seen.store, {
     workspaceId: 'ws-a',
