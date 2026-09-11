@@ -50,15 +50,25 @@ export function sanitizeAccountSymbolCatalog(input = []) {
       ['minVolume', raw.minVolume ?? raw.volumeMin ?? raw.volume_in_units_min],
       ['maxVolume', raw.maxVolume ?? raw.volumeMax ?? raw.volume_in_units_max],
       ['stepVolume', raw.stepVolume ?? raw.volumeStep ?? raw.volume_in_units_step],
+      ['minLots', raw.minLots ?? raw.minVolume ?? raw.volumeMin],
+      ['maxLots', raw.maxLots ?? raw.maxVolume ?? raw.volumeMax],
+      ['stepLots', raw.stepLots ?? raw.stepVolume ?? raw.volumeStep],
       ['lotSize', raw.lotSize],
       ['protocolLotSize', raw.protocolLotSize],
       ['tickSize', raw.tickSize],
-      ['tickValue', raw.tickValue],
+      ['tickValue', raw.tickValue ?? raw.tickValuePerLot],
+      ['tickValueLoss', raw.tickValueLoss ?? raw.tickValueLossPerLot],
+      ['tickValueProfit', raw.tickValueProfit ?? raw.tickValueProfitPerLot],
+      ['contractSize', raw.contractSize],
       ['pipSize', raw.pipSize],
       ['digits', raw.digits],
     ]) {
       const numeric = finiteOrNull(source);
       if (numeric !== null) item[target] = numeric;
+    }
+    for (const key of ['currencyBase', 'currencyProfit', 'currencyMargin']) {
+      const value = clean(raw[key]);
+      if (value) item[key] = value.slice(0, 32);
     }
     result.push(item);
     if (result.length >= MAX_CATALOG_SIZE) break;
