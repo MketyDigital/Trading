@@ -1,0 +1,110 @@
+name: Verify Fully Configured cBot Runtime
+
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/ops-verify-cbot-runtime-final.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Resolve app and assert production env is fully configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          python - <<'PY'
+          import json,os
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
+          a=rows[0]
+          print('App:',a.get('name'),a.get('uuid'),'initial_status=',a.get('status'))
+          open(os.environ['GITHUB_ENV'],'a').write(f"COOLIFY_APP_UUID={a['uuid']}\n")
+          PY
+          uuid="$(grep '^COOLIFY_APP_UUID=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          curl -fsS "$api/applications/$uuid/envs" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/envs.json
+          python - <<'PY'
+          import json
+          envs=json.load(open('/tmp/envs.json'))
+          required=['CBOT_PUBLIC_HOST','ACME_EMAIL','CLOUDFLARE_DNS_API_TOKEN','CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET']
+          def unquote(v):
+              if len(v)>=2 and v[0]==v[-1] and v[0] in "'\"": return v[1:-1]
+              return v
+          for key in required:
+              rows=[e for e in envs if e.get('key')==key and not e.get('is_preview')]
+              if len(rows)!=1: raise SystemExit(f'{key}: expected exactly one production row')
+              v=unquote(rows[0].get('real_value') or rows[0].get('value') or '')
+              if not v or v=='required': raise SystemExit(f'{key}: production value still missing/placeholder')
+              print(f'{key}: production configured; length={len(v)}')
+          host=unquote(next(e for e in envs if e.get('key')=='CBOT_PUBLIC_HOST' and not e.get('is_preview')).get('real_value') or '')
+          email=unquote(next(e for e in envs if e.get('key')=='ACME_EMAIL' and not e.get('is_preview')).get('real_value') or '')
+          if host!='cbot.mkety.com': raise SystemExit(f'Unexpected CBOT_PUBLIC_HOST: {host}')
+          if '@' not in email or '.' not in email.split('@')[-1]: raise SystemExit('ACME_EMAIL is not syntactically valid')
+          print('Public host:',host)
+          print('ACME email syntax: valid')
+          PY
+
+      - name: Restart and wait for stable running state
+        shell: bash
+        run: |
+          set -euo pipefail
+          (curl -sS -X POST "$COOLIFY_API/applications/$COOLIFY_APP_UUID/restart" -H "Authorization: Bearer $COOLIFY_TOKEN" >/tmp/restart.json 2>/tmp/restart.err || true) &
+          restart_pid=$!
+          last=''; stable=0
+          for attempt in $(seq 1 90); do
+            code="$(curl -sS -o /tmp/app.json -w '%{http_code}' "$COOLIFY_API/applications/$COOLIFY_APP_UUID" -H "Authorization: Bearer $COOLIFY_TOKEN" || true)"
+            if [ "$code" = 200 ]; then
+              status="$(python -c "import json; print(json.load(open('/tmp/app.json')).get('status',''))" 2>/dev/null || true)"
+              if [ "$status" != "$last" ]; then echo "Coolify status: $status"; last="$status"; fi
+              case "$status" in
+                running:healthy|running:unknown|running)
+                  stable=$((stable+1))
+                  [ "$stable" -ge 8 ] && break
+                  ;;
+                exited:*|failed:*|stopped:*)
+                  stable=0
+                  ;;
+                *) stable=0;;
+              esac
+            fi
+            sleep 1
+          done
+          wait "$restart_pid" || true
+          echo "FINAL_STATUS=$last" >> "$GITHUB_ENV"
+          case "$last" in running:healthy|running:unknown|running) ;; *) echo "Runtime did not stabilize: $last"; exit 1;; esac
+          echo "Runtime stabilized: $last"
+
+      - name: Inspect gateway and Caddy logs while running
+        shell: bash
+        run: |
+          set -euo pipefail
+          for service in gateway caddy; do
+            code="$(curl -sS -o "/tmp/$service.json" -w '%{http_code}' "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=180&service_name=$service&show_timestamps=true" -H "Authorization: Bearer $COOLIFY_TOKEN")"
+            test "$code" = 200 || { echo "$service logs HTTP $code"; cat "/tmp/$service.json"; exit 1; }
+            python - "$service" <<'PY'
+          import json,re,sys
+          service=sys.argv[1]
+          b=json.load(open('/tmp/'+service+'.json'))
+          raw=b.get('logs','') if isinstance(b,dict) else str(b)
+          raw=re.sub(r"(?i)(API\s+token\s+')[^']+(')",r"\1[REDACTED]\2",raw)
+          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+',r'\1\2[REDACTED]',raw)
+          print('===== '+service+' =====')
+          print(raw[-25000:])
+          bad=['appears invalid','invalidContact','EADDRINUSE','address already in use','CBOT_TOKEN_SIGNING_KEY is required','CBOT_CONTROL_SECRET is required']
+          hits=[x for x in bad if x.lower() in raw.lower()]
+          if hits: raise SystemExit(service+' startup contains fatal pattern(s): '+', '.join(hits))
+          PY
+          done
+          echo "Verified stable status: $FINAL_STATUS"
