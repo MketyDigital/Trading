@@ -70,6 +70,40 @@ def _parse_success_response(response_body):
     return result
 
 
+def _validate_https_endpoint(target, expected_paths):
+    parsed = urllib_parse.urlparse(target)
+    if parsed.scheme.lower() != 'https' or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('endpoint must be a clean HTTPS URL')
+    if parsed.path not in expected_paths:
+        raise ValueError(f'endpoint path must be one of: {", ".join(sorted(expected_paths))}')
+
+
+async def _post_event(*, target, raw_body, headers, timeout_seconds, selected_transport):
+    try:
+        status, response_body = await asyncio.to_thread(
+            selected_transport,
+            url=target,
+            body=raw_body,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise RetryableV1DeliveryError('NETWORK_ERROR') from exc
+
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError) as exc:
+        raise PermanentV1DeliveryError('INVALID_RESPONSE_STATUS') from exc
+
+    if status_code == 429 or 500 <= status_code <= 599:
+        raise RetryableV1DeliveryError(f'HTTP_{status_code}', status=status_code)
+    if status_code < 200 or status_code >= 300:
+        raise PermanentV1DeliveryError(f'HTTP_{status_code}', status=status_code)
+    return _parse_success_response(response_body)
+
+
 def create_signed_v1_sink(*, endpoint, source_id, source_secret, transport=None, timeout=3.0, now_ms=None):
     target = str(endpoint or '').strip()
     source = str(source_id or '').strip()
@@ -82,9 +116,7 @@ def create_signed_v1_sink(*, endpoint, source_id, source_secret, transport=None,
     if not secret:
         raise ValueError('source_secret is required')
 
-    parsed = urllib_parse.urlparse(target)
-    if parsed.scheme.lower() != 'https' or parsed.path != '/api/v1/events':
-        raise ValueError('endpoint must be an HTTPS /api/v1/events URL')
+    _validate_https_endpoint(target, {'/api/v1/events'})
 
     timeout_seconds = float(timeout)
     if timeout_seconds <= 0:
@@ -102,30 +134,43 @@ def create_signed_v1_sink(*, endpoint, source_id, source_secret, transport=None,
             'X-Mkety-Timestamp': timestamp,
             'X-Mkety-Signature': _signature(raw_body, timestamp, secret),
         }
+        return await _post_event(
+            target=target,
+            raw_body=raw_body,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+            selected_transport=selected_transport,
+        )
 
-        try:
-            status, response_body = await asyncio.to_thread(
-                selected_transport,
-                url=target,
-                body=raw_body,
-                headers=headers,
-                timeout=timeout_seconds,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise RetryableV1DeliveryError('NETWORK_ERROR') from exc
+    return sink
 
-        try:
-            status_code = int(status)
-        except (TypeError, ValueError) as exc:
-            raise PermanentV1DeliveryError('INVALID_RESPONSE_STATUS') from exc
 
-        if status_code == 429 or 500 <= status_code <= 599:
-            raise RetryableV1DeliveryError(f'HTTP_{status_code}', status=status_code)
-        if status_code < 200 or status_code >= 300:
-            raise PermanentV1DeliveryError(f'HTTP_{status_code}', status=status_code)
+def create_collector_sink(*, endpoint, collector_token, transport=None, timeout=3.0):
+    target = str(endpoint or '').strip()
+    token = str(collector_token or '').strip()
+    if not target:
+        raise ValueError('endpoint is required')
+    if not token:
+        raise ValueError('collector_token is required')
+    _validate_https_endpoint(target, {'/api/v1/external/mtproto/collect'})
 
-        return _parse_success_response(response_body)
+    timeout_seconds = float(timeout)
+    if timeout_seconds <= 0:
+        raise ValueError('timeout must be positive')
+    selected_transport = transport or _default_transport
+
+    async def sink(event):
+        raw_body = _serialize_event(event)
+        headers = {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Authorization': f'Bearer {token}',
+        }
+        return await _post_event(
+            target=target,
+            raw_body=raw_body,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+            selected_transport=selected_transport,
+        )
 
     return sink
