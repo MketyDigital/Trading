@@ -1,0 +1,85 @@
+name: Audit cBot Origin and Cloudflare DNS
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/diag-cbot-origin-dns-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Resolve Coolify server and Cloudflare DNS record
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          python - <<'PY' > /tmp/app-meta.txt
+          import json
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
+          a=rows[0]
+          print('APP_UUID='+str(a.get('uuid') or ''))
+          print('SERVER_UUID='+str(a.get('server',{}).get('uuid') or a.get('server_uuid') or ''))
+          print('SERVER_ID='+str(a.get('server_id') or ''))
+          PY
+          cat /tmp/app-meta.txt
+          app_uuid="$(grep '^APP_UUID=' /tmp/app-meta.txt | cut -d= -f2-)"
+          server_uuid="$(grep '^SERVER_UUID=' /tmp/app-meta.txt | cut -d= -f2-)"
+          server_id="$(grep '^SERVER_ID=' /tmp/app-meta.txt | cut -d= -f2-)"
+
+          if [ -n "$server_uuid" ]; then
+            curl -fsS "$api/servers/$server_uuid" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/server.json || true
+          elif [ -n "$server_id" ]; then
+            curl -fsS "$api/servers" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/servers.json
+            python - "$server_id" <<'PY' > /tmp/server.json
+          import json,sys
+          rows=json.load(open('/tmp/servers.json')); sid=str(sys.argv[1])
+          found=next((x for x in rows if str(x.get('id'))==sid),None)
+          if not found: raise SystemExit('Coolify server not found')
+          print(json.dumps(found))
+          PY
+          else
+            curl -fsS "$api/servers" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/servers.json
+            cp /tmp/servers.json /tmp/server.json
+          fi
+
+          python - <<'PY'
+          import json
+          b=json.load(open('/tmp/server.json'))
+          rows=b if isinstance(b,list) else [b]
+          for s in rows:
+              print('Coolify server:', s.get('name'), 'uuid=',s.get('uuid'),'ip=',s.get('ip'),'status=',s.get('validation_message') or s.get('status'))
+          PY
+
+          code="$(curl -sS -o /tmp/zones.json -w '%{http_code}' 'https://api.cloudflare.com/client/v4/zones?name=mkety.com&status=active' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")"
+          test "$code" = 200 || { echo "Cloudflare zone lookup HTTP $code"; exit 1; }
+          zone_id="$(python - <<'PY'
+          import json
+          b=json.load(open('/tmp/zones.json')); rows=b.get('result') or []
+          if len(rows)!=1: raise SystemExit('Expected one mkety.com zone')
+          print(rows[0]['id'])
+          PY
+          )"
+          code="$(curl -sS -o /tmp/dns.json -w '%{http_code}' "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?name=cbot.mkety.com&type=A" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")"
+          test "$code" = 200 || { echo "Cloudflare DNS lookup HTTP $code"; exit 1; }
+          python - <<'PY'
+          import json
+          b=json.load(open('/tmp/dns.json')); rows=b.get('result') or []
+          print('Cloudflare cbot A records:',len(rows))
+          for r in rows:
+              print('  id=',r.get('id'),'content=',r.get('content'),'proxied=',r.get('proxied'),'ttl=',r.get('ttl'))
+          PY
