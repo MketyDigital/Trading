@@ -1,4 +1,4 @@
-name: Diagnose Coolify cBot Runtime
+name: Repair Coolify cBot Runtime
 
 on:
   push:
@@ -12,22 +12,41 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  repair:
     runs-on: ubuntu-latest
     env:
       COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - name: Require Coolify credentials
+      - name: Require operator credentials
         shell: bash
         run: |
           set -euo pipefail
           test -n "${COOLIFY_URL:-}" || { echo 'COOLIFY_URL is missing'; exit 1; }
           test -n "${COOLIFY_TOKEN:-}" || { echo 'COOLIFY_TOKEN is missing'; exit 1; }
-          echo "Coolify URL configured: yes"
-          echo "Coolify token configured: yes"
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'CLOUDFLARE_API_TOKEN is missing'; exit 1; }
+          test "$CLOUDFLARE_API_TOKEN" != required || { echo 'Cloudflare token is still the placeholder required'; exit 1; }
+          echo 'Coolify and Cloudflare credentials are configured.'
 
-      - name: Discover deployed Trading Compose application
+      - name: Validate Cloudflare token before changing Coolify
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl -sS -o /tmp/cf-verify.json -w '%{http_code}' \
+            https://api.cloudflare.com/client/v4/user/tokens/verify \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H 'Content-Type: application/json')"
+          test "$status" = 200 || { echo "Cloudflare token verification HTTP $status"; exit 1; }
+          python - <<'PY'
+          import json
+          b=json.load(open('/tmp/cf-verify.json'))
+          if not b.get('success') or b.get('result',{}).get('status') != 'active':
+              raise SystemExit('Cloudflare token is not active')
+          print('Cloudflare token is active.')
+          PY
+
+      - name: Discover exact Coolify cBot application
         shell: bash
         run: |
           set -euo pipefail
@@ -43,123 +62,128 @@ jobs:
           python - <<'PY'
           import json, os
           apps=json.load(open('/tmp/apps.json'))
-          def text(v): return str(v or '').lower()
-          candidates=[]
+          matches=[]
           for a in apps:
-              repo=text(a.get('git_repository')) + ' ' + text(a.get('git_full_url'))
-              compose=text(a.get('docker_compose_location'))
-              name=text(a.get('name'))
-              score=0
-              if 'mketydigital/trading' in repo: score += 5
-              if 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in compose: score += 5
-              if 'cbot' in name and 'gateway' in name: score += 3
-              if text(a.get('git_branch')) == 'main': score += 1
-              if score: candidates.append((score,a))
-          if not candidates:
-              print('No matching Coolify application found.')
-              raise SystemExit(2)
-          candidates.sort(key=lambda x:x[0], reverse=True)
-          _,a=candidates[0]
-          print('Selected Coolify application:')
-          for key in ['name','uuid','status','git_repository','git_branch','git_commit_sha','docker_compose_location','fqdn','build_pack']:
-              print(f'  {key}: {a.get(key)}')
+              repo=str(a.get('git_repository') or '').lower()
+              compose=str(a.get('docker_compose_location') or '').lower()
+              name=str(a.get('name') or '').lower()
+              if repo == 'mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in compose:
+                  matches.append(a)
+              elif repo == 'mketydigital/trading' and 'cbot' in name and 'gateway' in name:
+                  matches.append(a)
+          if len(matches) != 1:
+              raise SystemExit(f'Expected exactly one cBot Coolify application, found {len(matches)}')
+          a=matches[0]
+          print('Selected:', a.get('name'), a.get('uuid'), 'status=', a.get('status'))
           with open(os.environ['GITHUB_ENV'],'a') as f:
               f.write(f"COOLIFY_APP_UUID={a['uuid']}\n")
           PY
 
-      - name: Inspect safe application metadata and required key presence
+      - name: Prove current failure is the placeholder token
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
           curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/envs.json
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/envs-before.json
           python - <<'PY'
           import json
-          a=json.load(open('/tmp/app.json'))
-          envs=json.load(open('/tmp/envs.json'))
-          print('Application runtime metadata:')
-          for key in ['name','uuid','status','git_commit_sha','docker_compose_location','docker_compose_domains','compose_parsing_version','updated_at']:
-              print(f'  {key}: {a.get(key)}')
-          by={e.get('key'):e for e in envs}
-          required=['CBOT_PUBLIC_HOST','ACME_EMAIL','CLOUDFLARE_DNS_API_TOKEN','CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET']
-          optional=['CBOT_COMMAND_TIMEOUT_MS']
-          print('Environment key presence:')
-          for key in required+optional:
-              e=by.get(key)
-              present=bool(e and (e.get('real_value') or e.get('value')))
-              print(f'  {key}: {"SET" if present else ("DEFAULT" if key in optional else "MISSING/EMPTY")}')
+          envs=json.load(open('/tmp/envs-before.json'))
+          row=next((e for e in envs if e.get('key')=='CLOUDFLARE_DNS_API_TOKEN'), None)
+          if not row:
+              raise SystemExit('CLOUDFLARE_DNS_API_TOKEN row is missing in Coolify')
+          value=row.get('real_value') or row.get('value') or ''
+          if value != 'required':
+              raise SystemExit('Expected the diagnosed placeholder value before repair; refusing unexpected mutation')
+          print('Confirmed diagnosed bad value is the literal placeholder "required".')
           PY
 
-      - name: Confirm stopped-log API behavior
+      - name: Replace only the bad Coolify DNS token value
         shell: bash
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/logs-response.json -w '%{http_code}' \
-            "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=100&show_timestamps=true" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json')
-          echo "Coolify logs endpoint while stopped HTTP: $code"
+          payload="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              'key':'CLOUDFLARE_DNS_API_TOKEN',
+              'value':os.environ['CLOUDFLARE_API_TOKEN'],
+              'is_preview':False,
+              'is_literal':True,
+              'is_multiline':False,
+          }))
+          PY
+          )"
+          status="$(curl -sS -o /tmp/env-update.json -w '%{http_code}' \
+            -X PATCH "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data "$payload")"
+          test "$status" = 201 || { echo "Coolify env update HTTP $status"; cat /tmp/env-update.json; exit 1; }
+          echo 'Coolify DNS token variable updated.'
+
+      - name: Verify Coolify stored the intended token without printing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/envs-after.json
           python - <<'PY'
-          import json
-          try:
-              body=json.load(open('/tmp/logs-response.json'))
-          except Exception:
-              print('Non-JSON response')
-          else:
-              print('Coolify response message:', body.get('message','<none>') if isinstance(body,dict) else '<non-object>')
+          import json, os, hmac
+          envs=json.load(open('/tmp/envs-after.json'))
+          row=next((e for e in envs if e.get('key')=='CLOUDFLARE_DNS_API_TOKEN'), None)
+          value=(row or {}).get('real_value') or (row or {}).get('value') or ''
+          if not value or value == 'required':
+              raise SystemExit('Coolify still has an empty/placeholder DNS token')
+          if not hmac.compare_digest(value, os.environ['CLOUDFLARE_API_TOKEN']):
+              raise SystemExit('Coolify DNS token does not match the validated GitHub secret')
+          print('Coolify now stores the validated Cloudflare token.')
           PY
 
-      - name: Install Coolify CLI
+      - name: Install Coolify CLI and restart application
         shell: bash
         run: |
           set -euo pipefail
           go install github.com/coollabsio/coolify-cli/coolify@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          coolify context add -d repair "$COOLIFY_URL" "$COOLIFY_TOKEN" >/dev/null
+          coolify app restart "$COOLIFY_APP_UUID" >/dev/null
+          echo 'Restart requested.'
 
-      - name: Restart once and capture gateway and Caddy startup logs
+      - name: Wait for stable running state
+        shell: bash
+        run: |
+          set -euo pipefail
+          last=''
+          stable=0
+          for attempt in $(seq 1 45); do
+            curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
+            status="$(python -c "import json; print(json.load(open('/tmp/app.json')).get('status',''))")"
+            if [ "$status" != "$last" ]; then echo "Coolify status: $status"; last="$status"; fi
+            case "$status" in
+              running:healthy|running:unknown|running)
+                stable=$((stable+1))
+                [ "$stable" -ge 5 ] && break
+                ;;
+              exited:*|stopped:*|failed:*)
+                echo "Application returned terminal bad status: $status"
+                break
+                ;;
+              *) stable=0 ;;
+            esac
+            sleep 2
+          done
+          echo "FINAL_COOLIFY_STATUS=$last" >> "$GITHUB_ENV"
+          case "$last" in running:healthy|running:unknown|running) ;; *) exit 1 ;; esac
+
+      - name: Verify gateway control health through running container logs API
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$(go env GOPATH)/bin:$PATH"
-          coolify context add -d diag "$COOLIFY_URL" "$COOLIFY_TOKEN" >/dev/null
-          echo 'Requesting one controlled restart for diagnosis.'
-          coolify app restart "$COOLIFY_APP_UUID" >/dev/null
-
-          capture_service() {
-            service="$1"
-            out="/tmp/${service}.log"
-            : > "$out"
-            for attempt in $(seq 1 30); do
-              if coolify app logs "$COOLIFY_APP_UUID" --service "$service" -n 200 --show-timestamps > "$out" 2>&1; then
-                if [ -s "$out" ]; then
-                  echo "Captured $service logs on attempt $attempt"
-                  break
-                fi
-              fi
-              sleep 0.4
-            done
-            echo "===== $service startup logs ====="
-            python - "$out" <<'PY'
-          import pathlib,re,sys
-          raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
-          raw=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+', r'\1[REDACTED]', raw)
-          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+', r'\1\2[REDACTED]', raw)
-          print(raw[-30000:])
-          PY
-          }
-
-          capture_service gateway
-          capture_service caddy
-
-      - name: Read final Coolify application status
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/final.json
-          python - <<'PY'
-          import json
-          a=json.load(open('/tmp/final.json'))
-          print('Final Coolify status:', a.get('status'))
-          PY
+          echo '===== gateway service ====='
+          coolify app logs "$COOLIFY_APP_UUID" --service gateway -n 80 --show-timestamps | tail -80
+          echo '===== caddy service ====='
+          coolify app logs "$COOLIFY_APP_UUID" --service caddy -n 120 --show-timestamps | \
+            sed -E 's/(token|secret|password|api[_-]?key)([=:][^ ,;]+)/\1=[REDACTED]/Ig' | tail -120
+          echo "Stable Coolify status: $FINAL_COOLIFY_STATUS"
