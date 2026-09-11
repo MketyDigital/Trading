@@ -5,6 +5,7 @@ import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections.js'
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
+import { handleExternalMtprotoCollectorRequest } from './http/external_mtproto_collector_endpoint.js';
 import { handleExternalMt5BridgeRequest } from './http/external_mt5_bridge_endpoint.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
@@ -32,6 +33,7 @@ export function createTradingConnectionsEntrypoint({
   ctraderCbotHandler = handleV1AdminCTraderCbotRequest,
   ctraderCallbackHandler = handleCTraderOAuthPublicCallback,
   externalMtprotoHandler = handleExternalMtprotoEndpointRequest,
+  externalMtprotoCollectorHandler = handleExternalMtprotoCollectorRequest,
   mt5BridgeHandler = handleExternalMt5BridgeRequest,
 } = {}) {
   return {
@@ -50,6 +52,11 @@ export function createTradingConnectionsEntrypoint({
       if (url.pathname === '/api/v1/admin/connections' || url.pathname.startsWith('/api/v1/admin/connections/')) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return connectionsHandler(request, env, { ctx });
+      }
+
+      if (/^\/api\/v1\/external\/mtproto\/collect(?:\/[^/]+)?$/.test(url.pathname)) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return externalMtprotoCollectorHandler(request, env, { ctx });
       }
 
       if (/^\/api\/v1\/external\/mtproto\/[^/]+$/.test(url.pathname)) {
