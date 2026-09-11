@@ -3,6 +3,11 @@ name: cTrader cBot Release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/ctrader-cbot-release.yml'
+      - 'ctrader-cbot/**'
     tags:
       - 'ctrader-cbot-v*'
 
@@ -14,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '6.0.x'
@@ -39,14 +46,24 @@ jobs:
             dist/MketyCloudAutoTrader.algo
             dist/MketyCloudAutoTrader.algo.sha256
           if-no-files-found: error
-      - name: Publish GitHub Release assets for version tag
-        if: startsWith(github.ref, 'refs/tags/ctrader-cbot-v')
+      - name: Publish stable GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            dist/MketyCloudAutoTrader.algo \
-            dist/MketyCloudAutoTrader.algo.sha256 \
-            --title "Mkety Cloud Auto Trader ${GITHUB_REF_NAME#ctrader-cbot-v}" \
-            --generate-notes
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/ctrader-cbot-v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="ctrader-cbot-v1.0.0"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/MketyCloudAutoTrader.algo dist/MketyCloudAutoTrader.algo.sha256 --clobber
+          else
+            gh release create "$tag" \
+              dist/MketyCloudAutoTrader.algo \
+              dist/MketyCloudAutoTrader.algo.sha256 \
+              --target main \
+              --title "Mkety Cloud Auto Trader ${tag#ctrader-cbot-v}" \
+              --generate-notes
+          fi
