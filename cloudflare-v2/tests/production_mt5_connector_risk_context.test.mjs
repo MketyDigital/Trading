@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createProductionExecutionDependencies } from '../src/execution/production_execution_deps.js';
+import { createProductionExecutionDependencies } from '../src/execution/production_execution_deps_unified.js';
 
 function account() {
   return {
@@ -34,8 +34,20 @@ test('risk-percent MT5 connector revalidates against fresh account equity, symbo
     deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
     fetchFn: async (url, options) => {
       requests.push({ url, options });
-      assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r$/);
       assert.equal(options.headers.Authorization, 'Bearer control-secret');
+      if (url.endsWith('/v1/mt5-connections/acct-mt5-risk')) {
+        return new Response(JSON.stringify({
+          ok: true, online: true, accountRowId: 'acct-mt5-risk',
+          identity: {
+            accountNumber: '50123456', serverName: 'Broker-Demo', isLive: false,
+            symbols: [{
+              platformSymbol: 'XAUUSD.r', canonical: 'XAUUSD', aliases: ['GOLD'], tradable: true,
+              minLots: 0.01, maxLots: 100, stepLots: 0.01, tickSize: 0.01, tickValueLoss: 1.2, digits: 2,
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r$/);
       return new Response(JSON.stringify({
         ok: true, accountRowId: 'acct-mt5-risk',
         context: {
@@ -60,5 +72,5 @@ test('risk-percent MT5 connector revalidates against fresh account equity, symbo
   assert.equal(result.action.lots, 0.01);
   assert.equal(result.risk != null, true);
   assert.equal(result.risk.riskAmount, 100);
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
 });
