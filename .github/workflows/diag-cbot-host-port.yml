@@ -22,21 +22,20 @@ jobs:
         run: |
           set -euo pipefail
           base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
-          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
           curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/apps.json
-          python - <<'PY'
-          import json, os
+          uuid="$(python - <<'PY'
+          import json,sys
           apps=json.load(open('/tmp/apps.json'))
           m=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and ('ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower() or ('cbot' in str(a.get('name') or '').lower() and 'gateway' in str(a.get('name') or '').lower()))]
           if len(m)!=1: raise SystemExit(f'expected 1 cBot app, found {len(m)}')
           a=m[0]
-          print('app', a.get('name'), 'uuid', a.get('uuid'), 'status', a.get('status'))
-          print('compose_location', a.get('docker_compose_location'))
-          print('ports_exposes', a.get('ports_exposes'))
-          print('ports_mappings', a.get('ports_mappings'))
-          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('COOLIFY_APP_UUID='+a['uuid']+'\n')
+          print('app='+str(a.get('name'))+' status='+str(a.get('status'))+' compose='+str(a.get('docker_compose_location'))+' exposes='+str(a.get('ports_exposes'))+' mappings='+str(a.get('ports_mappings')), file=sys.stderr)
+          print(a['uuid'])
           PY
-          curl -fsS "$api/applications/$COOLIFY_APP_UUID" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
+          )"
+          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
+          echo "COOLIFY_APP_UUID=$uuid" >> "$GITHUB_ENV"
+          curl -fsS "$api/applications/$uuid" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
           python - <<'PY'
           import json
           a=json.load(open('/tmp/app.json'))
@@ -44,7 +43,7 @@ jobs:
               v=a.get(k)
               if v is not None:
                   s=str(v)
-                  print(k, s[:8000])
+                  print('\n###',k,'\n',s[:12000])
           PY
 
       - name: Inspect service logs and external port
