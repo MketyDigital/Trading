@@ -1,0 +1,39 @@
+name: Validate cBot Caddy Routing
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - 'ctrader-cbot-gateway/deploy/coolify/Caddyfile'
+      - 'ctrader-cbot-gateway/deploy/coolify/Dockerfile.caddy'
+      - '.github/workflows/diag-cbot-caddy-routing.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build custom Caddy image
+        shell: bash
+        run: docker build -t mkety-cbot-caddy -f ctrader-cbot-gateway/deploy/coolify/Dockerfile.caddy ctrader-cbot-gateway
+      - name: Validate and inspect adapted config
+        shell: bash
+        run: |
+          set -euo pipefail
+          envs=(-e CBOT_PUBLIC_HOST=cbot.mkety.com -e ACME_EMAIL=ops@mkety.com -e CLOUDFLARE_DNS_API_TOKEN=dummy-test-token)
+          docker run --rm "${envs[@]}" mkety-cbot-caddy caddy validate --config /etc/caddy/Caddyfile
+          docker run --rm "${envs[@]}" mkety-cbot-caddy caddy adapt --config /etc/caddy/Caddyfile --pretty > /tmp/caddy.json
+          python - <<'PY'
+          import json
+          b=json.load(open('/tmp/caddy.json'))
+          raw=json.dumps(b)
+          required=['gateway:8790','gateway:25346','/health','/v1/connections/*','/v1/commands/*','cbot.mkety.com:25345']
+          missing=[x for x in required if x not in raw]
+          if missing: raise SystemExit('Missing expected routing elements: '+', '.join(missing))
+          print('Caddy config validates and contains both control and WebSocket routes.')
+          PY
