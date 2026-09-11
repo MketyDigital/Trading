@@ -3,6 +3,7 @@ import { withUnifiedTradingConnections } from './dashboard_unified_connections.j
 import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
+import { handleV1AdminMt5ConnectorRequest } from './http/v1_admin_mt5_connector.js';
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
 import { handleExternalMtprotoCollectorRequest } from './http/external_mtproto_collector_endpoint.js';
@@ -32,6 +33,7 @@ export function createTradingConnectionsEntrypoint({
   base = baseWorker,
   connectionsHandler = handleV1AdminConnectionsRequest,
   ctraderCbotHandler = handleV1AdminCTraderCbotRequest,
+  mt5ConnectorHandler = handleV1AdminMt5ConnectorRequest,
   ctraderCallbackHandler = handleCTraderOAuthPublicCallback,
   externalMtprotoHandler = handleExternalMtprotoEndpointRequest,
   externalMtprotoCollectorHandler = handleExternalMtprotoCollectorRequest,
@@ -53,6 +55,11 @@ export function createTradingConnectionsEntrypoint({
       if (url.pathname === '/api/v1/admin/connections/ctrader/cbot' || url.pathname.startsWith('/api/v1/admin/connections/ctrader/cbot/')) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return ctraderCbotHandler(request, env, { ctx });
+      }
+
+      if (url.pathname === '/api/v1/admin/connections/mt5/connector' || url.pathname.startsWith('/api/v1/admin/connections/mt5/connector/')) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return mt5ConnectorHandler(request, env, { ctx });
       }
 
       if (url.pathname === '/api/v1/admin/connections' || url.pathname.startsWith('/api/v1/admin/connections/')) {
