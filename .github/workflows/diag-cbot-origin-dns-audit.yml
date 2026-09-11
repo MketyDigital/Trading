@@ -20,35 +20,16 @@ jobs:
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - name: Resolve Coolify origin and Cloudflare DNS record
+      - name: Resolve wildcard origin used by cBot hostname
         shell: bash
         run: |
           set -euo pipefail
-          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
-
           coolify_host="$(python - <<'PY'
           import os,urllib.parse
-          u=urllib.parse.urlparse(os.environ['COOLIFY_URL'])
-          print(u.hostname or '')
+          print(urllib.parse.urlparse(os.environ['COOLIFY_URL']).hostname or '')
           PY
           )"
           test -n "$coolify_host" || { echo 'Unable to parse COOLIFY_URL host'; exit 1; }
-          echo 'Coolify public host resolves to:'
-          dig +short A "$coolify_host" | sort -u
-          echo 'Coolify public IPv4 candidates captured above.'
-
-          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
-          python - <<'PY' > /tmp/app-meta.txt
-          import json
-          apps=json.load(open('/tmp/apps.json'))
-          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
-          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
-          a=rows[0]
-          print('APP_UUID='+str(a.get('uuid') or ''))
-          print('SERVER_UUID='+str(a.get('server',{}).get('uuid') or a.get('server_uuid') or ''))
-          print('SERVER_ID='+str(a.get('server_id') or ''))
-          PY
-          cat /tmp/app-meta.txt
 
           code="$(curl -sS -o /tmp/zones.json -w '%{http_code}' 'https://api.cloudflare.com/client/v4/zones?name=mkety.com&status=active' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")"
           test "$code" = 200 || { echo "Cloudflare zone lookup HTTP $code"; exit 1; }
@@ -59,12 +40,22 @@ jobs:
           print(rows[0]['id'])
           PY
           )"
-          code="$(curl -sS -o /tmp/dns.json -w '%{http_code}' "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?name=cbot.mkety.com" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")"
-          test "$code" = 200 || { echo "Cloudflare DNS lookup HTTP $code"; exit 1; }
-          python - <<'PY'
-          import json
-          b=json.load(open('/tmp/dns.json')); rows=b.get('result') or []
-          print('Cloudflare cbot records:',len(rows))
+
+          code="$(curl -sS -o /tmp/dns-all.json -w '%{http_code}' "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?per_page=500" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")"
+          test "$code" = 200 || { echo "Cloudflare DNS list HTTP $code"; exit 1; }
+          COOLIFY_HOST="$coolify_host" python - <<'PY'
+          import json,os
+          b=json.load(open('/tmp/dns-all.json')); rows=b.get('result') or []
+          host=os.environ['COOLIFY_HOST'].lower()
+          print('Relevant DNS records:')
+          keep=[]
           for r in rows:
-              print('  id=',r.get('id'),'type=',r.get('type'),'content=',r.get('content'),'proxied=',r.get('proxied'),'ttl=',r.get('ttl'))
+              name=str(r.get('name') or '').lower()
+              content=str(r.get('content') or '')
+              if name in {'*.mkety.com','cbot.mkety.com',host} or name.startswith('coolify.') or 'azure' in content.lower():
+                  keep.append(r)
+          if not keep:
+              print('  none matched')
+          for r in keep:
+              print('  id=',r.get('id'),'name=',r.get('name'),'type=',r.get('type'),'content=',r.get('content'),'proxied=',r.get('proxied'),'ttl=',r.get('ttl'))
           PY
