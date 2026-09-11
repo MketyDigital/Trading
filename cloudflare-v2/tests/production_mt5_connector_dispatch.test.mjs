@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createProductionExecutionDependencies } from '../src/execution/production_execution_deps.js';
+import { createProductionExecutionDependencies } from '../src/execution/production_execution_deps_unified.js';
 
 function unexpectedSupabase() {
   return { from() { throw new Error('unexpected database query'); } };
