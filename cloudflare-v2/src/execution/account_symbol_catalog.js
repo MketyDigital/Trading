@@ -1,7 +1,8 @@
-import { normalizeInstrumentKey, resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
+import { normalizeInstrumentKey, normalizeSymbol, resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 
 const MAX_CATALOG_SIZE = 2000;
 const MAX_ALIASES_PER_SYMBOL = 24;
+const MAX_COMPACT_AFFIX_LENGTH = 4;
 
 function clean(value) {
   return value === null || value === undefined ? '' : String(value).trim();
@@ -94,6 +95,45 @@ function exactPlatformMatch(requested, catalog) {
   return catalog.filter((item) => clean(item.platformSymbol).toUpperCase() === text);
 }
 
+function requestedComparisonKeys(requested) {
+  const canonical = normalizeSymbol(requested).canonical;
+  return [...new Set([
+    normalizeInstrumentKey(requested),
+    normalizeInstrumentKey(canonical),
+  ].filter(Boolean))];
+}
+
+function hasBrokerAffixMatch(platformSymbol, requestedKey) {
+  if (!requestedKey || requestedKey.length < 4) return false;
+  const raw = clean(platformSymbol).toUpperCase();
+  if (!raw) return false;
+
+  const separatedTokens = raw.split(/[^A-Z0-9]+/).filter(Boolean);
+  if (separatedTokens.includes(requestedKey)) return true;
+
+  const compact = normalizeInstrumentKey(raw);
+  if (!compact || compact === requestedKey) return false;
+  if (compact.startsWith(requestedKey)) {
+    const suffix = compact.slice(requestedKey.length);
+    if (suffix.length > 0 && suffix.length <= MAX_COMPACT_AFFIX_LENGTH) return true;
+  }
+  if (compact.endsWith(requestedKey)) {
+    const prefix = compact.slice(0, compact.length - requestedKey.length);
+    if (prefix.length > 0 && prefix.length <= MAX_COMPACT_AFFIX_LENGTH) return true;
+  }
+  return false;
+}
+
+function resolveBrokerAffixMatch(requested, catalog) {
+  const keys = requestedComparisonKeys(requested);
+  const matches = catalog.filter((item) => keys.some((key) => hasBrokerAffixMatch(item.platformSymbol, key)));
+  if (matches.length === 1) return { ok: true, ...matches[0], matchType: 'broker_affix' };
+  if (matches.length > 1) {
+    return { ok: false, reason: 'AMBIGUOUS_SYMBOL', candidates: matches.map((item) => item.platformSymbol) };
+  }
+  return { ok: false, reason: 'SYMBOL_NOT_FOUND', candidates: [] };
+}
+
 export function resolveAccountSymbol(requested, catalog = [], aliases = {}) {
   const safeCatalog = sanitizeAccountSymbolCatalog(catalog).filter((item) => item.tradable !== false);
   const exact = exactPlatformMatch(requested, safeCatalog);
@@ -111,7 +151,9 @@ export function resolveAccountSymbol(requested, catalog = [], aliases = {}) {
   }
 
   const resolved = resolveSymbolAgainstCatalog(requested, safeCatalog);
-  return resolved.ok ? { ...resolved, matchType: 'catalog' } : resolved;
+  if (resolved.ok) return { ...resolved, matchType: 'catalog' };
+  if (resolved.reason === 'AMBIGUOUS_SYMBOL') return resolved;
+  return resolveBrokerAffixMatch(requested, safeCatalog);
 }
 
 export function accountSymbolCatalogFromProviderConfig(providerConfig = {}) {
