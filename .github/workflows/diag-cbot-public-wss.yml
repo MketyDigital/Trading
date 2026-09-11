@@ -1,0 +1,47 @@
+name: Public cBot WSS Acceptance
+
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/diag-cbot-public-wss.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install gateway dependencies
+        working-directory: ctrader-cbot-gateway
+        run: npm install --no-audit --no-fund
+      - name: Verify TLS health, WSS upgrade and fail-closed auth
+        working-directory: ctrader-cbot-gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --connect-timeout 8 https://cbot.mkety.com:25345/health | grep -q 'mkety-ctrader-cbot-gateway'
+          code="$(curl -sS -o /tmp/noauth.json -w '%{http_code}' https://cbot.mkety.com:25345/v1/connections/nonexistent)"
+          test "$code" = 401
+          node --input-type=module <<'NODE'
+          import { WebSocket } from 'ws';
+          const ws = new WebSocket('wss://cbot.mkety.com:25345/v1/cbot');
+          const opened = new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});
+          await opened;
+          const closed = new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>reject(new Error('expected fail-closed websocket rejection')),8000);
+            ws.once('close',(code,reason)=>{clearTimeout(timer);resolve({code,reason:String(reason)})});
+          });
+          ws.send(JSON.stringify({type:'auth',connectionToken:'v1.invalid.invalid',accountNumber:'public-probe',isLive:false}));
+          const result=await closed;
+          if(result.code!==1008 || result.reason!=='TOKEN_INVALID') throw new Error(`unexpected close ${result.code} ${result.reason}`);
+          console.log('TLS health: PASS');
+          console.log('WSS upgrade: PASS');
+          console.log('Invalid token rejection: PASS');
+          console.log('Unauthenticated control rejection: PASS');
+          NODE
