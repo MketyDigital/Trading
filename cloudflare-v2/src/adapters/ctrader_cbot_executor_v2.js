@@ -1,4 +1,5 @@
 import { buildCTraderCbotEnvelope } from './ctrader_cbot_protocol.js';
+import { resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
 
 function classifiedError(message, { code, failureClass, cause } = {}) {
   const error = new Error(String(message || code || 'cTrader cBot execution failed'), cause ? { cause } : undefined);
@@ -18,10 +19,10 @@ function normalizeGatewayUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
-function commandFor(action = {}) {
+function commandFor(action = {}, resolvedSymbol = null) {
   const command = { action: String(action.type || '').toUpperCase() };
   for (const [target, value] of [
-    ['side', action.side], ['orderType', action.orderType], ['symbol', action.symbol], ['lots', action.lots],
+    ['side', action.side], ['orderType', action.orderType], ['symbol', resolvedSymbol?.platformSymbol ?? action.symbol], ['lots', action.lots],
     ['stopLoss', action.stopLoss], ['takeProfit', action.takeProfit], ['positionId', action.brokerPositionId],
     ['orderId', action.brokerOrderId],
   ]) {
@@ -80,7 +81,24 @@ async function loadAuthenticatedIdentity({ baseUrl, accountRowId, controlSecret,
   if (!brokerAccountId) {
     throw classifiedError('cTrader Cloud Auto Trader broker identity is missing', { code: 'CTRADER_CBOT_IDENTITY_UNAVAILABLE', failureClass: 'RETRYABLE' });
   }
-  return brokerAccountId;
+  return {
+    brokerAccountId,
+    symbols: Array.isArray(data?.identity?.symbols) ? data.identity.symbols : [],
+    brokerName: String(data?.identity?.brokerName ?? '').trim() || null,
+  };
+}
+
+function resolveExecutionSymbol(action, identity, fallbackCatalog = [], symbolAliases = {}) {
+  if (!action?.symbol) return null;
+  const liveCatalog = Array.isArray(identity?.symbols) && identity.symbols.length ? identity.symbols : fallbackCatalog;
+  const resolved = resolveAccountSymbol(action.symbol, liveCatalog, symbolAliases);
+  if (!resolved.ok) {
+    throw classifiedError(`cTrader broker symbol resolution failed: ${resolved.reason}`, {
+      code: resolved.reason === 'AMBIGUOUS_SYMBOL' ? 'BROKER_SYMBOL_AMBIGUOUS' : 'BROKER_SYMBOL_NOT_FOUND',
+      failureClass: 'TERMINAL',
+    });
+  }
+  return resolved;
 }
 
 export async function executeCTraderCbotAction(action, {
@@ -88,6 +106,8 @@ export async function executeCTraderCbotAction(action, {
   accountRowId,
   gatewayUrl,
   controlSecret,
+  symbolCatalog = [],
+  symbolAliases = {},
   deliveryStore,
   fetchFn = fetch,
   nowMs = Date.now(),
@@ -98,7 +118,8 @@ export async function executeCTraderCbotAction(action, {
   if (!action?.idempotencyKey) throw new TypeError('idempotencyKey required for cTrader cBot execution');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) throw new TypeError('deliveryStore reserve/complete/fail required');
   const baseUrl = normalizeGatewayUrl(gatewayUrl);
-  const brokerAccountId = await loadAuthenticatedIdentity({ baseUrl, accountRowId, controlSecret, fetchFn });
+  const identity = await loadAuthenticatedIdentity({ baseUrl, accountRowId, controlSecret, fetchFn });
+  const resolvedSymbol = resolveExecutionSymbol(action, identity, symbolCatalog, symbolAliases);
 
   const reservation = await deliveryStore.reserve(action.idempotencyKey, { destinationType: 'ctrader_cbot', action });
   if (reservation?.duplicate) return { duplicate: true, ...(reservation.result || {}) };
@@ -108,10 +129,10 @@ export async function executeCTraderCbotAction(action, {
     commandId: action.idempotencyKey,
     workspaceId,
     accountId: accountRowId,
-    brokerAccountId,
+    brokerAccountId: identity.brokerAccountId,
     issuedAt: nowMs,
     ttlMs,
-    command: commandFor(action),
+    command: commandFor(action, resolvedSymbol),
   });
 
   try {
@@ -156,6 +177,7 @@ export async function executeCTraderCbotAction(action, {
       brokerOrderId: data.orderId != null ? String(data.orderId) : null,
       brokerDealId: data.dealId != null ? String(data.dealId) : null,
       fillPrice: Number.isFinite(fillPrice) ? fillPrice : null,
+      platformSymbol: resolvedSymbol?.platformSymbol ?? null,
       response: data,
     };
     await deliveryStore.complete(action.idempotencyKey, result);
