@@ -7,7 +7,7 @@ import { providerConfigWithSymbolCatalog } from '../execution/account_symbol_cat
 
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
-const DEFAULT_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const DEFAULT_TOKEN_TTL_MS = 15 * 60 * 1000;
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
