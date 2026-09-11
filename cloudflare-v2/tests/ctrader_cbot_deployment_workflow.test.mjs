@@ -41,9 +41,13 @@ test('production frontend E2E explicitly checks cTrader Direct, Cloud Auto Trade
   assert.match(workflow, /showMt5CloudBtn/);
 });
 
-test('Coolify stack keeps control API private and publishes only cTrader Cloud TLS port 25345', () => {
+test('Coolify stack uses repo-root-safe build paths and keeps control API private', () => {
   const compose = read('ctrader-cbot-gateway/deploy/coolify/docker-compose.yml');
   const caddy = read('ctrader-cbot-gateway/deploy/coolify/Caddyfile');
+  assert.match(compose, /context:\s*\.\/ctrader-cbot-gateway/);
+  assert.match(compose, /dockerfile:\s*Dockerfile/);
+  assert.match(compose, /dockerfile:\s*deploy\/coolify\/Dockerfile\.caddy/);
+  assert.doesNotMatch(compose, /context:\s*\.\.\/\.\./);
   assert.match(compose, /CBOT_WS_PORT:\s*25346/);
   assert.match(compose, /CBOT_CONTROL_PORT:\s*8790/);
   assert.match(compose, /"25345:25345\/tcp"/);
