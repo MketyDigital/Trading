@@ -95,7 +95,8 @@ export function createSupabaseIngestStores(supabase, {
         .select('id,workspace_id,source_type,source_instance_id,source_family,provider_type,external_identity,config,secret_ciphertext,settings,is_active')
         .eq('provider_type', 'external_mtproto')
         .eq('is_active', true);
-      if (error || !Array.isArray(data)) return [];
+      if (error) throw new Error('EXTERNAL_MTPROTO_SOURCE_LOOKUP_FAILED');
+      if (!Array.isArray(data)) throw new Error('EXTERNAL_MTPROTO_SOURCE_LOOKUP_FAILED');
 
       const matching = data.filter((row) => row?.id && row.secret_ciphertext && sourceAcceptsChat(row, normalizedChatId, externalIdentity));
       const result = [];
