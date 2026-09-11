@@ -1,0 +1,62 @@
+name: Fast Capture Coolify Caddy Failure
+
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/diag-coolify-fast-caddy-capture.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Restart and catch Caddy logs before exit
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          uuid="$(python - <<'PY'
+          import json
+          a=json.load(open('/tmp/apps.json'))
+          r=[x for x in a if str(x.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(x.get('docker_compose_location') or '').lower()]
+          if len(r)!=1: raise SystemExit('cBot app resolution failed')
+          print(r[0]['uuid'])
+          PY
+          )"
+          (curl -sS -X POST "$api/applications/$uuid/restart" -H "Authorization: Bearer $COOLIFY_TOKEN" >/tmp/restart.json 2>/dev/null || true) &
+          pid=$!
+          captured=0
+          for attempt in $(seq 1 120); do
+            code="$(curl -sS -o /tmp/caddy.json -w '%{http_code}' "$api/applications/$uuid/logs?lines=250&service_name=caddy&show_timestamps=true" -H "Authorization: Bearer $COOLIFY_TOKEN" || true)"
+            if [ "$code" = 200 ]; then
+              python - <<'PY' > /tmp/caddy.txt
+          import json
+          b=json.load(open('/tmp/caddy.json'))
+          print(b.get('logs','') if isinstance(b,dict) else b)
+          PY
+              if [ -s /tmp/caddy.txt ]; then
+                echo "Captured live Caddy logs on attempt $attempt"
+                captured=1
+                break
+              fi
+            fi
+            sleep 0.08
+          done
+          wait "$pid" || true
+          if [ "$captured" -ne 1 ]; then echo 'No live Caddy logs captured'; exit 1; fi
+          python - <<'PY'
+          import pathlib,re
+          raw=pathlib.Path('/tmp/caddy.txt').read_text(errors='replace')
+          raw=re.sub(r"(?i)(API\s+token\s+')[^']+(')",r"\1[REDACTED]\2",raw)
+          raw=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+',r'\1[REDACTED]',raw)
+          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+',r'\1\2[REDACTED]',raw)
+          print(raw[-30000:])
+          PY
