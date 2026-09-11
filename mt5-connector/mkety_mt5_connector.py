@@ -20,6 +20,8 @@ from mt5_bridge import MT5Engine, ReplayLedger  # noqa: E402
 
 DEFAULT_GATEWAY = 'wss://cbot.mkety.com:25345/v1/mt5'
 MAX_SYMBOLS = 2000
+DEFAULT_HEARTBEAT_SECONDS = 20
+DEFAULT_SYMBOL_REFRESH_SECONDS = 15 * 60
 
 
 def default_config_path():
@@ -169,13 +171,19 @@ def command_result(result):
     }
 
 
+def _is_receive_timeout(exc):
+    return isinstance(exc, TimeoutError) or type(exc).__name__ in {'WebSocketTimeoutException', 'TimeoutError'}
+
+
 class MketyMt5Connector:
-    def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=20, config_path=None):
+    def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS,
+                 symbol_refresh_seconds=DEFAULT_SYMBOL_REFRESH_SECONDS, config_path=None):
         self.mt5 = mt5
         self.websocket_factory = websocket_factory
         self.config = dict(config)
         self.config_path = Path(config_path) if config_path is not None else None
-        self.heartbeat_seconds = int(heartbeat_seconds)
+        self.heartbeat_seconds = max(1, int(heartbeat_seconds))
+        self.symbol_refresh_seconds = max(self.heartbeat_seconds, int(symbol_refresh_seconds))
         self.identity = terminal_identity(mt5)
         self.catalog = symbol_catalog(mt5)
         self.instance_id = str(self.config.get('connector_instance_id') or uuid.uuid4())
@@ -184,6 +192,8 @@ class MketyMt5Connector:
         self.ledger = ReplayLedger(str(ledger_path or default_ledger_path()))
 
     def auth_message(self):
+        self.identity = terminal_identity(self.mt5)
+        self.catalog = symbol_catalog(self.mt5)
         return {
             'type': 'auth',
             'connectionToken': self.config['connection_token'],
@@ -201,6 +211,20 @@ class MketyMt5Connector:
         if self.config_path is not None:
             self.config = save_local_config(self.config_path, self.config)
         return True
+
+    def maintenance_messages(self, *, now, last_heartbeat, last_symbols):
+        current = float(now)
+        heartbeat_at = float(last_heartbeat)
+        symbols_at = float(last_symbols)
+        messages = []
+        if current - heartbeat_at >= self.heartbeat_seconds:
+            messages.append({'type': 'heartbeat', 'at': int(time.time() * 1000)})
+            heartbeat_at = current
+        if current - symbols_at >= self.symbol_refresh_seconds:
+            self.catalog = symbol_catalog(self.mt5)
+            messages.append({'type': 'symbols', 'symbols': self.catalog})
+            symbols_at = current
+        return messages, {'last_heartbeat': heartbeat_at, 'last_symbols': symbols_at}
 
     def execute_envelope(self, envelope):
         command_id = str(envelope.get('command_id') or '')
@@ -241,9 +265,21 @@ class MketyMt5Connector:
             socket = None
             try:
                 socket = self.websocket_factory(self.config['gateway_url'], timeout=30)
+                if hasattr(socket, 'settimeout'):
+                    socket.settimeout(1.0)
                 socket.send(json.dumps(self.auth_message(), separators=(',', ':')))
+                now = time.monotonic()
+                maintenance = {'last_heartbeat': now, 'last_symbols': now}
                 while True:
-                    raw = socket.recv()
+                    messages, maintenance = self.maintenance_messages(now=time.monotonic(), **maintenance)
+                    for outbound in messages:
+                        socket.send(json.dumps(outbound, separators=(',', ':')))
+                    try:
+                        raw = socket.recv()
+                    except Exception as exc:
+                        if _is_receive_timeout(exc):
+                            continue
+                        raise
                     if raw is None:
                         raise RuntimeError('Mkety gateway disconnected')
                     message = json.loads(raw)
