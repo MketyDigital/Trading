@@ -1,7 +1,7 @@
 name: Production Cloudflare Deploy
 # Production deployment: unified enterprise Trading + safe Cloudflare for SaaS white-label.
 # Broker execution uses two gates: deployment capability + persisted Mkety owner switch.
-# Relevant production code merged to main deploys automatically; manual dispatch remains available.
+# Deployment reads and verifies the persisted owner choice but never changes it.
 
 on:
   workflow_dispatch:
@@ -112,7 +112,7 @@ jobs:
             if [ -n "$value" ]; then cbot_present=$((cbot_present + 1)); fi
           done
           if [ "$cbot_present" -ne 0 ] && [ "$cbot_present" -ne 4 ]; then
-            echo "cTrader cBot production configuration is partial; configure both URLs and both secrets together."
+            echo "Shared trading gateway production configuration is partial; configure both URLs and both secrets together."
             missing=1
           fi
           if [ "$cbot_present" -eq 4 ]; then
@@ -126,9 +126,9 @@ jobs:
             throw new Error('CTRADER_CBOT_WS_URL must be wss://<host>:25345/v1/cbot');
           }
           NODE
-            echo "cTrader cBot gateway production configuration is complete."
+            echo "Shared cTrader/MT5 gateway production configuration is complete."
           else
-            echo "cTrader cBot gateway is not configured; cBot onboarding remains fail-closed."
+            echo "Shared trading gateway is not configured; cBot/MT5 connector onboarding remains fail-closed."
           fi
 
           if [ -z "${PRODUCTION_TRADING_ACCESS_CODE_SESSION_SECRET:-}" ]; then
@@ -292,7 +292,7 @@ jobs:
           if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
           cat "$body_file"
 
-      - name: Verify persisted owner broker switch remains OFF for acceptance
+      - name: Verify persisted owner broker switch without changing it
         shell: bash
         run: |
           body_file="$RUNNER_TEMP/runtime-control-body.json"
@@ -302,8 +302,12 @@ jobs:
           const body = JSON.parse(process.env.RUNTIME_BODY || '{}');
           if (!body.ok) throw new Error('runtime controls unavailable');
           if (body.brokerExecutionCapabilityEnabled !== true) throw new Error('deployment broker capability not enabled');
-          if (body.brokerExecutionEnabled !== false) throw new Error('owner broker switch must remain OFF during acceptance');
-          if (body.effectiveBrokerExecutionEnabled !== false) throw new Error('effective broker execution must remain blocked during acceptance');
+          if (typeof body.brokerExecutionEnabled !== 'boolean') throw new Error('owner broker switch state is invalid');
+          if (typeof body.effectiveBrokerExecutionEnabled !== 'boolean') throw new Error('effective broker execution state is invalid');
+          const expectedEffective = body.brokerExecutionCapabilityEnabled && body.brokerExecutionEnabled;
+          if (body.effectiveBrokerExecutionEnabled !== expectedEffective) throw new Error('effective broker execution state is inconsistent');
+          console.log(`Owner broker switch preserved: ${body.brokerExecutionEnabled ? 'ON' : 'OFF'}`);
+          console.log(`Effective broker execution: ${body.effectiveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
           NODE
           cat "$body_file"
 
@@ -323,6 +327,5 @@ jobs:
           echo "White-label CNAME target: $TRADING_CUSTOM_HOSTNAME_CNAME_TARGET"
           echo "TradingView direct ingress: disabled"
           echo "Broker deployment capability: enabled"
-          if [ -n "$PRODUCTION_CTRADER_CBOT_GATEWAY_URL" ]; then echo "cTrader cBot gateway: configured"; else echo "cTrader cBot gateway: not configured"; fi
-          echo "Broker owner master switch: OFF"
-          echo "Effective broker execution: blocked"
+          if [ -n "$PRODUCTION_CTRADER_CBOT_GATEWAY_URL" ]; then echo "Shared cTrader/MT5 gateway: configured"; else echo "Shared cTrader/MT5 gateway: not configured"; fi
+          echo "Persisted owner broker switch: preserved (see verification step)"
