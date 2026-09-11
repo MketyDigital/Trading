@@ -56,3 +56,12 @@ test('Coolify stack uses repo-root-safe build paths and keeps control API privat
   assert.match(caddy, /dns cloudflare \{\$CLOUDFLARE_DNS_API_TOKEN\}/);
   assert.match(caddy, /reverse_proxy gateway:25346/);
 });
+
+test('cBot release workflow publishes a stable downloadable algo and checksum', () => {
+  const workflow = read('.github/workflows/ctrader-cbot-release.yml');
+  assert.match(workflow, /ctrader-cbot-v1\.0\.0/);
+  assert.match(workflow, /MketyCloudAutoTrader\.algo/);
+  assert.match(workflow, /MketyCloudAutoTrader\.algo\.sha256/);
+  assert.match(workflow, /gh release (create|upload)/);
+  assert.match(workflow, /branches:\s*\n\s*- main/);
+});

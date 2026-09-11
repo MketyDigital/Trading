@@ -25,7 +25,7 @@ test('connections UI explains unavailable cTrader and MT5 Cloud setup instead of
   assert.doesNotMatch(html, /cb\.disabled=!c\.configured/);
 });
 
-test('connections UI exposes recommended Open API and Cloud Auto Trader with create and identity sync actions', () => {
+test('connections UI exposes recommended Open API and Cloud Auto Trader with create, download and identity sync actions', () => {
   const base = withUnifiedTradingConnections('<html><body><div id="accountRows"></div><div id="sourceRows"></div></body></html>');
   const html = withCTraderCbotConnections(base);
   assert.match(html, /Direct Connection — Recommended/);
@@ -34,4 +34,6 @@ test('connections UI exposes recommended Open API and Cloud Auto Trader with cre
   assert.match(html, /\/sync/);
   assert.match(html, /wss:\/\//);
   assert.match(html, /connection token/i);
+  assert.match(html, /Download Mkety Cloud Auto Trader/);
+  assert.match(html, /https:\/\/github\.com\/MketyDigital\/Trading\/releases\/latest\/download\/MketyCloudAutoTrader\.algo/);
 });
