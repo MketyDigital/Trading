@@ -1,7 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { verifyMt5ConnectionToken, validateMt5Command } from './mt5_protocol.js';
+import { createMt5ReconnectToken, verifyMt5ConnectionToken, validateMt5Command } from './mt5_protocol.js';
 
 const wsPort = Number(process.env.MT5_CONNECTOR_WS_PORT || 25347);
 const wsHost = process.env.MT5_CONNECTOR_WS_HOST || '0.0.0.0';
@@ -11,6 +11,7 @@ const signingKey = process.env.CBOT_TOKEN_SIGNING_KEY || '';
 const controlSecret = process.env.CBOT_CONTROL_SECRET || '';
 const commandTimeoutMs = Number(process.env.MT5_CONNECTOR_COMMAND_TIMEOUT_MS || process.env.CBOT_COMMAND_TIMEOUT_MS || 8000);
 const contextTimeoutMs = Number(process.env.MT5_CONNECTOR_CONTEXT_TIMEOUT_MS || 5000);
+const reconnectTtlMs = Number(process.env.MT5_CONNECTOR_RECONNECT_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const maxSymbols = 2000;
 
 if (!signingKey || !controlSecret) {
@@ -22,6 +23,7 @@ const sessions = new Map();
 const pending = new Map();
 const pendingContext = new Map();
 const delivered = new Map();
+const consumedPairTokens = new Map();
 
 function json(response, status, body) {
   const raw = JSON.stringify(body);
@@ -35,6 +37,8 @@ function authorizedControl(request) {
 function commandKey(accountRowId, commandId) { return `${accountRowId}:${commandId}`; }
 function contextKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function pruneDelivered(now = Date.now()) { for (const [key, expiresAt] of delivered.entries()) if (expiresAt < now) delivered.delete(key); }
+function pruneConsumedPairTokens(now = Date.now()) { for (const [key, expiresAt] of consumedPairTokens.entries()) if (expiresAt < now) consumedPairTokens.delete(key); }
+function pairTokenKey(token) { return crypto.createHash('sha256').update(String(token)).digest('hex'); }
 function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
   const current = sessions.get(socket.mketyAccountRowId);
@@ -117,17 +121,36 @@ wsServer.on('connection', (socket) => {
     try { message = JSON.parse(data.toString()); } catch { return socket.close(1007, 'INVALID_JSON'); }
     if (!socket.authenticated) {
       if (message?.type !== 'auth') return socket.close(1008, 'AUTH_REQUIRED');
-      const verified = verifyMt5ConnectionToken(message.connectionToken, signingKey);
+      const suppliedToken = String(message.connectionToken || '');
+      const verified = verifyMt5ConnectionToken(suppliedToken, signingKey);
       if (!verified.ok) return socket.close(1008, verified.reason);
       const identity = sessionIdentity(message);
       if (!identity.accountNumber || !identity.serverName) return socket.close(1008, 'ACCOUNT_ID_REQUIRED');
+      if (!identity.connectorInstanceId) return socket.close(1008, 'CONNECTOR_INSTANCE_ID_REQUIRED');
+      if (verified.purpose === 'reconnect' && verified.connectorInstanceId !== identity.connectorInstanceId) {
+        return socket.close(1008, 'CONNECTOR_INSTANCE_MISMATCH');
+      }
+      if (verified.purpose === 'pair') {
+        pruneConsumedPairTokens();
+        const tokenKey = pairTokenKey(suppliedToken);
+        if (consumedPairTokens.has(tokenKey)) return socket.close(1008, 'PAIR_TOKEN_ALREADY_USED');
+        consumedPairTokens.set(tokenKey, verified.expiresAt);
+      }
       clearTimeout(timer);
       socket.authenticated = true;
       socket.mketyAccountRowId = verified.accountRowId;
       const previous = sessions.get(verified.accountRowId);
       if (previous?.socket?.readyState === WebSocket.OPEN && previous.socket !== socket) previous.socket.close(1008, 'REPLACED_BY_NEW_SESSION');
       sessions.set(verified.accountRowId, { socket, identity, connectedAt: Date.now(), lastHeartbeatAt: Date.now() });
-      socket.send(JSON.stringify({ type: 'auth_ok', accountRowId: verified.accountRowId }));
+      const authResponse = { type: 'auth_ok', accountRowId: verified.accountRowId };
+      if (verified.purpose === 'pair') {
+        authResponse.reconnectToken = createMt5ReconnectToken({
+          accountRowId: verified.accountRowId,
+          connectorInstanceId: identity.connectorInstanceId,
+          expiresAt: Date.now() + reconnectTtlMs,
+        }, signingKey);
+      }
+      socket.send(JSON.stringify(authResponse));
       return;
     }
     const session = sessions.get(socket.mketyAccountRowId);
