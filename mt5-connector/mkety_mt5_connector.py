@@ -8,6 +8,8 @@ from pathlib import Path
 
 
 def _repo_bridge_path():
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS) / 'cloudflare-v2' / 'bridges'
     return Path(__file__).resolve().parents[1] / 'cloudflare-v2' / 'bridges'
 
 
@@ -55,6 +57,14 @@ def load_local_config(path):
     return body
 
 
+def _finite(value):
+    try:
+        number = float(value)
+        return number if number == number and number not in (float('inf'), float('-inf')) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def terminal_identity(mt5):
     info = mt5.account_info()
     if info is None:
@@ -73,27 +83,76 @@ def terminal_identity(mt5):
     }
 
 
+def _symbol_row(mt5, symbol):
+    name = str(getattr(symbol, 'name', '') or '').strip()
+    if not name:
+        return None
+    row = {
+        'platformSymbol': name,
+        'description': str(getattr(symbol, 'description', '') or '')[:240],
+        'tradable': int(getattr(symbol, 'trade_mode', 0) or 0) != int(getattr(mt5, 'SYMBOL_TRADE_MODE_DISABLED', 0)),
+        'minVolume': float(getattr(symbol, 'volume_min', 0) or 0),
+        'maxVolume': float(getattr(symbol, 'volume_max', 0) or 0),
+        'stepVolume': float(getattr(symbol, 'volume_step', 0) or 0),
+        'minLots': float(getattr(symbol, 'volume_min', 0) or 0),
+        'maxLots': float(getattr(symbol, 'volume_max', 0) or 0),
+        'stepLots': float(getattr(symbol, 'volume_step', 0) or 0),
+        'tickSize': float(getattr(symbol, 'trade_tick_size', 0) or getattr(symbol, 'point', 0) or 0),
+        'tickValue': float(getattr(symbol, 'trade_tick_value', 0) or 0),
+        'tickValueLoss': float(getattr(symbol, 'trade_tick_value_loss', 0) or getattr(symbol, 'trade_tick_value', 0) or 0),
+        'tickValueProfit': float(getattr(symbol, 'trade_tick_value_profit', 0) or getattr(symbol, 'trade_tick_value', 0) or 0),
+        'contractSize': float(getattr(symbol, 'trade_contract_size', 0) or 0),
+        'digits': int(getattr(symbol, 'digits', 0) or 0),
+    }
+    for key, attr in [('currencyBase', 'currency_base'), ('currencyProfit', 'currency_profit'), ('currencyMargin', 'currency_margin')]:
+        value = str(getattr(symbol, attr, '') or '').strip()
+        if value:
+            row[key] = value
+    return row
+
+
 def symbol_catalog(mt5, limit=MAX_SYMBOLS):
     result = []
     for symbol in (mt5.symbols_get() or ()):
-        name = str(getattr(symbol, 'name', '') or '').strip()
-        if not name:
-            continue
-        row = {
-            'platformSymbol': name,
-            'description': str(getattr(symbol, 'description', '') or '')[:240],
-            'tradable': int(getattr(symbol, 'trade_mode', 0) or 0) != int(getattr(mt5, 'SYMBOL_TRADE_MODE_DISABLED', 0)),
-            'minVolume': float(getattr(symbol, 'volume_min', 0) or 0),
-            'maxVolume': float(getattr(symbol, 'volume_max', 0) or 0),
-            'stepVolume': float(getattr(symbol, 'volume_step', 0) or 0),
-            'tickSize': float(getattr(symbol, 'trade_tick_size', 0) or getattr(symbol, 'point', 0) or 0),
-            'tickValue': float(getattr(symbol, 'trade_tick_value', 0) or 0),
-            'digits': int(getattr(symbol, 'digits', 0) or 0),
-        }
-        result.append(row)
+        row = _symbol_row(mt5, symbol)
+        if row:
+            result.append(row)
         if len(result) >= int(limit):
             break
     return result
+
+
+def terminal_context(mt5, symbol_name):
+    account_info = mt5.account_info()
+    if account_info is None:
+        raise RuntimeError('MT5 account is not available')
+    identity = terminal_identity(mt5)
+    account = dict(identity)
+    for target, attr in [('balance', 'balance'), ('equity', 'equity'), ('marginFree', 'margin_free'), ('leverage', 'leverage')]:
+        value = _finite(getattr(account_info, attr, None))
+        if value is not None:
+            account[target] = value
+    currency = str(getattr(account_info, 'currency', '') or '').strip()
+    if currency:
+        account['currency'] = currency
+
+    requested = str(symbol_name or '').strip()
+    if not requested:
+        raise RuntimeError('MT5 context symbol is required')
+    symbol_info = mt5.symbol_info(requested)
+    if symbol_info is None:
+        raise RuntimeError('SYMBOL_NOT_FOUND')
+    symbol = _symbol_row(mt5, symbol_info)
+    if not symbol:
+        raise RuntimeError('SYMBOL_NOT_FOUND')
+    tick_info = mt5.symbol_info_tick(requested)
+    tick = {}
+    if tick_info is not None:
+        for key in ('ask', 'bid', 'last'):
+            value = _finite(getattr(tick_info, key, None))
+            if value is not None and value > 0:
+                tick[key] = value
+    return {'account': account, 'symbol': symbol, 'tick': tick}
 
 
 def command_result(result):
@@ -138,7 +197,8 @@ class MketyMt5Connector:
         expires_at = int(envelope.get('expires_at') or 0)
         if not command_id or not broker_account_id:
             return {'type': 'result', 'commandId': command_id, 'ok': False, 'reason': 'COMMAND_INVALID'}
-        if broker_account_id != self.identity['accountNumber']:
+        current_identity = terminal_identity(self.mt5)
+        if broker_account_id != current_identity['accountNumber']:
             return {'type': 'result', 'commandId': command_id, 'ok': False, 'reason': 'MT5_BROKER_ACCOUNT_MISMATCH'}
         if expires_at < int(time.time() * 1000):
             return {'type': 'result', 'commandId': command_id, 'ok': False, 'reason': 'COMMAND_EXPIRED'}
@@ -151,6 +211,19 @@ class MketyMt5Connector:
             return {'type': 'result', 'commandId': command_id, **command_result(result)}
         except Exception as exc:
             return {'type': 'result', 'commandId': command_id, 'ok': False, 'reason': str(exc)}
+
+    def handle_message(self, message):
+        kind = str(message.get('type') or '')
+        if kind == 'command':
+            return self.execute_envelope(message.get('envelope') or {})
+        if kind == 'context_request':
+            request_id = str(message.get('requestId') or '')
+            try:
+                context = terminal_context(self.mt5, message.get('symbol'))
+                return {'type': 'context_result', 'requestId': request_id, 'ok': True, 'context': context}
+            except Exception as exc:
+                return {'type': 'context_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
+        return None
 
     def run_forever(self):
         while True:
@@ -169,8 +242,8 @@ class MketyMt5Connector:
                         continue
                     if kind == 'heartbeat_ack' or kind == 'symbols_ack':
                         continue
-                    if kind == 'command':
-                        response = self.execute_envelope(message.get('envelope') or {})
+                    response = self.handle_message(message)
+                    if response is not None:
                         socket.send(json.dumps(response, separators=(',', ':')))
             except KeyboardInterrupt:
                 return
