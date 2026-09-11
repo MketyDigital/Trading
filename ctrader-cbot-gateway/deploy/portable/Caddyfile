@@ -1,0 +1,29 @@
+{
+  admin off
+  email {$ACME_EMAIL}
+}
+
+{$CBOT_PUBLIC_HOST}:25345 {
+  tls {
+    dns cloudflare {$CLOUDFLARE_DNS_API_TOKEN}
+  }
+
+  @mt5control path /v1/mt5-connections/* /v1/mt5-commands/* /v1/mt5-context/*
+  handle @mt5control {
+    reverse_proxy gateway:8791
+  }
+
+  @mt5ws path /v1/mt5
+  handle @mt5ws {
+    reverse_proxy gateway:25347
+  }
+
+  @control path /health /v1/connections/* /v1/commands/*
+  handle @control {
+    reverse_proxy gateway:8790
+  }
+
+  handle {
+    reverse_proxy gateway:25346
+  }
+}
