@@ -1,0 +1,111 @@
+name: Live cBot Gateway Acceptance
+
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/diag-cbot-live-e2e.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Load authoritative production cBot secrets from Coolify
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/apps.json
+          uuid="$(python - <<'PY'
+          import json
+          apps=json.load(open('/tmp/apps.json'))
+          m=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(m)!=1: raise SystemExit(f'expected one cBot app, got {len(m)}')
+          print(m[0]['uuid'])
+          PY
+          )"
+          curl -fsS "$api/applications/$uuid/envs" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/envs.json
+          python - <<'PY'
+          import json,os
+          rows=json.load(open('/tmp/envs.json'))
+          out={}
+          for key in ('CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET'):
+              candidates=[r for r in rows if r.get('key')==key and not r.get('is_preview',False)]
+              if len(candidates)!=1: raise SystemExit(f'{key}: expected one production row, got {len(candidates)}')
+              v=candidates[0].get('real_value') or candidates[0].get('value') or ''
+              if len(v)<32 or v=='required': raise SystemExit(f'{key}: invalid production value')
+              print(f'::add-mask::{v}')
+              out[key]=v
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              for k,v in out.items(): f.write(f'{k}={v}\n')
+          print('Loaded and masked both production cBot secrets.')
+          PY
+
+      - name: Verify public TLS health with certificate validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl -fsS -o /tmp/health.json -w '%{http_code}' --connect-timeout 8 https://cbot.mkety.com:25345/health)" = 200
+          node -e "const b=require('/tmp/health.json'); if(!b.ok||b.service!=='mkety-ctrader-cbot-gateway') process.exit(1); console.log('Public TLS health: PASS')"
+
+      - name: Run authenticated WebSocket and control-plane end-to-end test
+        working-directory: ctrader-cbot-gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund >/dev/null
+          node --input-type=module <<'NODE'
+          import crypto from 'node:crypto';
+          import { WebSocket } from 'ws';
+          const signing=process.env.CBOT_TOKEN_SIGNING_KEY;
+          const control=process.env.CBOT_CONTROL_SECRET;
+          const accountRowId='acceptance-'+crypto.randomUUID();
+          const brokerAccount='999000111';
+          const payload=Buffer.from(JSON.stringify({v:1,a:accountRowId,e:Date.now()+60000,n:crypto.randomBytes(16).toString('hex')})).toString('base64url');
+          const sig=crypto.createHmac('sha256',signing).update(payload).digest('base64url');
+          const token=`v1.${payload}.${sig}`;
+          const ws=new WebSocket('wss://cbot.mkety.com:25345/v1/cbot');
+          const wait=(pred,ms=8000)=>new Promise((resolve,reject)=>{const t=setTimeout(()=>reject(new Error('WS_TIMEOUT')),ms); const fn=(raw)=>{let m;try{m=JSON.parse(raw.toString())}catch{return} if(pred(m)){clearTimeout(t);ws.off('message',fn);resolve(m)}};ws.on('message',fn)});
+          await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject)});
+          ws.send(JSON.stringify({type:'auth',connectionToken:token,accountNumber:brokerAccount,brokerName:'Mkety Acceptance Broker',isLive:false,instanceId:'ci-acceptance'}));
+          const auth=await wait(m=>m.type==='auth_ok');
+          if(auth.accountRowId!==accountRowId) throw new Error('AUTH_ROW_MISMATCH');
+          const headers={Authorization:`Bearer ${control}`};
+          let r=await fetch(`https://cbot.mkety.com:25345/v1/connections/${encodeURIComponent(accountRowId)}`,{headers});
+          if(r.status!==200) throw new Error(`CONNECTION_STATUS_${r.status}`);
+          const state=await r.json();
+          if(state.identity?.accountNumber!==brokerAccount || state.identity?.isLive!==false) throw new Error('IDENTITY_MISMATCH');
+          const issued=Date.now();
+          const envelope={version:'mkety.ctrader.cbot.v1',command_id:crypto.randomUUID(),account_id:accountRowId,broker_account_id:brokerAccount,issued_at:issued,expires_at:issued+30000,command:{action:'acceptance_ping'}};
+          const resultWait=wait(m=>m.type==='command'&&m.envelope?.command_id===envelope.command_id);
+          const post=fetch(`https://cbot.mkety.com:25345/v1/commands/${encodeURIComponent(accountRowId)}`,{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify(envelope)});
+          const command=await resultWait;
+          ws.send(JSON.stringify({type:'result',commandId:command.envelope.command_id,ok:true,result:{acceptance:true}}));
+          r=await post;
+          if(r.status!==200) throw new Error(`COMMAND_STATUS_${r.status}`);
+          const commandResult=await r.json();
+          if(commandResult.ok!==true || commandResult.result?.acceptance!==true) throw new Error('COMMAND_RESULT_MISMATCH');
+          const bad={...envelope,command_id:crypto.randomUUID(),broker_account_id:'WRONG',issued_at:Date.now(),expires_at:Date.now()+30000};
+          r=await fetch(`https://cbot.mkety.com:25345/v1/commands/${encodeURIComponent(accountRowId)}`,{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify(bad)});
+          const badBody=await r.json();
+          if(r.status!==409 || badBody.reason!=='CBOT_BROKER_ACCOUNT_MISMATCH') throw new Error('BROKER_BINDING_NOT_ENFORCED');
+          const noAuth=await fetch(`https://cbot.mkety.com:25345/v1/connections/${encodeURIComponent(accountRowId)}`);
+          if(noAuth.status!==401) throw new Error('CONTROL_AUTH_NOT_ENFORCED');
+          ws.close(1000,'acceptance_complete');
+          console.log('WebSocket auth: PASS');
+          console.log('Authenticated connection lookup: PASS');
+          console.log('Command delivery/result correlation: PASS');
+          console.log('Broker account binding: PASS');
+          console.log('Control API authorization: PASS');
+          NODE
