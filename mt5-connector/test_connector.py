@@ -42,22 +42,39 @@ class FakeMT5:
     TRADE_RETCODE_DONE_PARTIAL = 10010
 
     def account_info(self):
-        return SimpleNamespace(login=123456, server='Broker-Demo', company='Broker Ltd', trade_mode=0)
-
-    def symbols_get(self):
-        return (
-            SimpleNamespace(name='XAUUSD.r', description='Gold', trade_mode=4, volume_min=0.01, volume_max=100, volume_step=0.01, trade_tick_size=0.01, point=0.01, trade_tick_value=1, digits=2),
-            SimpleNamespace(name='Synthetic 75', description='Derived market', trade_mode=4, volume_min=0.01, volume_max=10, volume_step=0.01, trade_tick_size=0.01, point=0.01, trade_tick_value=1, digits=2),
+        return SimpleNamespace(
+            login=123456, server='Broker-Demo', company='Broker Ltd', trade_mode=0,
+            balance=10000.0, equity=9950.0, margin_free=9000.0, currency='USD', leverage=500,
         )
 
+    def _symbol(self, name):
+        rows = {
+            'XAUUSD.r': SimpleNamespace(
+                name='XAUUSD.r', description='Gold', trade_mode=4, volume_min=0.01, volume_max=100,
+                volume_step=0.01, trade_tick_size=0.01, point=0.01, trade_tick_value=1,
+                trade_tick_value_loss=1.2, trade_tick_value_profit=0.9, trade_contract_size=100,
+                digits=2, currency_base='XAU', currency_profit='USD', currency_margin='USD', visible=True,
+            ),
+            'Synthetic 75': SimpleNamespace(
+                name='Synthetic 75', description='Derived market', trade_mode=4, volume_min=0.001, volume_max=10,
+                volume_step=0.001, trade_tick_size=0.01, point=0.01, trade_tick_value=0.5,
+                trade_tick_value_loss=0.5, trade_tick_value_profit=0.5, trade_contract_size=1,
+                digits=2, currency_base='', currency_profit='USD', currency_margin='USD', visible=True,
+            ),
+        }
+        return rows.get(name)
+
+    def symbols_get(self):
+        return (self._symbol('XAUUSD.r'), self._symbol('Synthetic 75'))
+
     def symbol_info(self, name):
-        return SimpleNamespace(name=name, visible=True)
+        return self._symbol(name)
 
     def symbol_select(self, name, enabled):
         return True
 
     def symbol_info_tick(self, name):
-        return SimpleNamespace(ask=2500.5, bid=2500.4)
+        return SimpleNamespace(ask=2500.5, bid=2500.4, last=2500.45)
 
     def order_check(self, request):
         return SimpleNamespace(retcode=0, comment='ok')
@@ -86,7 +103,22 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(identity['serverName'], 'Broker-Demo')
         catalog = module.symbol_catalog(mt5)
         self.assertEqual([row['platformSymbol'] for row in catalog], ['XAUUSD.r', 'Synthetic 75'])
+        self.assertEqual(catalog[0]['tickValueLoss'], 1.2)
+        self.assertEqual(catalog[0]['contractSize'], 100.0)
         self.assertNotIn('password', catalog[0])
+
+    def test_live_terminal_context_preserves_risk_economics_and_tick_without_credentials(self):
+        context = module.terminal_context(FakeMT5(), 'XAUUSD.r')
+        self.assertEqual(context['account']['accountNumber'], '123456')
+        self.assertEqual(context['account']['balance'], 10000.0)
+        self.assertEqual(context['account']['equity'], 9950.0)
+        self.assertEqual(context['symbol']['platformSymbol'], 'XAUUSD.r')
+        self.assertEqual(context['symbol']['tickValueLoss'], 1.2)
+        self.assertEqual(context['symbol']['minLots'], 0.01)
+        self.assertEqual(context['symbol']['stepLots'], 0.01)
+        self.assertEqual(context['tick']['ask'], 2500.5)
+        self.assertEqual(context['tick']['bid'], 2500.4)
+        self.assertNotIn('password', json.dumps(context).lower())
 
     def test_pairing_config_is_local_file_not_customer_environment(self):
         with tempfile.TemporaryDirectory() as td:
@@ -132,6 +164,20 @@ class ConnectorTests(unittest.TestCase):
             self.assertTrue(first['ok'])
             self.assertEqual(first['orderId'], 501)
             self.assertTrue(second['duplicate'])
+
+    def test_context_request_returns_fresh_terminal_context(self):
+        with tempfile.TemporaryDirectory() as td:
+            connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
+                'gateway_url': module.DEFAULT_GATEWAY,
+                'connection_token': 'token',
+                'connector_instance_id': 'i',
+            }, ledger_path=Path(td) / 'ledger.sqlite')
+            response = connector.handle_message({'type': 'context_request', 'requestId': 'ctx-1', 'symbol': 'XAUUSD.r'})
+            self.assertEqual(response['type'], 'context_result')
+            self.assertEqual(response['requestId'], 'ctx-1')
+            self.assertTrue(response['ok'])
+            self.assertEqual(response['context']['account']['equity'], 9950.0)
+            self.assertEqual(response['context']['symbol']['tickValueLoss'], 1.2)
 
 
 if __name__ == '__main__':
