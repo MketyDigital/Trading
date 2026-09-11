@@ -1,0 +1,50 @@
+name: Inspect Coolify cBot Env Rows
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/diag-coolify-env-row-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Inspect row metadata only
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          uuid="$(python - <<'PY'
+          import json
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one app, found {len(rows)}')
+          print(rows[0]['uuid'])
+          PY
+          )"
+          curl -fsS "$api/applications/$uuid/envs" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/envs.json
+          python - <<'PY'
+          import json,collections
+          envs=json.load(open('/tmp/envs.json'))
+          wanted={'CBOT_PUBLIC_HOST','ACME_EMAIL','CLOUDFLARE_DNS_API_TOKEN','CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET','CBOT_COMMAND_TIMEOUT_MS'}
+          grouped=collections.defaultdict(list)
+          for e in envs:
+              if e.get('key') in wanted: grouped[e.get('key')].append(e)
+          for key in sorted(wanted):
+              rows=grouped.get(key,[])
+              print(f'{key}: rows={len(rows)}')
+              for e in rows:
+                  v=e.get('real_value') or e.get('value') or ''
+                  if not v: state='EMPTY'
+                  elif v=='required': state='PLACEHOLDER_REQUIRED'
+                  elif v=='8000': state='TIMEOUT_8000'
+                  else: state='NONPLACEHOLDER'
+                  print('  id=%s uuid=%s preview=%s literal=%s runtime=%s buildtime=%s shared=%s shown_once=%s state=%s length=%s created=%s updated=%s' % (
+                      e.get('id'),e.get('uuid'),e.get('is_preview'),e.get('is_literal'),e.get('is_runtime'),e.get('is_buildtime'),e.get('is_shared'),e.get('is_shown_once'),state,len(v),e.get('created_at'),e.get('updated_at')))
+          PY
