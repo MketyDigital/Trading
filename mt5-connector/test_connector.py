@@ -163,6 +163,25 @@ class ConnectorTests(unittest.TestCase):
             connector.handle_auth_ok({'type': 'auth_ok', 'accountRowId': 'row-1'})
             self.assertEqual(module.load_local_config(path)['connection_token'], 'mt5r1.reconnect.signature')
 
+    def test_maintenance_emits_heartbeat_and_refreshes_actual_terminal_catalog_on_independent_cadences(self):
+        connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
+            'gateway_url': module.DEFAULT_GATEWAY,
+            'connection_token': 'token',
+            'connector_instance_id': 'i',
+        }, ledger_path=':memory:', heartbeat_seconds=20, symbol_refresh_seconds=900)
+        messages, state = connector.maintenance_messages(now=1000, last_heartbeat=970, last_symbols=0)
+        self.assertEqual([item['type'] for item in messages], ['heartbeat', 'symbols'])
+        self.assertEqual(messages[1]['symbols'][0]['platformSymbol'], 'XAUUSD.r')
+        self.assertEqual(state, {'last_heartbeat': 1000, 'last_symbols': 1000})
+
+        quiet, state2 = connector.maintenance_messages(now=1010, **state)
+        self.assertEqual(quiet, [])
+        self.assertEqual(state2, state)
+
+        heartbeat_only, state3 = connector.maintenance_messages(now=1021, **state)
+        self.assertEqual([item['type'] for item in heartbeat_only], ['heartbeat'])
+        self.assertEqual(state3['last_symbols'], 1000)
+
     def test_envelope_rejects_wrong_broker_account_before_engine(self):
         with tempfile.TemporaryDirectory() as td:
             connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
