@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { verifyMt5ConnectionToken, validateMt5Command } from './mt5_protocol.js';
 
@@ -9,10 +10,17 @@ const controlHost = process.env.MT5_CONNECTOR_CONTROL_HOST || '0.0.0.0';
 const signingKey = process.env.CBOT_TOKEN_SIGNING_KEY || '';
 const controlSecret = process.env.CBOT_CONTROL_SECRET || '';
 const commandTimeoutMs = Number(process.env.MT5_CONNECTOR_COMMAND_TIMEOUT_MS || process.env.CBOT_COMMAND_TIMEOUT_MS || 8000);
+const contextTimeoutMs = Number(process.env.MT5_CONNECTOR_CONTEXT_TIMEOUT_MS || 5000);
 const maxSymbols = 2000;
+
+if (!signingKey || !controlSecret) {
+  console.error('CBOT_TOKEN_SIGNING_KEY and CBOT_CONTROL_SECRET are required for MT5 connector gateway');
+  process.exit(1);
+}
 
 const sessions = new Map();
 const pending = new Map();
+const pendingContext = new Map();
 const delivered = new Map();
 
 function json(response, status, body) {
@@ -25,6 +33,7 @@ function authorizedControl(request) {
   return header.startsWith('Bearer ') && header.slice(7) === controlSecret;
 }
 function commandKey(accountRowId, commandId) { return `${accountRowId}:${commandId}`; }
+function contextKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function pruneDelivered(now = Date.now()) { for (const [key, expiresAt] of delivered.entries()) if (expiresAt < now) delivered.delete(key); }
 function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
@@ -44,9 +53,13 @@ function sanitizeSymbols(input) {
     const row = { platformSymbol };
     if (String(raw.description ?? '').trim()) row.description = String(raw.description).trim().slice(0, 240);
     if (typeof raw.tradable === 'boolean') row.tradable = raw.tradable;
-    for (const key of ['minVolume', 'maxVolume', 'stepVolume', 'tickSize', 'tickValue', 'digits']) {
+    for (const key of ['minVolume', 'maxVolume', 'stepVolume', 'minLots', 'maxLots', 'stepLots', 'tickSize', 'tickValue', 'tickValueLoss', 'tickValueProfit', 'contractSize', 'digits']) {
       const value = finiteOrNull(raw[key]);
       if (value !== null) row[key] = value;
+    }
+    for (const key of ['currencyBase', 'currencyProfit', 'currencyMargin']) {
+      const value = String(raw[key] ?? '').trim();
+      if (value) row[key] = value.slice(0, 32);
     }
     out.push(row);
     if (out.length >= maxSymbols) break;
@@ -64,6 +77,34 @@ function sessionIdentity(message = {}) {
     symbols: sanitizeSymbols(message.symbols),
     symbolsUpdatedAt: Date.now(),
   };
+}
+function safeContext(context, expectedIdentity) {
+  if (!context || typeof context !== 'object' || Array.isArray(context)) return null;
+  const accountRaw = context.account && typeof context.account === 'object' ? context.account : {};
+  const accountNumber = String(accountRaw.accountNumber ?? '').trim();
+  const serverName = String(accountRaw.serverName ?? '').trim();
+  if (!accountNumber || accountNumber !== String(expectedIdentity?.accountNumber ?? '')) return null;
+  if (!serverName || serverName !== String(expectedIdentity?.serverName ?? '')) return null;
+  const account = {
+    accountNumber,
+    serverName,
+    brokerName: String(accountRaw.brokerName ?? expectedIdentity?.brokerName ?? '').trim() || null,
+    isLive: Boolean(accountRaw.isLive),
+  };
+  for (const key of ['balance', 'equity', 'marginFree', 'leverage']) {
+    const value = finiteOrNull(accountRaw[key]);
+    if (value !== null) account[key] = value;
+  }
+  const currency = String(accountRaw.currency ?? '').trim();
+  if (currency) account.currency = currency.slice(0, 16);
+  const symbols = sanitizeSymbols([context.symbol]);
+  if (symbols.length !== 1) return null;
+  const tick = {};
+  for (const key of ['ask', 'bid', 'last']) {
+    const value = finiteOrNull(context?.tick?.[key]);
+    if (value !== null && value > 0) tick[key] = value;
+  }
+  return { account, symbol: symbols[0], tick };
 }
 
 const wsServer = new WebSocketServer({ port: wsPort, host: wsHost, path: '/v1/mt5' });
@@ -98,6 +139,17 @@ wsServer.on('connection', (socket) => {
       if (session) session.identity = { ...session.identity, symbols: sanitizeSymbols(message.symbols), symbolsUpdatedAt: Date.now() };
       return socket.send(JSON.stringify({ type: 'symbols_ack', count: session?.identity?.symbols?.length || 0, at: Date.now() }));
     }
+    if (message?.type === 'context_result' && message.requestId) {
+      const key = contextKey(socket.mketyAccountRowId, message.requestId);
+      const waiter = pendingContext.get(key);
+      if (!waiter) return;
+      pendingContext.delete(key);
+      clearTimeout(waiter.timer);
+      if (message.ok === false) return waiter.resolve({ ok: false, reason: String(message.reason || 'MT5_CONTEXT_FAILED') });
+      const context = safeContext(message.context, session?.identity);
+      if (!context) return waiter.resolve({ ok: false, reason: 'MT5_CONTEXT_IDENTITY_INVALID' });
+      return waiter.resolve({ ok: true, context });
+    }
     if (message?.type === 'result' && message.commandId) {
       const key = commandKey(socket.mketyAccountRowId, message.commandId);
       const waiter = pending.get(key);
@@ -118,6 +170,26 @@ const controlServer = http.createServer(async (request, response) => {
     const id = decodeURIComponent(statusMatch[1]); const session = sessions.get(id);
     if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 404, { ok: false, reason: 'MT5_CONNECTOR_OFFLINE' });
     return json(response, 200, { ok: true, online: true, accountRowId: id, identity: session.identity, connectedAt: session.connectedAt, lastHeartbeatAt: session.lastHeartbeatAt });
+  }
+  const contextMatch = url.pathname.match(/^\/v1\/mt5-context\/([^/]+)$/);
+  if (request.method === 'GET' && contextMatch) {
+    const id = decodeURIComponent(contextMatch[1]);
+    const symbol = String(url.searchParams.get('symbol') || '').trim();
+    if (!symbol) return json(response, 400, { ok: false, reason: 'SYMBOL_REQUIRED' });
+    const session = sessions.get(id);
+    if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 404, { ok: false, reason: 'MT5_CONNECTOR_OFFLINE' });
+    const requestId = crypto.randomUUID();
+    const key = contextKey(id, requestId);
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pendingContext.delete(key); reject(new Error('MT5_CONTEXT_TIMEOUT')); }, contextTimeoutMs);
+        pendingContext.set(key, { resolve, reject, timer });
+        session.socket.send(JSON.stringify({ type: 'context_request', requestId, symbol }));
+      });
+      return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
+    } catch (error) {
+      return json(response, 504, { ok: false, reason: error.message || 'MT5_CONTEXT_TIMEOUT' });
+    }
   }
   const commandMatch = url.pathname.match(/^\/v1\/mt5-commands\/([^/]+)$/);
   if (request.method === 'POST' && commandMatch) {
