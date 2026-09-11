@@ -34,6 +34,23 @@ test('canonical and broker-provided aliases resolve generically across instrumen
   assert.equal(resolveAccountSymbol('DOW', catalog, {}).platformSymbol, 'US30.cash');
 });
 
+test('raw live broker catalogs resolve common suffixes and prefixes without precomputed canonical fields', () => {
+  assert.equal(resolveAccountSymbol('GOLD', [{ platformSymbol: 'XAUUSD.r', tradable: true }], {}).platformSymbol, 'XAUUSD.r');
+  assert.equal(resolveAccountSymbol('GOLD', [{ platformSymbol: 'm.XAUUSD', tradable: true }], {}).platformSymbol, 'm.XAUUSD');
+  assert.equal(resolveAccountSymbol('DOW', [{ platformSymbol: 'US30.cash', tradable: true }], {}).platformSymbol, 'US30.cash');
+  assert.equal(resolveAccountSymbol('GER40', [{ platformSymbol: 'GER40m', tradable: true }], {}).platformSymbol, 'GER40m');
+});
+
+test('raw broker-affix matching remains fail-closed when more than one account symbol is plausible', () => {
+  const result = resolveAccountSymbol('GOLD', [
+    { platformSymbol: 'XAUUSD.a', tradable: true },
+    { platformSymbol: 'XAUUSD.b', tradable: true },
+  ], {});
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'AMBIGUOUS_SYMBOL');
+  assert.deepEqual(result.candidates.sort(), ['XAUUSD.a', 'XAUUSD.b']);
+});
+
 test('ambiguous normalized matches fail closed instead of guessing broker symbol', () => {
   const result = resolveAccountSymbol('gold', [
     { platformSymbol: 'XAUUSD.a', canonical: 'XAUUSD', aliases: ['GOLD'] },
