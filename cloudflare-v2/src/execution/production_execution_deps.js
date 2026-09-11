@@ -48,6 +48,21 @@ function brokerAccountIdOf(account = {}) {
   return text(account.account_id ?? account.brokerAccountId);
 }
 
+function providerConfigOf(account = {}) {
+  const config = account.provider_config ?? account.providerConfig;
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+}
+
+function assertCTraderCbotConnected(account = {}) {
+  const brokerAccountId = brokerAccountIdOf(account);
+  const status = text(providerConfigOf(account).status).toLowerCase();
+  if (!brokerAccountId || brokerAccountId.toLowerCase().startsWith('pending:') || status !== 'connected') {
+    const error = new Error('cTrader cBot trade account is not synchronized and connected');
+    error.code = 'CTRADER_CBOT_NOT_CONNECTED';
+    throw error;
+  }
+}
+
 function sizingModeOf(account = {}) {
   return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
 }
@@ -550,7 +565,8 @@ export function createProductionExecutionDependencies({
   }
 
   async function dispatchCTraderCbot(account, action, groupId) {
-    const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+        assertCTraderCbotConnected(account);
+const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
     const gatewayUrl = required(credentials.gatewayUrl, 'trade account cTrader cBot gatewayUrl');
     const controlSecret = required(credentials.controlSecret, 'trade account cTrader cBot controlSecret');
     const environment = environmentOf(account);
