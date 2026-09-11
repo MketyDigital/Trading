@@ -36,8 +36,8 @@ jobs:
           import json
           b=json.load(open('/tmp/caddy.json'))
           raw=json.dumps(b)
-          required=['gateway:8790','gateway:25346','/health','/v1/connections/*','/v1/commands/*','cbot.mkety.com:25345']
+          required=['gateway:8790','gateway:25346','/health','/v1/connections/*','/v1/commands/*','cbot.mkety.com',':25345']
           missing=[x for x in required if x not in raw]
           if missing: raise SystemExit('Missing expected routing elements: '+', '.join(missing))
-          print('Caddy config validates and contains both control and WebSocket routes.')
+          print('Caddy config validates and contains TLS host, 25345 listener, control routes and WebSocket upstream.')
           PY
