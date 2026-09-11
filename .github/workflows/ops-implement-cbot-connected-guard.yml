@@ -28,6 +28,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
           p=Path('cloudflare-v2/src/execution/production_execution_deps.js')
           s=p.read_text()
           anchor="""function brokerAccountIdOf(account = {}) {
@@ -56,16 +57,11 @@ jobs:
           if 'function assertCTraderCbotConnected' not in s:
               if anchor not in s: raise SystemExit('brokerAccountIdOf anchor not found')
               s=s.replace(anchor,insert,1)
-          dispatch="""  async function dispatchCTraderCbot(account, action, groupId) {
-            const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
-          """
-          replacement="""  async function dispatchCTraderCbot(account, action, groupId) {
-            assertCTraderCbotConnected(account);
-            const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
-          """
-          if 'async function dispatchCTraderCbot(account, action, groupId) {\n    assertCTraderCbotConnected(account);' not in s:
-              if dispatch not in s: raise SystemExit('dispatchCTraderCbot anchor not found')
-              s=s.replace(dispatch,replacement,1)
+
+          if 'assertCTraderCbotConnected(account);' not in s:
+              pattern=r"(async function dispatchCTraderCbot\(account, action, groupId\) \{\s*)"
+              s,n=re.subn(pattern,r"\1    assertCTraderCbotConnected(account);\n",s,count=1)
+              if n != 1: raise SystemExit(f'dispatchCTraderCbot insertion count={n}')
           p.write_text(s)
           PY
       - name: Run focused cBot dispatch tests
