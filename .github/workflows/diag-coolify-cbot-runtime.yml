@@ -30,21 +30,21 @@ jobs:
           test "$CLOUDFLARE_API_TOKEN" != required || { echo 'Cloudflare token is still the placeholder required'; exit 1; }
           echo 'Coolify and Cloudflare credentials are configured.'
 
-      - name: Validate Cloudflare token before changing Coolify
+      - name: Validate Cloudflare zone access before changing Coolify
         shell: bash
         run: |
           set -euo pipefail
-          status="$(curl -sS -o /tmp/cf-verify.json -w '%{http_code}' \
-            https://api.cloudflare.com/client/v4/user/tokens/verify \
+          status="$(curl -sS -o /tmp/cf-zone.json -w '%{http_code}' \
+            'https://api.cloudflare.com/client/v4/zones?name=mkety.com&status=active' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             -H 'Content-Type: application/json')"
-          test "$status" = 200 || { echo "Cloudflare token verification HTTP $status"; exit 1; }
+          test "$status" = 200 || { echo "Cloudflare zone lookup HTTP $status"; exit 1; }
           python - <<'PY'
           import json
-          b=json.load(open('/tmp/cf-verify.json'))
-          if not b.get('success') or b.get('result',{}).get('status') != 'active':
-              raise SystemExit('Cloudflare token is not active')
-          print('Cloudflare token is active.')
+          b=json.load(open('/tmp/cf-zone.json'))
+          if not b.get('success') or len(b.get('result') or []) != 1:
+              raise SystemExit('Cloudflare token cannot read the active mkety.com zone')
+          print('Cloudflare token can access the active mkety.com zone.')
           PY
 
       - name: Discover exact Coolify cBot application
@@ -156,7 +156,7 @@ jobs:
           set -euo pipefail
           last=''
           stable=0
-          for attempt in $(seq 1 45); do
+          for attempt in $(seq 1 60); do
             curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
               -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
             status="$(python -c "import json; print(json.load(open('/tmp/app.json')).get('status',''))")"
