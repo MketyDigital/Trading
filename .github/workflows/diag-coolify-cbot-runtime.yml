@@ -1,0 +1,143 @@
+name: Diagnose Coolify cBot Runtime
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/diag-coolify-cbot-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Require Coolify credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${COOLIFY_URL:-}" || { echo 'COOLIFY_URL is missing'; exit 1; }
+          test -n "${COOLIFY_TOKEN:-}" || { echo 'COOLIFY_TOKEN is missing'; exit 1; }
+          echo "Coolify URL configured: yes"
+          echo "Coolify token configured: yes"
+
+      - name: Discover deployed Trading Compose application
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"
+          case "$base" in
+            */api/v1) api="$base" ;;
+            *) api="$base/api/v1" ;;
+          esac
+          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
+          curl -fsS "$api/applications" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Accept: application/json' > /tmp/apps.json
+          python - <<'PY'
+          import json, os
+          apps=json.load(open('/tmp/apps.json'))
+          def text(v): return str(v or '').lower()
+          candidates=[]
+          for a in apps:
+              repo=text(a.get('git_repository')) + ' ' + text(a.get('git_full_url'))
+              compose=text(a.get('docker_compose_location'))
+              name=text(a.get('name'))
+              score=0
+              if 'mketydigital/trading' in repo: score += 5
+              if 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in compose: score += 5
+              if 'cbot' in name and 'gateway' in name: score += 3
+              if text(a.get('git_branch')) == 'main': score += 1
+              if score: candidates.append((score,a))
+          if not candidates:
+              print('No matching Coolify application found. Available application names:')
+              for a in apps: print('-', a.get('name'), a.get('uuid'))
+              raise SystemExit(2)
+          candidates.sort(key=lambda x:x[0], reverse=True)
+          score,a=candidates[0]
+          print('Selected Coolify application:')
+          for key in ['name','uuid','status','git_repository','git_branch','git_commit_sha','docker_compose_location','fqdn','build_pack']:
+              print(f'  {key}: {a.get(key)}')
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write(f"COOLIFY_APP_UUID={a['uuid']}\n")
+          PY
+
+      - name: Inspect safe application metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Accept: application/json' > /tmp/app.json
+          python - <<'PY'
+          import json
+          a=json.load(open('/tmp/app.json'))
+          print('Application runtime metadata:')
+          for key in ['name','uuid','status','git_commit_sha','docker_compose_location','docker_compose_domains','compose_parsing_version','updated_at']:
+              print(f'  {key}: {a.get(key)}')
+          PY
+
+      - name: Verify required runtime environment keys without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Accept: application/json' > /tmp/envs.json
+          python - <<'PY'
+          import json
+          envs=json.load(open('/tmp/envs.json'))
+          by={e.get('key'):e for e in envs}
+          required=['CBOT_PUBLIC_HOST','ACME_EMAIL','CLOUDFLARE_DNS_API_TOKEN','CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET']
+          optional=['CBOT_COMMAND_TIMEOUT_MS']
+          print('Required Coolify environment key presence:')
+          missing=[]
+          for key in required:
+              e=by.get(key)
+              present=bool(e and (e.get('real_value') or e.get('value')))
+              print(f'  {key}: {"SET" if present else "MISSING/EMPTY"}')
+              if not present: missing.append(key)
+          for key in optional:
+              e=by.get(key)
+              present=bool(e and (e.get('real_value') or e.get('value')))
+              print(f'  {key}: {"SET" if present else "DEFAULT"}')
+          if missing:
+              print('Missing required keys:', ', '.join(missing))
+          PY
+
+      - name: Fetch application container logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          code=$(curl -sS -o /tmp/logs.json -w '%{http_code}' \
+            "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=300&show_timestamps=true" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            -H 'Accept: application/json')
+          set -e
+          echo "Coolify logs endpoint HTTP: $code"
+          cat /tmp/logs.json | python - <<'PY'
+          import json,sys,re
+          raw=sys.stdin.read()
+          try:
+              body=json.loads(raw)
+              logs=body.get('logs','') if isinstance(body,dict) else raw
+          except Exception:
+              logs=raw
+          # Defensive redaction for common accidental secret patterns.
+          logs=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+', r'\1[REDACTED]', logs)
+          logs=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+', r'\1\2[REDACTED]', logs)
+          print(logs[-40000:])
+          PY
+
+      - name: Report diagnosis target
+        shell: bash
+        run: |
+          echo "Inspected Coolify application UUID: $COOLIFY_APP_UUID"
+          echo "No secret values were intentionally printed."
