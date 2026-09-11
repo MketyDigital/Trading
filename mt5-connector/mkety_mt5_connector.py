@@ -170,14 +170,16 @@ def command_result(result):
 
 
 class MketyMt5Connector:
-    def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=20):
+    def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=20, config_path=None):
         self.mt5 = mt5
         self.websocket_factory = websocket_factory
         self.config = dict(config)
+        self.config_path = Path(config_path) if config_path is not None else None
         self.heartbeat_seconds = int(heartbeat_seconds)
         self.identity = terminal_identity(mt5)
         self.catalog = symbol_catalog(mt5)
         self.instance_id = str(self.config.get('connector_instance_id') or uuid.uuid4())
+        self.config['connector_instance_id'] = self.instance_id
         self.engine = MT5Engine(mt5, magic=460051)
         self.ledger = ReplayLedger(str(ledger_path or default_ledger_path()))
 
@@ -190,6 +192,15 @@ class MketyMt5Connector:
             'connectorInstanceId': self.instance_id,
             'symbols': self.catalog,
         }
+
+    def handle_auth_ok(self, message):
+        reconnect_token = str(message.get('reconnectToken') or '').strip()
+        if not reconnect_token:
+            return False
+        self.config['connection_token'] = reconnect_token
+        if self.config_path is not None:
+            self.config = save_local_config(self.config_path, self.config)
+        return True
 
     def execute_envelope(self, envelope):
         command_id = str(envelope.get('command_id') or '')
@@ -238,6 +249,7 @@ class MketyMt5Connector:
                     message = json.loads(raw)
                     kind = str(message.get('type') or '')
                     if kind == 'auth_ok':
+                        self.handle_auth_ok(message)
                         print(f"Mkety MT5 Connector connected: account {self.identity['accountNumber']} / {self.identity['serverName']}")
                         continue
                     if kind == 'heartbeat_ack' or kind == 'symbols_ack':
@@ -288,7 +300,7 @@ def main(argv=None):
     if not mt5.initialize():
         raise RuntimeError(f'MT5 initialize failed: {mt5.last_error()}')
     try:
-        connector = MketyMt5Connector(mt5, websocket.create_connection, config)
+        connector = MketyMt5Connector(mt5, websocket.create_connection, config, config_path=config_path)
         connector.run_forever()
     finally:
         mt5.shutdown()
