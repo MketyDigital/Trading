@@ -15,11 +15,11 @@ async function signPayload(payload, secret) {
   return toBase64Url(await crypto.subtle.sign('HMAC', key, encoder.encode(payload)));
 }
 
-export async function createMt5ConnectorToken({ accountRowId, signingKey, issuedAt = Date.now(), ttlMs = 365 * 24 * 60 * 60 * 1000, nonce = crypto.randomUUID() } = {}) {
+export async function createMt5ConnectorToken({ accountRowId, signingKey, issuedAt = Date.now(), ttlMs = 15 * 60 * 1000, nonce = crypto.randomUUID() } = {}) {
   const id = String(accountRowId ?? '').trim();
   const issued = Number(issuedAt); const ttl = Number(ttlMs);
   if (!id || !signingKey || !Number.isFinite(issued) || !Number.isFinite(ttl) || ttl <= 0) throw new TypeError('accountRowId, signingKey and positive ttl required');
-  const payload = toBase64Url(JSON.stringify({ v: 1, p: 'mt5', a: id, e: issued + ttl, n: String(nonce) }));
+  const payload = toBase64Url(JSON.stringify({ v: 1, p: 'mt5', k: 'pair', a: id, e: issued + ttl, n: String(nonce) }));
   return `mt5v1.${payload}.${await signPayload(payload, signingKey)}`;
 }
 
