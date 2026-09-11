@@ -1,7 +1,7 @@
 services:
   gateway:
     build:
-      context: ../..
+      context: ./ctrader-cbot-gateway
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -20,7 +20,7 @@ services:
 
   caddy:
     build:
-      context: ../..
+      context: ./ctrader-cbot-gateway
       dockerfile: deploy/coolify/Dockerfile.caddy
     restart: unless-stopped
     depends_on:
