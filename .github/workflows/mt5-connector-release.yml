@@ -1,0 +1,84 @@
+name: MT5 Connector Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/mt5-connector-release.yml'
+      - 'mt5-connector/**'
+      - 'cloudflare-v2/bridges/mt5_bridge.py'
+    tags:
+      - 'mt5-connector-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned connector build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller==6.16.0" "websocket-client==1.8.0" "MetaTrader5==5.0.5200"
+
+      - name: Run pure connector regression tests
+        shell: pwsh
+        run: python -m unittest mt5-connector/test_connector.py
+
+      - name: Build standalone Windows executable
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name MketyMT5Connector `
+            --paths cloudflare-v2/bridges `
+            --hidden-import mt5_bridge `
+            --hidden-import websocket `
+            mt5-connector/mkety_mt5_connector.py
+          if (!(Test-Path "dist/MketyMT5Connector.exe")) { throw "MT5 connector executable was not produced" }
+
+      - name: Create SHA256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "dist/MketyMT5Connector.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  MketyMT5Connector.exe" | Out-File -FilePath "dist/MketyMT5Connector.exe.sha256" -Encoding ascii -NoNewline
+
+      - name: Upload verified build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MketyMT5Connector-windows
+          path: |
+            dist/MketyMT5Connector.exe
+            dist/MketyMT5Connector.exe.sha256
+          if-no-files-found: error
+
+      - name: Publish stable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/mt5-connector-v*') {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $tag = 'mt5-connector-v1.0.0'
+          }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/MketyMT5Connector.exe dist/MketyMT5Connector.exe.sha256 --clobber
+          } else {
+            gh release create $tag dist/MketyMT5Connector.exe dist/MketyMT5Connector.exe.sha256 --target main --title "Mkety MT5 Connector $($tag.Replace('mt5-connector-v',''))" --generate-notes
+          }
