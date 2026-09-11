@@ -1,0 +1,90 @@
+name: Implement cBot Connected Guard
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/ops-implement-cbot-connected-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diag/coolify-cbot-runtime
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Add minimal fail-closed cBot synchronization guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare-v2/src/execution/production_execution_deps.js')
+          s=p.read_text()
+          anchor="""function brokerAccountIdOf(account = {}) {
+            return text(account.account_id ?? account.brokerAccountId);
+          }
+          """
+          insert="""function brokerAccountIdOf(account = {}) {
+            return text(account.account_id ?? account.brokerAccountId);
+          }
+
+          function providerConfigOf(account = {}) {
+            const config = account.provider_config ?? account.providerConfig;
+            return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+          }
+
+          function assertCTraderCbotConnected(account = {}) {
+            const brokerAccountId = brokerAccountIdOf(account);
+            const status = text(providerConfigOf(account).status).toLowerCase();
+            if (!brokerAccountId || brokerAccountId.toLowerCase().startsWith('pending:') || status !== 'connected') {
+              const error = new Error('cTrader cBot trade account is not synchronized and connected');
+              error.code = 'CTRADER_CBOT_NOT_CONNECTED';
+              throw error;
+            }
+          }
+          """
+          if 'function assertCTraderCbotConnected' not in s:
+              if anchor not in s: raise SystemExit('brokerAccountIdOf anchor not found')
+              s=s.replace(anchor,insert,1)
+          dispatch="""  async function dispatchCTraderCbot(account, action, groupId) {
+            const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+          """
+          replacement="""  async function dispatchCTraderCbot(account, action, groupId) {
+            assertCTraderCbotConnected(account);
+            const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+          """
+          if 'async function dispatchCTraderCbot(account, action, groupId) {\n    assertCTraderCbotConnected(account);' not in s:
+              if dispatch not in s: raise SystemExit('dispatchCTraderCbot anchor not found')
+              s=s.replace(dispatch,replacement,1)
+          p.write_text(s)
+          PY
+      - name: Run focused cBot dispatch tests
+        working-directory: cloudflare-v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          node --test tests/production_ctrader_cbot_dispatch.test.mjs
+      - name: Commit implementation after green test
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloudflare-v2/src/execution/production_execution_deps.js
+          if git diff --cached --quiet; then
+            echo 'Guard already implemented; nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'fix: block unsynchronized cBot production dispatch'
+          git push origin HEAD:diag/coolify-cbot-runtime
