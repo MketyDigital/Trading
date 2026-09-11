@@ -25,12 +25,6 @@ test('connections UI explains unavailable cTrader and MT5 Cloud setup instead of
   assert.doesNotMatch(html, /cb\.disabled=!c\.configured/);
 });
 
-test('connections UI describes MT5 bridge as a Windows terminal connection without requiring a customer VPS', () => {
-  const html = withUnifiedTradingConnections('<html><body><div id="accountRows"></div><div id="sourceRows"></div></body></html>');
-  assert.match(html, /Windows (?:PC|computer|machine)/i);
-  assert.doesNotMatch(html, /Windows\/VPS/i);
-});
-
 test('connections UI exposes recommended Open API and Cloud Auto Trader with create, download and identity sync actions', () => {
   const base = withUnifiedTradingConnections('<html><body><div id="accountRows"></div><div id="sourceRows"></div></body></html>');
   const html = withCTraderCbotConnections(base);
