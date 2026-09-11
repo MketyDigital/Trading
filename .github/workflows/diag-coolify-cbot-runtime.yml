@@ -56,11 +56,10 @@ jobs:
               if text(a.get('git_branch')) == 'main': score += 1
               if score: candidates.append((score,a))
           if not candidates:
-              print('No matching Coolify application found. Available application names:')
-              for a in apps: print('-', a.get('name'), a.get('uuid'))
+              print('No matching Coolify application found.')
               raise SystemExit(2)
           candidates.sort(key=lambda x:x[0], reverse=True)
-          score,a=candidates[0]
+          _,a=candidates[0]
           print('Selected Coolify application:')
           for key in ['name','uuid','status','git_repository','git_branch','git_commit_sha','docker_compose_location','fqdn','build_pack']:
               print(f'  {key}: {a.get(key)}')
@@ -68,76 +67,99 @@ jobs:
               f.write(f"COOLIFY_APP_UUID={a['uuid']}\n")
           PY
 
-      - name: Inspect safe application metadata
+      - name: Inspect safe application metadata and required key presence
         shell: bash
         run: |
           set -euo pipefail
           curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" \
-            -H 'Accept: application/json' > /tmp/app.json
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/app.json
+          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/envs.json
           python - <<'PY'
           import json
           a=json.load(open('/tmp/app.json'))
+          envs=json.load(open('/tmp/envs.json'))
           print('Application runtime metadata:')
           for key in ['name','uuid','status','git_commit_sha','docker_compose_location','docker_compose_domains','compose_parsing_version','updated_at']:
               print(f'  {key}: {a.get(key)}')
-          PY
-
-      - name: Verify required runtime environment keys without printing values
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID/envs" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" \
-            -H 'Accept: application/json' > /tmp/envs.json
-          python - <<'PY'
-          import json
-          envs=json.load(open('/tmp/envs.json'))
           by={e.get('key'):e for e in envs}
           required=['CBOT_PUBLIC_HOST','ACME_EMAIL','CLOUDFLARE_DNS_API_TOKEN','CBOT_TOKEN_SIGNING_KEY','CBOT_CONTROL_SECRET']
           optional=['CBOT_COMMAND_TIMEOUT_MS']
-          print('Required Coolify environment key presence:')
-          missing=[]
-          for key in required:
+          print('Environment key presence:')
+          for key in required+optional:
               e=by.get(key)
               present=bool(e and (e.get('real_value') or e.get('value')))
-              print(f'  {key}: {"SET" if present else "MISSING/EMPTY"}')
-              if not present: missing.append(key)
-          for key in optional:
-              e=by.get(key)
-              present=bool(e and (e.get('real_value') or e.get('value')))
-              print(f'  {key}: {"SET" if present else "DEFAULT"}')
-          if missing:
-              print('Missing required keys:', ', '.join(missing))
+              print(f'  {key}: {"SET" if present else ("DEFAULT" if key in optional else "MISSING/EMPTY")}')
           PY
 
-      - name: Fetch application container logs
+      - name: Confirm stopped-log API behavior
         shell: bash
         run: |
           set -euo pipefail
-          set +e
-          code=$(curl -sS -o /tmp/logs.json -w '%{http_code}' \
-            "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=300&show_timestamps=true" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" \
-            -H 'Accept: application/json')
-          set -e
-          echo "Coolify logs endpoint HTTP: $code"
-          cat /tmp/logs.json | python - <<'PY'
-          import json,sys,re
-          raw=sys.stdin.read()
+          code=$(curl -sS -o /tmp/logs-response.json -w '%{http_code}' \
+            "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=100&show_timestamps=true" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json')
+          echo "Coolify logs endpoint while stopped HTTP: $code"
+          python - <<'PY'
+          import json
           try:
-              body=json.loads(raw)
-              logs=body.get('logs','') if isinstance(body,dict) else raw
+              body=json.load(open('/tmp/logs-response.json'))
           except Exception:
-              logs=raw
-          # Defensive redaction for common accidental secret patterns.
-          logs=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+', r'\1[REDACTED]', logs)
-          logs=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+', r'\1\2[REDACTED]', logs)
-          print(logs[-40000:])
+              print('Non-JSON response')
+          else:
+              print('Coolify response message:', body.get('message','<none>') if isinstance(body,dict) else '<non-object>')
           PY
 
-      - name: Report diagnosis target
+      - name: Install Coolify CLI
         shell: bash
         run: |
-          echo "Inspected Coolify application UUID: $COOLIFY_APP_UUID"
-          echo "No secret values were intentionally printed."
+          set -euo pipefail
+          go install github.com/coollabsio/coolify-cli/coolify@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Restart once and capture gateway and Caddy startup logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          coolify context add -d diag "$COOLIFY_URL" "$COOLIFY_TOKEN" >/dev/null
+          echo 'Requesting one controlled restart for diagnosis.'
+          coolify app restart "$COOLIFY_APP_UUID" >/dev/null
+
+          capture_service() {
+            service="$1"
+            out="/tmp/${service}.log"
+            : > "$out"
+            for attempt in $(seq 1 30); do
+              if coolify app logs "$COOLIFY_APP_UUID" --service "$service" -n 200 --show-timestamps > "$out" 2>&1; then
+                if [ -s "$out" ]; then
+                  echo "Captured $service logs on attempt $attempt"
+                  break
+                fi
+              fi
+              sleep 0.4
+            done
+            echo "===== $service startup logs ====="
+            python - "$out" <<'PY'
+          import pathlib,re,sys
+          raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
+          raw=re.sub(r'(?i)(authorization:\s*bearer\s+)[^\s]+', r'\1[REDACTED]', raw)
+          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+', r'\1\2[REDACTED]', raw)
+          print(raw[-30000:])
+          PY
+          }
+
+          capture_service gateway
+          capture_service caddy
+
+      - name: Read final Coolify application status
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json' > /tmp/final.json
+          python - <<'PY'
+          import json
+          a=json.load(open('/tmp/final.json'))
+          print('Final Coolify status:', a.get('status'))
+          PY
