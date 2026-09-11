@@ -17,9 +17,11 @@ public class MketyCloudAutoTrader : Robot
     private WebSocketClient? _socket;
     private bool _connected;
     private string? _accountRowId;
+    private DateTime _lastCatalogSentAt = DateTime.MinValue;
     private readonly HashSet<string> _seenCommands = new();
     private readonly Queue<string> _seenOrder = new();
     private const int SeenLimit = 500;
+    private const int MaxSymbols = 2000;
 
     protected override void OnStart()
     {
@@ -56,6 +58,45 @@ public class MketyCloudAutoTrader : Robot
         catch (Exception ex) { Print("Mkety gateway connection failed: {0}", ex.Message); }
     }
 
+    private List<object> BuildSymbolCatalog()
+    {
+        var catalog = new List<object>();
+        foreach (var symbolName in Symbols)
+        {
+            if (catalog.Count >= MaxSymbols) break;
+            try
+            {
+                var symbol = Symbols.GetSymbol(symbolName);
+                if (symbol == null) continue;
+                catalog.Add(new
+                {
+                    platformSymbol = symbol.Name,
+                    description = symbol.Description,
+                    lotSize = symbol.LotSize,
+                    pipSize = symbol.PipSize,
+                    tickSize = symbol.TickSize,
+                    minVolume = symbol.VolumeInUnitsMin,
+                    maxVolume = symbol.VolumeInUnitsMax,
+                    stepVolume = symbol.VolumeInUnitsStep,
+                    digits = symbol.Digits
+                });
+            }
+            catch { }
+        }
+        return catalog;
+    }
+
+    private void SendSymbolCatalog(string messageType = "symbols")
+    {
+        Send(new
+        {
+            type = messageType,
+            symbols = BuildSymbolCatalog(),
+            at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        });
+        _lastCatalogSentAt = DateTime.UtcNow;
+    }
+
     private void OnConnected(WebSocketClientConnectedEventArgs args)
     {
         _connected = true;
@@ -66,8 +107,10 @@ public class MketyCloudAutoTrader : Robot
             accountNumber = Account.Number.ToString(),
             brokerName = Account.BrokerName,
             isLive = Account.IsLive,
-            instanceId = InstanceId
+            instanceId = InstanceId,
+            symbols = BuildSymbolCatalog()
         });
+        _lastCatalogSentAt = DateTime.UtcNow;
     }
 
     private void OnDisconnected(WebSocketClientDisconnectEventArgs args)
@@ -78,8 +121,13 @@ public class MketyCloudAutoTrader : Robot
 
     protected override void OnTimer()
     {
-        if (!_connected) Connect();
-        else Send(new { type = "heartbeat", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        if (!_connected)
+        {
+            Connect();
+            return;
+        }
+        Send(new { type = "heartbeat", at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        if (DateTime.UtcNow - _lastCatalogSentAt >= TimeSpan.FromMinutes(15)) SendSymbolCatalog();
     }
 
     private void OnTextReceived(WebSocketClientTextReceivedEventArgs args)
@@ -92,7 +140,7 @@ public class MketyCloudAutoTrader : Robot
             if (type == "auth_ok")
             {
                 _accountRowId = Text(root, "accountRowId");
-                Print("Mkety Cloud Auto Trader connected.");
+                Print("Mkety Cloud Auto Trader connected. One cBot instance covers this entire cTrader account; the host pair/timeframe does not limit Mkety symbols.");
                 return;
             }
             if (type != "command" || !root.TryGetProperty("envelope", out var envelope)) return;
