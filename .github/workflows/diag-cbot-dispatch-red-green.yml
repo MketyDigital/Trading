@@ -1,0 +1,28 @@
+name: Validate cBot Dispatch Safety
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - 'cloudflare-v2/src/execution/production_execution_deps.js'
+      - 'cloudflare-v2/tests/production_ctrader_cbot_dispatch.test.mjs'
+      - '.github/workflows/diag-cbot-dispatch-red-green.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: node --test tests/production_ctrader_cbot_dispatch.test.mjs
