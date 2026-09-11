@@ -41,9 +41,9 @@ test('frontend E2E contract retains cTrader and MT5 account setup controls', () 
 });
 
 test('portable Docker stack supports cTrader and MT5 on one public TLS port with private controls', () => {
-  const compose = read('ctrader-cbot-gateway/deploy/docker-compose.yml');
-  const caddy = read('ctrader-cbot-gateway/deploy/Caddyfile');
-  assert.match(compose, /context:\s*\.\/ctrader-cbot-gateway/);
+  const compose = read('ctrader-cbot-gateway/deploy/portable/docker-compose.yml');
+  const caddy = read('ctrader-cbot-gateway/deploy/portable/Caddyfile');
+  assert.match(compose, /context:\s*\.\.\/\.\./);
   assert.match(compose, /CBOT_WS_PORT:\s*25346/);
   assert.match(compose, /MT5_CONNECTOR_WS_PORT:\s*25347/);
   assert.match(compose, /CBOT_CONTROL_PORT:\s*8790/);
