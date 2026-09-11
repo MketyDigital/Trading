@@ -32,7 +32,12 @@ async function readMessage(socket) {
   return JSON.parse(data.toString());
 }
 
-test('MT5 gateway requests fresh account/symbol/tick context from authenticated connector', async (t) => {
+async function waitForClose(socket) {
+  const [code, reason] = await once(socket, 'close');
+  return { code, reason: reason.toString() };
+}
+
+test('MT5 gateway converts one-time pairing into instance-bound reconnect auth and serves fresh context', async (t) => {
   const wsPort = await freePort();
   const controlPort = await freePort();
   const signingKey = 'test-signing-key';
@@ -62,16 +67,41 @@ test('MT5 gateway requests fresh account/symbol/tick context from authenticated 
     type: 'auth', connectionToken: token, accountNumber: '50123456', serverName: 'Broker-Demo',
     brokerName: 'Broker Ltd', isLive: false, connectorInstanceId: 'mt5-instance-1', symbols: [{ platformSymbol: 'XAUUSD.r' }],
   }));
-  assert.equal((await readMessage(socket)).type, 'auth_ok');
+  const auth = await readMessage(socket);
+  assert.equal(auth.type, 'auth_ok');
+  assert.equal(auth.accountRowId, accountRowId);
+  assert.match(auth.reconnectToken, /^mt5r1\./);
+
+  const reusedPair = new WebSocket(`ws://127.0.0.1:${wsPort}/v1/mt5`);
+  await once(reusedPair, 'open');
+  const reusedPairClosed = waitForClose(reusedPair);
+  reusedPair.send(JSON.stringify({
+    type: 'auth', connectionToken: token, accountNumber: '50123456', serverName: 'Broker-Demo',
+    brokerName: 'Broker Ltd', isLive: false, connectorInstanceId: 'mt5-instance-1', symbols: [],
+  }));
+  assert.equal((await reusedPairClosed).reason, 'PAIR_TOKEN_ALREADY_USED');
+
+  socket.close();
+  await once(socket, 'close');
+  const reconnect = new WebSocket(`ws://127.0.0.1:${wsPort}/v1/mt5`);
+  t.after(() => reconnect.close());
+  await once(reconnect, 'open');
+  reconnect.send(JSON.stringify({
+    type: 'auth', connectionToken: auth.reconnectToken, accountNumber: '50123456', serverName: 'Broker-Demo',
+    brokerName: 'Broker Ltd', isLive: false, connectorInstanceId: 'mt5-instance-1', symbols: [{ platformSymbol: 'XAUUSD.r' }],
+  }));
+  const reconnectAuth = await readMessage(reconnect);
+  assert.equal(reconnectAuth.type, 'auth_ok');
+  assert.equal(reconnectAuth.reconnectToken, undefined);
 
   const request = fetch(`${controlBase}/v1/mt5-context/${accountRowId}?symbol=XAUUSD.r`, {
     headers: { Authorization: `Bearer ${controlSecret}` },
   });
-  const delivered = await readMessage(socket);
+  const delivered = await readMessage(reconnect);
   assert.equal(delivered.type, 'context_request');
   assert.equal(delivered.symbol, 'XAUUSD.r');
   assert.ok(delivered.requestId);
-  socket.send(JSON.stringify({
+  reconnect.send(JSON.stringify({
     type: 'context_result', requestId: delivered.requestId, ok: true,
     context: {
       account: { accountNumber: '50123456', serverName: 'Broker-Demo', balance: 10000, equity: 9900 },
