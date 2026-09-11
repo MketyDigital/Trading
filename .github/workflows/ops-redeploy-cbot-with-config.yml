@@ -1,0 +1,106 @@
+name: Redeploy cBot Gateway With Corrected Config
+
+on:
+  push:
+    branches: ['diag/coolify-cbot-runtime']
+    paths: ['.github/workflows/ops-redeploy-cbot-with-config.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Resolve exact cBot application
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          python - <<'PY'
+          import json,os
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
+          a=rows[0]
+          print('Redeploying:',a.get('name'),a.get('uuid'),'commit=',a.get('git_commit_sha'))
+          open(os.environ['GITHUB_ENV'],'a').write(f"COOLIFY_APP_UUID={a['uuid']}\n")
+          PY
+
+      - name: Queue forced redeploy to recreate containers with current env
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/deploy.json -w '%{http_code}' -X POST "$COOLIFY_API/deploy?uuid=$COOLIFY_APP_UUID&force=true" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json')"
+          test "$code" = 200 || { echo "Deploy API HTTP $code"; cat /tmp/deploy.json; exit 1; }
+          python - <<'PY'
+          import json,os
+          b=json.load(open('/tmp/deploy.json'))
+          rows=b.get('deployments') or []
+          if len(rows)!=1 or not rows[0].get('deployment_uuid'): raise SystemExit('No deployment UUID returned')
+          d=rows[0]['deployment_uuid']
+          print('Queued deployment UUID:',d)
+          open(os.environ['GITHUB_ENV'],'a').write(f"DEPLOYMENT_UUID={d}\n")
+          PY
+
+      - name: Wait for deployment completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          last=''
+          for attempt in $(seq 1 180); do
+            code="$(curl -sS -o /tmp/deployment.json -w '%{http_code}' "$COOLIFY_API/deployments/$DEPLOYMENT_UUID" -H "Authorization: Bearer $COOLIFY_TOKEN")"
+            test "$code" = 200 || { echo "Deployment read HTTP $code"; exit 1; }
+            status="$(python -c "import json; print(json.load(open('/tmp/deployment.json')).get('status',''))")"
+            if [ "$status" != "$last" ]; then echo "Deployment status: $status"; last="$status"; fi
+            case "$status" in
+              finished|success|completed) break;;
+              failed|cancelled|cancelled-by-user) echo 'Deployment failed'; exit 1;;
+            esac
+            sleep 2
+          done
+          case "$last" in finished|success|completed) ;; *) echo "Deployment did not complete; final=$last"; exit 1;; esac
+
+      - name: Verify recreated app stays running
+        shell: bash
+        run: |
+          set -euo pipefail
+          stable=0; last=''
+          for attempt in $(seq 1 45); do
+            curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/app.json
+            status="$(python -c "import json; print(json.load(open('/tmp/app.json')).get('status',''))")"
+            if [ "$status" != "$last" ]; then echo "Application status: $status"; last="$status"; fi
+            case "$status" in
+              running:healthy|running:unknown|running) stable=$((stable+1)); [ "$stable" -ge 8 ] && break;;
+              *) stable=0;;
+            esac
+            sleep 1
+          done
+          case "$last" in running:healthy|running:unknown|running) ;; *) echo "App is not running: $last"; exit 1;; esac
+          echo "FINAL_APP_STATUS=$last" >> "$GITHUB_ENV"
+
+      - name: Inspect current aggregate container logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/logs.json -w '%{http_code}' "$COOLIFY_API/applications/$COOLIFY_APP_UUID/logs?lines=300&show_timestamps=true" -H "Authorization: Bearer $COOLIFY_TOKEN")"
+          test "$code" = 200 || { echo "Logs HTTP $code"; cat /tmp/logs.json; exit 1; }
+          python - <<'PY'
+          import json,re
+          b=json.load(open('/tmp/logs.json'))
+          raw=b.get('logs','') if isinstance(b,dict) else str(b)
+          raw=re.sub(r"(?i)(API\s+token\s+')[^']+(')",r"\1[REDACTED]\2",raw)
+          raw=re.sub(r'(?i)(token|secret|password|api[_-]?key)([=:]\s*)[^\s,;]+',r'\1\2[REDACTED]',raw)
+          print(raw[-35000:])
+          fatal=['domains":["required"]','identifier":"required"','invalidContact','appears invalid','EADDRINUSE','address already in use','CBOT_TOKEN_SIGNING_KEY is required','CBOT_CONTROL_SECRET is required']
+          hits=[x for x in fatal if x.lower() in raw.lower()]
+          if hits: raise SystemExit('Current container logs still contain fatal placeholder/startup pattern(s): '+', '.join(hits))
+          PY
+          echo "Recreated runtime status: $FINAL_APP_STATUS"
