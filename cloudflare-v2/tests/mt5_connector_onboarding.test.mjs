@@ -61,8 +61,9 @@ const env = {
   CBOT_CONTROL_SECRET: 'gateway-control-secret',
 };
 
-test('MT5 connector onboarding returns one-time outbound pairing material and persists no customer env configuration', async () => {
+test('MT5 connector onboarding returns short-lived one-time outbound pairing material and persists no customer env configuration', async () => {
   const capture = {};
+  const startedAt = Date.now();
   const request = new Request('https://trade.mkety.com/api/v1/admin/connections/mt5/connector', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -84,6 +85,9 @@ test('MT5 connector onboarding returns one-time outbound pairing material and pe
   assert.equal(body.account.providerConfig.status, 'awaiting_connector');
   assert.equal(body.gatewayWebSocketUrl, 'wss://cbot.mkety.example:25345/v1/mt5');
   assert.match(body.oneTimeConnectionToken, /^mt5v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  const expiresAt = Date.parse(body.connectionTokenExpiresAt);
+  assert.ok(expiresAt >= startedAt + 14 * 60 * 1000);
+  assert.ok(expiresAt <= Date.now() + 16 * 60 * 1000);
 
   assert.equal(capture.inserted.platform, 'mt5');
   assert.equal(capture.inserted.provider_mode, 'mt5_connector');
@@ -101,9 +105,10 @@ test('MT5 connector onboarding returns one-time outbound pairing material and pe
   const verified = verifyMt5ConnectionToken(body.oneTimeConnectionToken, env.CBOT_TOKEN_SIGNING_KEY, Date.now());
   assert.equal(verified.ok, true);
   assert.equal(verified.accountRowId, body.account.id);
+  assert.equal(verified.purpose, 'pair');
 });
 
-test('MT5 connector sync persists actual terminal identity and account-wide symbols from authenticated gateway session', async () => {
+test('MT5 connector sync persists actual terminal identity and sanitized account-wide symbols from authenticated gateway session', async () => {
   const capture = {};
   const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
     connectionToken: 'mt5v1.test.test',
@@ -151,6 +156,12 @@ test('MT5 connector sync persists actual terminal identity and account-wide symb
   assert.equal(capture.updated.environment, 'demo');
   assert.equal(capture.updated.provider_config.status, 'connected');
   assert.equal(capture.updated.provider_config.brokerName, 'Broker Ltd');
-  assert.deepEqual(capture.updated.provider_config.symbolCatalog, symbols);
+  assert.equal(capture.updated.provider_config.symbolCatalog.length, 2);
+  assert.equal(capture.updated.provider_config.symbolCatalog[0].platformSymbol, 'XAUUSD.r');
+  assert.equal(capture.updated.provider_config.symbolCatalog[0].minLots, 0.01);
+  assert.equal(capture.updated.provider_config.symbolCatalog[0].maxLots, 100);
+  assert.equal(capture.updated.provider_config.symbolCatalog[0].stepLots, 0.01);
+  assert.deepEqual(capture.updated.provider_config.symbolCatalog[0].aliases, []);
+  assert.equal(capture.updated.provider_config.symbolCatalog[1].platformSymbol, 'Volatility 75 Index');
   assert.equal(body.account.accountId, '50123456');
 });
