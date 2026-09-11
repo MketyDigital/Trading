@@ -14,6 +14,7 @@ permissions:
 jobs:
   repair:
     runs-on: ubuntu-latest
+    environment: staging
     env:
       COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
@@ -176,7 +177,7 @@ jobs:
           echo "FINAL_COOLIFY_STATUS=$last" >> "$GITHUB_ENV"
           case "$last" in running:healthy|running:unknown|running) ;; *) exit 1 ;; esac
 
-      - name: Verify gateway control health through running container logs API
+      - name: Verify startup logs after repair
         shell: bash
         run: |
           set -euo pipefail
