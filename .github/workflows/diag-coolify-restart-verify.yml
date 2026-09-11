@@ -1,0 +1,96 @@
+name: Verify Repaired Coolify cBot Runtime
+
+on:
+  push:
+    branches:
+      - 'diag/coolify-cbot-runtime'
+    paths:
+      - '.github/workflows/diag-coolify-restart-verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Locate application and confirm placeholder is gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${COOLIFY_URL%/}"; case "$base" in */api/v1) api="$base";; *) api="$base/api/v1";; esac
+          echo "COOLIFY_API=$api" >> "$GITHUB_ENV"
+          curl -fsS "$api/applications" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/apps.json
+          python - <<'PY'
+          import json,os
+          apps=json.load(open('/tmp/apps.json'))
+          rows=[a for a in apps if str(a.get('git_repository') or '').lower()=='mketydigital/trading' and 'ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' in str(a.get('docker_compose_location') or '').lower()]
+          if len(rows)!=1: raise SystemExit(f'Expected one cBot app, found {len(rows)}')
+          a=rows[0]
+          print('Application:',a.get('name'),a.get('uuid'),'status=',a.get('status'))
+          open(os.environ['GITHUB_ENV'],'a').write(f"COOLIFY_APP_UUID={a['uuid']}\n")
+          PY
+          uuid="$(grep '^COOLIFY_APP_UUID=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          curl -fsS "$api/applications/$uuid/envs" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/envs.json
+          python - <<'PY'
+          import json
+          envs=json.load(open('/tmp/envs.json'))
+          row=next((e for e in envs if e.get('key')=='CLOUDFLARE_DNS_API_TOKEN'),None)
+          if not row: raise SystemExit('DNS token env row missing')
+          v=row.get('real_value') or row.get('value') or ''
+          print('DNS token env is nonempty:',bool(v),'literal:',row.get('is_literal'),'runtime:',row.get('is_runtime'))
+          if not v or v=='required': raise SystemExit('DNS token is still empty/placeholder')
+          print('The diagnosed placeholder value is gone.')
+          PY
+
+      - name: Restart application once
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/coollabsio/coolify-cli/coolify@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"; echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          coolify context add -d verify "$COOLIFY_URL" "$COOLIFY_TOKEN" >/dev/null
+          coolify app restart "$COOLIFY_APP_UUID" >/dev/null
+          echo 'Restart requested.'
+
+      - name: Wait for stable state
+        shell: bash
+        run: |
+          set -euo pipefail
+          last=''; stable=0
+          for attempt in $(seq 1 60); do
+            curl -fsS "$COOLIFY_API/applications/$COOLIFY_APP_UUID" -H "Authorization: Bearer $COOLIFY_TOKEN" > /tmp/app.json
+            status="$(python -c "import json; print(json.load(open('/tmp/app.json')).get('status',''))")"
+            if [ "$status" != "$last" ]; then echo "Coolify status: $status"; last="$status"; fi
+            case "$status" in
+              running:healthy|running:unknown|running) stable=$((stable+1)); [ "$stable" -ge 5 ] && break;;
+              exited:*|failed:*|stopped:*) break;;
+              *) stable=0;;
+            esac
+            sleep 2
+          done
+          echo "FINAL_STATUS=$last" >> "$GITHUB_ENV"
+
+      - name: Capture service logs and assert old token error is gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          for service in gateway caddy; do
+            out="/tmp/$service.log"
+            set +e
+            coolify app logs "$COOLIFY_APP_UUID" --service "$service" -n 160 --show-timestamps > "$out" 2>&1
+            set -e
+            echo "===== $service ====="
+            sed -E 's/(token|secret|password|api[_-]?key)([=:][^ ,;]+)/\1=[REDACTED]/Ig' "$out" | tail -160
+          done
+          if grep -Fq "API token 'required' appears invalid" /tmp/gateway.log /tmp/caddy.log; then
+            echo 'Old placeholder-token crash is still present in current logs.'
+            exit 1
+          fi
+          case "$FINAL_STATUS" in running:healthy|running:unknown|running) echo "Stable status: $FINAL_STATUS";; *) echo "Unhealthy final status: $FINAL_STATUS"; exit 1;; esac
