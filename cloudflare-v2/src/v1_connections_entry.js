@@ -6,6 +6,7 @@ import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
 import { handleExternalMtprotoCollectorRequest } from './http/external_mtproto_collector_endpoint.js';
+import { handleMketyAdminIngressCollectorsRequest } from './http/v1_mkety_admin_ingress_collectors.js';
 import { handleExternalMt5BridgeRequest } from './http/external_mt5_bridge_endpoint.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
@@ -34,6 +35,7 @@ export function createTradingConnectionsEntrypoint({
   ctraderCallbackHandler = handleCTraderOAuthPublicCallback,
   externalMtprotoHandler = handleExternalMtprotoEndpointRequest,
   externalMtprotoCollectorHandler = handleExternalMtprotoCollectorRequest,
+  ingressCollectorsAdminHandler = handleMketyAdminIngressCollectorsRequest,
   mt5BridgeHandler = handleExternalMt5BridgeRequest,
 } = {}) {
   return {
@@ -42,6 +44,10 @@ export function createTradingConnectionsEntrypoint({
 
       if (url.pathname === '/api/v1/integrations/ctrader/callback') {
         return ctraderCallbackHandler(request, env, { ctx });
+      }
+
+      if (url.pathname === '/api/v1/mkety-admin/ingress-collectors' || url.pathname.startsWith('/api/v1/mkety-admin/ingress-collectors/')) {
+        return ingressCollectorsAdminHandler(request, env, { ctx });
       }
 
       if (url.pathname === '/api/v1/admin/connections/ctrader/cbot' || url.pathname.startsWith('/api/v1/admin/connections/ctrader/cbot/')) {
