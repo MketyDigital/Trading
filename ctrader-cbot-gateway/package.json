@@ -1,10 +1,10 @@
 {
-  "name": "mkety-ctrader-cbot-gateway",
+  "name": "mkety-broker-connector-gateway",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "start": "node src/server.js"
+    "start": "node src/bootstrap.js"
   },
   "engines": {
     "node": ">=20"
