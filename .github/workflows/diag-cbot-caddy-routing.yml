@@ -16,6 +16,9 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Build custom Caddy image
@@ -25,7 +28,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          envs=(-e CBOT_PUBLIC_HOST=cbot.mkety.com -e ACME_EMAIL=ops@mkety.com -e CLOUDFLARE_DNS_API_TOKEN=dummy-test-token)
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Cloudflare token missing'; exit 1; }
+          envs=(-e CBOT_PUBLIC_HOST=cbot.mkety.com -e ACME_EMAIL=cloudflare@mkety.com -e CLOUDFLARE_DNS_API_TOKEN="$CLOUDFLARE_API_TOKEN")
           docker run --rm "${envs[@]}" mkety-cbot-caddy caddy validate --config /etc/caddy/Caddyfile
           docker run --rm "${envs[@]}" mkety-cbot-caddy caddy adapt --config /etc/caddy/Caddyfile --pretty > /tmp/caddy.json
           python - <<'PY'
