@@ -28,6 +28,14 @@ function accountExecutionEnabled(account = {}) {
   return account.execution_enabled === true || account.executionEnabled === true;
 }
 
+function accountLiveExecutionEnabled(account = {}) {
+  return account.live_execution_enabled === true || account.liveExecutionEnabled === true;
+}
+
+function accountEnvironment(account = {}) {
+  return text(account.environment).toLowerCase();
+}
+
 function accountSafetyPolicy(account = {}) {
   const policy = account.safety_policy ?? account.safetyPolicy;
   return policy && typeof policy === 'object' && !Array.isArray(policy)
@@ -129,6 +137,29 @@ function validateAccountAuthority(account, workspaceId, requestedAccountId) {
   return null;
 }
 
+function validateLiveExecutionAuthority(account, requestedAccountId, {
+  liveBrokerExecutionEnabled,
+  liveBrokerExecutionControlAvailable,
+} = {}) {
+  // Legacy/unit callers that do not supply the global live-control contract keep
+  // their existing behavior. Production execution always supplies it.
+  if (typeof liveBrokerExecutionControlAvailable !== 'boolean') return null;
+
+  const environment = accountEnvironment(account);
+  if (environment === 'demo') return null;
+  if (environment !== 'live') return blockedAccount(requestedAccountId, 'ACCOUNT_ENVIRONMENT_INVALID');
+  if (liveBrokerExecutionControlAvailable !== true) {
+    return blockedAccount(requestedAccountId, 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE');
+  }
+  if (liveBrokerExecutionEnabled !== true) {
+    return blockedAccount(requestedAccountId, 'LIVE_BROKER_EXECUTION_DISABLED');
+  }
+  if (!accountLiveExecutionEnabled(account)) {
+    return blockedAccount(requestedAccountId, 'ACCOUNT_LIVE_EXECUTION_DISABLED');
+  }
+  return null;
+}
+
 async function runAccountPlan({
   workspaceId,
   eventId,
@@ -141,6 +172,8 @@ async function runAccountPlan({
   stateBinder,
   bindingRepairRecorder,
   latencyTrace,
+  liveBrokerExecutionEnabled,
+  liveBrokerExecutionControlAvailable,
 }) {
   const requestedAccountId = text(plan?.accountId);
   if (!requestedAccountId) return blockedAccount('', 'ACCOUNT_ID_REQUIRED');
@@ -154,6 +187,11 @@ async function runAccountPlan({
 
   const initialAuthorityBlock = validateAccountAuthority(account, workspaceId, requestedAccountId);
   if (initialAuthorityBlock) return initialAuthorityBlock;
+  const initialLiveBlock = validateLiveExecutionAuthority(account, requestedAccountId, {
+    liveBrokerExecutionEnabled,
+    liveBrokerExecutionControlAvailable,
+  });
+  if (initialLiveBlock) return initialLiveBlock;
 
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   if (actions.length === 0) return blockedAccount(requestedAccountId, 'ACCOUNT_ACTIONS_REQUIRED');
@@ -180,11 +218,13 @@ async function runAccountPlan({
 
       const currentAuthorityBlock = validateAccountAuthority(currentAccount, workspaceId, requestedAccountId);
       if (currentAuthorityBlock) return currentAuthorityBlock;
+      const currentLiveBlock = validateLiveExecutionAuthority(currentAccount, requestedAccountId, {
+        liveBrokerExecutionEnabled,
+        liveBrokerExecutionControlAvailable,
+      });
+      if (currentLiveBlock) return currentLiveBlock;
     }
 
-    // Runtime snapshots are advisory performance context only. They are loaded
-    // only after fresh durable authority has passed and snapshot failure/miss
-    // must never authorize, block, or replace the authoritative path.
     let snapshot = null;
     if (typeof snapshotLoader === 'function') {
       try {
@@ -232,9 +272,7 @@ async function runAccountPlan({
         });
         continue;
       }
-      if (materialized?.action && typeof materialized.action === 'object') {
-        executableAction = materialized.action;
-      }
+      if (materialized?.action && typeof materialized.action === 'object') executableAction = materialized.action;
     }
 
     const safetyPolicy = accountSafetyPolicy(currentAccount);
@@ -267,59 +305,32 @@ async function runAccountPlan({
       });
       safeMark(latencyTrace, 'BROKER_ACK');
       if (result?.ok === false || result?.success === false) {
-        outcomes.push({
-          status: 'FAILED',
-          legId: executableAction?.legId ?? null,
-          idempotencyKey: executableAction?.idempotencyKey ?? null,
-          reason: 'BROKER_DISPATCH_FAILED',
-        });
+        outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: 'BROKER_DISPATCH_FAILED' });
         continue;
       }
     } catch {
-      outcomes.push({
-        status: 'FAILED',
-        legId: executableAction?.legId ?? null,
-        idempotencyKey: executableAction?.idempotencyKey ?? null,
-        reason: 'BROKER_DISPATCH_FAILED',
-      });
+      outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: 'BROKER_DISPATCH_FAILED' });
       continue;
     }
 
     if (result?.duplicate !== true && hasBindableBrokerResult(result) && typeof stateBinder === 'function') {
       try {
         await stateBinder({
-          workspaceId,
-          eventId,
-          accountId: requestedAccountId,
-          groupId: plan?.groupId ?? null,
-          legId: executableAction?.legId ?? null,
-          brokerPositionId: result?.brokerPositionId ?? null,
-          brokerOrderId: result?.brokerOrderId ?? null,
-          brokerDealId: result?.brokerDealId ?? null,
+          workspaceId, eventId, accountId: requestedAccountId, groupId: plan?.groupId ?? null,
+          legId: executableAction?.legId ?? null, brokerPositionId: result?.brokerPositionId ?? null,
+          brokerOrderId: result?.brokerOrderId ?? null, brokerDealId: result?.brokerDealId ?? null,
           fillPrice: Number.isFinite(Number(result?.fillPrice)) ? Number(result.fillPrice) : null,
         });
       } catch {
         if (typeof bindingRepairRecorder === 'function') {
           try {
             await bindingRepairRecorder({
-              workspaceId,
-              eventId,
-              accountId: requestedAccountId,
-              groupId: plan?.groupId ?? null,
-              legId: executableAction?.legId ?? null,
-              idempotencyKey: executableAction?.idempotencyKey ?? null,
+              workspaceId, eventId, accountId: requestedAccountId, groupId: plan?.groupId ?? null,
+              legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null,
             });
-          } catch {
-            // The broker action already succeeded. Recorder failure must never
-            // cause a broker resend in this coordinator invocation.
-          }
+          } catch {}
         }
-        outcomes.push({
-          status: 'FAILED',
-          legId: executableAction?.legId ?? null,
-          idempotencyKey: executableAction?.idempotencyKey ?? null,
-          reason: 'STATE_BIND_FAILED',
-        });
+        outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: 'STATE_BIND_FAILED' });
         continue;
       }
     }
@@ -339,12 +350,7 @@ async function runAccountPlan({
     });
   }
 
-  return {
-    accountId: requestedAccountId,
-    status: 'SUCCEEDED',
-    groupId: plan?.groupId ?? null,
-    actions: outcomes,
-  };
+  return { accountId: requestedAccountId, status: 'SUCCEEDED', groupId: plan?.groupId ?? null, actions: outcomes };
 }
 
 export async function executeProductionPlan({
@@ -352,6 +358,8 @@ export async function executeProductionPlan({
   eventId = null,
   accountPlans = [],
   brokerExecutionEnabled = false,
+  liveBrokerExecutionEnabled,
+  liveBrokerExecutionControlAvailable,
 } = {}, {
   accountLoader,
   authorityLoader,
@@ -367,10 +375,6 @@ export async function executeProductionPlan({
   if (!trustedWorkspaceId) throw new TypeError('workspaceId is required');
   if (!Array.isArray(accountPlans)) throw new TypeError('accountPlans must be an array');
 
-  // The Worker-wide broker master fuse is deliberately the first broker-capable
-  // decision. When it is off, no account lookup, authority lookup, snapshot,
-  // risk materialization, delivery reservation, state mutation, broker adapter,
-  // or latency mark may be reached.
   if (brokerExecutionEnabled !== true) {
     const accounts = accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED'));
     return summarize(accounts, false);
@@ -392,16 +396,13 @@ export async function executeProductionPlan({
       stateBinder,
       bindingRepairRecorder,
       latencyTrace,
+      liveBrokerExecutionEnabled,
+      liveBrokerExecutionControlAvailable,
     })));
-
     return summarize(accounts, true);
   } finally {
     if (typeof finalizeExecutionBatch === 'function') {
-      try {
-        await finalizeExecutionBatch();
-      } catch {
-        // Runtime cleanup is best-effort and must never mask a broker outcome.
-      }
+      try { await finalizeExecutionBatch(); } catch {}
     }
   }
 }
