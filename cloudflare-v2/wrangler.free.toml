@@ -2,7 +2,7 @@
 # This is an alternative deployment target, not a side-by-side consumer of the
 # Paid deployment's queues. It intentionally contains no Container binding.
 name = "mkety-copier-engine-free"
-main = "src/v1_connections_entry.js"
+main = "src/v1_runtime_entry.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
