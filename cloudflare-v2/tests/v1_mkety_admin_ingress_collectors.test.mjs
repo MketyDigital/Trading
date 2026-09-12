@@ -37,7 +37,7 @@ function request(path, method = 'GET', body = undefined) {
   });
 }
 
-test('collector admin creates one-time token and secret-safe list response', async () => {
+test('collector admin creates one-time token and recommends clean bearer endpoint', async () => {
   const store = memoryStore();
   const env = { MKETY_TRADING_ADMIN_SECRET: 'admin-secret' };
   const created = await handleMketyAdminIngressCollectorsRequest(
@@ -49,7 +49,8 @@ test('collector admin creates one-time token and secret-safe list response', asy
   const payload = await created.json();
   assert.equal(payload.collector.id, 'collector-uuid');
   assert.equal(payload.oneTimeToken, 'collector-secret-token');
-  assert.equal(payload.endpointUrl, 'https://trade.mkety.com/api/v1/external/mtproto/collect/collector-secret-token');
+  assert.equal(payload.endpointUrl, 'https://trade.mkety.com/api/v1/external/mtproto/collect');
+  assert.equal(payload.endpointUrl.includes(payload.oneTimeToken), false);
   assert.equal(store.rows.get('collector-uuid').token_hash.length, 64);
   assert.notEqual(store.rows.get('collector-uuid').token_hash, 'collector-secret-token');
 
@@ -62,7 +63,7 @@ test('collector admin creates one-time token and secret-safe list response', asy
   assert.equal('oneTimeToken' in listPayload.collectors[0], false);
 });
 
-test('collector admin rotates token and revokes without returning stored secrets', async () => {
+test('collector admin rotates token while preserving clean endpoint and can revoke', async () => {
   const store = memoryStore();
   store.rows.set('c1', {
     id: 'c1', collector_name: 'Shared listener', token_hash: 'old-hash', is_active: true,
@@ -75,6 +76,8 @@ test('collector admin rotates token and revokes without returning stored secrets
   );
   const rotatePayload = await rotated.json();
   assert.equal(rotatePayload.oneTimeToken, 'new-token');
+  assert.equal(rotatePayload.endpointUrl, 'https://trade.mkety.com/api/v1/external/mtproto/collect');
+  assert.equal(rotatePayload.endpointUrl.includes(rotatePayload.oneTimeToken), false);
   assert.equal(store.rows.get('c1').token_hash.length, 64);
 
   const revoked = await handleMketyAdminIngressCollectorsRequest(
