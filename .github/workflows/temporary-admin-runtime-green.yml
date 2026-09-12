@@ -1,0 +1,100 @@
+name: Temporary Admin Runtime Green
+
+on:
+  push:
+    paths:
+      - '.github/workflows/temporary-admin-runtime-green.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/admin-runtime-authority
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply minimal runtime-authority implementation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'expected snippet not found in {path}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace(
+              'cloudflare-v2/src/pipeline/v1_execution_stage.js',
+              """  if (!enabled(env.BROKER_EXECUTION_ENABLED)) {\n    return summary('BROKER_EXECUTION_DISABLED', { blocked: accountPlans.length, transportMode });\n  }\n\n""",
+              """""",
+          )
+
+          replace(
+              'cloudflare-v2/src/http/v1_mkety_admin_access_codes.js',
+              """async function runtimeControlResponse(runtimeStore, env) {\n  const current = await runtimeStore.getBrokerExecutionEnabled();\n  if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');\n  const ownerEnabled = current?.enabled === true;\n  const capabilityEnabled = enabled(env.BROKER_EXECUTION_ENABLED);\n  return {\n    ok: true,\n    brokerExecutionCapabilityEnabled: capabilityEnabled,\n    brokerExecutionEnabled: ownerEnabled,\n    effectiveBrokerExecutionEnabled: capabilityEnabled && ownerEnabled,\n    updatedAt: current?.updatedAt || null,\n    updatedBy: current?.updatedBy || null,\n  };\n}\n""",
+              """async function runtimeControlResponse(runtimeStore) {\n  const current = await runtimeStore.getBrokerExecutionEnabled();\n  if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');\n  const ownerEnabled = current?.enabled === true;\n  return {\n    ok: true,\n    brokerExecutionCapabilityEnabled: true,\n    brokerExecutionEnabled: ownerEnabled,\n    effectiveBrokerExecutionEnabled: ownerEnabled,\n    updatedAt: current?.updatedAt || null,\n    updatedBy: current?.updatedBy || null,\n  };\n}\n""",
+          )
+
+          replace(
+              'cloudflare-v2/src/destinations/v1_destination_delivery_stage.js',
+              """  if (type === 'broker_account') {\n    if (String(env.BROKER_EXECUTION_ENABLED ?? '').toLowerCase() !== 'true') {\n      return publicOutcome(destination, 'BLOCKED', { errorCode: 'BROKER_EXECUTION_DISABLED' });\n    }\n    return publicOutcome(destination, 'ROUTED', { deliveryRef: text(destination.destination_ref) });\n  }\n""",
+              """  if (type === 'broker_account') {\n    return publicOutcome(destination, 'ROUTED', { deliveryRef: text(destination.destination_ref) });\n  }\n""",
+          )
+
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_runtime.js',
+              """  recoverFn,\n  batchLimit = 10,\n  leaseMs = 30000,\n} = {}) {""",
+              """  recoverFn,\n  brokerExecutionControlResolver = null,\n  batchLimit = 10,\n  leaseMs = 30000,\n} = {}) {""",
+          )
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_runtime.js',
+              """    // Structural master fuse: disabled recovery cannot construct Supabase or scan.\n    if (!isEnabled(env?.BROKER_EXECUTION_ENABLED)) return disabledSummary();\n\n    const timestamp = Number(nowMs);""",
+              """    // Legacy callers may retain the deployment fuse, but production injects\n    // the persisted Mkety admin runtime control as the operational authority.\n    if (!brokerExecutionControlResolver && !isEnabled(env?.BROKER_EXECUTION_ENABLED)) return disabledSummary();\n\n    const timestamp = Number(nowMs);""",
+          )
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_runtime.js',
+              """    const supabase = await supabaseFactory(env);\n    const listed = await listDueFn({ supabase, now, limit: safeBatchLimit });""",
+              """    const supabase = await supabaseFactory(env);\n    if (brokerExecutionControlResolver) {\n      let runtimeControl;\n      try {\n        runtimeControl = await brokerExecutionControlResolver({ env, supabase });\n      } catch {\n        runtimeControl = { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' };\n      }\n      if (!runtimeControl?.ok) return { ...disabledSummary(), status: 'BROKER_RUNTIME_CONTROL_UNAVAILABLE' };\n      if (runtimeControl.enabled !== true) return { ...disabledSummary(), status: 'BROKER_OWNER_SWITCH_OFF' };\n    }\n    const listed = await listDueFn({ supabase, now, limit: safeBatchLimit });""",
+          )
+
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_production.js',
+              """import { executeProductionPlan } from './production_execution_coordinator.js';\n""",
+              """import { executeProductionPlan } from './production_execution_coordinator.js';\nimport { resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';\n""",
+          )
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_production.js',
+              """  executeProductionFn = executeProductionPlan,\n  batchLimit = 10,""",
+              """  executeProductionFn = executeProductionPlan,\n  brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,\n  batchLimit = 10,""",
+          )
+          replace(
+              'cloudflare-v2/src/execution/destination_retry_production.js',
+              """      supabaseFactory,\n      batchLimit,\n      leaseMs,""",
+              """      supabaseFactory,\n      brokerExecutionControlResolver,\n      batchLimit,\n      leaseMs,""",
+          )
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare-v2
+        run: npm install --no-audit --no-fund
+      - name: Verify focused runtime-authority tests
+        run: node --test cloudflare-v2/tests/admin_runtime_authority.test.mjs
+      - name: Commit implementation to feature branch
+        run: |
+          git config user.name 'Mkety CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare-v2/src/pipeline/v1_execution_stage.js \
+                  cloudflare-v2/src/http/v1_mkety_admin_access_codes.js \
+                  cloudflare-v2/src/destinations/v1_destination_delivery_stage.js \
+                  cloudflare-v2/src/execution/destination_retry_runtime.js \
+                  cloudflare-v2/src/execution/destination_retry_production.js
+          git diff --cached --quiet && { echo 'No implementation changes staged'; exit 1; }
+          git commit -m 'fix: make DB admin switch broker runtime authority'
+          git push origin HEAD:fix/admin-runtime-authority
