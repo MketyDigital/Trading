@@ -1,0 +1,50 @@
+name: Temporary PR42 Diagnostics
+
+on:
+  push:
+    branches:
+      - feat/telegram-bot-source-ai-fallback
+
+permissions:
+  contents: read
+
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Run changed and likely affected tests independently
+        shell: bash
+        run: |
+          failed=0
+          for file in \
+            tests/telegram_bot_source_v1.test.mjs \
+            tests/telegram_destination_ai_mode_v1.test.mjs \
+            tests/ingest_pipeline.test.mjs \
+            tests/v1_events_http.test.mjs \
+            tests/v1_destination_execution_parallelism.test.mjs \
+            tests/source_connection_store.test.mjs \
+            tests/provider_registry.test.mjs \
+            tests/connection_credentials.test.mjs \
+            tests/trading_entitlements.test.mjs \
+            tests/unified_connections_entry.test.mjs \
+            tests/enterprise_destination_contracts.test.mjs; do
+            [ -f "$file" ] || continue
+            echo "=== $file ==="
+            log="$RUNNER_TEMP/$(basename "$file").log"
+            if node --test "$file" >"$log" 2>&1; then
+              echo "PASS $file"
+            else
+              echo "::error file=$file,title=FAILED_TEST::$file"
+              cat "$log"
+              failed=1
+            fi
+          done
+          exit "$failed"
