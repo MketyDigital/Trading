@@ -28,7 +28,11 @@ export const DATABASE_AUTHORITATIVE_CONFIGURATION = Object.freeze([
   'destinations and source-to-destination routes',
   'formatting templates and customer presentation settings',
   'workspace AI provider/model settings and encrypted customer provider credentials',
-  'connector pairing, revocation and reconnect state',
+  'connector pairing/revocation status and server-observed connection identity',
+]);
+
+export const CONNECTOR_LOCAL_TRANSPORT_STATE = Object.freeze([
+  'connector-local reconnect token is used only for gateway transport authentication and is never trade authority',
 ]);
 
 const CUSTOMER_ENV_KEY_PATTERNS = [
