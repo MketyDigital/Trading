@@ -116,6 +116,7 @@ export async function handleMketyAdminIngressCollectorsRequest(request, env = {}
   }
 
   const url = new URL(request.url);
+  const collectorEndpointUrl = `${url.origin}/api/v1/external/mtproto/collect`;
   const action = actionFromPath(url.pathname);
   if (action) {
     if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
@@ -128,7 +129,7 @@ export async function handleMketyAdminIngressCollectorsRequest(request, env = {}
           ok: true,
           collector: safeCollector(row),
           oneTimeToken,
-          endpointUrl: `${url.origin}/api/v1/external/mtproto/collect/${encodeURIComponent(oneTimeToken)}`,
+          endpointUrl: collectorEndpointUrl,
         });
       }
       const row = await collectorStore.setCollectorActive(action.id, action.action === 'activate');
@@ -175,7 +176,7 @@ export async function handleMketyAdminIngressCollectorsRequest(request, env = {}
         ok: true,
         collector: safeCollector(row),
         oneTimeToken,
-        endpointUrl: `${url.origin}/api/v1/external/mtproto/collect/${encodeURIComponent(oneTimeToken)}`,
+        endpointUrl: collectorEndpointUrl,
       }, 201);
     } catch { return json({ ok: false, reason: 'COLLECTOR_CREATE_FAILED' }, 503); }
   }
