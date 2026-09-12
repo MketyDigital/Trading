@@ -1,0 +1,80 @@
+name: Temporary Production Gateway Config Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/temporary-production-gateway-config-probe.yml'
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://trade.mkety.com
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      MKETY_TRADING_ADMIN_SECRET: ${{ secrets.MKETY_TRADING_ADMIN_SECRET }}
+    steps:
+      - name: Create disposable owner access code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MKETY_TRADING_ADMIN_SECRET"
+          email="gateway-config-probe-${GITHUB_RUN_ID}@example.test"
+          payload="$(EMAIL="$email" node -e "process.stdout.write(JSON.stringify({ownerEmail:process.env.EMAIL,ownerName:'Gateway Config Probe',workspaceName:'Gateway Config Probe',maxRedemptions:1,entitlements:{tradingExecutionDestination:true,telegramDestination:true,sourceTypes:['external_mtproto'],destinations:['audit_only','broker_account']},metadata:{purpose:'gateway-config-probe',githubRunId:process.env.GITHUB_RUN_ID}}))")"
+          response="$(curl -fsS -X POST "$BASE_URL/api/v1/mkety-admin/access-codes" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" -H 'Content-Type: application/json' --data "$payload")"
+          RESPONSE="$response" EMAIL="$email" node <<'NODE' >> "$GITHUB_ENV"
+          const b=JSON.parse(process.env.RESPONSE||'{}');
+          if(!b.ok||!b.accessCode?.plainCode||!b.accessCode?.workspaceId) throw new Error('fixture creation failed');
+          console.log(`PROBE_CODE=${b.accessCode.plainCode}`);
+          console.log(`PROBE_WORKSPACE=${b.accessCode.workspaceId}`);
+          console.log(`PROBE_EMAIL=${process.env.EMAIL}`);
+          NODE
+          code="$(RESPONSE="$response" node -e "const b=JSON.parse(process.env.RESPONSE);process.stdout.write(b.accessCode.plainCode)")"
+          echo "::add-mask::$code"
+
+      - name: Redeem disposable owner session
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(node -e "process.stdout.write(JSON.stringify({code:process.env.PROBE_CODE,ownerEmail:process.env.PROBE_EMAIL,ownerName:'Gateway Config Probe',workspaceName:'Gateway Config Probe'}))")"
+          response="$(curl -fsS -X POST "$BASE_URL/api/v1/access/redeem" -H 'Content-Type: application/json' --data "$payload")"
+          RESPONSE="$response" node <<'NODE' >> "$GITHUB_ENV"
+          const b=JSON.parse(process.env.RESPONSE||'{}');
+          if(!b.ok||!b.bearer) throw new Error('redeem failed');
+          console.log(`PROBE_BEARER=${b.bearer}`);
+          NODE
+          bearer="$(RESPONSE="$response" node -e "const b=JSON.parse(process.env.RESPONSE);process.stdout.write(b.bearer)")"
+          echo "::add-mask::$bearer"
+
+      - name: Verify outbound MT5 pairing fails closed while gateway secrets are absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          body_file="$RUNNER_TEMP/mt5-pairing.json"
+          status="$(curl -sS -o "$body_file" -w '%{http_code}' -X POST "$BASE_URL/api/v1/admin/connections/mt5/connector" \
+            -H "Authorization: Bearer $PROBE_BEARER" \
+            -H "X-Mkety-Workspace-Id: $PROBE_WORKSPACE" \
+            -H 'Content-Type: application/json' \
+            --data '{"label":"Gateway Config Probe","environment":"demo","roles":["execution"]}')"
+          cat "$body_file"
+          test "$status" = "503"
+          BODY="$(cat "$body_file")" node <<'NODE'
+          const b=JSON.parse(process.env.BODY||'{}');
+          if(b.ok!==false||b.reason!=='MT5_CONNECTOR_NOT_CONFIGURED') throw new Error(`unexpected response: ${process.env.BODY}`);
+          console.log('MT5_PAIRING_FAIL_CLOSED=true');
+          NODE
+
+      - name: Revoke disposable access code
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          [ -n "${PROBE_WORKSPACE:-}" ] || exit 0
+          list="$(curl -fsS "$BASE_URL/api/v1/mkety-admin/access-codes" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET")" || exit 0
+          id="$(LIST="$list" node -e "const b=JSON.parse(process.env.LIST||'{}');const x=(b.accessCodes||[]).find(x=>x.workspaceId===process.env.PROBE_WORKSPACE);if(x)process.stdout.write(x.id)")"
+          [ -n "$id" ] && curl -fsS -X POST "$BASE_URL/api/v1/mkety-admin/access-codes/$id/revoke" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" >/dev/null
