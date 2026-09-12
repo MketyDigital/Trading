@@ -19,6 +19,7 @@ export function createTelegramDestinationAiFormatter(aiRouter) {
     const payload = JSON.stringify({
       deterministicText: String(deterministicText ?? ''),
       brandName: brandName ?? null,
+      presentationInstructions: String(presentation.aiInstructions ?? presentation.ai_instructions ?? '').trim() || null,
       style: {
         header: presentation.header ?? null,
         suffix: presentation.suffix ?? null,

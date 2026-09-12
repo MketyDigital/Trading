@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { handleAuthorizedV1AdminDestinationsRequest } from '../src/http/v1_admin_destinations.js';
 import { createTelegramDestinationAiFormatter } from '../src/destinations/telegram_ai_formatter.js';
 import { withEnterpriseConnectionEnhancements } from '../src/dashboard_enterprise_enhancements.js';
+import { withRoutingAiCompletion } from '../src/dashboard_routing_ai_completion.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,7 +73,7 @@ test('Telegram presentation AI receives user rebranding instructions as presenta
 });
 
 test('enterprise workspace UI exposes route/destination removal and AI presentation instructions', () => {
-  const html = withEnterpriseConnectionEnhancements('<html><body><div id="workspaceMessage"></div></body></html>');
+  const html = withRoutingAiCompletion(withEnterpriseConnectionEnhancements('<html><body><div id="workspaceMessage"></div></body></html>'));
   assert.match(html, /data-route-remove/);
   assert.match(html, /data-destination-remove/);
   assert.match(html, /aiPresentationPrompt/);

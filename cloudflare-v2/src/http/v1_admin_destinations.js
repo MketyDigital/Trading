@@ -201,6 +201,10 @@ function templateItemMatch(pathname) {
   return pathname.match(/^\/api\/v1\/admin\/templates\/([^/]+)$/);
 }
 
+function routeItemMatch(pathname) {
+  return pathname.match(/^\/api\/v1\/admin\/routes\/([^/]+)$/);
+}
+
 function routeActionMatch(pathname) {
   return pathname.match(/^\/api\/v1\/admin\/routes\/([^/]+)\/(enable|disable)$/);
 }
@@ -251,6 +255,11 @@ export function createAdminDestinationStore(supabase) {
       const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
       if (error) throw new Error('DESTINATION_CREDENTIALS_UPDATE_FAILED');
       return data || null;
+    },
+    async removeDestination(workspaceId, id) {
+      const { data, error } = await supabase.from('trading_destinations').delete().eq('workspace_id', String(workspaceId)).eq('id', String(id)).select('id').maybeSingle();
+      if (error) throw new Error('DESTINATION_DELETE_FAILED');
+      return Boolean(data);
     },
     async listTemplates(workspaceId) {
       const { data, error } = await supabase.from('trading_destination_templates').select(TEMPLATE_SELECT).eq('workspace_id', String(workspaceId)).order('created_at', { ascending: true });
@@ -318,6 +327,11 @@ export function createAdminDestinationStore(supabase) {
       if (error) throw new Error('ROUTE_UPDATE_FAILED');
       return data || null;
     },
+    async removeRoute(workspaceId, id) {
+      const { data, error } = await supabase.from('source_destination_routes').delete().eq('workspace_id', String(workspaceId)).eq('id', String(id)).select('id').maybeSingle();
+      if (error) throw new Error('ROUTE_DELETE_FAILED');
+      return Boolean(data);
+    },
   };
 }
 
@@ -363,14 +377,25 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
 
   const destinationItem = destinationItemMatch(url.pathname);
   if (destinationItem) {
-    if (request.method !== 'PUT') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'PUT' });
+    const id = decodeURIComponent(destinationItem[1]);
+    if (request.method === 'DELETE') {
+      if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+      try {
+        const removed = await destinationStore.removeDestination(workspaceId, id);
+        if (!removed) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
+        return json({ ok: true, workspaceId, deleted: true, destinationId: id });
+      } catch {
+        return json({ ok: false, reason: 'DESTINATION_DELETE_FAILED' }, 503);
+      }
+    }
+    if (request.method !== 'PUT') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'PUT, DELETE' });
     if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
     const body = await readJson(request);
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseDestinationUpdateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
     try {
-      const row = await destinationStore.updateDestination(workspaceId, decodeURIComponent(destinationItem[1]), parsed.input);
+      const row = await destinationStore.updateDestination(workspaceId, id, parsed.input);
       if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
       return json({ ok: true, workspaceId, destination: publicDestination(row) });
     } catch {
@@ -474,6 +499,20 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       }
     }
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
+  }
+
+  const routeItem = routeItemMatch(url.pathname);
+  if (routeItem) {
+    if (request.method !== 'DELETE') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'DELETE' });
+    if (!can(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    const id = decodeURIComponent(routeItem[1]);
+    try {
+      const removed = await destinationStore.removeRoute(workspaceId, id);
+      if (!removed) return json({ ok: false, reason: 'ROUTE_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, deleted: true, routeId: id });
+    } catch {
+      return json({ ok: false, reason: 'ROUTE_DELETE_FAILED' }, 503);
+    }
   }
 
   const routeAction = routeActionMatch(url.pathname);
