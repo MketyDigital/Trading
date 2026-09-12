@@ -40,6 +40,12 @@ test('frontend E2E contract retains cTrader and MT5 account setup controls', () 
   assert.match(workflow, /showMt5BridgeBtn/);
 });
 
+test('gateway production image starts the shared bootstrap so cTrader and MT5 listeners run together', () => {
+  const dockerfile = read('ctrader-cbot-gateway/Dockerfile');
+  assert.match(dockerfile, /CMD\s*\[\s*"node"\s*,\s*"src\/bootstrap\.js"\s*\]/);
+  assert.doesNotMatch(dockerfile, /CMD\s*\[\s*"node"\s*,\s*"src\/server\.js"\s*\]/);
+});
+
 test('portable Docker stack supports cTrader and MT5 on one public TLS port with private controls', () => {
   const compose = read('ctrader-cbot-gateway/deploy/portable/docker-compose.yml');
   const caddy = read('ctrader-cbot-gateway/deploy/portable/Caddyfile');
