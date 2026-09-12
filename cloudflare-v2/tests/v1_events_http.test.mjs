@@ -137,8 +137,6 @@ test('accepted events always enter orchestration even when simulation mode is di
   assert.equal(body.simulation.status, 'PROCESSED');
   assert.equal(body.simulation.executionEnabled, true);
   assert.equal(body.simulation.actions.length, 1);
-  // No trusted READY account plans exist, so broker execution is not executable
-  // and the stage deliberately avoids runtime-control/database lookups.
   assert.equal(body.execution.status, 'NOT_EXECUTABLE');
   assert.equal(body.execution.executionEnabled, false);
 });
@@ -171,9 +169,10 @@ test('recovery marker cannot orchestrate duplicate unless ingest rehydrated pers
   let called = false;
   const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master' }, {
     supabaseFactory: async () => ({}), storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
-    ingestFn: async () => ({ ok: true, duplicate: true, recoveredDuplicate: true, eventId: 'existing' }),
+    ingestFn: async () => ({ ok: true, duplicate: true, recoveryReady: false, eventId: 'existing' }),
     simulationDepsFactory: async () => { called = true; return {}; },
     orchestrateFn: async () => { called = true; return {}; },
+    orchestrateDuplicates: true,
   });
   const body = await response.json();
   assert.equal(response.status, 200);
@@ -183,12 +182,13 @@ test('recovery marker cannot orchestrate duplicate unless ingest rehydrated pers
 
 test('recovery marker orchestrates duplicate only when persisted recovery context is ready', async () => {
   let called = false;
-  const recovered = successfulIngest({ duplicate: true, recoveredDuplicate: true });
+  const recovered = successfulIngest({ duplicate: true, recoveryReady: true });
   const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master' }, {
     supabaseFactory: async () => ({}), storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
     ingestFn: async () => recovered,
     simulationDepsFactory: async () => ({ safe: true }),
     orchestrateFn: async () => { called = true; return { status: 'SIMULATED', accounts: [] }; },
+    orchestrateDuplicates: true,
   });
   const body = await response.json();
   assert.equal(response.status, 200);
