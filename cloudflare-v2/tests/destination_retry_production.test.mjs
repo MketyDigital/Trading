@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { createProductionDestinationRetryRuntime } from '../src/execution/destination_retry_production.js';
 
+const brokerOn = async () => ({ ok: true, enabled: true });
+
 function retryRow(overrides = {}) {
   return {
     id: 'delivery-1',
@@ -42,6 +44,7 @@ test('production retry claims through existing persistent store and dispatches o
   let claimedStoreFactory;
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async (context, overrides) => {
@@ -73,7 +76,7 @@ test('production retry claims through existing persistent store and dispatches o
     },
   });
 
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.succeeded, 1);
   assert.equal(calls[0][0], 'claim');
@@ -89,6 +92,7 @@ test('trading access disabled prevents due scan, claim, dependency construction,
   let executeCalls = 0;
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => { supabaseCalls += 1; return { from() {} }; },
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => { dueScans += 1; return [row]; },
     deliveryStoreFactory: () => { storeCalls += 1; return {}; },
     executionDepsFactory: async () => { depsCalls += 1; return {}; },
@@ -104,7 +108,7 @@ test('trading access disabled prevents due scan, claim, dependency construction,
   assert.equal(executeCalls, 0);
 });
 
-test('broker execution disabled prevents due scan, claim, dependency construction, and broker retry', async () => {
+test('persisted broker execution switch OFF prevents due scan, claim, dependency construction, and broker retry regardless of env', async () => {
   const row = retryRow();
   let supabaseCalls = 0;
   let dueScans = 0;
@@ -113,15 +117,16 @@ test('broker execution disabled prevents due scan, claim, dependency constructio
   let executeCalls = 0;
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => { supabaseCalls += 1; return { from() {} }; },
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: false }),
     listDueFn: async () => { dueScans += 1; return [row]; },
     deliveryStoreFactory: () => { storeCalls += 1; return {}; },
     executionDepsFactory: async () => { depsCalls += 1; return {}; },
     executeProductionFn: async () => { executeCalls += 1; return {}; },
   });
 
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
-  assert.equal(result.status, 'BROKER_EXECUTION_DISABLED');
-  assert.equal(supabaseCalls, 0);
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  assert.equal(result.status, 'BROKER_OWNER_SWITCH_OFF');
+  assert.equal(supabaseCalls, 1);
   assert.equal(dueScans, 0);
   assert.equal(storeCalls, 0);
   assert.equal(depsCalls, 0);
@@ -143,6 +148,7 @@ test('revoked account authority after retry scheduling becomes terminal without 
 
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => ({
@@ -155,7 +161,7 @@ test('revoked account authority after retry scheduling becomes terminal without 
     }),
   });
 
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(brokerDispatches, 0);
   assert.equal(result.failed, 1);
   assert.equal(calls.length, 1);
@@ -187,6 +193,7 @@ test('source revocation is re-resolved from durable retry event authority and bl
 
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async (context) => {
@@ -212,7 +219,7 @@ test('source revocation is re-resolved from durable retry event authority and bl
     },
   });
 
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(brokerDispatches, 0);
   assert.equal(result.failed, 1);
   assert.equal(calls.some(([method]) => method === 'fail'), true);
@@ -227,12 +234,13 @@ test('destination/account mismatch fails closed before constructing execution de
   };
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => { depsCalls += 1; return {}; },
   });
 
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: Date.parse('2026-09-03T10:01:00Z') });
   assert.equal(depsCalls, 0);
   assert.equal(result.failed, 1);
 });
