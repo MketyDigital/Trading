@@ -9,6 +9,7 @@ import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';
 import { createProviderCircuitBreaker } from '../resilience/provider_circuit_breaker.js';
 import { decryptSecret } from '../security/secret_box.js';
 import { normalizeDestinationCredentialPlaintext } from '../destinations/destination_credentials_compat.js';
+import { createTelegramDestinationAiFormatter } from '../destinations/telegram_ai_formatter.js';
 import {
   createV1DestinationDeliveryStore,
   runV1DestinationDeliveryStage,
@@ -106,6 +107,21 @@ export async function handleV1EventsRequest(request, env = {}, {
     const supabase = await supabaseFactory(env);
     const stores = storesFactory(supabase, { masterKey });
     const interpretationTimeoutMs = Math.max(100, Number(env.TRADING_V1_AI_TIMEOUT_MS || 800));
+    let workspaceAiRouterPromise = null;
+    let workspaceAiRouterWorkspaceId = null;
+    const aiRouterForWorkspace = (workspaceId) => {
+      const trustedWorkspaceId = String(workspaceId ?? '').trim();
+      if (!trustedWorkspaceId) return Promise.resolve(null);
+      if (!workspaceAiRouterPromise || workspaceAiRouterWorkspaceId !== trustedWorkspaceId) {
+        workspaceAiRouterWorkspaceId = trustedWorkspaceId;
+        workspaceAiRouterPromise = Promise.resolve(workspaceAiFactory(supabase, trustedWorkspaceId, {
+          masterKey,
+          env,
+          circuitBreaker: aiCircuitBreaker,
+        }));
+      }
+      return workspaceAiRouterPromise;
+    };
 
     const result = await ingestFn({
       rawBody,
@@ -115,11 +131,7 @@ export async function handleV1EventsRequest(request, env = {}, {
     }, {
       ...stores,
       interpretationTimeoutMs,
-      aiRouterFactory: ({ source }) => workspaceAiFactory(supabase, source.workspace_id, {
-        masterKey,
-        env,
-        circuitBreaker: aiCircuitBreaker,
-      }),
+      aiRouterFactory: ({ source }) => aiRouterForWorkspace(source.workspace_id),
     });
 
     const recoveryReplay = request.headers.get('X-Mkety-Source-Recovery') === '1';
@@ -140,13 +152,22 @@ export async function handleV1EventsRequest(request, env = {}, {
       : (async () => {
           try {
             const destinationStore = destinationStoreFactory(supabase, { masterKey });
+            const aiFormatterFactory = async () => {
+              const router = await aiRouterForWorkspace(result?.event?.workspace_hint);
+              return createTelegramDestinationAiFormatter(router);
+            };
             return await destinationStageFn({
               workspaceId: result?.event?.workspace_hint,
               sourceId,
               event: result.event,
               interpretation: result.interpretation,
               env,
-            }, { destinationStore, decryptCredentials: decryptDestinationCredentialsCompat });
+            }, {
+              destinationStore,
+              decryptCredentials: decryptDestinationCredentialsCompat,
+              aiFormatterFactory,
+              aiCircuitBreaker,
+            });
           } catch {
             return blockedDestinationStage();
           }

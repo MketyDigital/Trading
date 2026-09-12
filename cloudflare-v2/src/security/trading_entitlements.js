@@ -64,3 +64,18 @@ export function canUseDestinationType(auth, type) {
   const entitlement = destinationEntitlementForType(type);
   return !entitlement || !requiresTradingEntitlement(auth, entitlement);
 }
+
+export function canUseSourceProvider(auth, { sourceFamily, providerType } = {}) {
+  if (!isAccessCodeProvisionedWorkspace(auth)) return true;
+  const allowed = new Set(entitlementsFromTradingAuth(auth).sourceTypes.map((value) => String(value).trim().toLowerCase()));
+  if (allowed.size === 0) return false;
+  const family = String(sourceFamily ?? '').trim().toLowerCase();
+  const provider = String(providerType ?? '').trim().toLowerCase();
+  if (provider && allowed.has(provider)) return true;
+  if (family && allowed.has(family)) return true;
+  // Historical access codes used friendly family aliases while newer test/provisioning
+  // paths can store exact provider identifiers. Keep both forms compatible.
+  if (family === 'telegram' && allowed.has('mtproto')) return true;
+  if (family === 'tradingview' && allowed.has('tradingview_webhook')) return true;
+  return false;
+}

@@ -1,5 +1,6 @@
 import { decryptSecret } from '../security/secret_box.js';
 import { formatTelegramDestinationMessage } from './formatting.js';
+import { renderTelegramDestination } from './telegram_presentation.js';
 import { sendTelegramDestination } from './telegram_destination.js';
 
 const DESTINATION_SELECT = [
@@ -240,6 +241,81 @@ async function credentialsForDestination(destination, env, deps) {
   return normalizeCredentialEnvelope(plaintext);
 }
 
+function templatePresentation(template = {}) {
+  const layout = safeObject(template.layout);
+  const prefix = [text(template.brand_name ?? template.brandName), text(template.header)].filter(Boolean).join('\n');
+  const suffix = [text(template.footer), text(template.disclaimer)].filter(Boolean).join('\n');
+  return {
+    useAi: true,
+    brandName: text(template.brand_name ?? template.brandName) || null,
+    prefix,
+    suffix,
+    header: text(template.header) || null,
+    labels: safeObject(layout.labels),
+    fieldOrder: Array.isArray(layout.fieldOrder) ? layout.fieldOrder : undefined,
+    emojiStyle: template.emoji_style ?? null,
+    aiTimeoutMs: Number(layout.aiTimeoutMs ?? layout.ai_timeout_ms ?? 500),
+  };
+}
+
+function cleanRawFallback(event, template, deps) {
+  const cleaned = deps.formatTelegram({
+    mode: 'clean',
+    rawText: event?.text ?? '',
+    interpretation: null,
+  }, template);
+  if (cleaned?.ok && text(cleaned.text)) return { text: cleaned.text, parseMode: 'plain' };
+  return { text: String(event?.text ?? ''), parseMode: 'plain' };
+}
+
+async function formatTelegramForDelivery({ destination, event, interpretation }, deps) {
+  const template = safeObject(destination.template);
+  const mode = text(template.formatting_mode ?? template.formattingMode) || 'template';
+
+  if (mode !== 'ai_then_fallback') {
+    return deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
+  }
+
+  // Ambiguous/non-canonical signals are still useful to Telegram humans. Never let
+  // presentation AI invent trade semantics when canonical intent is unavailable.
+  if (!interpretation?.intent && interpretation?.status !== 'MANAGEMENT' && !interpretation?.management) {
+    const raw = cleanRawFallback(event, template, deps);
+    return { ok: Boolean(text(raw.text)), ...raw, fallbackReason: 'CANONICAL_INTENT_UNAVAILABLE' };
+  }
+
+  let aiFormatter = null;
+  if (typeof deps.aiFormatterFactory === 'function') {
+    try {
+      aiFormatter = await deps.aiFormatterFactory({ destination, template, interpretation });
+    } catch {
+      aiFormatter = null;
+    }
+  }
+
+  const presentation = templatePresentation(template);
+  const rendered = await deps.renderTelegram({
+    canonicalEvent: interpretation,
+    destination: { ...destination, presentation },
+    aiFormatter,
+    timeoutMs: presentation.aiTimeoutMs,
+    workspaceId: destinationWorkspace(destination),
+    circuitBreaker: deps.aiCircuitBreaker,
+  });
+
+  if (text(rendered?.text)) {
+    return {
+      ok: true,
+      text: rendered.text,
+      parseMode: text(template.parse_mode ?? template.parseMode) || 'HTML',
+      presentationMode: rendered.mode,
+      fallbackReason: rendered.fallbackReason ?? null,
+    };
+  }
+
+  const raw = cleanRawFallback(event, template, deps);
+  return { ok: Boolean(text(raw.text)), ...raw, fallbackReason: rendered?.fallbackReason ?? 'AI_AND_TEMPLATE_EMPTY' };
+}
+
 async function deliverTelegram({ destination, event, interpretation, env }, deps) {
   if (!destination.credential_ciphertext) {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_MISSING' });
@@ -257,13 +333,15 @@ async function deliverTelegram({ destination, event, interpretation, env }, deps
   const botToken = text(credentials.botToken ?? credentials.bot_token);
   if (!botToken) return publicOutcome(destination, 'FAILED', { errorCode: 'TELEGRAM_BOT_TOKEN_MISSING' });
 
-  const template = safeObject(destination.template);
-  const formatted = deps.formatTelegram({
-    mode: template.formatting_mode ?? template.formattingMode ?? 'template',
-    rawText: event?.text ?? '',
-    interpretation,
-  }, template);
-  if (!formatted?.ok) {
+  let formatted;
+  try {
+    formatted = await formatTelegramForDelivery({ destination, event, interpretation }, deps);
+  } catch {
+    formatted = cleanRawFallback(event, safeObject(destination.template), deps);
+    formatted.ok = Boolean(text(formatted.text));
+    formatted.fallbackReason = 'DESTINATION_FORMAT_EXCEPTION';
+  }
+  if (!formatted?.ok || !text(formatted.text)) {
     return publicOutcome(destination, 'FAILED', { errorCode: sanitizeErrorCode(formatted?.reason, 'DESTINATION_FORMAT_FAILED') });
   }
 
@@ -284,6 +362,8 @@ async function deliverTelegram({ destination, event, interpretation, env }, deps
   return publicOutcome(destination, 'SUCCEEDED', {
     statusCode: Number(result.status) || 200,
     ...(result.messageId != null ? { deliveryRef: String(result.messageId) } : {}),
+    ...(formatted.presentationMode ? { presentationMode: formatted.presentationMode } : {}),
+    ...(formatted.fallbackReason ? { fallbackReason: formatted.fallbackReason } : {}),
   });
 }
 
@@ -322,7 +402,7 @@ async function deliverInternalWebhook({ workspaceId, sourceId, destination, even
 }
 
 async function deliverOne(input, deps) {
-  const { workspaceId, destination, env } = input;
+  const { workspaceId, destination } = input;
   if (!destinationId(destination)) return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_ID_REQUIRED' });
   if (destinationWorkspace(destination) !== text(workspaceId)) {
     return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_WORKSPACE_MISMATCH' });
@@ -351,6 +431,9 @@ export async function runV1DestinationDeliveryStage({
   sendTelegram = sendTelegramDestination,
   sendWebhook = sendSignedWebhookDestination,
   formatTelegram = formatTelegramDestinationMessage,
+  renderTelegram = renderTelegramDestination,
+  aiFormatterFactory = null,
+  aiCircuitBreaker = null,
   fetchFn = globalThis.fetch,
 } = {}) {
   const trustedWorkspaceId = text(workspaceId);
@@ -381,7 +464,16 @@ export async function runV1DestinationDeliveryStage({
         event,
         interpretation,
         env,
-      }, { decryptCredentials, sendTelegram, sendWebhook, formatTelegram, fetchFn });
+      }, {
+        decryptCredentials,
+        sendTelegram,
+        sendWebhook,
+        formatTelegram,
+        renderTelegram,
+        aiFormatterFactory,
+        aiCircuitBreaker,
+        fetchFn,
+      });
     } catch {
       outcome = publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_DELIVERY_FAILED' });
     }

@@ -1,6 +1,6 @@
 import { normalizeProviderRecord } from './provider_registry.js';
 
-const SOURCE_SELECT = [
+const PUBLIC_SOURCE_FIELDS = [
   'id',
   'workspace_id',
   'source_type',
@@ -21,7 +21,10 @@ const SOURCE_SELECT = [
   'last_disconnected_at',
   'restart_count',
   'last_error_code',
-].join(',');
+];
+
+const PUBLIC_SOURCE_SELECT = PUBLIC_SOURCE_FIELDS.join(',');
+const INTERNAL_TELEGRAM_BOT_SELECT = [...PUBLIC_SOURCE_FIELDS, 'secret_ciphertext', 'provider_secret_ciphertext'].join(',');
 
 function normalize(row) {
   if (!row) return null;
@@ -46,6 +49,16 @@ function normalize(row) {
   };
 }
 
+function normalizeInternalTelegramBot(row) {
+  const source = normalize(row);
+  if (!source) return null;
+  return {
+    ...source,
+    secretCiphertext: row.secret_ciphertext ?? null,
+    providerSecretCiphertext: row.provider_secret_ciphertext ?? null,
+  };
+}
+
 function sortSources(a, b) {
   return a.priority - b.priority;
 }
@@ -60,7 +73,7 @@ export function createSourceConnectionStore(supabase) {
       if (!workspaceId) return [];
       const { data, error } = await supabase
         .from('source_connections')
-        .select(SOURCE_SELECT)
+        .select(PUBLIC_SOURCE_SELECT)
         .eq('workspace_id', String(workspaceId))
         .eq('is_active', true)
         .order('priority', { ascending: true });
@@ -73,7 +86,7 @@ export function createSourceConnectionStore(supabase) {
       if (!sourceId) return null;
       const { data, error } = await supabase
         .from('source_connections')
-        .select(SOURCE_SELECT)
+        .select(PUBLIC_SOURCE_SELECT)
         .eq('id', String(sourceId))
         .maybeSingle();
 
@@ -87,7 +100,7 @@ export function createSourceConnectionStore(supabase) {
 
       const { data, error } = await supabase
         .from('source_connections')
-        .select(SOURCE_SELECT)
+        .select(PUBLIC_SOURCE_SELECT)
         .eq('public_source_handle', normalizedHandle)
         .eq('is_active', true)
         .eq('provider_type', 'tradingview_webhook')
@@ -96,6 +109,23 @@ export function createSourceConnectionStore(supabase) {
 
       if (error) throw new Error(error.message || 'failed to load TradingView source connection');
       return normalize(data);
+    },
+
+    async getActiveTelegramBotSourceByPublicHandle(handle) {
+      const normalizedHandle = String(handle ?? '').trim();
+      if (!normalizedHandle) return null;
+
+      const { data, error } = await supabase
+        .from('source_connections')
+        .select(INTERNAL_TELEGRAM_BOT_SELECT)
+        .eq('public_source_handle', normalizedHandle)
+        .eq('is_active', true)
+        .eq('provider_type', 'telegram_bot_api')
+        .eq('source_family', 'telegram')
+        .maybeSingle();
+
+      if (error) throw new Error(error.message || 'failed to load Telegram bot source connection');
+      return normalizeInternalTelegramBot(data);
     },
 
     async setDefaultSource(workspaceId, sourceFamily, sourceId) {
@@ -121,7 +151,7 @@ export function createSourceConnectionStore(supabase) {
         .from('source_connections')
         .update({ is_active: false, is_default: false })
         .eq('id', String(sourceId))
-        .select(SOURCE_SELECT)
+        .select(PUBLIC_SOURCE_SELECT)
         .maybeSingle();
 
       if (error) throw new Error(error.message || 'failed to disable source connection');

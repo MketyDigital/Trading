@@ -2,6 +2,7 @@ import baseWorker from './v1_entry.js';
 import { withUnifiedTradingConnections } from './dashboard_unified_connections.js';
 import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { withMt5ConnectorConnections } from './dashboard_mt5_connector_connections.js';
+import { withTelegramBotSource } from './dashboard_telegram_bot_source.js';
 import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleV1AdminMt5ConnectorRequest } from './http/v1_admin_mt5_connector.js';
@@ -10,6 +11,8 @@ import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_en
 import { handleExternalMtprotoCollectorRequest } from './http/external_mtproto_collector_endpoint.js';
 import { handleMketyAdminIngressCollectorsRequest } from './http/v1_mkety_admin_ingress_collectors.js';
 import { handleExternalMt5BridgeRequest } from './http/external_mt5_bridge_endpoint.js';
+import { handleTelegramBotWebhookRequest } from './http/telegram_bot_webhook.js';
+import { handleTelegramBotAdminRequest } from './http/telegram_bot_admin.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
 export { MTProtoListenerNode, TradeStateNode, MtprotoContainerRuntime } from './v1_entry.js';
@@ -23,7 +26,7 @@ async function enhancePortalResponse(response) {
   const html = await response.text();
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
-  return new Response(withMt5ConnectorConnections(withCTraderCbotConnections(withUnifiedTradingConnections(html))), {
+  return new Response(withTelegramBotSource(withMt5ConnectorConnections(withCTraderCbotConnections(withUnifiedTradingConnections(html)))), {
     status: response.status,
     statusText: response.statusText,
     headers,
@@ -40,6 +43,8 @@ export function createTradingConnectionsEntrypoint({
   externalMtprotoCollectorHandler = handleExternalMtprotoCollectorRequest,
   ingressCollectorsAdminHandler = handleMketyAdminIngressCollectorsRequest,
   mt5BridgeHandler = handleExternalMt5BridgeRequest,
+  telegramBotWebhookHandler = handleTelegramBotWebhookRequest,
+  telegramBotAdminHandler = handleTelegramBotAdminRequest,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -66,6 +71,17 @@ export function createTradingConnectionsEntrypoint({
       if (url.pathname === '/api/v1/admin/connections' || url.pathname.startsWith('/api/v1/admin/connections/')) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return connectionsHandler(request, env, { ctx });
+      }
+
+      if (url.pathname === '/api/v1/admin/sources' || /^\/api\/v1\/admin\/sources\/[^/]+\/(?:enable|disable|credentials)$/.test(url.pathname)) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        const botAdminResponse = await telegramBotAdminHandler(request, env, { ctx });
+        if (botAdminResponse) return botAdminResponse;
+      }
+
+      if (/^\/api\/v1\/webhooks\/telegram-bot\/[^/]+$/.test(url.pathname)) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return telegramBotWebhookHandler(request, env, { ctx });
       }
 
       if (/^\/api\/v1\/external\/mtproto\/collect(?:\/[^/]+)?$/.test(url.pathname)) {

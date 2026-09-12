@@ -24,7 +24,7 @@ test('produces canonical intent beside legacy formatting without executing broke
 test('uses bounded AI interpretation for conversational signal but remains shadow-only', async () => {
   let timeoutSeen;
   const result = await buildCanonicalShadow({
-    text: 'Gold is good here, buy around 2526 and protect under 2518, aim 2530 then 2535',
+    text: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535',
   }, {
     aiTimeoutMs: 600,
     aiRouter: { processSignal: async (_text, _prompt, options) => {

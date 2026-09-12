@@ -104,7 +104,7 @@ test('loads AI only after authenticated source establishes trusted workspace', a
   const state = stores();
   const input = await signedInput({
     external_event_id: 'msg-ai',
-    text: 'Gold is good here, buy around 2526 and protect under 2518, aim 2530 then 2535',
+    text: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535',
   });
   let factoryContext;
   const result = await ingestTradingEvent(input, {

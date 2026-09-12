@@ -25,7 +25,7 @@ test('does not call AI for deterministic management commands', async () => {
 });
 
 test('uses AI only for ambiguous natural language and validates structured result', async () => {
-  const result = await interpretTradingEvent({ text: 'Gold is good here, buy around 2526 and protect under 2518, aim 2530 then 2535' }, {
+  const result = await interpretTradingEvent({ text: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535' }, {
     aiRouter: {
       processSignal: async () => ({
         success: true,
@@ -85,7 +85,15 @@ test('rejects malformed AI JSON and unsupported event types fail closed', async 
   assert.equal(unsupported.status, 'NEEDS_REVIEW');
 });
 
-test('passes the requested latency budget into AI router', async () => {
+test('gives ambiguous AI interpretation a sufficient default bounded budget', async () => {
+  let seen;
+  await interpretTradingEvent({ text: 'ambiguous trade words' }, {
+    aiRouter: { processSignal: async (_text, _prompt, options) => { seen = options.timeoutMs; return { success: false, error: 'timeout' }; } },
+  });
+  assert.equal(seen, 12000);
+});
+
+test('passes an explicit latency budget into AI router', async () => {
   let seen;
   await interpretTradingEvent({ text: 'ambiguous trade words' }, {
     aiRouter: { processSignal: async (_text, _prompt, options) => { seen = options.timeoutMs; return { success: false, error: 'timeout' }; } },
