@@ -10,6 +10,7 @@ function request() {
       external_event_id: 'caller-event-id-ignored',
       workspace_id: 'caller-workspace-ignored',
       execution_enabled: true,
+      environment: 'live',
       credentials: { token: 'caller-secret-must-not-flow' },
     }),
     headers: {
@@ -21,7 +22,7 @@ function request() {
   });
 }
 
-test('V1 production-shaped path executes exactly once through real coordinator with enabled gates and fake broker dependencies', async () => {
+test('V1 production-shaped DEMO path executes exactly once through real coordinator with persisted runtime controls and fake broker dependencies', async () => {
   const seen = {
     accountLoads: 0,
     authorityLoads: 0,
@@ -34,8 +35,10 @@ test('V1 production-shaped path executes exactly once through real coordinator w
     workspace_id: 'ws-trusted',
     platform: 'mt5',
     account_id: '90001',
+    environment: 'demo',
     is_active: true,
     execution_enabled: true,
+    live_execution_enabled: false,
     credential_ciphertext: 'synthetic-envelope',
     safety_policy: { enabled: true, killSwitch: false, maxLotsPerTrade: 0.1 },
   };
@@ -53,8 +56,8 @@ test('V1 production-shaped path executes exactly once through real coordinator w
   const response = await handleV1EventsRequest(request(), {
     TRADING_MASTER_KEY: 'synthetic-master',
     TRADING_V1_SIMULATION: 'false',
-    TRADING_ACCESS_ENABLED: 'true',
-    BROKER_EXECUTION_ENABLED: 'true',
+    TRADING_ACCESS_ENABLED: 'false',
+    BROKER_EXECUTION_ENABLED: 'false',
   }, {
     supabaseFactory: async () => ({ from() {} }),
     storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
@@ -90,11 +93,9 @@ test('V1 production-shaped path executes exactly once through real coordinator w
         }],
       };
     },
-    brokerExecutionControlResolver: async () => ({
-      ok: true,
-      enabled: true,
-      reason: 'TEST_ENABLED',
-    }),
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: true, reason: 'TEST_TRADING_ENABLED' }),
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: true, reason: 'TEST_BROKER_ENABLED' }),
+    liveBrokerExecutionControlResolver: async () => ({ ok: true, enabled: false, reason: 'TEST_LIVE_DISABLED' }),
     executionDepsFactory: async ({ workspaceId, tradingEventId }) => {
       assert.equal(workspaceId, 'ws-trusted');
       assert.equal(tradingEventId, 'db-event-1');
@@ -183,4 +184,5 @@ test('V1 production-shaped path executes exactly once through real coordinator w
   });
   assert.equal(JSON.stringify(body).includes('caller-secret-must-not-flow'), false);
   assert.equal(JSON.stringify(body).includes('caller-workspace-ignored'), false);
+  assert.equal(JSON.stringify(body).includes('"environment":"live"'), false);
 });
