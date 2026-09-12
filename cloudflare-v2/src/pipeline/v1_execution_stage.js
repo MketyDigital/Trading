@@ -80,6 +80,13 @@ export async function runV1ProductionExecutionStage({
   }
 
   const transportMode = executionTransportMode(env);
+  const accountPlans = trustedReadyPlans(simulation);
+
+  // Runtime controls protect executable broker plans. Review/blocked/duplicate
+  // paths never reach a broker and should not become DB-availability failures.
+  if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
+    return summary('NOT_EXECUTABLE', { transportMode });
+  }
 
   const tradingAccessControl = await resolveRuntimeControl(
     tradingAccessControlResolver,
@@ -87,16 +94,10 @@ export async function runV1ProductionExecutionStage({
     'TRADING_RUNTIME_CONTROL_UNAVAILABLE',
   );
   if (!tradingAccessControl?.ok) {
-    return summary('TRADING_RUNTIME_CONTROL_UNAVAILABLE', { transportMode });
+    return summary('TRADING_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
   }
   if (tradingAccessControl.enabled !== true) {
-    return summary('TRADING_ACCESS_DISABLED', { transportMode });
-  }
-
-  const accountPlans = trustedReadyPlans(simulation);
-
-  if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
-    return summary('NOT_EXECUTABLE', { transportMode });
+    return summary('TRADING_ACCESS_DISABLED', { blocked: accountPlans.length, transportMode });
   }
 
   const runtimeControl = await resolveRuntimeControl(
@@ -117,8 +118,6 @@ export async function runV1ProductionExecutionStage({
     return summary('NOT_EXECUTABLE', { transportMode });
   }
 
-  // Transport selection comes only from trusted Worker configuration. Request,
-  // event and orchestration payload fields cannot opt into or escape simulation.
   const selectedFactory = transportMode === 'simulation'
     ? safeSimulationDepsFactory
     : executionDepsFactory;
