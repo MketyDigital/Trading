@@ -1,0 +1,110 @@
+name: PR48 Raw Webhook Patch
+
+on:
+  push:
+    branches:
+      - feat/raw-external-webhook-modes-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[pr48-patcher]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/raw-external-webhook-modes-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply bounded raw webhook patches
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text()
+              if new in text:
+                  print(f'{label}: already applied')
+                  return
+              if old not in text:
+                  raise SystemExit(f'{label}: expected source pattern not found')
+              p.write_text(text.replace(old, new, 1))
+              print(f'{label}: applied')
+
+          backend='cloudflare-v2/src/destinations/v1_destination_delivery_stage.js'
+          replace_once(
+              backend,
+              "const TEMPLATE_SELECT = [\n  'id', 'workspace_id', 'template_name', 'formatting_mode', 'parse_mode', 'brand_name', 'header',\n  'footer', 'disclaimer', 'emoji_style', 'cleanup_rules', 'layout', 'is_default',\n].join(',');\n",
+              "const TEMPLATE_SELECT = [\n  'id', 'workspace_id', 'template_name', 'formatting_mode', 'parse_mode', 'brand_name', 'header',\n  'footer', 'disclaimer', 'emoji_style', 'cleanup_rules', 'layout', 'is_default',\n].join(',');\n\nconst WEBHOOK_MODES = new Set(['mkety_signed', 'raw_text', 'raw_json']);\n",
+              'webhook modes',
+          )
+          replace_once(
+              backend,
+              "function active(row = {}) {\n  return (row.is_active ?? row.enabled) === true;\n}\n",
+              "function active(row = {}) {\n  return (row.is_active ?? row.enabled) === true;\n}\n\nfunction webhookMode(destination = {}) {\n  const settings = safeObject(destination.settings);\n  const mode = text(settings.webhookMode ?? settings.webhook_mode).toLowerCase() || 'mkety_signed';\n  return WEBHOOK_MODES.has(mode) ? mode : null;\n}\n",
+              'webhook mode resolver',
+          )
+          marker = "export function createV1DestinationDeliveryStore(supabase) {"
+          raw_sender = """export async function sendRawWebhookDestination({\n  url,\n  body,\n  contentType = 'application/json',\n  fetchFn = globalThis.fetch,\n  timeoutMs = 8000,\n} = {}) {\n  if (!isHttpsUrl(url)) return { ok: false, status: 0, errorCode: 'WEBHOOK_HTTPS_REQUIRED' };\n  if (typeof fetchFn !== 'function') return { ok: false, status: 0, errorCode: 'WEBHOOK_TRANSPORT_UNAVAILABLE' };\n\n  const timeout = Math.max(250, Math.min(30000, Number(timeoutMs) || 8000));\n  const controller = new AbortController();\n  const timer = setTimeout(() => controller.abort(), timeout);\n  try {\n    const response = await fetchFn(url, {\n      method: 'POST',\n      headers: { 'Content-Type': contentType },\n      body: String(body ?? ''),\n      signal: controller.signal,\n      redirect: 'error',\n    });\n    if (!response?.ok) {\n      return { ok: false, status: Number(response?.status) || 0, errorCode: 'WEBHOOK_HTTP_ERROR' };\n    }\n    return { ok: true, status: Number(response.status) || 200 };\n  } catch (error) {\n    return {\n      ok: false,\n      status: 0,\n      errorCode: error?.name === 'AbortError' ? 'WEBHOOK_TIMEOUT' : 'WEBHOOK_TRANSPORT_FAILED',\n    };\n  } finally {\n    clearTimeout(timer);\n  }\n}\n\n"""
+          p=Path(backend)
+          s=p.read_text()
+          if 'export async function sendRawWebhookDestination' not in s:
+              if marker not in s: raise SystemExit('raw sender insertion marker not found')
+              p.write_text(s.replace(marker, raw_sender+marker, 1))
+              print('raw webhook sender: applied')
+          else:
+              print('raw webhook sender: already applied')
+
+          old_deliver = """async function deliverInternalWebhook({ workspaceId, sourceId, destination, event, interpretation, env }, deps) {\n  const url = text(destination.destination_ref);\n  if (!isHttpsUrl(url)) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_HTTPS_REQUIRED' });\n\n  let credentials;\n  try {\n    credentials = await credentialsForDestination(destination, env, deps);\n  } catch {\n    return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_INVALID' });\n  }\n  const signingSecret = text(credentials.signingSecret ?? credentials.signing_secret ?? credentials.secret);\n  if (!signingSecret) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_SIGNING_SECRET_MISSING' });\n\n  const result = await deps.sendWebhook({\n    url,\n    workspaceId,\n    sourceId,\n    signingSecret,\n    payload: canonicalWebhookPayload({ workspaceId, sourceId, event, interpretation }),\n    fetchFn: deps.fetchFn,\n    timeoutMs: destination?.settings?.timeoutMs,\n  });\n  if (!result?.ok) {\n    return publicOutcome(destination, 'FAILED', {\n      errorCode: sanitizeErrorCode(result?.errorCode, 'WEBHOOK_DELIVERY_FAILED'),\n      statusCode: Number(result?.status) || 0,\n    });\n  }\n  return publicOutcome(destination, 'SUCCEEDED', {\n    statusCode: Number(result.status) || 200,\n    ...(result.deliveryRef ? { deliveryRef: text(result.deliveryRef) } : {}),\n  });\n}\n"""
+          new_deliver = """async function deliverInternalWebhook({ workspaceId, sourceId, destination, event, interpretation, env }, deps) {\n  const url = text(destination.destination_ref);\n  if (!isHttpsUrl(url)) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_HTTPS_REQUIRED' });\n\n  const mode = webhookMode(destination);\n  if (!mode) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_MODE_INVALID' });\n\n  if (mode === 'raw_text' || mode === 'raw_json') {\n    const result = await deps.sendRawWebhook({\n      url,\n      body: mode === 'raw_text' ? String(event?.text ?? '') : JSON.stringify(event ?? {}),\n      contentType: mode === 'raw_text' ? 'text/plain; charset=utf-8' : 'application/json',\n      fetchFn: deps.fetchFn,\n      timeoutMs: destination?.settings?.timeoutMs,\n    });\n    if (!result?.ok) {\n      return publicOutcome(destination, 'FAILED', {\n        errorCode: sanitizeErrorCode(result?.errorCode, 'WEBHOOK_DELIVERY_FAILED'),\n        statusCode: Number(result?.status) || 0,\n      });\n    }\n    return publicOutcome(destination, 'SUCCEEDED', { statusCode: Number(result.status) || 200 });\n  }\n\n  let credentials;\n  try {\n    credentials = await credentialsForDestination(destination, env, deps);\n  } catch {\n    return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_INVALID' });\n  }\n  const signingSecret = text(credentials.signingSecret ?? credentials.signing_secret ?? credentials.secret);\n  if (!signingSecret) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_SIGNING_SECRET_MISSING' });\n\n  const result = await deps.sendWebhook({\n    url,\n    workspaceId,\n    sourceId,\n    signingSecret,\n    payload: canonicalWebhookPayload({ workspaceId, sourceId, event, interpretation }),\n    fetchFn: deps.fetchFn,\n    timeoutMs: destination?.settings?.timeoutMs,\n  });\n  if (!result?.ok) {\n    return publicOutcome(destination, 'FAILED', {\n      errorCode: sanitizeErrorCode(result?.errorCode, 'WEBHOOK_DELIVERY_FAILED'),\n      statusCode: Number(result?.status) || 0,\n    });\n  }\n  return publicOutcome(destination, 'SUCCEEDED', {\n    statusCode: Number(result.status) || 200,\n    ...(result.deliveryRef ? { deliveryRef: text(result.deliveryRef) } : {}),\n  });\n}\n"""
+          replace_once(backend, old_deliver, new_deliver, 'raw delivery branch')
+          replace_once(
+              backend,
+              "  sendWebhook = sendSignedWebhookDestination,\n  formatTelegram = formatTelegramDestinationMessage,",
+              "  sendWebhook = sendSignedWebhookDestination,\n  sendRawWebhook = sendRawWebhookDestination,\n  formatTelegram = formatTelegramDestinationMessage,",
+              'raw sender dependency',
+          )
+          replace_once(
+              backend,
+              "        sendTelegram,\n        sendWebhook,\n        formatTelegram,",
+              "        sendTelegram,\n        sendWebhook,\n        sendRawWebhook,\n        formatTelegram,",
+              'raw sender dependency forwarding',
+          )
+
+          frontend='cloudflare-v2/src/dashboard_enterprise_enhancements.js'
+          replace_once(
+              frontend,
+              "function configureDestinationFields(){var t=q('destinationType'),box=q('destinationFields');if(!t||!box)return;if(t.value==='internal_webhook'){box.innerHTML='<div class=\"field\"><label>Webhook signing secret</label><input id=\"destWebhookSecret\" type=\"password\" autocomplete=\"new-password\" required><div class=\"muted small\">Required to sign outbound Mkety webhook deliveries.</div></div>'}setTimeout(async function(){try{var r=await admin('/api/v1/admin/accounts');configureBrokerDestination(r.accounts||[])}catch(_){}},0)}",
+              "function configureDestinationFields(){var t=q('destinationType'),box=q('destinationFields');if(!t||!box)return;if(t.value==='internal_webhook'){box.innerHTML='<div class=\"grid\"><div class=\"field\"><label>Webhook mode</label><select id=\"destWebhookMode\"><option value=\"mkety_signed\">Mkety signed</option><option value=\"raw_text\">Raw text</option><option value=\"raw_json\">Raw JSON</option></select><div class=\"muted small\">Raw modes send ordinary data to the external HTTPS endpoint without Mkety protocol headers.</div></div><div class=\"field\" id=\"destWebhookSecretWrap\"><label>Webhook signing secret</label><input id=\"destWebhookSecret\" type=\"password\" autocomplete=\"new-password\"><div class=\"muted small\">Required only for Mkety signed mode.</div></div></div>';var mode=q('destWebhookMode'),wrap=q('destWebhookSecretWrap');var sync=function(){if(wrap)wrap.style.display=mode&&mode.value==='mkety_signed'?'':'none'};if(mode)mode.addEventListener('change',sync);sync()}setTimeout(async function(){try{var r=await admin('/api/v1/admin/accounts');configureBrokerDestination(r.accounts||[])}catch(_){}},0)}",
+              'webhook mode selector',
+          )
+          replace_once(
+              frontend,
+              "if(t==='internal_webhook'){var secret=q('destWebhookSecret')&&q('destWebhookSecret').value.trim();if(!secret){note('Webhook signing secret is required.','error');return}payload.credentials={signingSecret:secret}}",
+              "if(t==='internal_webhook'){var mode=(q('destWebhookMode')&&q('destWebhookMode').value)||'mkety_signed';payload.settings={webhookMode:mode};if(mode==='mkety_signed'){var secret=q('destWebhookSecret')&&q('destWebhookSecret').value.trim();if(!secret){note('Webhook signing secret is required for Mkety signed mode.','error');return}payload.credentials={signingSecret:secret}}}",
+              'webhook mode create payload',
+          )
+          PY
+      - name: Run focused tests
+        run: |
+          cd cloudflare-v2
+          npm install --no-audit --no-fund
+          node --test tests/v1_internal_webhook_destination.test.mjs tests/webhook_mode_frontend_contract.test.mjs tests/routing_ai_product_gaps.test.mjs tests/v1_admin_destinations.test.mjs
+      - name: Commit implementation
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No implementation changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare-v2/src
+          git commit -m "feat: support raw external webhook delivery [pr48-patcher]"
+          git push origin HEAD:feat/raw-external-webhook-modes-v2
