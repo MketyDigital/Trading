@@ -1,5 +1,6 @@
 import { buildMachinePlan } from '../pipeline/machine_plan.js';
 import { normalizeSymbol, normalizeOrderIntent } from '../normalization/trading_normalizer.js';
+import { recoverKnownNaturalLanguageSignal } from './relaxed_signal_recovery.js';
 
 const INTERPRETER_PROMPT = `Return JSON only. Classify the trading message into one of: NEW_SIGNAL, MANAGEMENT, NON_ACTIONABLE. For NEW_SIGNAL use fields: side BUY|SELL, symbol, order_type MARKET|LIMIT|STOP|STOP_LIMIT, entry (number, {min,max}, or null for current market), stop_loss (number|null), take_profits (number array), fast_entry (boolean). Never invent missing numeric prices. If uncertain return {"event_type":"NON_ACTIONABLE"}.`;
 
@@ -79,6 +80,11 @@ export async function interpretTradingEvent(event = {}, {
   const deterministic = buildMachinePlan(event);
   if (deterministic.status !== 'NEEDS_INTERPRETATION') {
     return { ...deterministic, source: 'deterministic' };
+  }
+
+  const relaxedIntent = recoverKnownNaturalLanguageSignal(event.text);
+  if (relaxedIntent) {
+    return { status: 'READY', source: 'deterministic_relaxed', intent: relaxedIntent };
   }
 
   let resolvedAiRouter = aiRouter;
