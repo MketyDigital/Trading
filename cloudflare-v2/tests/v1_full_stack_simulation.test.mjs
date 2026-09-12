@@ -64,6 +64,8 @@ const simulatedPlan = {
   ],
 };
 
+const tradingAccessControlResolver = async () => ({ ok: true, enabled: true, reason: 'TEST_TRADING_ENABLED' });
+
 test('V1 event request performs ingest, simulation planning and safe execution-stage handoff without broker network execution', async () => {
   const calls = {
     supabase: 0,
@@ -116,6 +118,7 @@ test('V1 event request performs ingest, simulation planning and safe execution-s
       assert.equal(typeof deps.accountProvider, 'function');
       return structuredClone(simulatedPlan);
     },
+    tradingAccessControlResolver,
     brokerExecutionControlResolver: async () => ({
       ok: true,
       enabled: true,
@@ -207,6 +210,7 @@ test('V1 full stack safe simulation remains fail-closed when persisted broker ow
     }),
     simulationDepsFactory: async () => ({}),
     orchestrateFn: async () => structuredClone(simulatedPlan),
+    tradingAccessControlResolver,
     brokerExecutionControlResolver: async () => ({
       ok: true,
       enabled: false,
