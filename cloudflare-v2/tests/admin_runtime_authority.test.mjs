@@ -18,17 +18,23 @@ const readySimulation = {
   accounts: [{ accountId: 'account-1', status: 'READY', actions: [{ type: 'OPEN_POSITION', symbol: 'XAUUSD' }] }],
 };
 
+const tradingOn = async () => ({ ok: true, enabled: true });
+const liveOff = async () => ({ ok: true, enabled: false });
+
 test('persisted admin broker switch can enable execution without a deployment env toggle', async () => {
   let executed = false;
   const result = await runV1ProductionExecutionStage({
-    env: { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
+    env: { TRADING_ACCESS_ENABLED: 'false', BROKER_EXECUTION_ENABLED: 'false' },
     supabase: { from() {} },
     result: ingestResult,
     simulation: readySimulation,
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
+    liveBrokerExecutionControlResolver: liveOff,
     executionDepsFactory: async () => ({}),
     bindingRepairRecorderFactory: () => ({}),
-    executeProductionFn: async () => {
+    executeProductionFn: async (input) => {
+      assert.equal(input.liveBrokerExecutionEnabled, false);
       executed = true;
       return { executionEnabled: true, status: 'SUCCEEDED', accounts: [], succeeded: 1, failed: 0, blocked: 0 };
     },
@@ -43,6 +49,8 @@ test('staff runtime-control API reports the persisted DB switch as effective reg
   const runtimeStore = {
     async getBrokerExecutionEnabled() { return { ok: true, enabled }; },
     async setBrokerExecutionEnabled(next) { enabled = Boolean(next); return { ok: true, enabled }; },
+    async getTradingAccessEnabled() { return { ok: true, enabled: true }; },
+    async getLiveBrokerExecutionEnabled() { return { ok: true, enabled: false }; },
   };
   const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {
     headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
@@ -85,9 +93,11 @@ test('production retry runtime follows persisted admin broker switch instead of 
     deliveryStoreFactory: () => ({}),
     executionDepsFactory: async () => ({}),
     executeProductionFn: async () => ({ accounts: [] }),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
+    liveBrokerExecutionControlResolver: liveOff,
   });
-  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: 1800000000000 });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'false', BROKER_EXECUTION_ENABLED: 'false' }, { nowMs: 1800000000000 });
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.scanned, 0);
 });
@@ -100,7 +110,9 @@ test('turning the persisted admin broker switch OFF stops retry scanning before 
     deliveryStoreFactory: () => ({}),
     executionDepsFactory: async () => ({}),
     executeProductionFn: async () => ({ accounts: [] }),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: false }),
+    liveBrokerExecutionControlResolver: liveOff,
   });
   const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: 1800000000000 });
   assert.equal(listed, false);
@@ -117,7 +129,9 @@ test('retry processing fails closed when the persisted admin runtime control can
     deliveryStoreFactory: () => ({}),
     executionDepsFactory: async () => ({}),
     executeProductionFn: async () => ({ accounts: [] }),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }),
+    liveBrokerExecutionControlResolver: liveOff,
   });
   const result = await runtime({ TRADING_ACCESS_ENABLED: 'true' }, { nowMs: 1800000000000 });
   assert.equal(listed, false);

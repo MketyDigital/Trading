@@ -12,10 +12,6 @@ function json(body, status = 200, extraHeaders = {}) {
   });
 }
 
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
-
 function bearerOrHeaderSecret(request) {
   const auth = request.headers.get('Authorization') || '';
   if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
@@ -83,25 +79,18 @@ function safePublicAccessCode(row = {}, plainCode = undefined) {
   return out;
 }
 
-function nativeRandomUUID() {
-  return crypto.randomUUID();
-}
-
+function nativeRandomUUID() { return crypto.randomUUID(); }
 function randomCode(randomUUID = nativeRandomUUID) {
   const raw = String(randomUUID()).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 16);
   return `TRD-MKETY-${raw}`;
 }
 
-export async function createMketyAdminAccessCodePlan(input = {}, {
-  now = new Date(),
-  randomUUID = nativeRandomUUID,
-} = {}) {
+export async function createMketyAdminAccessCodePlan(input = {}, { now = new Date(), randomUUID = nativeRandomUUID } = {}) {
   const ownerEmail = text(input.ownerEmail ?? input.owner_email)?.toLowerCase();
   const ownerName = text(input.ownerName ?? input.owner_name);
   const workspaceName = text(input.workspaceName ?? input.workspace_name);
   if (!ownerEmail || !ownerEmail.includes('@')) return { ok: false, reason: 'OWNER_EMAIL_REQUIRED' };
   if (!workspaceName) return { ok: false, reason: 'WORKSPACE_NAME_REQUIRED' };
-
   const plainCode = normalizeTradingAccessCode(input.code || randomCode(randomUUID));
   if (!plainCode) return { ok: false, reason: 'ACCESS_CODE_REQUIRED' };
   const workspaceId = text(input.workspaceId ?? input.workspace_id) || randomUUID();
@@ -109,84 +98,42 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
   const maxRedemptions = Math.max(1, Number.parseInt(input.maxRedemptions ?? input.max_redemptions ?? 1, 10) || 1);
   const entitlements = normalizeEntitlements(input.entitlements || {});
   const codeHash = await hashTradingAccessCode(plainCode);
-
+  const metadata = { ...(input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata) ? input.metadata : {}), createdBy: 'mkety-admin-api' };
   return {
-    ok: true,
-    plainCode,
+    ok: true, plainCode,
     workspace: { id: workspaceId, displayName: workspaceName },
     owner: { email: ownerEmail, name: ownerName },
-    entitlements,
-    maxRedemptions,
-    expiresAt,
-    metadata: {
-      ...(input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata) ? input.metadata : {}),
-      createdBy: 'mkety-admin-api',
-    },
+    entitlements, maxRedemptions, expiresAt, metadata,
     record: {
-      code_hash: codeHash,
-      product: 'trading',
-      status: 'active',
-      workspace_id: workspaceId,
-      workspace_display_name: workspaceName,
-      owner_email: ownerEmail,
-      owner_name: ownerName,
-      role: 'owner',
-      entitlements,
-      max_redemptions: maxRedemptions,
-      redeemed_count: 0,
-      expires_at: expiresAt,
-      metadata: {
-        ...(input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata) ? input.metadata : {}),
-        createdBy: 'mkety-admin-api',
-      },
+      code_hash: codeHash, product: 'trading', status: 'active', workspace_id: workspaceId,
+      workspace_display_name: workspaceName, owner_email: ownerEmail, owner_name: ownerName,
+      role: 'owner', entitlements, max_redemptions: maxRedemptions, redeemed_count: 0,
+      expires_at: expiresAt, metadata,
     },
   };
 }
 
 const ACCESS_CODE_PUBLIC_SELECT = 'id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at';
-
 export function createMketyAdminAccessCodeStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listAccessCodes() {
-      const { data, error } = await supabase
-        .from('trading_access_codes')
-        .select(ACCESS_CODE_PUBLIC_SELECT)
-        .order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('trading_access_codes').select(ACCESS_CODE_PUBLIC_SELECT).order('created_at', { ascending: false });
       if (error) throw new Error('ACCESS_CODE_LIST_FAILED');
       return data || [];
     },
     async createAccessCode(plan) {
-      const workspaceRow = {
-        id: plan.workspace.id,
-        display_name: plan.workspace.displayName,
-        owner_email: plan.owner.email,
-        trading_access_enabled: true,
-        metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements },
-        updated_at: new Date().toISOString(),
-      };
-      const { error: workspaceError } = await supabase
-        .from('trading_workspace_access')
-        .upsert(workspaceRow, { onConflict: 'id' });
+      const workspaceRow = { id: plan.workspace.id, display_name: plan.workspace.displayName, owner_email: plan.owner.email, trading_access_enabled: true, metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements }, updated_at: new Date().toISOString() };
+      const { error: workspaceError } = await supabase.from('trading_workspace_access').upsert(workspaceRow, { onConflict: 'id' });
       if (workspaceError) throw new Error('ACCESS_CODE_WORKSPACE_CREATE_FAILED');
-
-      const { data, error } = await supabase
-        .from('trading_access_codes')
-        .insert(plan.record)
-        .select(ACCESS_CODE_PUBLIC_SELECT)
-        .maybeSingle();
+      const { data, error } = await supabase.from('trading_access_codes').insert(plan.record).select(ACCESS_CODE_PUBLIC_SELECT).maybeSingle();
       if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
       return data;
     },
     async revokeAccessCode(id) {
       const accessCodeId = text(id);
       if (!accessCodeId) throw new Error('ACCESS_CODE_ID_REQUIRED');
-      const { data, error } = await supabase
-        .from('trading_access_codes')
-        .update({ status: 'revoked', updated_at: new Date().toISOString() })
-        .eq('id', accessCodeId)
-        .select(ACCESS_CODE_PUBLIC_SELECT)
-        .maybeSingle();
+      const { data, error } = await supabase.from('trading_access_codes').update({ status: 'revoked', updated_at: new Date().toISOString() }).eq('id', accessCodeId).select(ACCESS_CODE_PUBLIC_SELECT).maybeSingle();
       if (error || !data) throw new Error('ACCESS_CODE_REVOKE_FAILED');
       return data;
     },
@@ -198,18 +145,37 @@ function revokeIdFromPath(pathname) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function publicControl(control) {
+  return { enabled: control?.enabled === true, updatedAt: control?.updatedAt || null, updatedBy: control?.updatedBy || null };
+}
+
 async function runtimeControlResponse(runtimeStore) {
-  const current = await runtimeStore.getBrokerExecutionEnabled();
-  if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');
-  const ownerEnabled = current?.enabled === true;
+  const [trading, broker, live] = await Promise.all([
+    runtimeStore.getTradingAccessEnabled(),
+    runtimeStore.getBrokerExecutionEnabled(),
+    runtimeStore.getLiveBrokerExecutionEnabled(),
+  ]);
+  if (!trading?.ok || !broker?.ok || !live?.ok) throw new Error('RUNTIME_CONTROL_UNAVAILABLE');
   return {
     ok: true,
-    brokerExecutionCapabilityEnabled: true,
-    brokerExecutionEnabled: ownerEnabled,
-    effectiveBrokerExecutionEnabled: ownerEnabled,
-    updatedAt: current?.updatedAt || null,
-    updatedBy: current?.updatedBy || null,
+    tradingAccessEnabled: trading.enabled === true,
+    brokerExecutionEnabled: broker.enabled === true,
+    effectiveBrokerExecutionEnabled: trading.enabled === true && broker.enabled === true,
+    liveBrokerExecutionEnabled: live.enabled === true,
+    effectiveLiveBrokerExecutionEnabled: trading.enabled === true && broker.enabled === true && live.enabled === true,
+    controls: { tradingAccess: publicControl(trading), brokerExecution: publicControl(broker), liveBrokerExecution: publicControl(live) },
   };
+}
+
+async function updateRuntimeControls(controls, body) {
+  const keys = ['tradingAccessEnabled', 'brokerExecutionEnabled', 'liveBrokerExecutionEnabled'];
+  const supplied = keys.filter((key) => Object.hasOwn(body, key));
+  if (!supplied.length) return { ok: false, reason: 'RUNTIME_CONTROL_BOOLEAN_REQUIRED' };
+  for (const key of supplied) if (typeof body[key] !== 'boolean') return { ok: false, reason: 'RUNTIME_CONTROL_BOOLEAN_REQUIRED' };
+  if (Object.hasOwn(body, 'tradingAccessEnabled')) await controls.setTradingAccessEnabled(body.tradingAccessEnabled, { updatedBy: 'mkety-admin' });
+  if (Object.hasOwn(body, 'brokerExecutionEnabled')) await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+  if (Object.hasOwn(body, 'liveBrokerExecutionEnabled')) await controls.setLiveBrokerExecutionEnabled(body.liveBrokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+  return { ok: true };
 }
 
 export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
@@ -221,87 +187,56 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
 } = {}) {
   const auth = authorizeMketyAdmin(request, env);
   if (!auth.ok) return json({ ok: false, reason: auth.reason }, auth.status);
-
   const url = new URL(request.url);
 
   if (url.pathname === '/api/v1/mkety-admin/runtime-controls') {
     let controls = runtimeStore;
     if (!controls) {
-      try {
-        controls = createTradingRuntimeControlStore(await supabaseFactory(env));
-      } catch {
-        return json({ ok: false, reason: 'MKETY_ADMIN_RUNTIME_CONTROL_STORE_UNAVAILABLE' }, 503);
-      }
+      try { controls = createTradingRuntimeControlStore(await supabaseFactory(env)); }
+      catch { return json({ ok: false, reason: 'MKETY_ADMIN_RUNTIME_CONTROL_STORE_UNAVAILABLE' }, 503); }
     }
     if (request.method === 'GET') {
-      try {
-        return json(await runtimeControlResponse(controls, env));
-      } catch {
-        return json({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }, 503);
-      }
+      try { return json(await runtimeControlResponse(controls)); }
+      catch { return json({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }, 503); }
     }
     if (request.method === 'PATCH') {
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-      if (typeof body.brokerExecutionEnabled !== 'boolean') {
-        return json({ ok: false, reason: 'BROKER_EXECUTION_BOOLEAN_REQUIRED' }, 400);
-      }
       try {
-        await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
-        return json(await runtimeControlResponse(controls, env));
-      } catch {
-        return json({ ok: false, reason: 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503);
-      }
+        const updated = await updateRuntimeControls(controls, body);
+        if (!updated.ok) return json({ ok: false, reason: updated.reason }, 400);
+        return json(await runtimeControlResponse(controls));
+      } catch { return json({ ok: false, reason: 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503); }
     }
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, PATCH' });
   }
 
   let accessStore = store;
   if (!accessStore) {
-    try {
-      accessStore = createMketyAdminAccessCodeStore(await supabaseFactory(env));
-    } catch {
-      return json({ ok: false, reason: 'MKETY_ADMIN_ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
-    }
+    try { accessStore = createMketyAdminAccessCodeStore(await supabaseFactory(env)); }
+    catch { return json({ ok: false, reason: 'MKETY_ADMIN_ACCESS_CODE_STORE_UNAVAILABLE' }, 503); }
   }
 
   const revokeId = revokeIdFromPath(url.pathname);
   if (revokeId) {
     if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
     if (typeof accessStore.revokeAccessCode !== 'function') return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_UNAVAILABLE' }, 503);
-    try {
-      const row = await accessStore.revokeAccessCode(revokeId);
-      return json({ ok: true, accessCode: safePublicAccessCode(row) });
-    } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_FAILED' }, 503);
-    }
+    try { return json({ ok: true, accessCode: safePublicAccessCode(await accessStore.revokeAccessCode(revokeId)) }); }
+    catch { return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_FAILED' }, 503); }
   }
 
-  if (url.pathname !== '/api/v1/mkety-admin/access-codes') {
-    return json({ ok: false, reason: 'MKETY_ADMIN_ROUTE_NOT_FOUND' }, 404);
-  }
-
+  if (url.pathname !== '/api/v1/mkety-admin/access-codes') return json({ ok: false, reason: 'MKETY_ADMIN_ROUTE_NOT_FOUND' }, 404);
   if (request.method === 'GET') {
-    try {
-      const rows = await accessStore.listAccessCodes();
-      return json({ ok: true, accessCodes: rows.map((row) => safePublicAccessCode(row)) });
-    } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_LIST_FAILED' }, 503);
-    }
+    try { return json({ ok: true, accessCodes: (await accessStore.listAccessCodes()).map((row) => safePublicAccessCode(row)) }); }
+    catch { return json({ ok: false, reason: 'ACCESS_CODE_LIST_FAILED' }, 503); }
   }
-
   if (request.method === 'POST') {
     const body = await readJson(request);
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const plan = await createMketyAdminAccessCodePlan(body, { now, randomUUID });
     if (!plan.ok) return json({ ok: false, reason: plan.reason }, 400);
-    try {
-      const row = await accessStore.createAccessCode(plan);
-      return json({ ok: true, accessCode: safePublicAccessCode(row, plan.plainCode) }, 201);
-    } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_CREATE_FAILED' }, 503);
-    }
+    try { return json({ ok: true, accessCode: safePublicAccessCode(await accessStore.createAccessCode(plan), plan.plainCode) }, 201); }
+    catch { return json({ ok: false, reason: 'ACCESS_CODE_CREATE_FAILED' }, 503); }
   }
-
   return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
 }
