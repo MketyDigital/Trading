@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 import uuid
@@ -16,12 +17,42 @@ def _repo_bridge_path():
 if str(_repo_bridge_path()) not in sys.path:
     sys.path.insert(0, str(_repo_bridge_path()))
 
-from mt5_bridge import MT5Engine, ReplayLedger  # noqa: E402
+from mt5_bridge import MT5Engine  # noqa: E402
 
 DEFAULT_GATEWAY = 'wss://cbot.mkety.com:25345/v1/mt5'
 MAX_SYMBOLS = 2000
 DEFAULT_HEARTBEAT_SECONDS = 20
 DEFAULT_SYMBOL_REFRESH_SECONDS = 15 * 60
+
+
+class ReplayLedger:
+    """Connector-local replay ledger with deterministic SQLite handle ownership."""
+
+    def __init__(self, path):
+        self.path = str(path)
+        db = sqlite3.connect(self.path)
+        try:
+            db.execute('CREATE TABLE IF NOT EXISTS commands (command_id TEXT PRIMARY KEY, response_json TEXT NOT NULL, created_at REAL NOT NULL)')
+            db.commit()
+        finally:
+            db.close()
+
+    def get(self, command_id):
+        db = sqlite3.connect(self.path)
+        try:
+            row = db.execute('SELECT response_json FROM commands WHERE command_id=?', (command_id,)).fetchone()
+            return json.loads(row[0]) if row else None
+        finally:
+            db.close()
+
+    def put(self, command_id, response):
+        payload = json.dumps(response, separators=(',', ':'), default=str)
+        db = sqlite3.connect(self.path)
+        try:
+            db.execute('INSERT OR REPLACE INTO commands(command_id,response_json,created_at) VALUES(?,?,?)', (command_id, payload, time.time()))
+            db.commit()
+        finally:
+            db.close()
 
 
 def default_config_path():
@@ -315,20 +346,34 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def resolve_startup_config(args, input_fn=input):
     config_path = Path(args.config)
     if args.reset and config_path.exists():
         config_path.unlink()
     config = load_local_config(config_path)
     if args.token:
-        config = save_local_config(config_path, {
+        return save_local_config(config_path, {
             'gateway_url': args.gateway or DEFAULT_GATEWAY,
             'connection_token': args.token,
             'connector_instance_id': (config or {}).get('connector_instance_id') or str(uuid.uuid4()),
         })
+    if config:
+        return config
+    token = str(input_fn('Paste the one-time pairing token from Mkety Trading: ') or '').strip()
+    if not token:
+        return None
+    return save_local_config(config_path, {
+        'gateway_url': args.gateway or DEFAULT_GATEWAY,
+        'connection_token': token,
+        'connector_instance_id': str(uuid.uuid4()),
+    })
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    config = resolve_startup_config(args)
     if not config:
-        print('Mkety MT5 pairing is required. Run with --token <token shown in Mkety Trading>.')
+        print('Mkety MT5 pairing token is required.')
         return 2
 
     import MetaTrader5 as mt5
@@ -336,7 +381,7 @@ def main(argv=None):
     if not mt5.initialize():
         raise RuntimeError(f'MT5 initialize failed: {mt5.last_error()}')
     try:
-        connector = MketyMt5Connector(mt5, websocket.create_connection, config, config_path=config_path)
+        connector = MketyMt5Connector(mt5, websocket.create_connection, config, config_path=Path(args.config))
         connector.run_forever()
     finally:
         mt5.shutdown()
