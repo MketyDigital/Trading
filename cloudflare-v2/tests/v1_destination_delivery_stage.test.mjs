@@ -77,7 +77,7 @@ test('routes a trusted source event to its active Telegram destination without e
   assert.equal(JSON.stringify(stage).includes('ciphertext-only'), false);
 });
 
-test('does not dispatch destinations outside the trusted workspace and never invokes broker execution', async () => {
+test('does not dispatch destinations outside the trusted workspace and only routes broker destinations for the authoritative execution stage', async () => {
   let telegramCalls = 0;
   const stage = await runV1DestinationDeliveryStage({
     workspaceId: 'ws-1',
@@ -102,12 +102,14 @@ test('does not dispatch destinations outside the trusted workspace and never inv
 
   assert.equal(telegramCalls, 0);
   assert.equal(stage.succeeded, 0);
+  assert.equal(stage.routed, 1);
   assert.equal(stage.failed, 0);
   assert.equal(stage.rejected, 1);
-  assert.equal(stage.blocked, 1);
+  assert.equal(stage.blocked, 0);
+  assert.equal(stage.status, 'PARTIAL_FAILURE');
   assert.deepEqual(stage.outcomes.map((item) => [item.destinationId, item.status]), [
     ['cross-tenant', 'REJECTED'],
-    ['broker-1', 'BLOCKED'],
+    ['broker-1', 'ROUTED'],
   ]);
 });
 
