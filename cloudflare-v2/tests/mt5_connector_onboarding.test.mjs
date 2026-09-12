@@ -108,7 +108,7 @@ test('MT5 connector onboarding returns short-lived one-time outbound pairing mat
   assert.equal(verified.purpose, 'pair');
 });
 
-test('MT5 connector sync persists actual terminal identity and sanitized account-wide symbols from authenticated gateway session', async () => {
+test('MT5 connector sync persists terminal identity, retires pairing token and keeps only gateway control credentials', async () => {
   const capture = {};
   const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
     connectionToken: 'mt5v1.test.test',
@@ -163,5 +163,9 @@ test('MT5 connector sync persists actual terminal identity and sanitized account
   assert.equal(capture.updated.provider_config.symbolCatalog[0].stepLots, 0.01);
   assert.deepEqual(capture.updated.provider_config.symbolCatalog[0].aliases, []);
   assert.equal(capture.updated.provider_config.symbolCatalog[1].platformSymbol, 'Volatility 75 Index');
+  const persistedCredentials = await decryptConnectionCredentials('mt5_connector', capture.updated.credential_ciphertext, env.TRADING_MASTER_KEY);
+  assert.equal(Object.hasOwn(persistedCredentials, 'connectionToken'), false);
+  assert.equal(persistedCredentials.gatewayUrl, env.CTRADER_CBOT_GATEWAY_URL);
+  assert.equal(persistedCredentials.controlSecret, env.CBOT_CONTROL_SECRET);
   assert.equal(body.account.accountId, '50123456');
 });
