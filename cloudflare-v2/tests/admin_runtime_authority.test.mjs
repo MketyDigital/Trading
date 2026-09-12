@@ -91,3 +91,37 @@ test('production retry runtime follows persisted admin broker switch instead of 
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.scanned, 0);
 });
+
+test('turning the persisted admin broker switch OFF stops retry scanning before any delivery can dispatch', async () => {
+  let listed = false;
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    listDueFn: async () => { listed = true; return []; },
+    deliveryStoreFactory: () => ({}),
+    executionDepsFactory: async () => ({}),
+    executeProductionFn: async () => ({ accounts: [] }),
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: false }),
+  });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, { nowMs: 1800000000000 });
+  assert.equal(listed, false);
+  assert.equal(result.status, 'BROKER_OWNER_SWITCH_OFF');
+  assert.equal(result.scanned, 0);
+  assert.equal(result.dispatched, 0);
+});
+
+test('retry processing fails closed when the persisted admin runtime control cannot be read', async () => {
+  let listed = false;
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    listDueFn: async () => { listed = true; return []; },
+    deliveryStoreFactory: () => ({}),
+    executionDepsFactory: async () => ({}),
+    executeProductionFn: async () => ({ accounts: [] }),
+    brokerExecutionControlResolver: async () => ({ ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }),
+  });
+  const result = await runtime({ TRADING_ACCESS_ENABLED: 'true' }, { nowMs: 1800000000000 });
+  assert.equal(listed, false);
+  assert.equal(result.status, 'BROKER_RUNTIME_CONTROL_UNAVAILABLE');
+  assert.equal(result.scanned, 0);
+  assert.equal(result.dispatched, 0);
+});
