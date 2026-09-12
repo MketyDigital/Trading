@@ -14,6 +14,8 @@ const SOURCE_SELECT = [
   'external_identity',
   'public_source_handle',
   'config',
+  'secret_ciphertext',
+  'provider_secret_ciphertext',
   'health_status',
   'last_heartbeat_at',
   'last_event_at',
@@ -34,6 +36,8 @@ function normalize(row) {
     externalIdentity: row.external_identity ?? null,
     publicSourceHandle: row.public_source_handle ?? null,
     config: row.config || {},
+    secretCiphertext: row.secret_ciphertext ?? null,
+    providerSecretCiphertext: row.provider_secret_ciphertext ?? null,
     health: {
       status: row.health_status || (core.enabled ? 'STARTING' : 'DISABLED'),
       lastHeartbeatAt: row.last_heartbeat_at ?? null,
@@ -95,6 +99,23 @@ export function createSourceConnectionStore(supabase) {
         .maybeSingle();
 
       if (error) throw new Error(error.message || 'failed to load TradingView source connection');
+      return normalize(data);
+    },
+
+    async getActiveTelegramBotSourceByPublicHandle(handle) {
+      const normalizedHandle = String(handle ?? '').trim();
+      if (!normalizedHandle) return null;
+
+      const { data, error } = await supabase
+        .from('source_connections')
+        .select(SOURCE_SELECT)
+        .eq('public_source_handle', normalizedHandle)
+        .eq('is_active', true)
+        .eq('provider_type', 'telegram_bot_api')
+        .eq('source_family', 'telegram')
+        .maybeSingle();
+
+      if (error) throw new Error(error.message || 'failed to load Telegram bot source connection');
       return normalize(data);
     },
 
