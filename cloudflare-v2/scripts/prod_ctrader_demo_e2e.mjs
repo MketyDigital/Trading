@@ -15,12 +15,26 @@ async function poll(label, fn, attempts = 40) { for (let i = 0; i < attempts; i 
 async function controls() { const rows = await data(sb.from('trading_runtime_controls').select('control_key,enabled'), 'runtime controls'); return Object.fromEntries((rows || []).map((r) => [r.control_key, r.enabled])); }
 async function account() { return (await data(sb.from('trade_accounts').select('id,workspace_id,platform,provider_mode,account_id,account_label,environment,is_active,execution_enabled,live_execution_enabled,lot_sizing_type,lot_value,safety_policy').eq('id', accountId).eq('workspace_id', workspaceId).limit(1), 'account'))?.[0] || null; }
 async function patchAccount(patch, label) { const rows = await data(sb.from('trade_accounts').update(patch).eq('id', accountId).eq('workspace_id', workspaceId).eq('environment', 'demo').eq('live_execution_enabled', false).select('id,execution_enabled,live_execution_enabled,safety_policy'), label); if (!rows?.length) fail(`${label} did not persist`); return rows[0]; }
+function safeIngressSummary(body = {}) {
+  return {
+    ok: body?.ok,
+    duplicate: body?.duplicate,
+    interpretationStatus: body?.interpretation?.status,
+    simulationStatus: body?.simulation?.status,
+    simulationReason: body?.simulation?.reason,
+    simulationAccounts: (body?.simulation?.accounts || []).map((a) => ({ accountId: a?.accountId, status: a?.status, reason: a?.reason, error: a?.error, policyReasons: a?.policy?.reasons })),
+    executionStatus: body?.execution?.status,
+    executionEnabled: body?.execution?.executionEnabled,
+    executionBlocked: body?.execution?.blocked,
+    executionAccounts: (body?.execution?.accounts || []).map((a) => ({ accountId: a?.accountId, status: a?.status, reason: a?.reason, errorCode: a?.errorCode })),
+  };
+}
 async function postExternal(secret, chatId, messageId, text) {
   const externalEventId = `telegram:${chatId}:${messageId}`;
   const response = await fetch(`${baseUrl}/api/v1/external/mtproto/${encodeURIComponent(sourceId)}/${encodeURIComponent(secret)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: String(messageId), text, metadata: { acceptance: 'prod-ctrader-demo-e2e' } }), redirect: 'error' });
   let body = {}; try { body = await response.json(); } catch {}
   if (!response.ok) fail(`external ingress HTTP ${response.status}: ${body?.reason || 'failed'}`);
-  return { externalEventId, status: response.status };
+  return { externalEventId, status: response.status, body };
 }
 
 let originalSafetyPolicy = null;
@@ -60,10 +74,13 @@ try {
   const seed = Date.now();
   const openIngress = await postExternal(secret, chatId, seed, 'BUY XAUUSD NOW');
   console.log(`OPEN_INGRESS_HTTP=${openIngress.status}`);
+  console.log(`OPEN_PIPELINE_SUMMARY=${JSON.stringify(safeIngressSummary(openIngress.body))}`);
   const openEvent = await poll('open event', async () => (await data(sb.from('trading_events').select('id,processing_status,error_code,canonical_intent').eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('external_event_id', openIngress.externalEventId).limit(1), 'open event'))?.[0] || null);
   if (openEvent.error_code) fail(`open event error: ${openEvent.error_code}`);
   console.log(`OPEN_EVENT_ID=${openEvent.id}`);
   console.log(`OPEN_EVENT_STATUS=${openEvent.processing_status}`);
+  if (openIngress.body?.simulation?.accounts?.length && !openIngress.body.simulation.accounts.some((x) => x?.status === 'READY')) fail(`planning did not produce a READY account: ${JSON.stringify(safeIngressSummary(openIngress.body))}`);
+  if (openIngress.body?.execution && !['EXECUTED','PARTIAL_FAILURE'].includes(openIngress.body.execution.status)) fail(`execution did not enter broker path: ${JSON.stringify(safeIngressSummary(openIngress.body))}`);
 
   const group = await poll('position group', async () => (await data(sb.from('position_groups').select('id,status,trade_account_id,source_event_id,canonical_symbol,side').eq('workspace_id', workspaceId).eq('trade_account_id', accountId).eq('source_event_id', openEvent.id).order('created_at', { ascending: false }).limit(1), 'position group'))?.[0] || null);
   const leg = await poll('broker-opened leg', async () => { const legs = await data(sb.from('position_legs').select('id,status,lots,broker_position_id,broker_order_id,opened_at,closed_at').eq('position_group_id', group.id).order('created_at', { ascending: true }), 'position legs'); return (legs || []).find((x) => x.broker_position_id || x.broker_order_id || x.opened_at) || null; });
@@ -75,6 +92,7 @@ try {
 
   const closeIngress = await postExternal(secret, chatId, seed + 1, 'CLOSE');
   console.log(`CLOSE_INGRESS_HTTP=${closeIngress.status}`);
+  console.log(`CLOSE_PIPELINE_SUMMARY=${JSON.stringify(safeIngressSummary(closeIngress.body))}`);
   const closeEvent = await poll('close event', async () => (await data(sb.from('trading_events').select('id,processing_status,error_code').eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('external_event_id', closeIngress.externalEventId).limit(1), 'close event'))?.[0] || null);
   if (closeEvent.error_code) fail(`close event error: ${closeEvent.error_code}`);
   console.log(`CLOSE_EVENT_ID=${closeEvent.id}`);
