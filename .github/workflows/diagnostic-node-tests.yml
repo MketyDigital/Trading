@@ -1,0 +1,44 @@
+name: Diagnostic Node Tests
+
+on:
+  pull_request:
+    paths:
+      - 'cloudflare-v2/**'
+      - '.github/workflows/diagnostic-node-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  node-test-log:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Node tests and capture output
+        id: tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:ci 2>&1 | tee "$RUNNER_TEMP/node-test.log"
+
+      - name: Upload Node test log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-node-test-log
+          path: ${{ runner.temp }}/node-test.log
+          if-no-files-found: error
+          retention-days: 1
