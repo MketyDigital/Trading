@@ -198,16 +198,15 @@ function revokeIdFromPath(pathname) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function runtimeControlResponse(runtimeStore, env) {
+async function runtimeControlResponse(runtimeStore) {
   const current = await runtimeStore.getBrokerExecutionEnabled();
   if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');
   const ownerEnabled = current?.enabled === true;
-  const capabilityEnabled = enabled(env.BROKER_EXECUTION_ENABLED);
   return {
     ok: true,
-    brokerExecutionCapabilityEnabled: capabilityEnabled,
+    brokerExecutionCapabilityEnabled: true,
     brokerExecutionEnabled: ownerEnabled,
-    effectiveBrokerExecutionEnabled: capabilityEnabled && ownerEnabled,
+    effectiveBrokerExecutionEnabled: ownerEnabled,
     updatedAt: current?.updatedAt || null,
     updatedBy: current?.updatedBy || null,
   };

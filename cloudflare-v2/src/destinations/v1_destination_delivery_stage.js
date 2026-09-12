@@ -334,9 +334,6 @@ async function deliverOne(input, deps) {
   if (type === 'internal_webhook') return deliverInternalWebhook(input, deps);
   if (type === 'audit_only') return publicOutcome(destination, 'SUCCEEDED', { deliveryRef: 'audit-only' });
   if (type === 'broker_account') {
-    if (String(env.BROKER_EXECUTION_ENABLED ?? '').toLowerCase() !== 'true') {
-      return publicOutcome(destination, 'BLOCKED', { errorCode: 'BROKER_EXECUTION_DISABLED' });
-    }
     return publicOutcome(destination, 'ROUTED', { deliveryRef: text(destination.destination_ref) });
   }
   return publicOutcome(destination, 'REJECTED', { errorCode: 'DESTINATION_TYPE_UNSUPPORTED' });

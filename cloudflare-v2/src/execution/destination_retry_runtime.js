@@ -38,6 +38,7 @@ export function createDestinationRetryRuntime({
   listDueFn,
   claimFn,
   recoverFn,
+  brokerExecutionControlResolver = null,
   batchLimit = 10,
   leaseMs = 30000,
 } = {}) {
@@ -50,14 +51,25 @@ export function createDestinationRetryRuntime({
   const safeLeaseMs = Math.max(1000, Math.min(300000, Math.trunc(Number(leaseMs) || 30000)));
 
   return async function runDestinationRetry(env = {}, { nowMs = Date.now() } = {}) {
-    // Structural master fuse: disabled recovery cannot construct Supabase or scan.
-    if (!isEnabled(env?.BROKER_EXECUTION_ENABLED)) return disabledSummary();
+    // Legacy callers may retain the deployment fuse, but production injects
+    // the persisted Mkety admin runtime control as the operational authority.
+    if (!brokerExecutionControlResolver && !isEnabled(env?.BROKER_EXECUTION_ENABLED)) return disabledSummary();
 
     const timestamp = Number(nowMs);
     if (!Number.isFinite(timestamp)) throw new TypeError('nowMs must be finite');
     const now = new Date(timestamp).toISOString();
     const leaseUntil = new Date(timestamp + safeLeaseMs).toISOString();
     const supabase = await supabaseFactory(env);
+    if (brokerExecutionControlResolver) {
+      let runtimeControl;
+      try {
+        runtimeControl = await brokerExecutionControlResolver({ env, supabase });
+      } catch {
+        runtimeControl = { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' };
+      }
+      if (!runtimeControl?.ok) return { ...disabledSummary(), status: 'BROKER_RUNTIME_CONTROL_UNAVAILABLE' };
+      if (runtimeControl.enabled !== true) return { ...disabledSummary(), status: 'BROKER_OWNER_SWITCH_OFF' };
+    }
     const listed = await listDueFn({ supabase, now, limit: safeBatchLimit });
     const due = Array.isArray(listed) ? listed.slice(0, safeBatchLimit) : [];
 

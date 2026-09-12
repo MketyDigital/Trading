@@ -6,6 +6,7 @@ import {
 import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_store.js';
 import { createProductionExecutionDependencies } from './production_execution_deps.js';
 import { executeProductionPlan } from './production_execution_coordinator.js';
+import { resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -135,6 +136,7 @@ export function createProductionDestinationRetryRuntime({
   deliveryStoreFactory = createSupabaseDeliveryStore,
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
+  brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
   batchLimit = 10,
   leaseMs = 30000,
   maxAttempts = 5,
@@ -156,6 +158,7 @@ export function createProductionDestinationRetryRuntime({
 
     const runtime = createDestinationRetryRuntime({
       supabaseFactory,
+      brokerExecutionControlResolver,
       batchLimit,
       leaseMs,
       listDueFn: ({ supabase, now, limit }) => listDueFn({
