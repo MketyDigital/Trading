@@ -1,0 +1,94 @@
+name: Temporary Coolify Access Discovery
+
+on:
+  push:
+    paths:
+      - '.github/workflows/temporary-coolify-access-discovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      S_COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      S_COOLIFY_API_URL: ${{ secrets.COOLIFY_API_URL }}
+      S_COOLIFY_BASE_URL: ${{ secrets.COOLIFY_BASE_URL }}
+      V_COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+      V_COOLIFY_API_URL: ${{ vars.COOLIFY_API_URL }}
+      V_COOLIFY_BASE_URL: ${{ vars.COOLIFY_BASE_URL }}
+      S_COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      S_COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      S_COOLIFY_ACCESS_TOKEN: ${{ secrets.COOLIFY_ACCESS_TOKEN }}
+      S_COOLIFY_API_KEY: ${{ secrets.COOLIFY_API_KEY }}
+      S_COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+      S_COOLIFY_APPLICATION_UUID: ${{ secrets.COOLIFY_APPLICATION_UUID }}
+      S_COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
+      S_COOLIFY_SERVICE_UUID: ${{ secrets.COOLIFY_SERVICE_UUID }}
+      V_COOLIFY_APP_UUID: ${{ vars.COOLIFY_APP_UUID }}
+      V_COOLIFY_APPLICATION_UUID: ${{ vars.COOLIFY_APPLICATION_UUID }}
+      V_COOLIFY_RESOURCE_UUID: ${{ vars.COOLIFY_RESOURCE_UUID }}
+      V_COOLIFY_SERVICE_UUID: ${{ vars.COOLIFY_SERVICE_UUID }}
+      S_AZURE_VM_HOST: ${{ secrets.AZURE_VM_HOST }}
+      S_AZURE_HOST: ${{ secrets.AZURE_HOST }}
+      S_COOLIFY_VM_HOST: ${{ secrets.COOLIFY_VM_HOST }}
+      S_VM_HOST: ${{ secrets.VM_HOST }}
+      V_AZURE_VM_HOST: ${{ vars.AZURE_VM_HOST }}
+      V_COOLIFY_VM_HOST: ${{ vars.COOLIFY_VM_HOST }}
+      S_AZURE_VM_USER: ${{ secrets.AZURE_VM_USER }}
+      S_AZURE_USER: ${{ secrets.AZURE_USER }}
+      S_COOLIFY_SSH_USER: ${{ secrets.COOLIFY_SSH_USER }}
+      S_COOLIFY_USERNAME: ${{ secrets.COOLIFY_USERNAME }}
+      S_VM_USER: ${{ secrets.VM_USER }}
+      S_AZURE_VM_SSH_KEY: ${{ secrets.AZURE_VM_SSH_KEY }}
+      S_AZURE_SSH_KEY: ${{ secrets.AZURE_SSH_KEY }}
+      S_COOLIFY_SSH_KEY: ${{ secrets.COOLIFY_SSH_KEY }}
+      S_SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      S_COOLIFY_PASSWORD: ${{ secrets.COOLIFY_PASSWORD }}
+      S_AZURE_VM_PASSWORD: ${{ secrets.AZURE_VM_PASSWORD }}
+    steps:
+      - name: Report deployment access shape without exposing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          present() { [[ -n "${!1:-}" ]] && printf '%s=SET\n' "$1" || printf '%s=UNSET\n' "$1"; }
+          for name in \
+            S_COOLIFY_URL S_COOLIFY_API_URL S_COOLIFY_BASE_URL V_COOLIFY_URL V_COOLIFY_API_URL V_COOLIFY_BASE_URL \
+            S_COOLIFY_TOKEN S_COOLIFY_API_TOKEN S_COOLIFY_ACCESS_TOKEN S_COOLIFY_API_KEY \
+            S_COOLIFY_APP_UUID S_COOLIFY_APPLICATION_UUID S_COOLIFY_RESOURCE_UUID S_COOLIFY_SERVICE_UUID \
+            V_COOLIFY_APP_UUID V_COOLIFY_APPLICATION_UUID V_COOLIFY_RESOURCE_UUID V_COOLIFY_SERVICE_UUID \
+            S_AZURE_VM_HOST S_AZURE_HOST S_COOLIFY_VM_HOST S_VM_HOST V_AZURE_VM_HOST V_COOLIFY_VM_HOST \
+            S_AZURE_VM_USER S_AZURE_USER S_COOLIFY_SSH_USER S_COOLIFY_USERNAME S_VM_USER \
+            S_AZURE_VM_SSH_KEY S_AZURE_SSH_KEY S_COOLIFY_SSH_KEY S_SSH_PRIVATE_KEY \
+            S_COOLIFY_PASSWORD S_AZURE_VM_PASSWORD; do
+            present "$name"
+          done
+
+          first_set() {
+            for name in "$@"; do
+              if [[ -n "${!name:-}" ]]; then printf '%s' "${!name}"; return 0; fi
+            done
+            return 1
+          }
+
+          api_url="$(first_set S_COOLIFY_URL S_COOLIFY_API_URL S_COOLIFY_BASE_URL V_COOLIFY_URL V_COOLIFY_API_URL V_COOLIFY_BASE_URL || true)"
+          api_token="$(first_set S_COOLIFY_TOKEN S_COOLIFY_API_TOKEN S_COOLIFY_ACCESS_TOKEN S_COOLIFY_API_KEY || true)"
+          resource_uuid="$(first_set S_COOLIFY_APP_UUID S_COOLIFY_APPLICATION_UUID S_COOLIFY_RESOURCE_UUID S_COOLIFY_SERVICE_UUID V_COOLIFY_APP_UUID V_COOLIFY_APPLICATION_UUID V_COOLIFY_RESOURCE_UUID V_COOLIFY_SERVICE_UUID || true)"
+          ssh_host="$(first_set S_AZURE_VM_HOST S_AZURE_HOST S_COOLIFY_VM_HOST S_VM_HOST V_AZURE_VM_HOST V_COOLIFY_VM_HOST || true)"
+          ssh_user="$(first_set S_AZURE_VM_USER S_AZURE_USER S_COOLIFY_SSH_USER S_COOLIFY_USERNAME S_VM_USER || true)"
+          ssh_key="$(first_set S_AZURE_VM_SSH_KEY S_AZURE_SSH_KEY S_COOLIFY_SSH_KEY S_SSH_PRIVATE_KEY || true)"
+          ssh_password="$(first_set S_COOLIFY_PASSWORD S_AZURE_VM_PASSWORD || true)"
+
+          if [[ -n "$api_url" && -n "$api_token" && -n "$resource_uuid" ]]; then
+            echo 'COOLIFY_API_ACCESS=READY'
+          else
+            echo 'COOLIFY_API_ACCESS=INCOMPLETE'
+          fi
+          if [[ -n "$ssh_host" && -n "$ssh_user" && ( -n "$ssh_key" || -n "$ssh_password" ) ]]; then
+            echo 'COOLIFY_SSH_ACCESS=READY'
+          else
+            echo 'COOLIFY_SSH_ACCESS=INCOMPLETE'
+          fi
