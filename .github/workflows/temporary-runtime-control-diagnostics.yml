@@ -9,22 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  targeted-tests:
-    name: ${{ matrix.test_file }}
+  isolate-node-test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        test_file:
-          - safe_execution_simulation.test.mjs
-          - v1_execution_transport_compatibility.test.mjs
-          - v1_full_stack_simulation.test.mjs
-          - admin_runtime_authority.test.mjs
-          - returning_session_runtime_controls.test.mjs
-          - hot_path_failure_isolation.test.mjs
-          - v1_full_stack_simulation_idempotency_audit.test.mjs
-          - global_runtime_controls.test.mjs
-          - live_broker_runtime_guard.test.mjs
     defaults:
       run:
         working-directory: cloudflare-v2
@@ -34,4 +20,19 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - run: node --test "tests/${{ matrix.test_file }}"
+      - name: Run every Node test file independently
+        shell: bash
+        run: |
+          failed=0
+          for file in tests/*.test.mjs; do
+            echo "=== $file ==="
+            log="$RUNNER_TEMP/$(basename "$file").log"
+            if node --test "$file" >"$log" 2>&1; then
+              echo "PASS $file"
+            else
+              echo "::error file=$file,title=FAILED_TEST::$file"
+              cat "$log"
+              failed=1
+            fi
+          done
+          exit "$failed"
