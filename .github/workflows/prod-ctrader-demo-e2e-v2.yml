@@ -1,0 +1,46 @@
+name: Production cTrader Demo E2E Acceptance V2
+
+on:
+  push:
+    branches:
+      - accept/prod-ctrader-demo-e2e
+    paths:
+      - '.github/workflows/prod-ctrader-demo-e2e-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  demo-e2e:
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
+      BASE_URL: https://trade.mkety.com
+      WORKSPACE_ID: 5f63234c-20e9-426c-995f-56d129f51ece
+      SOURCE_ID: 48860770-4b2c-4b13-b49f-7d998f9d7ed5
+      DEMO_ACCOUNT_ID: 40eacf2a-5a8a-4648-9b90-55038748d2ed
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Require protected production acceptance credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}" || { echo 'SUPABASE_URL unavailable'; exit 1; }
+          test -n "${TRADING_MASTER_KEY:-}" || { echo 'TRADING_MASTER_KEY unavailable'; exit 1; }
+          service_role="${SUPABASE_SERVICE_ROLE:-${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}}"
+          test -n "$service_role" || { echo 'Supabase service role unavailable'; exit 1; }
+      - name: Run real production demo open-close lifecycle
+        run: node scripts/prod_ctrader_demo_e2e.mjs
