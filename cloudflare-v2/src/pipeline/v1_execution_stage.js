@@ -2,11 +2,10 @@ import { createProductionExecutionDependencies } from '../execution/production_e
 import { createSafeSimulationExecutionDependencies } from '../execution/safe_simulation_execution_deps.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';
-import { resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
-
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
+import {
+  resolveBrokerExecutionRuntimeControl,
+  resolveTradingAccessRuntimeControl,
+} from '../persistence/supabase_runtime_control_store.js';
 
 function executionTransportMode(env = {}) {
   return String(env.TRADING_EXECUTION_TRANSPORT_MODE ?? 'real').trim().toLowerCase() === 'simulation'
@@ -56,6 +55,14 @@ function summary(status, { executionEnabled = false, blocked = 0, transportMode 
   }, transportMode);
 }
 
+async function resolveRuntimeControl(resolver, { env, supabase }, unavailableReason) {
+  try {
+    return await resolver({ env, supabase });
+  } catch {
+    return { ok: false, enabled: false, reason: unavailableReason };
+  }
+}
+
 export async function runV1ProductionExecutionStage({
   env = {},
   supabase,
@@ -65,6 +72,7 @@ export async function runV1ProductionExecutionStage({
   safeSimulationDepsFactory = createSafeSimulationExecutionDependencies,
   bindingRepairRecorderFactory = createProductionBindingRepairRecorder,
   executeProductionFn = executeProductionPlan,
+  tradingAccessControlResolver = resolveTradingAccessRuntimeControl,
   brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
 } = {}) {
   if (!result?.ok || result?.duplicate) {
@@ -73,7 +81,15 @@ export async function runV1ProductionExecutionStage({
 
   const transportMode = executionTransportMode(env);
 
-  if (!enabled(env.TRADING_ACCESS_ENABLED)) {
+  const tradingAccessControl = await resolveRuntimeControl(
+    tradingAccessControlResolver,
+    { env, supabase },
+    'TRADING_RUNTIME_CONTROL_UNAVAILABLE',
+  );
+  if (!tradingAccessControl?.ok) {
+    return summary('TRADING_RUNTIME_CONTROL_UNAVAILABLE', { transportMode });
+  }
+  if (tradingAccessControl.enabled !== true) {
     return summary('TRADING_ACCESS_DISABLED', { transportMode });
   }
 
@@ -83,12 +99,11 @@ export async function runV1ProductionExecutionStage({
     return summary('NOT_EXECUTABLE', { transportMode });
   }
 
-  let runtimeControl;
-  try {
-    runtimeControl = await brokerExecutionControlResolver({ env, supabase });
-  } catch {
-    runtimeControl = { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' };
-  }
+  const runtimeControl = await resolveRuntimeControl(
+    brokerExecutionControlResolver,
+    { env, supabase },
+    'RUNTIME_CONTROL_UNAVAILABLE',
+  );
   if (!runtimeControl?.ok) {
     return summary('BROKER_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
   }
