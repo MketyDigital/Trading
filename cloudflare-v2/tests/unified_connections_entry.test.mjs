@@ -46,10 +46,15 @@ test('unified connections client script is valid browser JavaScript after HTML c
   assert.doesNotThrow(() => new Function(scripts.at(-1)), 'injected unified-connections script must parse as JavaScript');
 });
 
-test('deployment configs keep the broker master execution fuse off through the unified entry', () => {
+test('deployment configs use the DB runtime-control wrapper while preserving unified connections underneath', () => {
+  const runtimeEntry = fs.readFileSync(path.resolve(here, '..', 'src', 'v1_runtime_entry.js'), 'utf8');
+  assert.match(runtimeEntry, /from ['"]\.\/v1_connections_entry\.js['"]/);
+
   for (const filename of ['wrangler.toml', 'wrangler.free.toml']) {
     const toml = fs.readFileSync(path.resolve(here, '..', filename), 'utf8');
-    assert.match(toml, /main\s*=\s*"src\/v1_connections_entry\.js"/);
+    assert.match(toml, /main\s*=\s*"src\/v1_runtime_entry\.js"/);
+    // Legacy env value remains a fail-closed bootstrap/compatibility default only;
+    // persisted runtime controls are the operational authority.
     assert.match(toml, /BROKER_EXECUTION_ENABLED\s*=\s*"false"/);
   }
 });
