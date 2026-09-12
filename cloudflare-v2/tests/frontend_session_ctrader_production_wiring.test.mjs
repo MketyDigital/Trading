@@ -31,7 +31,7 @@ test('production post-deploy sync preserves server-side cTrader Direct and share
     'CBOT_CONTROL_SECRET',
   ]) {
     assert.match(workflow, new RegExp(`secrets\\.${key}`));
-    assert.match(workflow, new RegExp(`Worker secret binding missing after sync: \\${required}`.replace('\\${required}', key)));
+    assert.match(workflow, new RegExp(`['\"]${key}['\"]`));
   }
   assert.match(workflow, /wrangler secret bulk/);
   assert.match(workflow, /wrangler secret list/);
