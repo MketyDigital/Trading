@@ -7,6 +7,10 @@ const event = {
   workspace_hint: 'ws-1',
   external_event_id: 'evt-webhook-1',
   text: 'SELL EURUSD 1.1000 SL 1.1050 TP 1.0900',
+  metadata: {
+    native_identity: { chat_id: '-100123456', message_id: '77' },
+    telegram_payload: { chat_id: '-100123456', message_id: 77, text: 'SELL EURUSD 1.1000 SL 1.1050 TP 1.0900' },
+  },
 };
 const interpretation = {
   status: 'READY',
@@ -33,7 +37,7 @@ function webhookDestination(overrides = {}) {
   };
 }
 
-test('internal webhook sends a signed canonical payload without exposing its signing secret', async () => {
+test('internal webhook signed mode remains the default and sends canonical Mkety payload', async () => {
   let request;
   const stage = await runV1DestinationDeliveryStage({
     workspaceId: 'ws-1', sourceId: 'src-1', event, interpretation,
@@ -68,18 +72,78 @@ test('internal webhook sends a signed canonical payload without exposing its sig
   assert.equal(JSON.stringify(stage).includes('encrypted-webhook-secret'), false);
 });
 
-test('internal webhook rejects non-https destination URLs before any network call', async () => {
+test('internal webhook raw_text mode posts only source message text and requires no destination credentials', async () => {
+  let networkRequest;
+  let decryptCalls = 0;
+  const stage = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1', sourceId: 'src-1', event, interpretation,
+    env: { TRADING_MASTER_KEY: 'master-key-placeholder', BROKER_EXECUTION_ENABLED: 'false' },
+  }, {
+    destinationStore: {
+      listRoutedDestinations: async () => [webhookDestination({
+        credential_ciphertext: null,
+        settings: { webhookMode: 'raw_text' },
+      })],
+      recordDestinationOutcome: async () => {},
+    },
+    decryptCredentials: async () => { decryptCalls += 1; throw new Error('must not decrypt'); },
+    fetchFn: async (url, options) => {
+      networkRequest = { url, options };
+      return new Response('', { status: 202 });
+    },
+  });
+
+  assert.equal(stage.status, 'DELIVERED');
+  assert.equal(stage.succeeded, 1);
+  assert.equal(decryptCalls, 0);
+  assert.equal(networkRequest.url, 'https://hooks.example.invalid/signal');
+  assert.equal(networkRequest.options.method, 'POST');
+  assert.equal(networkRequest.options.body, event.text);
+  assert.equal(networkRequest.options.headers['Content-Type'], 'text/plain; charset=utf-8');
+  assert.equal(Object.keys(networkRequest.options.headers).some((key) => key.toLowerCase().startsWith('x-mkety-')), false);
+});
+
+test('internal webhook raw_json mode posts source event directly without Mkety wrapper or signature requirements', async () => {
+  let networkRequest;
+  const stage = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1', sourceId: 'src-1', event, interpretation,
+    env: { TRADING_MASTER_KEY: 'master-key-placeholder', BROKER_EXECUTION_ENABLED: 'false' },
+  }, {
+    destinationStore: {
+      listRoutedDestinations: async () => [webhookDestination({
+        credential_ciphertext: null,
+        settings: { webhookMode: 'raw_json' },
+      })],
+      recordDestinationOutcome: async () => {},
+    },
+    fetchFn: async (url, options) => {
+      networkRequest = { url, options };
+      return new Response('', { status: 200 });
+    },
+  });
+
+  assert.equal(stage.status, 'DELIVERED');
+  assert.equal(stage.succeeded, 1);
+  assert.equal(networkRequest.options.headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(networkRequest.options.body), event);
+  assert.equal(Object.keys(networkRequest.options.headers).some((key) => key.toLowerCase().startsWith('x-mkety-')), false);
+});
+
+test('internal webhook rejects non-https destination URLs before any network call in every mode', async () => {
   let calls = 0;
   const stage = await runV1DestinationDeliveryStage({
     workspaceId: 'ws-1', sourceId: 'src-1', event, interpretation,
     env: { TRADING_MASTER_KEY: 'master-key-placeholder', BROKER_EXECUTION_ENABLED: 'false' },
   }, {
     destinationStore: {
-      listRoutedDestinations: async () => [webhookDestination({ destination_ref: 'http://127.0.0.1/private' })],
+      listRoutedDestinations: async () => [webhookDestination({
+        destination_ref: 'http://127.0.0.1/private',
+        credential_ciphertext: null,
+        settings: { webhookMode: 'raw_text' },
+      })],
       recordDestinationOutcome: async () => {},
     },
-    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { signingSecret: 'synthetic-signing-secret' } }),
-    sendWebhook: async () => { calls += 1; return { ok: true, status: 200 }; },
+    fetchFn: async () => { calls += 1; return new Response('', { status: 200 }); },
   });
 
   assert.equal(calls, 0);

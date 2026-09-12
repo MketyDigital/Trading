@@ -13,6 +13,8 @@ const TEMPLATE_SELECT = [
   'footer', 'disclaimer', 'emoji_style', 'cleanup_rules', 'layout', 'is_default',
 ].join(',');
 
+const WEBHOOK_MODES = new Set(['mkety_signed', 'raw_text', 'raw_json']);
+
 function text(value) {
   return String(value ?? '').trim();
 }
@@ -58,6 +60,12 @@ function destinationType(row = {}) {
 
 function active(row = {}) {
   return (row.is_active ?? row.enabled) === true;
+}
+
+function webhookMode(destination = {}) {
+  const settings = safeObject(destination.settings);
+  const mode = text(settings.webhookMode ?? settings.webhook_mode).toLowerCase() || 'mkety_signed';
+  return WEBHOOK_MODES.has(mode) ? mode : null;
 }
 
 function publicOutcome(destination, status, extra = {}) {
@@ -153,6 +161,42 @@ export async function sendSignedWebhookDestination({
       status: Number(response.status) || 200,
       deliveryRef: text(response.headers?.get?.('X-Mkety-Delivery-Id')) || null,
     };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      errorCode: error?.name === 'AbortError' ? 'WEBHOOK_TIMEOUT' : 'WEBHOOK_TRANSPORT_FAILED',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function sendRawWebhookDestination({
+  url,
+  body,
+  contentType = 'application/json',
+  fetchFn = globalThis.fetch,
+  timeoutMs = 8000,
+} = {}) {
+  if (!isHttpsUrl(url)) return { ok: false, status: 0, errorCode: 'WEBHOOK_HTTPS_REQUIRED' };
+  if (typeof fetchFn !== 'function') return { ok: false, status: 0, errorCode: 'WEBHOOK_TRANSPORT_UNAVAILABLE' };
+
+  const timeout = Math.max(250, Math.min(30000, Number(timeoutMs) || 8000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body: String(body ?? ''),
+      signal: controller.signal,
+      redirect: 'error',
+    });
+    if (!response?.ok) {
+      return { ok: false, status: Number(response?.status) || 0, errorCode: 'WEBHOOK_HTTP_ERROR' };
+    }
+    return { ok: true, status: Number(response.status) || 200 };
   } catch (error) {
     return {
       ok: false,
@@ -372,6 +416,26 @@ async function deliverInternalWebhook({ workspaceId, sourceId, destination, even
   const url = text(destination.destination_ref);
   if (!isHttpsUrl(url)) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_HTTPS_REQUIRED' });
 
+  const mode = webhookMode(destination);
+  if (!mode) return publicOutcome(destination, 'FAILED', { errorCode: 'WEBHOOK_MODE_INVALID' });
+
+  if (mode === 'raw_text' || mode === 'raw_json') {
+    const result = await deps.sendRawWebhook({
+      url,
+      body: mode === 'raw_text' ? String(event?.text ?? '') : JSON.stringify(event ?? {}),
+      contentType: mode === 'raw_text' ? 'text/plain; charset=utf-8' : 'application/json',
+      fetchFn: deps.fetchFn,
+      timeoutMs: destination?.settings?.timeoutMs,
+    });
+    if (!result?.ok) {
+      return publicOutcome(destination, 'FAILED', {
+        errorCode: sanitizeErrorCode(result?.errorCode, 'WEBHOOK_DELIVERY_FAILED'),
+        statusCode: Number(result?.status) || 0,
+      });
+    }
+    return publicOutcome(destination, 'SUCCEEDED', { statusCode: Number(result.status) || 200 });
+  }
+
   let credentials;
   try {
     credentials = await credentialsForDestination(destination, env, deps);
@@ -431,6 +495,7 @@ export async function runV1DestinationDeliveryStage({
   decryptCredentials = decryptSecret,
   sendTelegram = sendTelegramDestination,
   sendWebhook = sendSignedWebhookDestination,
+  sendRawWebhook = sendRawWebhookDestination,
   formatTelegram = formatTelegramDestinationMessage,
   renderTelegram = renderTelegramDestination,
   aiFormatterFactory = null,
@@ -469,6 +534,7 @@ export async function runV1DestinationDeliveryStage({
         decryptCredentials,
         sendTelegram,
         sendWebhook,
+        sendRawWebhook,
         formatTelegram,
         renderTelegram,
         aiFormatterFactory,
