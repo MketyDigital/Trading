@@ -1,0 +1,37 @@
+name: Temporary Runtime Control Diagnostics
+
+on:
+  push:
+    branches:
+      - fix/frontend-runtime-controls
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-tests:
+    name: ${{ matrix.test_file }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test_file:
+          - safe_execution_simulation.test.mjs
+          - v1_execution_transport_compatibility.test.mjs
+          - v1_full_stack_simulation.test.mjs
+          - admin_runtime_authority.test.mjs
+          - returning_session_runtime_controls.test.mjs
+          - hot_path_failure_isolation.test.mjs
+          - v1_full_stack_simulation_idempotency_audit.test.mjs
+          - global_runtime_controls.test.mjs
+          - live_broker_runtime_guard.test.mjs
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: node --test "tests/${{ matrix.test_file }}"
