@@ -20,23 +20,11 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - name: Run changed and likely affected tests independently
+      - name: Run every Node test independently
         shell: bash
         run: |
           failed=0
-          for file in \
-            tests/telegram_bot_source_v1.test.mjs \
-            tests/telegram_destination_ai_mode_v1.test.mjs \
-            tests/ingest_pipeline.test.mjs \
-            tests/v1_events_http.test.mjs \
-            tests/v1_destination_execution_parallelism.test.mjs \
-            tests/source_connection_store.test.mjs \
-            tests/provider_registry.test.mjs \
-            tests/connection_credentials.test.mjs \
-            tests/trading_entitlements.test.mjs \
-            tests/unified_connections_entry.test.mjs \
-            tests/enterprise_destination_contracts.test.mjs; do
-            [ -f "$file" ] || continue
+          for file in tests/*.test.mjs; do
             echo "=== $file ==="
             log="$RUNNER_TEMP/$(basename "$file").log"
             if node --test "$file" >"$log" 2>&1; then
