@@ -19,6 +19,11 @@ jobs:
     env:
       MKETY_TRADING_ADMIN_SECRET: ${{ secrets.MKETY_TRADING_ADMIN_SECRET }}
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install WebSocket client
+        run: npm install --no-save ws@8
       - name: Create disposable owner access code
         shell: bash
         run: |
@@ -51,22 +56,69 @@ jobs:
           bearer="$(RESPONSE="$response" node -e "const b=JSON.parse(process.env.RESPONSE);process.stdout.write(b.bearer)")"
           echo "::add-mask::$bearer"
 
-      - name: Verify outbound MT5 pairing fails closed while gateway secrets are absent
+      - name: Prove Worker gateway secrets match live cTrader gateway
         shell: bash
         run: |
           set -euo pipefail
-          body_file="$RUNNER_TEMP/mt5-pairing.json"
-          status="$(curl -sS -o "$body_file" -w '%{http_code}' -X POST "$BASE_URL/api/v1/admin/connections/mt5/connector" \
-            -H "Authorization: Bearer $PROBE_BEARER" \
-            -H "X-Mkety-Workspace-Id: $PROBE_WORKSPACE" \
-            -H 'Content-Type: application/json' \
-            --data '{"label":"Gateway Config Probe","environment":"demo","roles":["execution"]}')"
-          cat "$body_file"
-          test "$status" = "503"
-          BODY="$(cat "$body_file")" node <<'NODE'
-          const b=JSON.parse(process.env.BODY||'{}');
-          if(b.ok!==false||b.reason!=='MT5_CONNECTOR_NOT_CONFIGURED') throw new Error(`unexpected response: ${process.env.BODY}`);
-          console.log('MT5_PAIRING_FAIL_CLOSED=true');
+          node <<'NODE'
+          const WebSocket = require('ws');
+          const base = process.env.BASE_URL;
+          const headers = {
+            'Authorization': `Bearer ${process.env.PROBE_BEARER}`,
+            'X-Mkety-Workspace-Id': process.env.PROBE_WORKSPACE,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          };
+          (async () => {
+            const create = await fetch(`${base}/api/v1/admin/connections/ctrader/cbot`, {
+              method: 'POST', headers,
+              body: JSON.stringify({ label: 'Gateway Config Probe cTrader', environment: 'demo', roles: ['execution'] }),
+            });
+            const created = await create.json();
+            if (create.status !== 201 || !created.ok || !created.account?.id || !created.oneTimeConnectionToken || !created.gatewayWebSocketUrl) {
+              throw new Error(`cTrader pairing creation failed status=${create.status} reason=${created.reason || 'unknown'}`);
+            }
+            console.log(`::add-mask::${created.oneTimeConnectionToken}`);
+            process.stdout.write(`PROBE_ACCOUNT=${created.account.id}\n`);
+
+            const ws = new WebSocket(created.gatewayWebSocketUrl);
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error('cTrader gateway auth timeout')), 12000);
+              ws.on('open', () => ws.send(JSON.stringify({
+                type: 'auth',
+                connectionToken: created.oneTimeConnectionToken,
+                accountNumber: '99000001',
+                brokerName: 'Mkety Gateway Probe',
+                isLive: false,
+                instanceId: `probe-${process.env.GITHUB_RUN_ID}`,
+                symbols: [{ platformSymbol: 'XAUUSD', description: 'Probe Gold', minVolume: 0.01, maxVolume: 100, stepVolume: 0.01, tickSize: 0.01, digits: 2 }],
+              })));
+              ws.on('message', data => {
+                const m = JSON.parse(String(data));
+                if (m.type === 'auth_ok') { clearTimeout(timer); resolve(); }
+              });
+              ws.on('error', reject);
+              ws.on('close', (code, reason) => {
+                if (code !== 1000 && code !== 1005) reject(new Error(`cTrader gateway closed ${code} ${String(reason)}`));
+              });
+            });
+
+            const sync = await fetch(`${base}/api/v1/admin/connections/ctrader/cbot/${encodeURIComponent(created.account.id)}/sync`, { method: 'POST', headers });
+            const synced = await sync.json();
+            if (!sync.ok || !synced.ok || synced.account?.accountId !== '99000001' || synced.account?.environment !== 'demo') {
+              throw new Error(`cTrader sync failed status=${sync.status} reason=${synced.reason || 'unknown'}`);
+            }
+            if (synced.account.active !== false || synced.account.executionEnabled !== false || synced.account.killSwitch !== true) {
+              throw new Error('cTrader probe account safety state changed unexpectedly');
+            }
+            console.log('CTRADER_GATEWAY_AUTH_AND_CONTROL_MATCH=true');
+
+            ws.close(1000, 'PROBE_COMPLETE');
+            const del = await fetch(`${base}/api/v1/admin/connections/accounts/${encodeURIComponent(created.account.id)}`, { method: 'DELETE', headers });
+            const deleted = await del.json();
+            if (!del.ok || !deleted.ok) throw new Error(`account cleanup failed status=${del.status} reason=${deleted.reason || 'unknown'}`);
+            console.log('PROBE_ACCOUNT_CLEANED=true');
+          })().catch(err => { console.error(err); process.exit(1); });
           NODE
 
       - name: Revoke disposable access code
