@@ -89,7 +89,7 @@ jobs:
           code="$(curl -sS -o "$response" -w '%{http_code}' -X POST \
             -H "Authorization: Bearer $COOLIFY_TOKEN" \
             -H 'Accept: application/json' \
-            "$API/deploy?uuid=$(python3 -c 'import os,urllib.parse;print(urllib.parse.quote(os.environ["RESOURCE_UUID"]))')&force=true')"
+            "$API/deploy?uuid=$RESOURCE_UUID&force=true")"
           test "$code" = "200"
           DEPLOY_RESPONSE="$response" node <<'NODE' > "$RUNNER_TEMP/deploy.env"
           const fs=require('fs');
