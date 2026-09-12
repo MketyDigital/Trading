@@ -21,29 +21,39 @@ test('returning-session bootstrap exposes an awaitable restore contract before p
   assert.match(helper, /<body\(\[\^>\]\*\)>/);
 });
 
-test('production post-deploy sync preserves server-side cTrader Direct and shared gateway secrets', () => {
+test('production verification checks broker secrets at deployed sources without copying their values', () => {
   const workflow = read('.github/workflows/production-platform-secret-sync.yml');
 
-  for (const key of [
-    'CTRADER_CLIENT_ID',
-    'CTRADER_CLIENT_SECRET',
-    'CBOT_TOKEN_SIGNING_KEY',
-    'CBOT_CONTROL_SECRET',
-  ]) {
-    assert.match(workflow, new RegExp(`secrets\\.${key}`));
-    assert.match(workflow, new RegExp(`['\"]${key}['\"]`));
-  }
-  assert.match(workflow, /wrangler secret bulk/);
   assert.match(workflow, /wrangler secret list/);
-  assert.match(workflow, /Production Cloudflare Deploy/);
+  assert.match(workflow, /CTRADER_CLIENT_ID/);
+  assert.match(workflow, /CTRADER_CLIENT_SECRET/);
+  assert.match(workflow, /CBOT_TOKEN_SIGNING_KEY/);
+  assert.match(workflow, /CBOT_CONTROL_SECRET/);
+  assert.match(workflow, /applications\/\$uuid\/envs/);
+  assert.match(workflow, /CBOT_PUBLIC_HOST/);
+  assert.match(workflow, /PUBLIC_GATEWAY_HEALTH=PASS/);
+  assert.match(workflow, /\/v1\/cbot/);
+  assert.match(workflow, /\/v1\/mt5/);
+  assert.doesNotMatch(workflow, /wrangler secret bulk/);
+  assert.doesNotMatch(workflow, /secrets\.CTRADER_CLIENT_ID/);
+  assert.doesNotMatch(workflow, /secrets\.CTRADER_CLIENT_SECRET/);
+  assert.doesNotMatch(workflow, /secrets\.CBOT_TOKEN_SIGNING_KEY/);
+  assert.doesNotMatch(workflow, /secrets\.CBOT_CONTROL_SECRET/);
 });
 
-test('production platform secret pairs stay atomic and fail closed', () => {
+test('production broker verification remains fail closed and never enables live execution', () => {
   const workflow = read('.github/workflows/production-platform-secret-sync.yml');
 
-  assert.match(workflow, /cTrader Direct/);
-  assert.match(workflow, /Shared cTrader\/MT5 gateway/);
-  assert.match(workflow, /production configuration is partial/);
-  assert.match(workflow, /production configuration is absent/);
+  assert.match(workflow, /Worker broker secret binding missing after deploy/);
+  assert.match(workflow, /Coolify gateway environment key missing/);
+  assert.match(workflow, /Expected exactly one Mkety gateway application/);
   assert.doesNotMatch(workflow, /CTRADER_LIVE_TRADING_ENABLED:\s*true/i);
+  assert.doesNotMatch(workflow, /liveBrokerExecutionEnabled\s*[:=]\s*true/i);
+});
+
+test('production browser E2E explicitly verifies cTrader Direct readiness', () => {
+  const workflow = read('.github/workflows/production-frontend-e2e.yml');
+  assert.match(workflow, /\/api\/v1\/admin\/connections/);
+  assert.match(workflow, /readiness\.ctrader\.configured/);
+  assert.match(workflow, /CTRADER_DIRECT_READINESS=PASS/);
 });
