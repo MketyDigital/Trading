@@ -45,6 +45,7 @@ test('retry setup failure is durably rescheduled with the configured delay', asy
 
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     listDueFn: async () => [{ ...delivery, status: 'RETRYABLE', next_attempt_at: '2026-09-03T10:00:00.000Z' }],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => { throw new Error('dependency construction failed'); },
@@ -52,7 +53,7 @@ test('retry setup failure is durably rescheduled with the configured delay', asy
   });
 
   const result = await runtime(
-    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
     { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
   );
 

@@ -22,19 +22,25 @@ function readySimulation() {
   };
 }
 
-test('default real execution keeps the established disabled summary contract', async () => {
+test('default real execution keeps the established disabled summary contract when persisted admin control is off', async () => {
   const execution = await runV1ProductionExecutionStage({
     env: {
       TRADING_ACCESS_ENABLED: 'true',
-      BROKER_EXECUTION_ENABLED: 'false',
+      BROKER_EXECUTION_ENABLED: 'true',
     },
+    supabase: { from() {} },
     result,
     simulation: readySimulation(),
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: false,
+      reason: 'TEST_OWNER_SWITCH_OFF',
+    }),
   });
 
   assert.deepEqual(execution, {
     executionEnabled: false,
-    status: 'BROKER_EXECUTION_DISABLED',
+    status: 'BROKER_OWNER_SWITCH_OFF',
     accounts: [],
     succeeded: 0,
     failed: 0,

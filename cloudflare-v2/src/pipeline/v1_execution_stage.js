@@ -79,10 +79,6 @@ export async function runV1ProductionExecutionStage({
 
   const accountPlans = trustedReadyPlans(simulation);
 
-  if (!enabled(env.BROKER_EXECUTION_ENABLED)) {
-    return summary('BROKER_EXECUTION_DISABLED', { blocked: accountPlans.length, transportMode });
-  }
-
   if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
     return summary('NOT_EXECUTABLE', { transportMode });
   }

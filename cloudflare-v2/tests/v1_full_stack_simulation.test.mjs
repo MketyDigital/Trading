@@ -187,13 +187,13 @@ test('V1 event request performs ingest, simulation planning and safe execution-s
   assert.equal(executionInput.accountPlans[0].actions[0].transportMode, undefined);
 });
 
-test('V1 full stack safe simulation remains fail-closed when broker fuse is disabled', async () => {
+test('V1 full stack safe simulation remains fail-closed when persisted broker owner switch is disabled', async () => {
   let productionExecuteCalled = false;
 
   const response = await handleV1EventsRequest(signedV1Request(canonicalEvent), {
     TRADING_MASTER_KEY: 'test-master-key',
     TRADING_ACCESS_ENABLED: 'true',
-    BROKER_EXECUTION_ENABLED: 'false',
+    BROKER_EXECUTION_ENABLED: 'true',
     TRADING_EXECUTION_TRANSPORT_MODE: 'simulation',
   }, {
     supabaseFactory: async () => ({ from() {} }),
@@ -207,10 +207,15 @@ test('V1 full stack safe simulation remains fail-closed when broker fuse is disa
     }),
     simulationDepsFactory: async () => ({}),
     orchestrateFn: async () => structuredClone(simulatedPlan),
+    brokerExecutionControlResolver: async () => ({
+      ok: true,
+      enabled: false,
+      reason: 'TEST_OWNER_DISABLED',
+    }),
     executionStageFn: async (stageInput) => runV1ProductionExecutionStage({
       ...stageInput,
       safeSimulationDepsFactory: async () => {
-        throw new Error('safe execution deps must not be built when broker fuse is disabled');
+        throw new Error('safe execution deps must not be built when persisted broker owner switch is disabled');
       },
       executeProductionFn: async () => {
         productionExecuteCalled = true;
@@ -223,7 +228,7 @@ test('V1 full stack safe simulation remains fail-closed when broker fuse is disa
   assert.equal(response.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.simulation.status, 'SIMULATED');
-  assert.equal(body.execution.status, 'BROKER_EXECUTION_DISABLED');
+  assert.equal(body.execution.status, 'BROKER_OWNER_SWITCH_OFF');
   assert.equal(body.execution.executionEnabled, false);
   assert.equal(body.execution.blocked, 1);
   assert.equal(body.execution.transportMode, 'simulation');

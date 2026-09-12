@@ -22,10 +22,11 @@ function baseDeps(overrides = {}) {
   };
 }
 
-test('broker-disabled V1 planning returns disabled execution summary without constructing production dependencies', async () => {
+test('persisted broker-owner switch OFF returns blocked execution summary without constructing production dependencies', async () => {
   let executionDepsCalls = 0;
   let executeCalls = 0;
-  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, baseDeps({
+  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: false, reason: 'TEST_OWNER_DISABLED' }),
     executionDepsFactory: async () => { executionDepsCalls += 1; throw new Error('must not construct broker dependencies'); },
     executeProductionFn: async () => { executeCalls += 1; throw new Error('must not execute'); },
   }));
@@ -33,13 +34,13 @@ test('broker-disabled V1 planning returns disabled execution summary without con
   assert.equal(response.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.simulation.status, 'SIMULATED');
-  assert.equal(body.execution.status, 'BROKER_EXECUTION_DISABLED');
+  assert.equal(body.execution.status, 'BROKER_OWNER_SWITCH_OFF');
   assert.equal(body.execution.executionEnabled, false);
   assert.equal(executionDepsCalls, 0);
   assert.equal(executeCalls, 0);
 });
 
-test('trading-access-disabled V1 planning cannot construct production dependencies even when broker fuse is enabled', async () => {
+test('trading-access-disabled V1 planning cannot construct production dependencies even when persisted broker switch is enabled', async () => {
   let executionDepsCalls = 0;
   let executeCalls = 0;
   const response = await handleV1EventsRequest(request(), {
@@ -86,8 +87,9 @@ test('broker-enabled stage forwards only trusted READY account actions, exact pe
     { accountId: 'acct-blocked', status: 'BLOCKED', actions: [{ type: 'OPEN_POSITION', idempotencyKey: 'must-not-forward', simulated: true }] },
     { accountId: 'acct-waiting', status: 'WAITING', actions: [] },
   ] };
-  const response = await handleV1EventsRequest(request(JSON.stringify({ workspace_id: 'ws-attacker', tradingEventId: 'evt-attacker', brokerExecutionEnabled: true, BROKER_EXECUTION_ENABLED: true, credentials: { token: 'caller-token' } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }, baseDeps({
+  const response = await handleV1EventsRequest(request(JSON.stringify({ workspace_id: 'ws-attacker', tradingEventId: 'evt-attacker', brokerExecutionEnabled: true, BROKER_EXECUTION_ENABLED: true, credentials: { token: 'caller-token' } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' }, baseDeps({
     orchestrateFn: async () => trustedSimulation,
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     executionDepsFactory: async (input) => { dependencyInput = input; return { accountLoader() {}, authorityLoader() {}, dispatchAction() {}, stateBinder() {} }; },
     executeProductionFn: async (input) => { executionInput = input; return { executionEnabled: true, status: 'SUCCEEDED', accounts: [], succeeded: 1, failed: 0, blocked: 0 }; },
   }));
@@ -109,12 +111,15 @@ test('broker-enabled stage forwards only trusted READY account actions, exact pe
   assert.equal(JSON.stringify(dependencyInput).includes('evt-attacker'), false);
 });
 
-test('caller payload cannot enable broker execution when server master fuse is absent or false', async () => {
-  for (const serverValue of [undefined, 'false']) {
+test('caller payload and deployment env cannot enable broker execution when persisted owner switch is OFF', async () => {
+  for (const serverValue of [undefined, 'false', 'true']) {
     let executionDepsCalls = 0;
-    const response = await handleV1EventsRequest(request(JSON.stringify({ BROKER_EXECUTION_ENABLED: true, brokerExecutionEnabled: true, execution: { enabled: true } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', ...(serverValue === undefined ? {} : { BROKER_EXECUTION_ENABLED: serverValue }) }, baseDeps({ executionDepsFactory: async () => { executionDepsCalls += 1; return {}; } }));
+    const response = await handleV1EventsRequest(request(JSON.stringify({ BROKER_EXECUTION_ENABLED: true, brokerExecutionEnabled: true, execution: { enabled: true } })), { TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true', TRADING_ACCESS_ENABLED: 'true', ...(serverValue === undefined ? {} : { BROKER_EXECUTION_ENABLED: serverValue }) }, baseDeps({
+      brokerExecutionControlResolver: async () => ({ ok: true, enabled: false, reason: 'TEST_OWNER_DISABLED' }),
+      executionDepsFactory: async () => { executionDepsCalls += 1; return {}; },
+    }));
     const body = await response.json();
-    assert.equal(body.execution.status, 'BROKER_EXECUTION_DISABLED');
+    assert.equal(body.execution.status, 'BROKER_OWNER_SWITCH_OFF');
     assert.equal(body.execution.executionEnabled, false);
     assert.equal(executionDepsCalls, 0);
   }
@@ -157,8 +162,9 @@ test('real production stage uses broker-authoritative canonical policy inputs be
     };
     const response = await handleV1EventsRequest(request(), {
       TRADING_MASTER_KEY: 'master', TRADING_V1_SIMULATION: 'true',
-      TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true',
+      TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false',
     }, baseDeps({
+      brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
       executionDepsFactory: async () => ({
         accountLoader: async () => account,
         authorityLoader: async () => ({ account }),

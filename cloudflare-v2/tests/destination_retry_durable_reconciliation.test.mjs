@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import { createProductionDestinationRetryRuntime } from '../src/execution/destination_retry_production.js';
 
+const brokerOn = async () => ({ ok: true, enabled: true });
+
 function retryRow() {
   return {
     id: 'delivery-1',
@@ -45,6 +47,7 @@ function harness({ coordinatorResult, durableStatus = 'PENDING' } = {}) {
 
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => ({
@@ -68,7 +71,7 @@ test('coordinator failure that leaves claimed delivery PENDING is durably resche
   });
 
   const result = await runtime(
-    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
     { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
   );
 
@@ -89,7 +92,6 @@ test('adapter-owned RETRYABLE or UNCERTAIN durable outcome is never overwritten 
     });
     fixture.setStatus(durableStatus);
 
-    // Simulate the adapter transition occurring during coordinator execution.
     const originalFind = fixture.baseStore.find;
     let finds = 0;
     fixture.baseStore.find = async (...args) => {
@@ -99,7 +101,7 @@ test('adapter-owned RETRYABLE or UNCERTAIN durable outcome is never overwritten 
     };
 
     await fixture.runtime(
-      { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+      { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
       { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
     );
     assert.equal(fixture.transitions.length, 0, `wrapper must preserve ${durableStatus}`);
@@ -120,6 +122,7 @@ test('broker-success row remains SUCCEEDED when only post-broker state binding f
   };
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => ({}),
@@ -130,7 +133,7 @@ test('broker-success row remains SUCCEEDED when only post-broker state binding f
   });
 
   const result = await runtime(
-    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
     { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
   );
 
