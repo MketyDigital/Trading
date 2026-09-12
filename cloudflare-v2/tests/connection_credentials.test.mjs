@@ -13,6 +13,9 @@ test('connection credentials validate known provider payloads', () => {
   assert.deepEqual(validateConnectionCredentials('mt5', { bridgeUrl: ' https://bridge.example ', bridgeSecret: ' secret ' }), {
     bridgeUrl: 'https://bridge.example', bridgeSecret: 'secret',
   });
+  assert.deepEqual(validateConnectionCredentials('mt5_connector', { connectionToken: ' token ', gatewayUrl: ' https://gateway.example ', controlSecret: ' secret ' }), {
+    connectionToken: 'token', gatewayUrl: 'https://gateway.example', controlSecret: 'secret',
+  });
   assert.deepEqual(validateConnectionCredentials('ctrader', { clientId: ' id ', clientSecret: ' secret ', accessToken: ' access ', refreshToken: ' refresh ' }), {
     clientId: 'id', clientSecret: 'secret', accessToken: 'access', refreshToken: 'refresh',
   });
@@ -28,6 +31,17 @@ test('cTrader cBot credentials reject broker identity and arbitrary fields', () 
   );
   assert.throws(
     () => validateConnectionCredentials('ctrader_cbot', { connectionToken: 'token', password: 'nope' }),
+    /unsupported credential key: password/,
+  );
+});
+
+test('MT5 connector credentials reject broker login and password fields', () => {
+  assert.throws(
+    () => validateConnectionCredentials('mt5_connector', { gatewayUrl: 'https://gateway.example', accountId: 'caller-controlled' }),
+    /unsupported credential key: accountId/,
+  );
+  assert.throws(
+    () => validateConnectionCredentials('mt5_connector', { gatewayUrl: 'https://gateway.example', password: 'nope' }),
     /unsupported credential key: password/,
   );
 });

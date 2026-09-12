@@ -43,6 +43,64 @@ test('loads active source connection, non-secret config and decrypts only its HM
   assert.deepEqual(calls, ['source_connections']);
 });
 
+test('shared MTProto source lookup returns only matching active rows across workspaces', async () => {
+  const rows = [
+    {
+      id: 'src-a', workspace_id: 'ws-a', source_type: 'telegram_mtproto', source_instance_id: 'a',
+      source_family: 'telegram', provider_type: 'external_mtproto', external_identity: 'telegram-account-42',
+      config: { chat_acceptance_mode: 'allowlist', allowed_chat_ids: ['-10012345'] }, secret_ciphertext: 'cipher-a', is_active: true,
+    },
+    {
+      id: 'src-b', workspace_id: 'ws-b', source_type: 'telegram_mtproto', source_instance_id: 'b',
+      source_family: 'telegram', provider_type: 'external_mtproto', external_identity: 'telegram-account-42',
+      config: { chat_acceptance_mode: 'all_visible', allowed_chat_ids: [] }, secret_ciphertext: 'cipher-b', is_active: true,
+    },
+    {
+      id: 'src-c', workspace_id: 'ws-c', source_type: 'telegram_mtproto', source_instance_id: 'c',
+      source_family: 'telegram', provider_type: 'external_mtproto', external_identity: 'other-account',
+      config: { chat_acceptance_mode: 'all_visible', allowed_chat_ids: [] }, secret_ciphertext: 'cipher-c', is_active: true,
+    },
+  ];
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'source_connections');
+      const chain = {
+        select() { return chain; },
+        eq() { return chain; },
+        then(resolve) { resolve({ data: rows, error: null }); },
+      };
+      return chain;
+    },
+  };
+  const { sourceStore } = createSupabaseIngestStores(supabase, {
+    masterKey: 'master', decryptFn: async (cipher) => `${cipher}:plain`,
+  });
+  const matches = await sourceStore.findActiveExternalMtprotoSourcesForChat('-10012345', { externalIdentity: 'telegram-account-42' });
+  assert.deepEqual(matches.map((row) => [row.id, row.workspace_id, row.secret]), [
+    ['src-a', 'ws-a', 'cipher-a:plain'],
+    ['src-b', 'ws-b', 'cipher-b:plain'],
+  ]);
+});
+
+test('shared MTProto source lookup throws on database failure instead of converting outage into zero matches', async () => {
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'source_connections');
+      const chain = {
+        select() { return chain; },
+        eq() { return chain; },
+        then(resolve) { resolve({ data: null, error: { message: 'database unavailable' } }); },
+      };
+      return chain;
+    },
+  };
+  const { sourceStore } = createSupabaseIngestStores(supabase, { masterKey: 'master', decryptFn: async () => 'secret' });
+  await assert.rejects(
+    sourceStore.findActiveExternalMtprotoSourcesForChat('-10012345'),
+    /EXTERNAL_MTPROTO_SOURCE_LOOKUP_FAILED/,
+  );
+});
+
 test('reserves a trading event and returns generated event id', async () => {
   let inserted;
   const supabase = {

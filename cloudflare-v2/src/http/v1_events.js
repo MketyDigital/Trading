@@ -2,7 +2,7 @@ import { ingestTradingEvent } from '../pipeline/ingest.js';
 import { orchestrateTradingEventSimulation } from '../pipeline/v1_orchestrator.js';
 import { createV1SimulationDependencies } from '../pipeline/v1_simulation_deps.js';
 import { runV1ProductionExecutionStage } from '../pipeline/v1_execution_stage.js';
-import { createProductionExecutionDependencies } from '../execution/production_execution_deps.js';
+import { createProductionExecutionDependencies } from '../execution/production_execution_deps_unified.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { createWorkspaceAIRouter } from '../ai/workspace_ai.js';

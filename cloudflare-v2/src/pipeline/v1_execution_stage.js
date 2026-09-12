@@ -1,4 +1,4 @@
-import { createProductionExecutionDependencies } from '../execution/production_execution_deps.js';
+import { createProductionExecutionDependencies } from '../execution/production_execution_deps_unified.js';
 import { createSafeSimulationExecutionDependencies } from '../execution/safe_simulation_execution_deps.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';

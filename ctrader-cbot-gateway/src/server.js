@@ -9,6 +9,7 @@ const controlHost = process.env.CBOT_CONTROL_HOST || '0.0.0.0';
 const signingKey = process.env.CBOT_TOKEN_SIGNING_KEY || '';
 const controlSecret = process.env.CBOT_CONTROL_SECRET || '';
 const commandTimeoutMs = Number(process.env.CBOT_COMMAND_TIMEOUT_MS || 8000);
+const maxSymbols = 2000;
 
 if (!signingKey || !controlSecret) {
   console.error('CBOT_TOKEN_SIGNING_KEY and CBOT_CONTROL_SECRET are required');
@@ -65,6 +66,43 @@ function pruneDelivered(now = Date.now()) {
   }
 }
 
+function finiteOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sanitizeSymbols(input) {
+  if (!Array.isArray(input)) return [];
+  const result = [];
+  const seen = new Set();
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const platformSymbol = String(raw.platformSymbol ?? raw.symbol ?? raw.name ?? '').trim();
+    if (!platformSymbol || seen.has(platformSymbol.toUpperCase())) continue;
+    seen.add(platformSymbol.toUpperCase());
+    const row = { platformSymbol };
+    if (String(raw.description ?? '').trim()) row.description = String(raw.description).trim().slice(0, 240);
+    for (const key of ['lotSize', 'pipSize', 'tickSize', 'minVolume', 'maxVolume', 'stepVolume', 'digits']) {
+      const numeric = finiteOrNull(raw[key]);
+      if (numeric !== null) row[key] = numeric;
+    }
+    result.push(row);
+    if (result.length >= maxSymbols) break;
+  }
+  return result;
+}
+
+function sessionIdentity(message = {}) {
+  return {
+    accountNumber: String(message.accountNumber ?? '').trim(),
+    brokerName: String(message.brokerName ?? '').trim() || null,
+    isLive: Boolean(message.isLive),
+    instanceId: String(message.instanceId ?? '').trim() || null,
+    symbols: sanitizeSymbols(message.symbols),
+    symbolsUpdatedAt: Date.now(),
+  };
+}
+
 const wsServer = new WebSocketServer({ port: wsPort, host: wsHost, path: '/v1/cbot' });
 wsServer.on('connection', (socket) => {
   socket.authenticated = false;
@@ -83,18 +121,13 @@ wsServer.on('connection', (socket) => {
       if (message?.type !== 'auth') return socket.close(1008, 'AUTH_REQUIRED');
       const verified = verifyConnectionToken(message.connectionToken, signingKey);
       if (!verified.ok) return socket.close(1008, verified.reason);
-      const accountNumber = String(message.accountNumber ?? '').trim();
-      if (!accountNumber) return socket.close(1008, 'ACCOUNT_ID_REQUIRED');
+      const identity = sessionIdentity(message);
+      if (!identity.accountNumber) return socket.close(1008, 'ACCOUNT_ID_REQUIRED');
 
       clearTimeout(authTimer);
       socket.authenticated = true;
       socket.mketyAccountRowId = verified.accountRowId;
-      socket.accountIdentity = {
-        accountNumber,
-        brokerName: String(message.brokerName ?? '').trim() || null,
-        isLive: Boolean(message.isLive),
-        instanceId: String(message.instanceId ?? '').trim() || null,
-      };
+      socket.accountIdentity = identity;
       const previous = sessions.get(verified.accountRowId);
       if (previous?.socket?.readyState === WebSocket.OPEN && previous.socket !== socket) {
         previous.socket.close(1008, 'REPLACED_BY_NEW_SESSION');
@@ -108,6 +141,16 @@ wsServer.on('connection', (socket) => {
     if (message?.type === 'heartbeat') {
       if (session) session.lastHeartbeatAt = Date.now();
       socket.send(JSON.stringify({ type: 'heartbeat_ack', at: Date.now() }));
+      return;
+    }
+
+    if (message?.type === 'symbols') {
+      if (session) {
+        const symbols = sanitizeSymbols(message.symbols);
+        session.identity = { ...session.identity, symbols, symbolsUpdatedAt: Date.now() };
+        socket.accountIdentity = session.identity;
+      }
+      socket.send(JSON.stringify({ type: 'symbols_ack', count: session?.identity?.symbols?.length || 0, at: Date.now() }));
       return;
     }
 

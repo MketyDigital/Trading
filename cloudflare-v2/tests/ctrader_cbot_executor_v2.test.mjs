@@ -19,7 +19,13 @@ function connection(identity = {}) {
     ok: true,
     online: true,
     accountRowId: 'row-1',
-    identity: { accountNumber: '12345678', brokerName: 'Test Broker', isLive: false, ...identity },
+    identity: {
+      accountNumber: '12345678',
+      brokerName: 'Test Broker',
+      isLive: false,
+      symbols: [{ platformSymbol: 'XAUUSD', tradable: true }],
+      ...identity,
+    },
   });
 }
 

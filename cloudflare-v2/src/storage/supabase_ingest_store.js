@@ -36,6 +36,35 @@ function persistedEvent(row = {}) {
   };
 }
 
+function clean(value) {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function sourceAcceptsChat(row = {}, chatId, externalIdentity = null) {
+  const config = row.config && typeof row.config === 'object' && !Array.isArray(row.config) ? row.config : {};
+  const mode = clean(config.chat_acceptance_mode || 'allowlist').toLowerCase();
+  const allowed = Array.isArray(config.allowed_chat_ids) ? config.allowed_chat_ids.map(clean).filter(Boolean) : [];
+  if (externalIdentity && clean(row.external_identity) && clean(row.external_identity) !== clean(externalIdentity)) return false;
+  if (mode === 'all_visible') return true;
+  if (mode !== 'allowlist') return false;
+  return allowed.includes(clean(chatId));
+}
+
+function sourceShape(data, secret) {
+  return {
+    id: data.id,
+    workspace_id: data.workspace_id,
+    source_type: data.source_type,
+    source_instance_id: data.source_instance_id,
+    source_family: data.source_family ?? null,
+    provider_type: data.provider_type ?? null,
+    external_identity: data.external_identity ?? null,
+    config: data.config || {},
+    settings: data.settings || {},
+    secret,
+  };
+}
+
 export function createSupabaseIngestStores(supabase, {
   masterKey,
   decryptFn = decryptSecret,
@@ -55,18 +84,27 @@ export function createSupabaseIngestStores(supabase, {
 
       if (error || !data?.id || !data.secret_ciphertext) return null;
       const secret = await decryptFn(data.secret_ciphertext, masterKey);
-      return {
-        id: data.id,
-        workspace_id: data.workspace_id,
-        source_type: data.source_type,
-        source_instance_id: data.source_instance_id,
-        source_family: data.source_family ?? null,
-        provider_type: data.provider_type ?? null,
-        external_identity: data.external_identity ?? null,
-        config: data.config || {},
-        settings: data.settings || {},
-        secret,
-      };
+      return sourceShape(data, secret);
+    },
+
+    async findActiveExternalMtprotoSourcesForChat(chatId, { externalIdentity = null } = {}) {
+      const normalizedChatId = clean(chatId);
+      if (!normalizedChatId) return [];
+      const { data, error } = await supabase
+        .from('source_connections')
+        .select('id,workspace_id,source_type,source_instance_id,source_family,provider_type,external_identity,config,secret_ciphertext,settings,is_active')
+        .eq('provider_type', 'external_mtproto')
+        .eq('is_active', true);
+      if (error) throw new Error('EXTERNAL_MTPROTO_SOURCE_LOOKUP_FAILED');
+      if (!Array.isArray(data)) throw new Error('EXTERNAL_MTPROTO_SOURCE_LOOKUP_FAILED');
+
+      const matching = data.filter((row) => row?.id && row.secret_ciphertext && sourceAcceptsChat(row, normalizedChatId, externalIdentity));
+      const result = [];
+      for (const row of matching) {
+        const secret = await decryptFn(row.secret_ciphertext, masterKey);
+        result.push(sourceShape(row, secret));
+      }
+      return result;
     },
   };
 

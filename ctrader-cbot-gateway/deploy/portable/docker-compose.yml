@@ -1,7 +1,7 @@
 services:
   gateway:
     build:
-      context: ./ctrader-cbot-gateway
+      context: ../..
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -15,6 +15,7 @@ services:
       MT5_CONNECTOR_CONTROL_HOST: 0.0.0.0
       MT5_CONNECTOR_CONTROL_PORT: 8791
       MT5_CONNECTOR_COMMAND_TIMEOUT_MS: ${MT5_CONNECTOR_COMMAND_TIMEOUT_MS:-8000}
+      MT5_CONNECTOR_CONTEXT_TIMEOUT_MS: ${MT5_CONNECTOR_CONTEXT_TIMEOUT_MS:-5000}
       CBOT_TOKEN_SIGNING_KEY: ${CBOT_TOKEN_SIGNING_KEY:?required}
       CBOT_CONTROL_SECRET: ${CBOT_CONTROL_SECRET:?required}
     expose:
@@ -23,12 +24,12 @@ services:
       - "8790"
       - "8791"
     networks:
-      - cbot
+      - connectors
 
   caddy:
     build:
-      context: ./ctrader-cbot-gateway
-      dockerfile: deploy/coolify/Dockerfile.caddy
+      context: ../..
+      dockerfile: deploy/portable/Dockerfile.caddy
     restart: unless-stopped
     depends_on:
       - gateway
@@ -42,10 +43,10 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     networks:
-      - cbot
+      - connectors
 
 networks:
-  cbot:
+  connectors:
     driver: bridge
 
 volumes:

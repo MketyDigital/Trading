@@ -1,171 +1,191 @@
 # Mkety Trading — Operator & Customer Connection Manual
 
-**Updated:** 2026-09-11  
-**Portal:** https://trade.mkety.com  
-**cTrader cBot gateway:** `wss://cbot.mkety.com:25345/v1/cbot`  
-**cBot download:** https://github.com/MketyDigital/Trading/releases/latest/download/MketyCloudAutoTrader.algo
+**Updated:** 2026-09-12  
+**Portal:** `https://trade.mkety.com`  
+**cTrader WebSocket:** `wss://cbot.mkety.com:25345/v1/cbot`  
+**MT5 WebSocket:** `wss://cbot.mkety.com:25345/v1/mt5`
 
 ## 1. System purpose and authority
 
-Mkety Trading is a multi-tenant trading automation workspace. The existing Mkety Worker is the single authoritative orchestration/execution system. It owns source authentication, workspace binding, canonical signal parsing, replay protection, routing, risk/safety validation, broker-account selection, execution dispatch, retry/reconciliation and audit state.
+Mkety Trading is a multi-tenant trading automation workspace. The existing Mkety Worker is the single authoritative orchestration/execution system. It owns source authentication, workspace binding, canonical signal processing, replay protection, persisted routing, risk/safety validation, broker-account selection, execution dispatch, reconciliation and audit state.
 
-There is no separate cBot trading engine. cTrader Open API, cTrader Cloud Auto Trader and MT5 are adapters behind the same Worker.
+cTrader, MT5, Telegram/MTProto and other integrations are adapters around that Worker. None of them is a second trading engine and none may bypass Worker authority.
 
-```text
-Signal source
-    ↓
-Mkety source/workspace authentication
-    ↓
-Canonical event + replay protection
-    ↓
-Deterministic signal interpretation
-    ↓
-Optional bounded AI / presentation formatting
-    ↓
-Persisted route
-    ↓
-Telegram | Broker Account | Internal API | Audit Only
-                     ↓
-              Mkety execution authority
-                 ↙             ↘
-             cTrader            MT5
-          Direct / cBot        Bridge
-```
+Immediately before broker dispatch, Mkety reloads durable source/workspace/account state and rechecks source authorization, explicit routing, account/provider state, account activation, execution permission, kill switch, symbol/risk policy and the platform broker-execution gates.
 
-Caller-supplied workspace, account, provider, broker, route, destination or credential hints are never authoritative. Mkety reloads persisted state before execution.
+Caller-supplied workspace, account, provider, broker, route, destination or credential hints are never authoritative.
 
 ## 2. Safety model
 
-A connected account is not automatically allowed to trade. New accounts start inactive, execution disabled, and kill switch ON.
+A connected broker account is not automatically allowed to trade. New accounts start inactive, execution disabled and kill switch ON.
 
-Execution requires all relevant gates to pass: source authorization, persisted route, same-workspace account binding, provider connectivity, active account, execution enabled, kill switch OFF, risk/symbol policy, platform demo/live gate, global broker capability and the persisted Mkety owner broker switch.
+Broker execution requires all relevant gates to pass, including:
+
+- authorized source and workspace;
+- explicit persisted source → broker-account route;
+- same-workspace account binding;
+- connected provider and verified broker identity;
+- Active ON;
+- Execution ON;
+- Kill switch OFF;
+- symbol, lot/risk and environment policy;
+- deployment broker capability; and
+- persisted Mkety owner/master broker switch.
+
+Deployment, pairing, sync or gateway connectivity must not mutate the owner/master broker switch. Preserve its current persisted value during rollout.
 
 ## 3. cTrader connection modes
 
-### Direct Connection — Recommended
+### Direct Connection — Recommended when Open API is available
 
-This is cTrader Open API/OAuth. When Mkety's approved Open API client credentials are configured, the customer clicks **Direct Connection — Recommended**, authorizes Mkety at cTrader, Mkety exchanges the code for access/refresh tokens, discovers the authorized cTrader accounts and stores encrypted credentials. Accounts remain inactive, execution-disabled and kill-switched until explicitly enabled.
+Mkety uses cTrader Open API/OAuth, discovers the authorized accounts and stores encrypted credentials. Accounts remain inactive, execution-disabled and kill-switched until explicitly enabled.
 
 ### Cloud Auto Trader — cBot route
 
-This route runs `MketyCloudAutoTrader.algo` in cTrader Cloud. No customer VPS is required. Mkety hosts the shared WebSocket gateway.
-
-## 4. Exact cTrader Cloud Auto Trader customer flow
-
-1. Customer signs in at `https://trade.mkety.com` and opens **Connections**.
-2. For an account that should receive trades, select **Execution / destination**. Select both roles only if it will also act as a source/master.
-3. Click **Cloud Auto Trader** and download `MketyCloudAutoTrader.algo`.
-4. **Before starting the cBot**, enter a connection label, choose Demo or Live, and click **Create Cloud Auto Trader connection**.
-5. Mkety creates an inactive `ctrader_cbot` account row with a pending broker identity and generates a signed one-time Connection Token.
-6. The success box shows:
+`MketyCloudAutoTrader.algo` runs in cTrader Cloud and connects outbound to:
 
 ```text
-WebSocket: wss://cbot.mkety.com:25345/v1/cbot
-Connection token: v1.<payload>.<signature>
-Expires: <timestamp>
+wss://cbot.mkety.com:25345/v1/cbot
 ```
 
-7. In cTrader, import/open the `.algo`, create an instance on the exact cTrader account being connected, leave the default Mkety Gateway as `wss://cbot.mkety.com:25345/v1/cbot`, paste the **Connection Token**, and start the cBot in cTrader Cloud.
-8. The cBot sends its real account number, broker name, demo/live state and instance ID to Mkety's gateway.
-9. Return to Mkety and click **Sync cBot identity**.
-10. Mkety verifies the online gateway session and changes the pending Mkety account to the real cTrader account number with `provider_config.status=connected`.
-11. Review the actual account number/environment/broker.
-12. Configure the explicit source → broker-account route and risk settings.
-13. For an approved demo/live phase, turn **Active ON**, **Execution ON**, and **Kill switch OFF** for that account.
-14. Broker trades can still execute only when the global Mkety broker gate is intentionally enabled.
+No customer VPS is required. Mkety hosts the shared gateway.
 
-### Where the cBot Connection Token comes from
+Customer flow:
 
-The token is **not embedded in the `.algo`**. It is generated by Mkety only after **Create Cloud Auto Trader connection** succeeds in the workspace. Starting the cBot without that token correctly prints `Mkety connection token is required.`
+1. Open **Connections** and choose the account role(s).
+2. Create the Cloud Auto Trader connection in Mkety.
+3. Download/import the `.algo` on the exact cTrader account.
+4. Copy the one-time connection token generated by Mkety.
+5. Keep the default gateway, paste the token and start the cBot.
+6. Return to Mkety and click **Sync cBot identity**.
+7. Confirm the real account number, broker and Demo/Live environment.
+8. Configure explicit route and risk controls.
+9. Open account safety gates only for an approved acceptance/live phase.
 
-The signed token binds the cBot to one authoritative Mkety `trade_accounts` row. On WebSocket connect, the cBot reports the actual broker identity. Commands later carry both the Mkety account-row identity and authoritative broker account number. The cBot rejects account mismatch, expired commands and duplicates.
+The token binds the cBot session to one authoritative Mkety account row. The gateway verifies the session/account identity; the Worker still decides whether any command is allowed to reach it.
 
-## 5. cTrader cBot execution capabilities
+## 4. MT5 Connector — recommended MT5 route
 
-The current cBot supports market BUY/SELL, Buy/Sell Limit, Buy/Sell Stop, Stop Loss, Take Profit, position modification, full close, partial close and pending-order cancellation. It normalizes requested lots into broker-supported cTrader volume units and rejects invalid/minimum volumes.
+The recommended MetaTrader 5 route is **MT5 Connector — Recommended**. It runs on the same Windows computer as a logged-in MT5 terminal and opens an outbound encrypted WebSocket to Mkety.
 
-Fail-closed states include pending account identity, provider status not connected, offline cBot, broker-account mismatch, environment mismatch, inactive account, execution flag OFF, kill switch ON, global gate blocked, policy rejection, expired command or replay.
+Customer requirements:
 
-## 6. cTrader gateway
+- Windows computer with MetaTrader 5 installed;
+- MT5 logged into the intended broker account;
+- Mkety MT5 Connector running while the account should remain connected.
 
-Public cBot WSS endpoint: `wss://cbot.mkety.com:25345/v1/cbot`.
+The customer does **not** expose an inbound port, configure a public HTTPS bridge URL, or need a customer VPS for the recommended connector mode.
 
-Worker control base: `https://cbot.mkety.com:25345`.
+### MT5 first-run flow
 
-The shared Mkety gateway authenticates cBots, binds sessions to Mkety account-row IDs, stores authenticated broker identity, receives protected Worker commands, compares expected broker account to the authenticated session, correlates command results, rejects replay/offline delivery and keeps the raw control service private. Customers never receive Mkety's gateway signing key or control secret.
-
-## 7. MT5 — exact current connection model
-
-The implemented MT5 execution route is **MT5 Bridge**. It runs beside a logged-in MetaTrader 5 terminal on a Windows machine. A customer VPS is not required; an always-online Windows PC is valid.
-
-The machine must remain online with MT5 and the bridge running. The bridge must also be externally reachable by Mkety through a secure public HTTPS base URL.
-
-### Current MT5 UX limitation
-
-The repository currently contains the Python bridge (`cloudflare-v2/bridges/mt5_bridge.py`), not a finished one-click Windows EXE/installer. Therefore the MT5 route is technically implemented but currently operator-assisted rather than cTrader-cBot-level self-service.
-
-## 8. Exact MT5 Bridge customer/operator flow
-
-1. Customer signs in to Mkety and opens **Connections**.
-2. Select **Execution / destination**.
-3. Click **Connect MT5 Bridge**.
-4. Enter a label and Demo/Live, then click **Create Bridge pairing**.
-5. Mkety returns one-time material:
+1. Open **Mkety Trading → Connections**.
+2. Choose **MT5 Connector — Recommended**.
+3. Enter a label and expected Demo/Live environment.
+4. Click **Create MT5 Connector pairing**.
+5. Download `MketyMT5Connector.exe`.
+6. Keep MT5 open and logged into the intended account.
+7. Start `MketyMT5Connector.exe`.
+8. On first run, paste the one-time pairing token shown by Mkety when prompted.
+9. The connector uses the baked production gateway:
 
 ```text
-Endpoint: https://trade.mkety.com/api/v1/external/mt5/bridge
-Bridge account ID: <Mkety trade_accounts UUID>
-Bridge secret: <one-time secret>
+wss://cbot.mkety.com:25345/v1/mt5
 ```
 
-6. On the Windows machine, install/run MetaTrader 5 and log in to the exact broker account.
-7. Run Mkety's `mt5_bridge.py` with the generated secret and actual MT5 account ID.
+10. Return to Mkety and click **Sync MT5 identity**.
+11. Confirm actual account number, broker/server and Demo/Live state.
+12. Configure the explicit source → account route, symbol aliases if needed and risk controls.
+13. Open account execution gates only for the approved acceptance/live phase.
 
-Core environment variables:
+The normal customer does not paste a WebSocket URL. Operator/testing flags such as `--token`, `--gateway`, `--config` and `--reset` exist for controlled use.
+
+## 5. MT5 pairing and reconnect credential boundary
+
+The one-time pairing token is short-lived. After the initial authenticated connection, the gateway issues an instance-bound reconnect credential stored locally by the connector.
+
+The reconnect credential authenticates only the connector's transport session. It is **not trade authority** and cannot bypass database state or Worker safety checks.
+
+Mkety's database remains authoritative for:
+
+- account existence and provider status;
+- actual broker account/server/environment identity;
+- activation and execution permission;
+- kill switch and risk policy;
+- account symbol catalog and aliases;
+- destinations/routes; and
+- server-observed pairing/revocation state.
+
+After successful MT5 identity sync, Mkety retires the original pairing token from long-lived encrypted `trade_accounts` credentials and retains only the gateway/control material needed by the managed server connection.
+
+## 6. MT5 symbol catalog and execution
+
+The connector reads the real terminal identity from `MetaTrader5.account_info()` and symbol metadata from `MetaTrader5.symbols_get()`.
+
+Mkety persists the account-specific symbol catalog and resolves each canonical signal symbol against that catalog before execution. Exact/normalized names and explicit aliases are supported; ambiguous matches fail closed rather than guessing.
+
+The outbound connector reuses Mkety's MT5 execution/reconciliation engine for market and pending orders, SL/TP, modify, partial/full close, pending cancellation, `order_check`, filling-mode fallback and uncertain-outcome reconciliation.
+
+The customer's MT5 password is not sent to Mkety by the connector.
+
+## 7. Legacy MT5 HTTP Bridge — advanced compatibility only
+
+The older inbound/public-HTTPS MT5 bridge remains supported for existing or specialized installations. It is not the recommended new-customer route.
+
+Unlike the outbound connector, the HTTP bridge requires a secure externally reachable HTTPS endpoint beside the logged-in terminal. Operators using it must provision/maintain that ingress and its signed bridge credentials.
+
+Do not instruct ordinary MT5 customers to create a public bridge URL when the outbound connector is available.
+
+## 8. Shared cTrader/MT5 gateway
+
+The gateway process starts both broker WebSocket transports:
 
 ```text
-MKETY_MT5_BRIDGE_SECRET=<bridge secret>
-MKETY_MT5_ACCOUNT_ID=<actual MT5 login>
-MKETY_MT5_LEDGER=mkety_mt5_bridge.sqlite
-MKETY_MT5_HOST=127.0.0.1
-MKETY_MT5_PORT=8789
-MKETY_MT5_MAGIC=460051
+/v1/cbot   cTrader Cloud Auto Trader
+/v1/mt5    MT5 outbound connector
 ```
 
-8. The bridge calls `mt5.initialize()` and aborts if `MKETY_MT5_ACCOUNT_ID` does not match the actual logged-in MT5 account.
-9. Expose the local bridge through a secure externally reachable HTTPS URL. Mkety cannot call `127.0.0.1` on the customer's PC. The current repo does not automatically provision this HTTPS ingress.
-10. Pair the running terminal back to Mkety with `POST https://trade.mkety.com/api/v1/external/mt5/bridge/<bridgeAccountId>` using `Authorization: Bearer <bridge secret>`.
-11. Pairing payload contains the actual account ID, demo/live environment, public HTTPS bridge URL, and optionally broker/server/terminal metadata.
-12. Mkety uses signed requests to `<bridgeUrl>/v1/health` and `<bridgeUrl>/v1/account`, verifies actual terminal account/server identity, then persists the verified runtime URL and marks `provider_config.status=connected`.
-13. Review the account/risk/route, then for an approved broker acceptance phase set **Active ON**, **Execution ON**, **Kill switch OFF**.
-14. Global Mkety execution must also be intentionally enabled.
+Worker-facing control routes are authenticated with server-side control credentials. Customers never receive the control secret or token-signing key.
 
-Example pairing payload:
+The gateway is deployed separately from the Cloudflare Worker (for example via the repository's Azure/Coolify deployment path). A successful Worker deployment does **not** deploy or prove health of the gateway.
 
-```json
-{
-  "accountId": "12345678",
-  "environment": "demo",
-  "bridgeUrl": "https://customer-bridge.example.com",
-  "serverName": "Broker-Demo",
-  "broker": "Broker Name",
-  "terminalName": "Customer MT5"
-}
+Before broker acceptance, independently verify TLS, `/health`, `/v1/cbot`, `/v1/mt5`, authenticated demo connectivity and identity sync.
+
+## 9. Telegram/MTProto modes
+
+### Hosted MTProto
+
+`cloudflare-v2/containers/mtproto-listener` is Mkety-hosted and source-bound. Keep it source-bound. Do not convert it into the shared collector.
+
+### External MTProto shared collector
+
+`cloudflare-v2/external/mtproto-adapter` supports a shared external Telegram collector. Its recommended server endpoint is:
+
+```text
+POST /api/v1/external/mtproto/collect
+Authorization: Bearer <TRADING_COLLECTOR_TOKEN>
 ```
 
-## 9. MT5 bridge API and capabilities
+The clean endpoint URL contains no credential. In shared collector mode, the external runtime uses `TRADING_COLLECTOR_TOKEN` and must not mix in `TRADING_SOURCE_ID`, `TRADING_SOURCE_SECRET` or `ALLOWED_CHAT_IDS`.
 
-Local/default listener: `127.0.0.1:8789`.
+Mkety's database is authoritative for active `external_mtproto` sources and allowed Telegram chat scope. An unselected visible chat is accepted/ignored; a selected chat is fanned out only to matching authorized source rows.
 
-The bridge exposes `GET /health`, signed `GET /v1/health`, signed `GET /v1/account`, signed `GET /v1/symbols`, signed `GET /v1/tick?symbol=...`, and signed `POST /v1/command`.
+### Legacy external signed-source mode
 
-Trade capabilities include market BUY/SELL, limit/stop pending orders, SL/TP, modify SL/TP, full/partial close and pending-order cancellation. It performs broker order checks and filling-mode fallback.
+One-runtime-per-source HMAC ingress remains available for compatibility using `TRADING_SOURCE_ID` and `TRADING_SOURCE_SECRET`. Local `ALLOWED_CHAT_IDS` is only a transport optimization and never grants server authorization.
 
-The bridge uses a deterministic `mkety:<hash>` broker marker plus a local SQLite replay ledger. It can reconcile uncertain outcomes against current orders, positions, historical orders and historical deals before allowing a retry to become a duplicate trade.
+## 10. Telegram event identity and replay safety
 
-## 10. Account activation controls
+Telegram native event identity is preserved in canonical form:
 
-Mkety's protected account controls are:
+```text
+telegram:<accountScope>:<chatId>:<messageId>
+```
+
+Replays through hosted or external transports converge through persistent workspace-scoped idempotency after authentication. A duplicate must not create a second interpretation, route delivery or broker order.
+
+## 11. Account activation controls
+
+Protected account controls include:
 
 ```text
 POST /api/v1/admin/accounts/:id/active
@@ -173,144 +193,100 @@ POST /api/v1/admin/accounts/:id/execution
 POST /api/v1/admin/accounts/:id/kill-switch
 ```
 
-Body is `{"enabled": true}` or false. Active OFF also forces execution OFF. Execution controls the account execution flag. Kill-switch ON blocks account execution.
+Active OFF also forces execution OFF. Execution controls account broker permission. Kill switch ON blocks account execution.
 
-The platform has an additional two-part master gate: deployment broker capability **AND** persisted Mkety owner broker switch. Effective broker execution requires both.
+Effective broker execution additionally requires both the deployment broker capability and persisted Mkety owner/master broker switch.
 
-## 11. Sources and inputs
+## 12. Sources, destinations and routing
 
-The system contains source/integration support for TradingView webhook, custom signed API, External Telegram/MTProto handoff, Mkety-hosted MTProto infrastructure, MT5 source/master bridge foundations and cTrader source/master foundations.
+Supported source foundations include TradingView webhook, custom signed API, hosted MTProto, external MTProto, MT5/cTrader broker-source foundations and internal integrations.
 
-Sources are workspace-bound. Telegram/MTProto allowed chat/channel scope is persisted and rechecked before AI or routing.
+Destinations include Telegram, explicit broker account, internal API/webhook and audit-only flows.
 
-## 12. Canonical signal logic
+Routes are persisted and workspace-scoped. A broker account is never selected merely because it exists in the workspace; an explicit source → account destination route is required.
 
-The Worker classifies events as new trade, management/update, or non-actionable/needs review.
+## 13. Canonical signal and AI boundary
 
-Supported semantic concepts include BUY/SELL/LONG/SHORT; MARKET/LIMIT/STOP and canonical STOP_LIMIT where the destination supports it; market entry, fixed entry, range/zone entry and fast/incomplete entry; symbol, entry, stop loss, TP1/TP2/TP3+; volume/risk instructions; move/modify stop, breakeven, partial close, full close, close-all concepts and pending-order cancellation.
+The Worker owns the trusted canonical trading meaning: symbol, side, order type, entries, SL, TPs, management actions, risk/volume semantics and route context.
 
-The canonical event is the trusted trading meaning.
+AI may assist with presentation/formatting and bounded interpretation where configured. It is not allowed to silently choose a different broker account/route or override symbol, side, entry, SL/TP or risk authority.
 
-## 13. AI boundary
+## 14. Risk and fail-closed behavior
 
-AI can assist with formatting, message cleanup, branding and bounded interpretation where configured. AI is not authoritative for silently changing symbol, side, order type, entry, SL, TPs, risk/volume, broker account or route.
+Risk/account policy can include kill switch, allowed symbols, max lots per trade, max risk percent, max daily/open risk, fixed/risk-based sizing and broker-context validation.
 
-Formatting modes include `none`, `clean`, `template`, and `ai_then_fallback`. Deterministic fallback preserves canonical trading semantics when AI is unavailable.
+Dynamic validation may use equity/balance, price/entry/stop, tick size/value, broker min/max/step volume and targets.
 
-## 14. Destinations and routing
+Healthy connectivity does not imply a trade should execute. Invalid symbol mapping, ambiguous catalog match, risk rejection, environment mismatch, inactive account, disabled execution, kill switch ON, missing route, offline provider or blocked global gate must fail closed.
 
-Destination concepts include Telegram channel/group, explicit broker account, internal webhook/API and audit-only.
+## 15. Normal customer onboarding
 
-Routes are persisted, workspace-scoped and enable/disable controlled. A broker account is never selected merely because it exists in the workspace. A source must have an explicit persisted route to that broker-account destination.
+1. Customer receives/uses the appropriate Mkety workspace entitlement.
+2. Customer signs in to `trade.mkety.com`.
+3. Configure signal source(s).
+4. Connect broker account(s) using recommended cTrader/MT5 flow.
+5. Sync and verify real broker identity/environment.
+6. Configure destinations and explicit routes.
+7. Configure risk/account policy and symbol aliases where required.
+8. Verify non-live/demo connectivity and behavior.
+9. Operator reviews actual source/account/route/risk state.
+10. Open account gates only for the approved phase.
+11. Global broker execution is changed only through a separately reviewed decision; deployment itself must not alter it.
 
-## 15. Risk and execution authority
+## 16. Troubleshooting
 
-Account policy support includes kill switch, allowed symbols, max lots per trade, max risk percent, max daily loss percent, max open risk percent, fixed-lot/risk sizing concepts and broker-context validation.
+### MT5 connector will not pair
 
-Dynamic checks can use equity, balance, current price, entry, stop, tick size/value, broker min/max/step volume and targets. A healthy connection can still correctly reject a trade because of risk policy.
+Confirm the token is current/unmodified, MT5 is running, the connector can reach `wss://cbot.mkety.com:25345/v1/mt5`, and no stale/reset local pairing is interfering.
 
-## 16. Idempotency/replay safety
+### MT5 sync fails
 
-Mkety protects against duplicates at multiple layers: source-native identity, workspace/source event idempotency, canonical event identity, destination delivery state, cBot command replay protection, MT5 local replay ledger and MT5 broker reconciliation after uncertain results.
+Confirm the connector remains online, the actual account/server is complete, requested Demo/Live matches the terminal and the server can reach the gateway control API.
 
-Retries are intended to converge on the original event/command rather than create a second trade.
+### cTrader sync fails
 
-## 17. Normal customer onboarding from Mkety's side
+Confirm the cBot is running on the intended account, the token is current, gateway is `/v1/cbot`, and the actual account/environment matches the Mkety pairing.
 
-1. Mkety staff creates an access code/entitlement profile.
-2. Customer signs in at `trade.mkety.com`.
-3. Customer/configurator creates signal sources.
-4. Customer connects broker accounts.
-5. Customer configures Telegram/internal/audit destinations as entitled.
-6. Customer creates explicit source → destination routes.
-7. Risk/account policy is configured.
-8. Demo/non-live connectivity is verified.
-9. Operator verifies actual broker identity/environment and route.
-10. Account Active is enabled.
-11. Account Execution is enabled.
-12. Kill switch is removed for the approved account.
-13. Global broker execution is enabled only for an explicitly approved acceptance/live phase.
+### Connected but no broker order
 
-## 18. Customer scripts
+Check the explicit route, provider state, Active, Execution, Kill switch, environment, symbol catalog/aliases, risk policy, account role and both global broker gates. Do not bypass a failed safety gate to make a test pass.
 
-### cTrader
+### External MTProto receives a Telegram chat but nothing routes
 
-Open Mkety Trading → Connections; tick **Execution / destination**; click **Cloud Auto Trader**; download the `.algo`; create the Mkety Cloud Auto Trader connection; copy the Connection Token; add the `.algo` to the exact cTrader account; keep Gateway `wss://cbot.mkety.com:25345/v1/cbot`; paste the token and start the cBot in cTrader Cloud; return to Mkety and **Sync cBot identity**; confirm actual account/environment; then configure route/risk and open safety gates only after verification.
+For shared collector mode, verify an active `external_mtproto` source exists whose persisted chat policy selects that chat. Unselected visible chats are intentionally accepted/ignored.
 
-### MT5 — current technical route
+## 17. Deployment and rollback order
 
-Open Mkety Trading → Connections; tick **Execution / destination**; create MT5 Bridge pairing; save Bridge account ID and secret; on an always-online Windows PC install/login to MT5; run `mt5_bridge.py` with the exact account and secret; provide a secure public HTTPS route to the local bridge; pair that URL back to Mkety; let Mkety verify the actual account/server; configure route/risk; then open safety controls for approved acceptance.
+Production-safe rollout order:
 
-For large-scale customers, Mkety should package the bridge into a signed Windows installer/EXE and automate secure HTTPS ingress before marketing MT5 as fully self-service.
+1. Verify all branch CI and security checks green.
+2. Recheck production DB/current safety state and preserve owner/master broker switch.
+3. Apply only reviewed Trading migrations.
+4. Merge the verified PR.
+5. Deploy/verify the Cloudflare Worker and runtime controls.
+6. Publish the Windows MT5 release from the verified `main` build.
+7. Deploy the shared cTrader/MT5 gateway separately and prove its health.
+8. Create/rotate external MTProto collector credential through protected admin.
+9. Update only the **external** MTProto listener to the clean collector endpoint/token.
+10. Demo-test unselected/selected MTProto behavior.
+11. Demo-connect MT5 and sync its real symbol catalog.
+12. Re-sync cTrader catalog/identity as needed.
+13. Keep account execution disabled unless the specific demo/live acceptance phase separately authorizes it.
 
-## 19. Troubleshooting
+Rollback should reverse the changed component without changing unrelated runtime safety controls. If gateway acceptance fails, roll back the gateway independently of the Worker. If collector acceptance fails, revoke/rotate the collector token and return the external listener to its prior mode; do not modify hosted MTProto. If Worker acceptance fails, roll back the Worker using the reviewed deployment rollback path while preserving the persisted owner/master broker switch.
 
-### `Cloud Auto Trader setup failed: ACCOUNT_CREATE_FAILED`
+## 18. What Mkety hosts vs customer runs
 
-Root cause found on 2026-09-11: production `trade_accounts` still required legacy `api_token_encrypted TEXT NOT NULL`, while unified provider modes correctly store encrypted credentials in `credential_ciphertext`. This rejected cBot and could reject MT5/unified cTrader rows.
+For cTrader Cloud Auto Trader, Mkety hosts Worker/database/gateway/control services; the customer runs the cBot in cTrader Cloud. No customer VPS is required.
 
-Production fix applied:
+For recommended MT5 Connector, Mkety hosts Worker/database/gateway/control services; the customer runs MT5 plus `MketyMT5Connector.exe` on Windows. No inbound customer public URL is required.
 
-```sql
-alter table public.trade_accounts
-  alter column api_token_encrypted drop not null;
-```
+For legacy MT5 HTTP bridge, the customer/operator additionally maintains the public HTTPS bridge ingress.
 
-Existing legacy values remain untouched. New provider modes continue to use `credential_ciphertext`. Refresh the workspace and recreate the Cloud Auto Trader connection. A successful creation will show the Connection Token.
+For shared external MTProto, the external host runs the Telegram client/session and outbound collector transport; Mkety remains authoritative for workspace/source/chat policy and all trading decisions.
 
-### cBot says `Mkety connection token is required`
-
-Create the Cloud Auto Trader connection in Mkety first, copy the returned one-time token, paste it into the cBot and restart it.
-
-### cBot Sync fails
-
-Check cBot is running, correct account, correct gateway, complete token, Demo/Live matches the actual account, token is not expired and no stale instance is being used.
-
-### cBot connected but no trade
-
-Check provider status connected, Active ON, Execution ON, Kill switch OFF, execution role present, explicit route points to that account, risk/symbol policy passes, global broker gate permits it, and cBot remains online.
-
-### MT5 pairing fails
-
-Check bridge secret and row ID, HTTPS public reachability, signed health/account endpoints, MT5 running/logged in, actual login and server matching the pairing payload.
-
-### MT5 connected but no trade
-
-Check PC/MT5/bridge/HTTPS ingress online, provider connected, Active/Execution/Kill switch, explicit route, risk/symbol policy and global execution gate.
-
-## 20. What Mkety hosts vs customer runs
-
-For cTrader cBot, Mkety hosts Worker, database, gateway, TLS, command control, signing secrets, routes/risk. Customer runs only the cBot in cTrader Cloud. **No customer VPS required.**
-
-For MT5 Bridge, Mkety hosts Worker, database, pairing API, encrypted credentials, route/risk/execution authority. Customer/operator currently runs Windows + MT5 + Python bridge + secure public HTTPS ingress. An always-online PC is valid; a VPS is optional, not required.
-
-## 21. Capability readiness
-
-### Ready now
-
-Access-code enterprise workspace, returning owner session, workspace isolation, source registry/auth, Telegram/MTProto ingestion architecture, deterministic canonical signal logic, presentation-only AI boundary, Telegram destinations, broker-account destinations, internal webhook, audit-only destination, persisted routing, cTrader cBot gateway, downloadable `.algo`, signed cBot pairing token, cTrader identity sync, cBot execution adapter, MT5 local bridge adapter, MT5 signed pairing/identity verification, account safety controls, risk logic, replay/idempotency controls and production portal/operations foundations.
-
-### Conditional/provider-dependent
-
-cTrader Direct/Open API requires approved/configured Mkety Open API application credentials. MT5 Cloud requires a configured supported MT5 cloud provider.
-
-### Current MT5 self-service gap
-
-The bridge runtime exists, but a signed Windows installer/EXE and automatic secure public HTTPS transport are not yet completed. cTrader cBot is therefore the cleaner self-service broker route today; MT5 Bridge is currently operator-assisted.
-
-## 22. Endpoint reference
-
-- Customer portal: `https://trade.mkety.com`
-- cTrader cBot download: `https://github.com/MketyDigital/Trading/releases/latest/download/MketyCloudAutoTrader.algo`
-- cTrader gateway: `wss://cbot.mkety.com:25345/v1/cbot`
-- cBot create: `POST /api/v1/admin/connections/ctrader/cbot`
-- cBot identity sync: `POST /api/v1/admin/connections/ctrader/cbot/:id/sync`
-- MT5 bridge account creation: `POST /api/v1/admin/connections/accounts` with `providerMode=mt5_bridge`
-- MT5 terminal pairing: `POST /api/v1/external/mt5/bridge/:accountRowId`
-- Account controls: `POST /api/v1/admin/accounts/:id/active`, `/execution`, `/kill-switch`
-
-## 23. Core operational rule
+## 19. Core operating principle
 
 **Connected** and **allowed to trade** are deliberately separate states.
 
-Mkety first proves the broker account's real identity, then the operator/customer configures routing and risk, and only then are execution gates intentionally opened. This separation is a core safety property of the platform.
+Mkety first proves the source/broker connection and real identity, then routing and risk are configured, and only then are execution gates intentionally opened through a separately reviewed acceptance decision. This separation is a core safety property of the platform.
