@@ -1,0 +1,40 @@
+name: PR43 UI Patch
+on:
+  push:
+    branches: [feat/raw-external-webhook-modes]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/raw-external-webhook-modes
+      - name: Patch webhook mode controls
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          p = Path('cloudflare-v2/src/dashboard_enterprise_enhancements.js')
+          s = p.read_text()
+          old = "function configureDestinationFields(){var t=q('destinationType'),box=q('destinationFields');if(!t||!box)return;if(t.value==='internal_webhook'){box.innerHTML='<div class=\"field\"><label>Webhook signing secret</label><input id=\"destWebhookSecret\" type=\"password\" autocomplete=\"new-password\" required><div class=\"muted small\">Required to sign outbound Mkety webhook deliveries.</div></div>'}setTimeout(async function(){try{var r=await admin('/api/v1/admin/accounts');configureBrokerDestination(r.accounts||[])}catch(_){}},0)}"
+          new = "function configureDestinationFields(){var t=q('destinationType'),box=q('destinationFields');if(!t||!box)return;if(t.value==='internal_webhook'){box.innerHTML='<div class=\"grid\"><div class=\"field\"><label>Webhook mode</label><select id=\"destWebhookMode\"><option value=\"mkety_signed\">Mkety signed</option><option value=\"raw_text\">Raw text</option><option value=\"raw_json\">Raw JSON</option></select><div class=\"muted small\">Raw modes send directly to the external HTTPS endpoint without Mkety protocol headers.</div></div><div class=\"field\" id=\"destWebhookSecretWrap\"><label>Webhook signing secret</label><input id=\"destWebhookSecret\" type=\"password\" autocomplete=\"new-password\"><div class=\"muted small\">Required only for Mkety signed mode.</div></div></div>';var mode=q('destWebhookMode'),wrap=q('destWebhookSecretWrap');var sync=function(){if(wrap)wrap.style.display=mode&&mode.value==='mkety_signed'?'':'none'};if(mode)mode.addEventListener('change',sync);sync()}else if(t.value!=='telegram')box.innerHTML='';setTimeout(async function(){try{var r=await admin('/api/v1/admin/accounts');configureBrokerDestination(r.accounts||[])}catch(_){}},0)}"
+          if old not in s:
+              if 'destWebhookMode' in s:
+                  raise SystemExit(0)
+              raise SystemExit('configureDestinationFields target not found')
+          s = s.replace(old, new, 1)
+          old2 = "if(t==='internal_webhook'){var secret=q('destWebhookSecret')&&q('destWebhookSecret').value.trim();if(!secret){note('Webhook signing secret is required.','error');return}payload.credentials={signingSecret:secret}}"
+          new2 = "if(t==='internal_webhook'){var mode=(q('destWebhookMode')&&q('destWebhookMode').value)||'mkety_signed';payload.settings={webhookMode:mode};if(mode==='mkety_signed'){var secret=q('destWebhookSecret')&&q('destWebhookSecret').value.trim();if(!secret){note('Webhook signing secret is required for Mkety signed mode.','error');return}payload.credentials={signingSecret:secret}}}"
+          if old2 not in s:
+              raise SystemExit('destination create target not found')
+          s = s.replace(old2, new2, 1)
+          p.write_text(s)
+          PY
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare-v2/src/dashboard_enterprise_enhancements.js
+          git commit -m "feat: expose raw webhook modes in portal"
+          git push origin HEAD:feat/raw-external-webhook-modes
