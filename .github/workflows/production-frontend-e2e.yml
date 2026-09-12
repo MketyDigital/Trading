@@ -143,6 +143,8 @@ jobs:
             await page.locator('#showMt5BridgeBtn').click();
             await page.locator('#createMt5ConnectorBtn').waitFor({ state: 'visible', timeout: 5000 });
             assert.equal(await page.locator('#createMt5ConnectorBtn').isVisible(), true);
+            await page.getByText('MketyMT5Connector.exe', { exact: false }).waitFor({ state: 'visible', timeout: 5000 });
+            assert.equal(await page.getByText('MketyMT5Connector.exe', { exact: false }).first().isVisible(), true);
             assert.match(await page.locator('#mt5ConnectionForm').innerText(), /outbound encrypted WebSocket/i);
 
             await page.getByRole('button', { name: 'Routing', exact: true }).click();
