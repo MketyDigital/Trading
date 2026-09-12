@@ -14,7 +14,7 @@ function runtimeSupabase(seed = {}) {
       const chain = {
         select() { return chain; },
         eq(_column, value) { state.key = value; return chain; },
-        async maybeSingle() { return { data: rows.get(state.key) || null, error: null }; },
+        async maybeSingle() { return { data: state.row || rows.get(state.key) || null, error: null }; },
         upsert(row) { state.row = row; rows.set(row.control_key, row); return chain; },
       };
       return chain;
@@ -29,17 +29,10 @@ function account(environment, liveExecutionEnabled = false) {
     safety_policy: { enabled: true, killSwitch: false },
   };
 }
-
-function plan() {
-  return [{ accountId: 'acct-1', groupId: 'g1', actions: [{ type: 'OPEN_POSITION', symbol: 'XAUUSD', lots: 0.01, idempotencyKey: 'k1' }] }];
-}
-
+function plan() { return [{ accountId: 'acct-1', groupId: 'g1', actions: [{ type: 'OPEN_POSITION', symbol: 'XAUUSD', lots: 0.01, idempotencyKey: 'k1' }] }]; }
 async function execute(row, liveBrokerExecutionEnabled) {
   let dispatches = 0;
-  const result = await executeProductionPlan({
-    workspaceId: 'ws-1', eventId: 'evt-1', accountPlans: plan(), brokerExecutionEnabled: true,
-    liveBrokerExecutionEnabled,
-  }, {
+  const result = await executeProductionPlan({ workspaceId: 'ws-1', eventId: 'evt-1', accountPlans: plan(), brokerExecutionEnabled: true, liveBrokerExecutionEnabled }, {
     accountLoader: async () => row,
     dispatchAction: async () => { dispatches += 1; return { ok: true }; },
   });
