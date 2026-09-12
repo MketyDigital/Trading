@@ -51,9 +51,11 @@ test('production broker verification remains fail closed and never enables live 
   assert.doesNotMatch(workflow, /liveBrokerExecutionEnabled\s*[:=]\s*true/i);
 });
 
-test('production browser E2E explicitly verifies cTrader Direct readiness', () => {
-  const workflow = read('.github/workflows/production-frontend-e2e.yml');
+test('authenticated production connection gate explicitly verifies cTrader Direct and MT5 readiness', () => {
+  const workflow = read('.github/workflows/production-connection-readiness.yml');
   assert.match(workflow, /\/api\/v1\/admin\/connections/);
-  assert.match(workflow, /readiness\.ctrader\.configured/);
+  assert.match(workflow, /readiness\?\.ctrader\?\.configured/);
   assert.match(workflow, /CTRADER_DIRECT_READINESS=PASS/);
+  assert.match(workflow, /MT5_CONNECTOR_BASE_READINESS=PASS/);
+  assert.match(workflow, /liveExecution:\s*false/);
 });
