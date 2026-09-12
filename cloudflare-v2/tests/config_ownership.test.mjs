@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   assertNoCustomerSpecificRequiredEnvironment,
+  CONNECTOR_LOCAL_TRANSPORT_STATE,
+  DATABASE_AUTHORITATIVE_CONFIGURATION,
   isCustomerSpecificEnvironmentKey,
   isPlatformBootstrapKey,
 } from '../src/config/config_ownership.js';
@@ -28,4 +30,11 @@ test('deployment-required customer configuration is rejected by ownership guard'
       && error.invalidKeys.includes('MT5_ACCOUNT_ID')
       && error.invalidKeys.includes('ALLOWED_CHAT_IDS'),
   );
+});
+
+test('database authority and connector-local reconnect transport authentication are explicitly separated', () => {
+  assert.equal(DATABASE_AUTHORITATIVE_CONFIGURATION.some((entry) => /reconnect state/i.test(entry)), false);
+  assert.equal(DATABASE_AUTHORITATIVE_CONFIGURATION.some((entry) => /pairing\/revocation status/i.test(entry)), true);
+  assert.equal(CONNECTOR_LOCAL_TRANSPORT_STATE.some((entry) => /transport authentication/i.test(entry)), true);
+  assert.equal(CONNECTOR_LOCAL_TRANSPORT_STATE.some((entry) => /never trade authority/i.test(entry)), true);
 });
