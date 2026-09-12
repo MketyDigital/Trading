@@ -28,6 +28,12 @@ async function renewReturningOwner(){
   })();
   return refreshInFlight;
 }
+async function restoreReturningOwner(){
+  if(sessionStorage.getItem('mketyTradingBearer'))return {ok:true,restored:false};
+  try{return await renewReturningOwner()}catch(_){return null}
+}
+window.mketyTradingRestoreSession=restoreReturningOwner;
+window.mketyTradingSessionRestorePromise=restoreReturningOwner();
 window.fetch=async function(input,init){
   var response=await nativeFetch(input,init);
   if(response.status!==401)return response;
@@ -44,14 +50,6 @@ window.fetch=async function(input,init){
   headers.set('X-Mkety-Workspace-Id',String(renewed.workspace.id));
   return nativeFetch(input,Object.assign({},init||{},{headers:headers}));
 };
-async function restoreReturningOwner(){
-  if(sessionStorage.getItem('mketyTradingBearer'))return;
-  try{
-    var x=await renewReturningOwner();
-    if(!x)return;
-    location.reload();
-  }catch(_){}
-}
 async function logoutReturningOwner(ev){
   var target=ev.target&&ev.target.closest?ev.target.closest('#portalLogout,#logoutBtn'):null;
   if(!target)return;
@@ -68,7 +66,25 @@ async function logoutReturningOwner(ev){
   location.reload();
 }
 document.addEventListener('click',logoutReturningOwner,true);
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',restoreReturningOwner);else restoreReturningOwner();
 })();</script>`;
-  return String(html).replace('</body>', `${script}</body>`);
+
+  let output = String(html);
+  output = output.replace(/<body([^>]*)>/i, (match) => `${match}${script}`);
+  output = output.replace(
+    'async function api(path,options){options=options||{};var s=session();',
+    "async function awaitReturningSession(){if(window.mketyTradingSessionRestorePromise)await window.mketyTradingSessionRestorePromise;}\nasync function api(path,options){options=options||{};await awaitReturningSession();var s=session();",
+  );
+  output = output.replace(
+    "async function admin(path,options){options=options||{};var s=auth();",
+    "async function admin(path,options){options=options||{};if(window.mketyTradingSessionRestorePromise)await window.mketyTradingSessionRestorePromise;var s=auth();",
+  );
+  output = output.replace(
+    'renderSourceFields();renderAccountFields();renderDestinationFields();showWorkspace();',
+    'renderSourceFields();renderAccountFields();renderDestinationFields();(async function(){await awaitReturningSession();showWorkspace()})();',
+  );
+  output = output.replace(
+    'function init(){ensureSourceExtras();',
+    'async function init(){if(window.mketyTradingSessionRestorePromise)await window.mketyTradingSessionRestorePromise;ensureSourceExtras();',
+  );
+  return output;
 }
