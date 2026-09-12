@@ -76,7 +76,7 @@ export async function ingestTradingEvent({
   eventStore,
   aiRouter,
   aiRouterFactory,
-  interpretationTimeoutMs = 1200,
+  interpretationTimeoutMs = 12000,
 } = {}) {
   if (!sourceStore?.getActiveSource || !eventStore?.reserve) {
     throw new TypeError('sourceStore and eventStore are required');
