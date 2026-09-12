@@ -66,16 +66,27 @@ This state was intentionally preserved during migrations and both production dep
 
 ## External gateway state — remaining infrastructure cutover
 
-The code, release packages and deployment stack for the shared cTrader/MT5 gateway are complete and CI-green, but the independent Azure/Coolify gateway is not currently wired into the production deployment secrets.
+The code, release packages and deployment stack for the shared cTrader/MT5 gateway are complete and CI-green, but the independent Azure/Coolify gateway is not yet on the complete current deployment/configuration.
 
-The production credential gate reports these four inputs absent as a complete set:
+A production network probe from GitHub Actions on 2026-09-12 established:
+
+- `cbot.mkety.com` resolves to the Azure host;
+- TLS on public port `25345` verifies successfully with a valid certificate for `cbot.mkety.com`;
+- public `GET /health` returns HTTP 200 from `mkety-ctrader-cbot-gateway`;
+- `wss://cbot.mkety.com:25345/v1/cbot` upgrades with HTTP 101 and unauthenticated sessions fail closed with `AUTH_REQUIRED`;
+- the gateway remains healthy immediately after the cTrader unauthenticated probe;
+- `wss://cbot.mkety.com:25345/v1/mt5` currently returns HTTP **502**.
+
+The current repository Caddy configuration routes `/v1/mt5` to `gateway:25347`, and the current gateway bootstrap starts the MT5 listener on that internal port. Therefore the 502 is consistent with the externally deployed Azure/Coolify application still running an older/incomplete gateway deployment where the MT5 backend listener is unavailable. Redeploy the existing Coolify application from current `main` before MT5 connector acceptance.
+
+The Worker production credential gate also reports these four inputs absent as a complete set:
 
 - `PRODUCTION_CTRADER_CBOT_GATEWAY_URL`
 - `PRODUCTION_CTRADER_CBOT_WS_URL`
 - `PRODUCTION_CBOT_TOKEN_SIGNING_KEY`
 - `PRODUCTION_CBOT_CONTROL_SECRET`
 
-Until the existing Azure/Coolify application is deployed/configured with matching signing/control secrets and those values are configured in the GitHub production environment, cTrader cBot and outbound MT5 pairing/dispatch intentionally remain fail-closed.
+Until the Azure/Coolify application is updated/configured with matching signing/control secrets and those values are configured in the GitHub production environment, cTrader cBot and outbound MT5 pairing/dispatch intentionally remain fail-closed from the Worker.
 
 Expected public broker endpoints after gateway cutover:
 
@@ -99,15 +110,17 @@ Current-head repository/production evidence includes:
 - Cloudflare authentication/SaaS DNS/fallback-origin checks: green;
 - production dry-run + Worker/container deploy: green;
 - production health/runtime-control checks: green;
-- real production Chromium E2E: green.
+- real production Chromium E2E: green;
+- public gateway DNS/TLS/health/cTrader transport: green;
+- public MT5 gateway route: **blocked by external 502 until Coolify redeploy**.
 
 ## Next external acceptance step
 
 The repository/Worker/database/frontend release is complete. The next work requiring infrastructure outside the currently connected repository/database tooling is:
 
-1. deploy/update `ctrader-cbot-gateway/deploy/coolify/docker-compose.yml` on the existing Azure/Coolify application;
+1. redeploy/update `ctrader-cbot-gateway/deploy/coolify/docker-compose.yml` on the existing Azure/Coolify application from current `main`;
 2. configure matching gateway signing/control secrets and production GitHub environment values;
-3. verify gateway `/health`, TLS on port 25345, and valid/invalid pairing behavior;
+3. re-verify gateway `/health`, TLS on port 25345, cTrader `/v1/cbot`, and MT5 `/v1/mt5` (MT5 must upgrade rather than return 502);
 4. create one shared external MTProto collector and configure the external listener with its one-time token;
 5. verify unselected Telegram chat => accepted/ignored and selected chat => correct persisted source/workspace pipeline;
 6. connect a demo MT5 terminal and sync its real identity/catalog;
