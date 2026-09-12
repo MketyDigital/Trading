@@ -18,7 +18,7 @@ import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime
 import { createProductionDestinationRetryRuntime } from './execution/destination_retry_production.js';
 import { runScheduledBindingRepairs } from './execution/production_binding_repair.js';
 import { handleCustomHostnameRouteProofRequest } from './security/custom_hostname_route_proof.js';
-import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
+import { resolveGlobalTradingAccess, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
 export { MTProtoListenerNode } from './listener/listener_node.js';
 export { TradeStateNode } from './state/trade_state_node.js';
@@ -29,113 +29,56 @@ const MTPROTO_RECOVERY_CRON = '* * * * *';
 function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
-
 function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
-
-function safeAccent(value) {
-  const color = String(value ?? '').trim();
-  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : null;
-}
-
+function safeAccent(value) { const color = String(value ?? '').trim(); return /^#[0-9a-fA-F]{6}$/.test(color) ? color : null; }
 function safeHttpsUrl(value) {
-  const raw = String(value ?? '').trim();
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw);
-    return parsed.protocol === 'https:' ? parsed.toString() : null;
-  } catch { return null; }
+  const raw = String(value ?? '').trim(); if (!raw) return null;
+  try { const parsed = new URL(raw); return parsed.protocol === 'https:' ? parsed.toString() : null; } catch { return null; }
 }
-
 function applyInitialBranding(html, payload = null) {
   if (!payload?.ok || !payload?.branding) return String(html);
   const branding = payload.branding || {};
   const brandName = String(branding.brandName || 'Mkety').trim() || 'Mkety';
   const productName = String(branding.productName || 'Trading').trim() || 'Trading';
   const title = `${brandName} ${productName}`.trim();
-  const accent = safeAccent(branding.accentColor);
-  const logoUrl = safeHttpsUrl(branding.logoUrl);
-
-  let output = String(html)
-    .replace('<title>Mkety Trading</title>', `<title>${escapeHtml(title)}</title>`)
-    .replace('<h1 id="brandTitle">Mkety Trading</h1>', `<h1 id="brandTitle">${escapeHtml(title)}</h1>`);
-
+  const accent = safeAccent(branding.accentColor); const logoUrl = safeHttpsUrl(branding.logoUrl);
+  let output = String(html).replace('<title>Mkety Trading</title>', `<title>${escapeHtml(title)}</title>`).replace('<h1 id="brandTitle">Mkety Trading</h1>', `<h1 id="brandTitle">${escapeHtml(title)}</h1>`);
   if (accent) output = output.replace('--accent:#0f172a', `--accent:${accent}`);
-  if (logoUrl) {
-    output = output.replace(
-      '<img id="brandLogo" class="logo hidden" alt="Brand logo">',
-      `<img id="brandLogo" class="logo" src="${escapeHtml(logoUrl)}" alt="Brand logo">`,
-    );
-  }
-  if (payload.kind === 'white_label') {
-    output = output.replace(
-      '<div id="brandSubtitle" class="muted">Enterprise signal automation, routing and execution workspace.</div>',
-      '<div id="brandSubtitle" class="muted">Enterprise trading automation workspace.</div>',
-    );
-  }
+  if (logoUrl) output = output.replace('<img id="brandLogo" class="logo hidden" alt="Brand logo">', `<img id="brandLogo" class="logo" src="${escapeHtml(logoUrl)}" alt="Brand logo">`);
+  if (payload.kind === 'white_label') output = output.replace('<div id="brandSubtitle" class="muted">Enterprise signal automation, routing and execution workspace.</div>', '<div id="brandSubtitle" class="muted">Enterprise trading automation workspace.</div>');
   return output;
 }
-
 function withPublicBrandingBootstrap(html) {
   const script = `<script>(function(){async function loadPublicBranding(){try{var r=await fetch('/api/v1/public/branding',{headers:{Accept:'application/json'}});if(!r.ok)return;var x=await r.json();if(!x||!x.ok||!x.branding)return;var b=x.branding||{};var title=(b.brandName||'Mkety')+' '+(b.productName||'Trading');var t=document.getElementById('brandTitle');if(t)t.textContent=title;document.title=title;if(b.accentColor)document.documentElement.style.setProperty('--accent',b.accentColor);var logo=document.getElementById('brandLogo');if(logo&&b.logoUrl){logo.src=b.logoUrl;logo.classList.remove('hidden')}var sub=document.getElementById('brandSubtitle');if(sub&&x.kind==='white_label')sub.textContent='Enterprise trading automation workspace.'}catch(_){}}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',loadPublicBranding);else loadPublicBranding()})();</script>`;
   return String(html).replace('</body>', `${script}</body>`);
 }
-
-function normalizeEnterprisePortalHtml(html) {
-  return String(html).replace('placeholder="gpt-5-mini"', 'placeholder="Enter the current provider model ID"');
-}
-
+function normalizeEnterprisePortalHtml(html) { return String(html).replace('placeholder="gpt-5-mini"', 'placeholder="Enter the current provider model ID"'); }
 async function publicSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
+  const url = env.SUPABASE_URL; const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) return null;
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+  const { createClient } = await import('@supabase/supabase-js'); return createClient(url, key);
 }
-
 async function resolveInitialBranding(request, env, publicBrandingHandler) {
-  try {
-    const supabase = await publicSupabase(env);
-    const response = await publicBrandingHandler(request, env, { supabase });
-    if (!response?.ok) return null;
-    const payload = await response.json();
-    return payload?.ok && payload?.branding ? payload : null;
-  } catch { return null; }
+  try { const supabase = await publicSupabase(env); const response = await publicBrandingHandler(request, env, { supabase }); if (!response?.ok) return null; const payload = await response.json(); return payload?.ok && payload?.branding ? payload : null; }
+  catch { return null; }
 }
-
-function retiredLegacyAdminResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_ADMIN_API_RETIRED', replacement: '/api/v1/admin/*' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-}
-
-function retiredLegacySignalResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED', replacement: '/api/v1/internal/source-event or /api/v1/events' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-}
-
-function notFoundResponse() {
-  return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), { status: 404, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-}
-
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
-
-function isTradingViewCertificateProbeRequest(url, env = {}) {
-  return url.pathname === '/api/v1/webhooks/tradingview/probe' && enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED);
-}
-
+function retiredLegacyAdminResponse() { return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_ADMIN_API_RETIRED', replacement: '/api/v1/admin/*' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } }); }
+function retiredLegacySignalResponse() { return new Response(JSON.stringify({ ok: false, reason: 'LEGACY_SIGNAL_WEBHOOK_RETIRED', replacement: '/api/v1/internal/source-event or /api/v1/events' }), { status: 410, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } }); }
+function notFoundResponse() { return new Response(JSON.stringify({ ok: false, reason: 'NOT_FOUND' }), { status: 404, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } }); }
+function enabled(value) { return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase()); }
+function isTradingViewCertificateProbeRequest(url, env = {}) { return url.pathname === '/api/v1/webhooks/tradingview/probe' && enabled(env?.TRADINGVIEW_CERT_PROBE_ENABLED); }
 function healthResponse(request, env = {}) {
   if (request.method !== 'GET') return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), { status: 405, headers: { 'Content-Type': 'application/json; charset=utf-8', Allow: 'GET' } });
-  const core = validateStagingReadiness(env);
-  const simulation = validateStagingReadiness(env, { requireSimulation: true });
-  const mtprotoContainer = validateStagingReadiness(env, { requireMtprotoContainer: true });
+  const core = validateStagingReadiness(env); const simulation = validateStagingReadiness(env, { requireSimulation: true }); const mtprotoContainer = validateStagingReadiness(env, { requireMtprotoContainer: true });
   const status = !core.ready ? 'not_ready' : core.features.simulationEnabled && !simulation.ready ? 'degraded' : 'ready';
   return new Response(JSON.stringify({ ok: true, service: 'mkety-trading-v1', status, ready: core.ready, simulationReady: simulation.ready, mtprotoContainerReady: mtprotoContainer.ready, missing: core.missing, simulationMissing: simulation.missing, mtprotoContainerMissing: mtprotoContainer.missing, optionalMissing: core.optionalMissing, features: core.features }), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+async function tradingAccessBlock(env) {
+  const control = await resolveGlobalTradingAccess(env);
+  if (!control?.ok) return tradingAccessDisabledResponse('TRADING_RUNTIME_CONTROL_UNAVAILABLE');
+  return control.enabled === true ? null : tradingAccessDisabledResponse();
 }
 
 export function createTradingV1Entrypoint({
@@ -150,10 +93,7 @@ export function createTradingV1Entrypoint({
   mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
   publicBrandingHandler = handlePublicBrandingRequest,
   customHostnameRouteProofHandler = handleCustomHostnameRouteProofRequest,
-  queueRuntime = null,
-  recoveryRuntime = null,
-  destinationRetryRuntime = null,
-  bindingRepairRuntime = null,
+  queueRuntime = null, recoveryRuntime = null, destinationRetryRuntime = null, bindingRepairRuntime = null,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -166,39 +106,22 @@ export function createTradingV1Entrypoint({
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
-      if (url.pathname === '/api/v1/custom-hostname/probe') {
-        const supabase = await publicSupabase(env);
-        return customHostnameRouteProofHandler(request, env, { supabase });
-      }
-      if (url.pathname === '/api/v1/public/branding') {
-        const supabase = await publicSupabase(env);
-        return publicBrandingHandler(request, env, { supabase });
-      }
-      if (url.pathname === '/api/v1/internal/source-event') return internalSourceHandler(request, env, { ctx });
-      if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
+      if (url.pathname === '/api/v1/custom-hostname/probe') { const supabase = await publicSupabase(env); return customHostnameRouteProofHandler(request, env, { supabase }); }
+      if (url.pathname === '/api/v1/public/branding') { const supabase = await publicSupabase(env); return publicBrandingHandler(request, env, { supabase }); }
       if (['/api/v1/access/redeem', '/api/v1/access/session', '/api/v1/access/logout'].includes(url.pathname)) return accessCodeRedeemHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
       if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
-      if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) {
-        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
-        return externalMtprotoHandler(request, env, { ctx, eventsHandler });
-      }
+
+      if (url.pathname === '/api/v1/internal/source-event') { const block = await tradingAccessBlock(env); if (block) return block; return internalSourceHandler(request, env, { ctx }); }
+      if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
+      if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) { const block = await tradingAccessBlock(env); if (block) return block; return externalMtprotoHandler(request, env, { ctx, eventsHandler }); }
       if (url.pathname.startsWith('/api/v1/external/')) return notFoundResponse();
-      if (url.pathname === '/api/v1/events') {
-        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
-        return eventsHandler(request, env, { ctx });
-      }
-      if (/^\/api\/v1\/admin\/sources\/[^/]+\/ingress-secret$/.test(url.pathname)) {
-        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
-        return sourceIngressSecretHandler(request, env, { ctx });
-      }
-      if (url.pathname.startsWith('/api/v1/admin/')) {
-        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
-        return adminHandler(request, env, { ctx });
-      }
+      if (url.pathname === '/api/v1/events') { const block = await tradingAccessBlock(env); if (block) return block; return eventsHandler(request, env, { ctx }); }
+      if (/^\/api\/v1\/admin\/sources\/[^/]+\/ingress-secret$/.test(url.pathname)) { const block = await tradingAccessBlock(env); if (block) return block; return sourceIngressSecretHandler(request, env, { ctx }); }
+      if (url.pathname.startsWith('/api/v1/admin/')) { const block = await tradingAccessBlock(env); if (block) return block; return adminHandler(request, env, { ctx }); }
       if (url.pathname.startsWith('/api/v1/webhooks/tradingview/')) {
-        if (!isTradingAccessEnabled(env) && !isTradingViewCertificateProbeRequest(url, env)) return tradingAccessDisabledResponse();
+        if (!isTradingViewCertificateProbeRequest(url, env)) { const block = await tradingAccessBlock(env); if (block) return block; }
         return tradingViewHandler(request, env, { ctx });
       }
       if (url.pathname.startsWith('/api/v1/webhooks/')) return notFoundResponse();
@@ -207,6 +130,8 @@ export function createTradingV1Entrypoint({
       return legacy.fetch(request, env, ctx);
     },
     async queue(batch, env, ctx) {
+      const control = await resolveGlobalTradingAccess(env);
+      if (!control?.ok || control.enabled !== true) return { status: control?.ok ? 'TRADING_ACCESS_DISABLED' : 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' };
       const runtime = queueRuntime || createSourceQueueRuntime();
       return runtime(batch, env, { ctx });
     },
