@@ -3,10 +3,11 @@ import { withUnifiedTradingConnections } from './dashboard_unified_connections.j
 import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { withMt5ConnectorConnections } from './dashboard_mt5_connector_connections.js';
 import { withTelegramBotSource } from './dashboard_telegram_bot_source.js';
-import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections.js';
+import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections_relay.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleV1AdminMt5ConnectorRequest } from './http/v1_admin_mt5_connector.js';
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
+import { handleCTraderOAuthRelayAuthorize } from './http/ctrader_oauth_relay.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
 import { handleExternalMtprotoCollectorRequest } from './http/external_mtproto_collector_endpoint.js';
 import { handleMketyAdminIngressCollectorsRequest } from './http/v1_mkety_admin_ingress_collectors.js';
@@ -39,6 +40,7 @@ export function createTradingConnectionsEntrypoint({
   ctraderCbotHandler = handleV1AdminCTraderCbotRequest,
   mt5ConnectorHandler = handleV1AdminMt5ConnectorRequest,
   ctraderCallbackHandler = handleCTraderOAuthPublicCallback,
+  ctraderRelayAuthorizeHandler = handleCTraderOAuthRelayAuthorize,
   externalMtprotoHandler = handleExternalMtprotoEndpointRequest,
   externalMtprotoCollectorHandler = handleExternalMtprotoCollectorRequest,
   ingressCollectorsAdminHandler = handleMketyAdminIngressCollectorsRequest,
@@ -49,6 +51,10 @@ export function createTradingConnectionsEntrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
+
+      if (url.pathname === '/api/v1/integrations/ctrader/authorize') {
+        return ctraderRelayAuthorizeHandler(request, env, { ctx });
+      }
 
       if (url.pathname === '/api/v1/integrations/ctrader/callback') {
         return ctraderCallbackHandler(request, env, { ctx });
