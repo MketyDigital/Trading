@@ -82,8 +82,10 @@ export async function interpretTradingEvent(event = {}, {
     if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
       const recovered = recoverKnownNaturalLanguageSignal(event.text);
       if (recovered) return { status: 'READY', source: 'deterministic_relaxed', intent: recovered };
+      if (deterministic.intent?.fastEntry) return { ...deterministic, source: 'deterministic' };
+    } else {
+      return { ...deterministic, source: 'deterministic' };
     }
-    return { ...deterministic, source: 'deterministic' };
   }
 
   const relaxedIntent = recoverKnownNaturalLanguageSignal(event.text);
