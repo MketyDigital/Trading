@@ -117,7 +117,6 @@ export async function handleExternalMtprotoEndpointRequest(request, env = {}, {
     return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ENDPOINT_INVALID' }, 400);
   }
   if (!sourceId) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_ENDPOINT_INVALID' }, 400);
-  if (!endpointToken) return json({ ok: false, reason: 'EXTERNAL_MTPROTO_AUTH_REQUIRED' }, 401);
 
   let source;
   try {
@@ -129,7 +128,7 @@ export async function handleExternalMtprotoEndpointRequest(request, env = {}, {
   if (!source?.id || source.provider_type !== 'external_mtproto' || !source.secret) {
     return json({ ok: false, reason: 'UNKNOWN_OR_INACTIVE_SOURCE' }, 404);
   }
-  if (!constantTimeEqual(endpointToken, source.secret)) {
+  if (endpointToken && !constantTimeEqual(endpointToken, source.secret)) {
     return json({ ok: false, reason: 'INVALID_EXTERNAL_MTPROTO_ENDPOINT' }, 401);
   }
 
