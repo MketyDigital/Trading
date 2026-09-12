@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { handleTradingAccessCodeRedeemRequest } from '../src/http/v1_access_codes.js';
 import { renderEnterpriseTradingPortal } from '../src/dashboard_enterprise_portal.js';
 import { withReturningOwnerSession } from '../src/dashboard_returning_session.js';
+import { withUnifiedTradingConnections } from '../src/dashboard_unified_connections.js';
 import { runV1ProductionExecutionStage } from '../src/pipeline/v1_execution_stage.js';
 import { handleMketyAdminAccessCodesRequest } from '../src/http/v1_mkety_admin_access_codes.js';
 
@@ -102,6 +103,14 @@ test('enterprise browser transparently renews an expired bearer and retries the 
   assert.match(html, /\/api\/v1\/access\/session/);
   assert.match(html, /sessionStorage\.setItem\(['"]mketyTradingBearer['"],/);
   assert.match(html, /Authorization/);
+});
+
+test('connections UI waits for returning-session restoration before declaring the session expired', () => {
+  const base = withReturningOwnerSession('<html><body><div id="accountRows"></div><div id="sourceRows"></div></body></html>');
+  const html = withUnifiedTradingConnections(base);
+  assert.match(html, /window\.mketyTradingEnsureSession\s*=\s*renewReturningOwner/);
+  assert.match(html, /await\s+window\.mketyTradingEnsureSession\(\)/);
+  assert.match(html, /Your session has expired\. Sign in again\./);
 });
 
 test('broker execution fails closed when persisted Mkety owner switch is OFF even if deployment capability is ON', async () => {
