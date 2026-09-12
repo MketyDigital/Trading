@@ -51,7 +51,7 @@ class CollectorModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config['source_secret'], 'source-secret')
 
     def test_config_rejects_partial_auth_mode_instead_of_guessing(self):
-        with self.assertRaisesRegex(ValueError, 'TRADING_COLLECTOR_TOKEN|TRADING_SOURCE_ID'):
+        with self.assertRaisesRegex(ValueError, 'TRADING_SOURCE_SECRET'):
             app.load_config({
                 'TELEGRAM_API_ID': '12345',
                 'TELEGRAM_API_HASH': 'hash',
