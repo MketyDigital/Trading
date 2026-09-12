@@ -3,6 +3,7 @@ import { normalizeTradingEvent } from '../events/trading_event.js';
 import { interpretTradingEvent } from '../ai/trading_interpreter.js';
 import { buildCanonicalSourceEventId } from '../sources/canonical_event_id.js';
 import { authorizeMtprotoEvent } from '../sources/mtproto/external_policy.js';
+import { authorizeTelegramBotEvent } from '../sources/telegram_bot_policy.js';
 
 function deriveCanonicalEventId(source, input) {
   if (!source?.source_family || !source?.external_identity) return null;
@@ -103,11 +104,13 @@ export async function ingestTradingEvent({
     return { ok: false, status: 400, reason: 'INVALID_JSON' };
   }
 
-  // Every MTProto transport is a listener only. The authenticated source row
-  // remains authoritative for account scope and accepted Telegram chats, even
-  // for Mkety-hosted Container/DO listeners.
-  const sourcePolicy = authorizeMtprotoEvent({ source, input });
-  if (!sourcePolicy.ok) return sourcePolicy;
+  // Transports are listeners only. The authenticated source row remains
+  // authoritative for Telegram account scope and accepted chats even if a
+  // webhook/queue handler is bypassed before canonical ingest.
+  const mtprotoPolicy = authorizeMtprotoEvent({ source, input });
+  if (!mtprotoPolicy.ok) return mtprotoPolicy;
+  const telegramBotPolicy = authorizeTelegramBotEvent({ source, input });
+  if (!telegramBotPolicy.ok) return telegramBotPolicy;
 
   const normalizedInput = {
     ...input,
