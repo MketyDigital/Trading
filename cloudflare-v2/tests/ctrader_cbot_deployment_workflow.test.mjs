@@ -24,6 +24,16 @@ test('production Worker deploy wires shared gateway URLs and secrets atomically 
   assert.doesNotMatch(workflow, /CTRADER_LIVE_TRADING_ENABLED:\s*true/i);
 });
 
+test('production Worker deploy carries direct cTrader OAuth credentials from GitHub environment secrets into Worker secrets', () => {
+  const workflow = read('.github/workflows/production-cloudflare-deploy.yml');
+  assert.match(workflow, /PRODUCTION_CTRADER_CLIENT_ID:\s*\$\{\{\s*secrets\.CTRADER_CLIENT_ID\s*\}\}/);
+  assert.match(workflow, /PRODUCTION_CTRADER_CLIENT_SECRET:\s*\$\{\{\s*secrets\.CTRADER_CLIENT_SECRET\s*\}\}/);
+  assert.match(workflow, /require_any CTRADER_CLIENT_ID/);
+  assert.match(workflow, /require_any CTRADER_CLIENT_SECRET/);
+  assert.match(workflow, /CTRADER_CLIENT_ID:\s*process\.env\.PRODUCTION_CTRADER_CLIENT_ID/);
+  assert.match(workflow, /CTRADER_CLIENT_SECRET:\s*process\.env\.PRODUCTION_CTRADER_CLIENT_SECRET/);
+});
+
 test('production Worker deploy automatically follows relevant main changes instead of a magic commit message', () => {
   const workflow = read('.github/workflows/production-cloudflare-deploy.yml');
   assert.match(workflow, /- 'cloudflare-v2\/\*\*'/);
