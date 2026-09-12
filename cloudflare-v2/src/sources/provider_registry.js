@@ -10,6 +10,7 @@ export const PROVIDER_TYPES = Object.freeze({
   CLOUDFLARE_CONTAINER_MTPROTO: 'cloudflare_container_mtproto',
   CLOUDFLARE_DO_MTPROTO: 'cloudflare_do_mtproto',
   EXTERNAL_MTPROTO: 'external_mtproto',
+  TELEGRAM_BOT_API: 'telegram_bot_api',
   TRADINGVIEW_WEBHOOK: 'tradingview_webhook',
   MT5_SOURCE_BRIDGE: 'mt5_source_bridge',
   CTRADER_SOURCE: 'ctrader_source',
@@ -33,6 +34,12 @@ const DEFINITIONS = Object.freeze({
     providerType: PROVIDER_TYPES.EXTERNAL_MTPROTO,
     sourceFamily: SOURCE_FAMILIES.TELEGRAM,
     runtimeKind: 'external',
+    nativeIdentity: true,
+  }),
+  [PROVIDER_TYPES.TELEGRAM_BOT_API]: Object.freeze({
+    providerType: PROVIDER_TYPES.TELEGRAM_BOT_API,
+    sourceFamily: SOURCE_FAMILIES.TELEGRAM,
+    runtimeKind: 'webhook',
     nativeIdentity: true,
   }),
   [PROVIDER_TYPES.TRADINGVIEW_WEBHOOK]: Object.freeze({
@@ -93,7 +100,7 @@ export function normalizeProviderRecord(record) {
     workspaceId: record.workspaceId ?? record.workspace_id,
     providerType,
     sourceFamily,
-    enabled: Boolean(record.enabled),
+    enabled: Boolean(record.enabled ?? record.is_active),
     isDefault: Boolean(record.isDefault ?? record.is_default),
     priority,
   };
