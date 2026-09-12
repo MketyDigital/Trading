@@ -74,7 +74,7 @@ function normalizeAiSignal(payload) {
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
   aiRouterFactory,
-  timeoutMs = 1200,
+  timeoutMs = 12000,
   systemPrompt = INTERPRETER_PROMPT,
 } = {}) {
   const deterministic = buildMachinePlan(event);
