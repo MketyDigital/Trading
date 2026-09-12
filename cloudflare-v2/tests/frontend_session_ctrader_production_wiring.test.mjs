@@ -13,26 +13,37 @@ function read(relative) {
 
 test('returning-session bootstrap exposes an awaitable restore contract before portal startup', () => {
   const helper = read('cloudflare-v2/src/dashboard_returning_session.js');
-  const portal = read('cloudflare-v2/src/dashboard_enterprise_portal.js');
 
   assert.match(helper, /mketyTradingRestoreSession/);
   assert.match(helper, /mketyTradingSessionRestorePromise/);
-  assert.match(portal, /awaitReturningSession/);
-  assert.match(portal, /mketyTradingSessionRestorePromise/);
+  assert.match(helper, /awaitReturningSession/);
+  assert.match(helper, /await window\.mketyTradingSessionRestorePromise/);
+  assert.match(helper, /<body\(\[\^>\]\*\)>/);
 });
 
-test('production Worker deploy preserves server-side cTrader Direct OAuth credentials', () => {
-  const workflow = read('.github/workflows/production-cloudflare-deploy.yml');
+test('production post-deploy sync preserves server-side cTrader Direct and shared gateway secrets', () => {
+  const workflow = read('.github/workflows/production-platform-secret-sync.yml');
 
-  assert.match(workflow, /PRODUCTION_CTRADER_CLIENT_ID:\s*\$\{\{\s*secrets\.CTRADER_CLIENT_ID\s*\}\}/);
-  assert.match(workflow, /PRODUCTION_CTRADER_CLIENT_SECRET:\s*\$\{\{\s*secrets\.CTRADER_CLIENT_SECRET\s*\}\}/);
-  assert.match(workflow, /payload\.CTRADER_CLIENT_ID\s*=\s*process\.env\.PRODUCTION_CTRADER_CLIENT_ID/);
-  assert.match(workflow, /payload\.CTRADER_CLIENT_SECRET\s*=\s*process\.env\.PRODUCTION_CTRADER_CLIENT_SECRET/);
+  for (const key of [
+    'CTRADER_CLIENT_ID',
+    'CTRADER_CLIENT_SECRET',
+    'CBOT_TOKEN_SIGNING_KEY',
+    'CBOT_CONTROL_SECRET',
+  ]) {
+    assert.match(workflow, new RegExp(`secrets\\.${key}`));
+    assert.match(workflow, new RegExp(`Worker secret binding missing after sync: \\${required}`.replace('\\${required}', key)));
+  }
+  assert.match(workflow, /wrangler secret bulk/);
+  assert.match(workflow, /wrangler secret list/);
+  assert.match(workflow, /Production Cloudflare Deploy/);
 });
 
-test('production Worker deploy keeps cTrader Direct credential pair atomic and fail-closed', () => {
-  const workflow = read('.github/workflows/production-cloudflare-deploy.yml');
+test('production platform secret pairs stay atomic and fail closed', () => {
+  const workflow = read('.github/workflows/production-platform-secret-sync.yml');
 
-  assert.match(workflow, /cTrader Direct production configuration is partial/);
-  assert.match(workflow, /CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET/);
+  assert.match(workflow, /cTrader Direct/);
+  assert.match(workflow, /Shared cTrader\/MT5 gateway/);
+  assert.match(workflow, /production configuration is partial/);
+  assert.match(workflow, /production configuration is absent/);
+  assert.doesNotMatch(workflow, /CTRADER_LIVE_TRADING_ENABLED:\s*true/i);
 });
