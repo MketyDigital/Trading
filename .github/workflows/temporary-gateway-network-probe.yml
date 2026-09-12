@@ -17,28 +17,45 @@ jobs:
         run: |
           set -euo pipefail
           getent ahosts cbot.mkety.com
-      - name: Verify TLS handshake on broker WebSocket port
+      - name: Verify initial TLS and health
         run: |
           set -euo pipefail
-          timeout 15 openssl s_client -connect cbot.mkety.com:25345 -servername cbot.mkety.com -verify_return_error </dev/null 2>&1 | tee /tmp/tls.txt
-          grep -q 'Verify return code: 0 (ok)' /tmp/tls.txt
-      - name: Probe cTrader WebSocket endpoint upgrade response
+          timeout 15 openssl s_client -connect cbot.mkety.com:25345 -servername cbot.mkety.com -verify_return_error </dev/null 2>&1 | tee /tmp/tls-before.txt
+          grep -q 'Verify return code: 0 (ok)' /tmp/tls-before.txt
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 10 https://cbot.mkety.com:25345/health
+      - name: Probe cTrader WebSocket endpoint
         run: |
           set -euo pipefail
-          status=$(curl --http1.1 --silent --show-error --output /tmp/cbot-body --write-out '%{http_code}' --connect-timeout 10 --max-time 15 \
+          status=$(curl --http1.1 --silent --show-error --output /tmp/cbot-body --write-out '%{http_code}' --connect-timeout 10 --max-time 7 \
             -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
             -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
             https://cbot.mkety.com:25345/v1/cbot || true)
           echo "CBOT_HTTP_STATUS=$status"
           cat /tmp/cbot-body || true
-          test "$status" != "000"
-      - name: Probe MT5 WebSocket endpoint upgrade response
+          test "$status" = "101"
+      - name: Recheck gateway after cTrader unauthenticated close
         run: |
           set -euo pipefail
-          status=$(curl --http1.1 --silent --show-error --output /tmp/mt5-body --write-out '%{http_code}' --connect-timeout 10 --max-time 15 \
+          for attempt in 1 2 3 4 5; do
+            echo "recovery attempt=$attempt"
+            if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 https://cbot.mkety.com:25345/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Probe MT5 WebSocket endpoint
+        run: |
+          set -euo pipefail
+          status=$(curl --http1.1 --silent --show-error --output /tmp/mt5-body --write-out '%{http_code}' --connect-timeout 10 --max-time 7 \
             -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
             -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
             https://cbot.mkety.com:25345/v1/mt5 || true)
           echo "MT5_HTTP_STATUS=$status"
           cat /tmp/mt5-body || true
-          test "$status" != "000"
+          test "$status" = "101"
+      - name: Final gateway health
+        run: |
+          set -euo pipefail
+          sleep 2
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 10 https://cbot.mkety.com:25345/health
