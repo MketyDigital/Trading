@@ -250,11 +250,21 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
       ? new Date(Number(identity.symbolsUpdatedAt)).toISOString()
       : new Date().toISOString(),
   });
+  let retainedCredentialCiphertext;
+  try {
+    retainedCredentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
+      gatewayUrl,
+      controlSecret,
+    }, env.TRADING_MASTER_KEY);
+  } catch {
+    return json({ ok: false, reason: 'MT5_CONNECTOR_SYNC_FAILED' }, 503);
+  }
   const patch = {
     account_id: accountNumber,
     server_name: serverName,
     environment: observedEnvironment,
     provider_config: providerConfig,
+    credential_ciphertext: retainedCredentialCiphertext,
   };
   const { data: updated, error: updateError } = await supabase
     .from('trade_accounts')
