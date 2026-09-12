@@ -50,12 +50,11 @@ async function interpretAndPersist({
   aiRouterFactory,
   interpretationTimeoutMs,
 }) {
-  const resolvedAiRouter = aiRouterFactory
-    ? await aiRouterFactory({ source, event })
-    : aiRouter;
-
   const interpretation = await interpretTradingEvent(event, {
-    aiRouter: resolvedAiRouter,
+    aiRouter,
+    aiRouterFactory: aiRouterFactory
+      ? () => aiRouterFactory({ source, event })
+      : undefined,
     timeoutMs: interpretationTimeoutMs,
   });
 
