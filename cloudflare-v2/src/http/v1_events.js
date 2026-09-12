@@ -132,21 +132,25 @@ export async function handleV1EventsRequest(request, env = {}, {
       return json(responseBody, result?.ok ? 200 : Number(result?.status || 500));
     }
 
-    let destinations = skippedDuplicateDestinationStage();
-    if (!result?.duplicate) {
-      try {
-        const destinationStore = destinationStoreFactory(supabase, { masterKey });
-        destinations = await destinationStageFn({
-          workspaceId: result?.event?.workspace_hint,
-          sourceId,
-          event: result.event,
-          interpretation: result.interpretation,
-          env,
-        }, { destinationStore, decryptCredentials: decryptDestinationCredentialsCompat });
-      } catch {
-        destinations = blockedDestinationStage();
-      }
-    }
+    // Destination delivery is independent of broker planning/execution. Start it
+    // immediately, but contain all destination failures inside this branch so a
+    // slow or failing Telegram/webhook destination cannot delay broker dispatch.
+    const destinationPromise = result?.duplicate
+      ? Promise.resolve(skippedDuplicateDestinationStage())
+      : (async () => {
+          try {
+            const destinationStore = destinationStoreFactory(supabase, { masterKey });
+            return await destinationStageFn({
+              workspaceId: result?.event?.workspace_hint,
+              sourceId,
+              event: result.event,
+              interpretation: result.interpretation,
+              env,
+            }, { destinationStore, decryptCredentials: decryptDestinationCredentialsCompat });
+          } catch {
+            return blockedDestinationStage();
+          }
+        })();
 
     let simulation;
     try {
@@ -182,6 +186,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       ...(brokerExecutionControlResolver ? { brokerExecutionControlResolver } : {}),
     });
 
+    const destinations = await destinationPromise;
     return json({ ...result, destinations, simulation, ...(execution ? { execution } : {}) }, 200);
   } catch (error) {
     console.error('V1 event ingress failed:', error);
