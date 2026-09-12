@@ -29,12 +29,6 @@ def _required(source, names):
 
 def load_config(env=None):
     source = os.environ if env is None else env
-    _required(source, COMMON_REQUIRED_ENV)
-
-    try:
-        api_id = int(str(source['TELEGRAM_API_ID']).strip())
-    except (TypeError, ValueError) as exc:
-        raise ValueError('TELEGRAM_API_ID must be an integer') from exc
 
     collector_token = str(source.get('TRADING_COLLECTOR_TOKEN', '')).strip()
     source_id = str(source.get('TRADING_SOURCE_ID', '')).strip()
@@ -43,6 +37,7 @@ def load_config(env=None):
     allowed_chat_ids = _parse_allowed_chat_ids(source.get('ALLOWED_CHAT_IDS', ''))
 
     if collector_token:
+        _required(source, COMMON_REQUIRED_ENV)
         if source_id or has_source_secret:
             raise ValueError('Use either TRADING_COLLECTOR_TOKEN or TRADING_SOURCE_ID/TRADING_SOURCE_SECRET, not both')
         if allowed_chat_ids:
@@ -50,9 +45,14 @@ def load_config(env=None):
         transport_mode = 'collector'
         runtime_source_id = str(source.get('MTPROTO_COLLECTOR_ID', '')).strip() or 'shared-mtproto-collector'
     else:
-        _required(source, ('TRADING_SOURCE_ID', 'TRADING_SOURCE_SECRET'))
+        _required(source, COMMON_REQUIRED_ENV + ('TRADING_SOURCE_ID', 'TRADING_SOURCE_SECRET'))
         transport_mode = 'signed_source'
         runtime_source_id = source_id
+
+    try:
+        api_id = int(str(source['TELEGRAM_API_ID']).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError('TELEGRAM_API_ID must be an integer') from exc
 
     config = {
         'api_id': api_id,
