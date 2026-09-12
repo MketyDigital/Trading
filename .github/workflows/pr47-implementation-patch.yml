@@ -120,7 +120,7 @@ jobs:
       - name: Run targeted regression tests
         run: |
           cd cloudflare-v2
-          npm ci
+          npm install --no-audit --no-fund
           node --test tests/routing_ai_product_gaps.test.mjs tests/v1_admin_destinations.test.mjs tests/telegram_destination_ai_mode_v1.test.mjs tests/ctrader_custom_hostname_oauth.test.mjs
       - name: Commit implementation
         shell: bash
