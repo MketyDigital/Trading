@@ -13,9 +13,10 @@ permissions:
 jobs:
   demo-e2e:
     runs-on: ubuntu-latest
+    environment: staging
     timeout-minutes: 10
     env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -33,209 +34,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - name: Run real production demo open-close lifecycle
+      - name: Require protected production acceptance credentials
         shell: bash
         run: |
           set -euo pipefail
+          test -n "${SUPABASE_URL:-}" || { echo 'SUPABASE_URL unavailable'; exit 1; }
+          test -n "${TRADING_MASTER_KEY:-}" || { echo 'TRADING_MASTER_KEY unavailable'; exit 1; }
           service_role="${SUPABASE_SERVICE_ROLE:-${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}}"
-          test -n "${SUPABASE_URL:-}" || { echo 'SUPABASE_URL missing'; exit 1; }
-          test -n "$service_role" || { echo 'Supabase service role missing'; exit 1; }
-          test -n "${TRADING_MASTER_KEY:-}" || { echo 'TRADING_MASTER_KEY missing'; exit 1; }
-          echo "::add-mask::$service_role"
-          SUPABASE_SERVICE_ROLE="$service_role" node --input-type=module <<'NODE'
-          import { createClient } from '@supabase/supabase-js';
-          import { decryptSecret } from './src/security/secret_box.js';
-
-          const workspaceId = process.env.WORKSPACE_ID;
-          const sourceId = process.env.SOURCE_ID;
-          const accountId = process.env.DEMO_ACCOUNT_ID;
-          const baseUrl = process.env.BASE_URL;
-          const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE, {
-            auth: { persistSession: false, autoRefreshToken: false },
-          });
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const fail = (message) => { throw new Error(message); };
-          const one = async (table, query) => {
-            const { data, error } = await query;
-            if (error) fail(`${table}: ${error.message}`);
-            return data;
-          };
-          async function poll(label, fn, { attempts = 36, delay = 2500 } = {}) {
-            for (let i = 0; i < attempts; i += 1) {
-              const value = await fn();
-              if (value) return value;
-              await sleep(delay);
-            }
-            fail(`${label} timed out`);
-          }
-          async function runtimeControls() {
-            const rows = await one('trading_runtime_controls', sb.from('trading_runtime_controls').select('control_key,enabled'));
-            return Object.fromEntries((rows || []).map((r) => [r.control_key, r.enabled]));
-          }
-          async function loadAccount(id) {
-            const rows = await one('trade_accounts', sb.from('trade_accounts')
-              .select('id,workspace_id,platform,provider_mode,account_id,account_label,environment,is_active,execution_enabled,live_execution_enabled,lot_sizing_type,lot_value')
-              .eq('id', id).eq('workspace_id', workspaceId).limit(1));
-            return rows?.[0] || null;
-          }
-          async function setDemoExecution(enabled) {
-            const { data, error } = await sb.from('trade_accounts')
-              .update({ execution_enabled: enabled })
-              .eq('id', accountId)
-              .eq('workspace_id', workspaceId)
-              .eq('environment', 'demo')
-              .eq('live_execution_enabled', false)
-              .select('id,execution_enabled,live_execution_enabled,environment');
-            if (error) fail(`demo execution update: ${error.message}`);
-            if (!data?.length || data[0].execution_enabled !== enabled) fail('demo execution update did not persist');
-          }
-          async function postExternal(secret, messageId, text) {
-            const externalEventId = `telegram:-100987654321:${messageId}`;
-            const body = {
-              chat_id: '-100987654321',
-              message_id: String(messageId),
-              text,
-              metadata: { acceptance: 'prod-ctrader-demo-e2e' },
-            };
-            const url = `${baseUrl}/api/v1/external/mtproto/${encodeURIComponent(sourceId)}/${encodeURIComponent(secret)}`;
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-              redirect: 'error',
-            });
-            const raw = await response.text();
-            let parsed = null;
-            try { parsed = JSON.parse(raw); } catch {}
-            if (!response.ok) fail(`external ingress HTTP ${response.status}: ${parsed?.reason || 'request failed'}`);
-            return { externalEventId, status: response.status, response: parsed };
-          }
-
-          let openedLeg = null;
-          let openEvent = null;
-          try {
-            const controls = await runtimeControls();
-            if (controls.trading_access_enabled !== true) fail('global trading access is not ON');
-            if (controls.broker_execution_enabled !== true) fail('global broker execution is not ON');
-            if (controls.live_broker_execution_enabled !== false) fail('global live execution must remain OFF');
-
-            const liveAccounts = await one('trade_accounts', sb.from('trade_accounts')
-              .select('id,execution_enabled,live_execution_enabled,environment')
-              .eq('workspace_id', workspaceId).eq('environment', 'live'));
-            if ((liveAccounts || []).some((a) => a.execution_enabled || a.live_execution_enabled)) fail('a live account execution flag is enabled');
-
-            const account = await loadAccount(accountId);
-            if (!account) fail('demo account not found');
-            if (account.environment !== 'demo' || account.platform !== 'ctrader' || account.is_active !== true) fail('target is not an active cTrader demo account');
-            if (account.live_execution_enabled !== false) fail('demo account live execution must be OFF');
-            if (account.lot_sizing_type !== 'fixed' || Number(account.lot_value) !== 0.01) fail('demo account must be fixed at 0.01 lot for acceptance');
-
-            const sources = await one('source_connections', sb.from('source_connections')
-              .select('id,provider_type,is_active,secret_ciphertext')
-              .eq('id', sourceId).eq('workspace_id', workspaceId).limit(1));
-            const source = sources?.[0];
-            if (!source || source.provider_type !== 'external_mtproto' || source.is_active !== true || !source.secret_ciphertext) fail('active external MTProto source secret unavailable');
-            const sourceSecret = await decryptSecret(source.secret_ciphertext, process.env.TRADING_MASTER_KEY);
-            if (!sourceSecret) fail('source secret decrypted empty');
-            console.log(`::add-mask::${sourceSecret}`);
-
-            const routes = await one('source_destination_routes', sb.from('source_destination_routes')
-              .select('id,destination_id,is_active')
-              .eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('is_active', true));
-            if (!routes?.length) fail('no active route for production source');
-            const destinationIds = routes.map((r) => r.destination_id);
-            const destinations = await one('trading_destinations', sb.from('trading_destinations')
-              .select('id,destination_type,destination_ref,is_active')
-              .eq('workspace_id', workspaceId).in('id', destinationIds).eq('is_active', true));
-            if (!(destinations || []).some((d) => d.destination_type === 'broker_account' && d.destination_ref === accountId)) fail('demo broker destination is not actively routed');
-
-            await setDemoExecution(true);
-            console.log('DEMO_EXECUTION_GATE=ON');
-
-            const seed = Date.now();
-            const openMessageId = seed;
-            const openIngress = await postExternal(sourceSecret, openMessageId, 'BUY XAUUSD NOW');
-            console.log(`OPEN_INGRESS_HTTP=${openIngress.status}`);
-
-            openEvent = await poll('open trading event', async () => {
-              const rows = await one('trading_events', sb.from('trading_events')
-                .select('id,external_event_id,processing_status,error_code,canonical_intent,created_at')
-                .eq('workspace_id', workspaceId).eq('source_connection_id', sourceId)
-                .eq('external_event_id', openIngress.externalEventId).limit(1));
-              return rows?.[0] || null;
-            });
-            if (openEvent.error_code) fail(`open event error: ${openEvent.error_code}`);
-            console.log(`OPEN_EVENT_ID=${openEvent.id}`);
-            console.log(`OPEN_EVENT_STATUS=${openEvent.processing_status}`);
-
-            openedLeg = await poll('broker-opened position leg', async () => {
-              const { data, error } = await sb.from('position_groups')
-                .select('id,status,trade_account_id,source_event_id,canonical_symbol,side,position_legs(id,status,lots,broker_position_id,broker_order_id,opened_at,closed_at)')
-                .eq('workspace_id', workspaceId).eq('trade_account_id', accountId).eq('source_event_id', openEvent.id)
-                .order('created_at', { ascending: false }).limit(1);
-              if (error) fail(`position_groups: ${error.message}`);
-              const group = data?.[0];
-              const leg = group?.position_legs?.find((x) => x.broker_position_id || x.broker_order_id || x.opened_at);
-              return leg ? { group, leg } : null;
-            });
-            if (!openedLeg.leg.broker_position_id && !openedLeg.leg.broker_order_id) fail('broker did not return a position/order id');
-            console.log(`OPEN_POSITION_GROUP_ID=${openedLeg.group.id}`);
-            console.log(`BROKER_POSITION_ID=${openedLeg.leg.broker_position_id || ''}`);
-            console.log(`BROKER_ORDER_ID=${openedLeg.leg.broker_order_id || ''}`);
-            console.log(`OPEN_LOTS=${openedLeg.leg.lots}`);
-
-            const closeIngress = await postExternal(sourceSecret, seed + 1, 'CLOSE');
-            console.log(`CLOSE_INGRESS_HTTP=${closeIngress.status}`);
-            const closeEvent = await poll('close trading event', async () => {
-              const rows = await one('trading_events', sb.from('trading_events')
-                .select('id,external_event_id,processing_status,error_code,created_at')
-                .eq('workspace_id', workspaceId).eq('source_connection_id', sourceId)
-                .eq('external_event_id', closeIngress.externalEventId).limit(1));
-              return rows?.[0] || null;
-            });
-            if (closeEvent.error_code) fail(`close event error: ${closeEvent.error_code}`);
-            console.log(`CLOSE_EVENT_ID=${closeEvent.id}`);
-
-            const closed = await poll('broker-closed position leg', async () => {
-              const rows = await one('position_legs', sb.from('position_legs')
-                .select('id,status,broker_position_id,broker_order_id,opened_at,closed_at')
-                .eq('id', openedLeg.leg.id).limit(1));
-              const leg = rows?.[0];
-              return leg?.closed_at ? leg : null;
-            }, { attempts: 40, delay: 2500 });
-            console.log(`CLOSED_LEG_ID=${closed.id}`);
-            console.log(`CLOSED_AT=${closed.closed_at}`);
-            console.log('REAL_DEMO_E2E=PASS');
-          } finally {
-            try {
-              await setDemoExecution(false);
-              console.log('DEMO_EXECUTION_GATE=OFF');
-            } catch (error) {
-              console.error(`FAILED_TO_DISABLE_DEMO_EXECUTION=${error.message}`);
-              process.exitCode = 2;
-            }
-            try {
-              const controls = await runtimeControls();
-              if (controls.live_broker_execution_enabled !== false) {
-                console.error('GLOBAL_LIVE_GATE_NOT_OFF');
-                process.exitCode = 2;
-              }
-              const after = await loadAccount(accountId);
-              if (after?.execution_enabled !== false || after?.live_execution_enabled !== false) {
-                console.error('DEMO_ACCOUNT_GATES_NOT_OFF');
-                process.exitCode = 2;
-              }
-              const liveAccounts = await one('trade_accounts', sb.from('trade_accounts')
-                .select('id,execution_enabled,live_execution_enabled,environment')
-                .eq('workspace_id', workspaceId).eq('environment', 'live'));
-              if ((liveAccounts || []).some((a) => a.execution_enabled || a.live_execution_enabled)) {
-                console.error('LIVE_ACCOUNT_GATE_CHANGED');
-                process.exitCode = 2;
-              }
-              console.log('LIVE_SAFETY_POSTURE=PASS');
-            } catch (error) {
-              console.error(`SAFETY_RECHECK_FAILED=${error.message}`);
-              process.exitCode = 2;
-            }
-          }
-          NODE
+          test -n "$service_role" || { echo 'Supabase service role unavailable'; exit 1; }
+      - name: Run real production demo open-close lifecycle
+        run: node scripts/prod_ctrader_demo_e2e.mjs
