@@ -15,8 +15,7 @@ async function poll(label, fn, attempts = 40) { for (let i = 0; i < attempts; i 
 async function controls() { const rows = await data(sb.from('trading_runtime_controls').select('control_key,enabled'), 'runtime controls'); return Object.fromEntries((rows || []).map((r) => [r.control_key, r.enabled])); }
 async function account() { return (await data(sb.from('trade_accounts').select('id,workspace_id,platform,provider_mode,account_id,account_label,environment,is_active,execution_enabled,live_execution_enabled,lot_sizing_type,lot_value').eq('id', accountId).eq('workspace_id', workspaceId).limit(1), 'account'))?.[0] || null; }
 async function setExecution(enabled) { const rows = await data(sb.from('trade_accounts').update({ execution_enabled: enabled }).eq('id', accountId).eq('workspace_id', workspaceId).eq('environment', 'demo').eq('live_execution_enabled', false).select('id,execution_enabled'), 'execution gate'); if (!rows?.length || rows[0].execution_enabled !== enabled) fail('demo execution gate did not persist'); }
-async function postExternal(secret, messageId, text) {
-  const chatId = '-100987654321';
+async function postExternal(secret, chatId, messageId, text) {
   const externalEventId = `telegram:${chatId}:${messageId}`;
   const response = await fetch(`${baseUrl}/api/v1/external/mtproto/${encodeURIComponent(sourceId)}/${encodeURIComponent(secret)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: String(messageId), text, metadata: { acceptance: 'prod-ctrader-demo-e2e' } }), redirect: 'error' });
   let body = {}; try { body = await response.json(); } catch {}
@@ -32,11 +31,16 @@ try {
   const a = await account();
   if (!a || a.platform !== 'ctrader' || a.environment !== 'demo' || a.is_active !== true || a.live_execution_enabled !== false) fail('target account is not an active safe cTrader demo');
   if (a.lot_sizing_type !== 'fixed' || Number(a.lot_value) !== 0.01) fail('demo account is not fixed at 0.01 lot');
-  const source = (await data(sb.from('source_connections').select('id,provider_type,is_active,secret_ciphertext').eq('id', sourceId).eq('workspace_id', workspaceId).limit(1), 'source'))?.[0];
+  const source = (await data(sb.from('source_connections').select('id,provider_type,is_active,secret_ciphertext,config').eq('id', sourceId).eq('workspace_id', workspaceId).limit(1), 'source'))?.[0];
   if (!source || source.provider_type !== 'external_mtproto' || source.is_active !== true || !source.secret_ciphertext) fail('external MTProto source unavailable');
+  const mode = String(source.config?.chat_acceptance_mode || 'allowlist');
+  const allowed = Array.isArray(source.config?.allowed_chat_ids) ? source.config.allowed_chat_ids.map(String).filter(Boolean) : [];
+  const chatId = mode === 'all_visible' ? '-100987654321' : allowed[0];
+  if (!chatId) fail('source has no authorized Telegram chat for acceptance');
   const secret = await decryptSecret(source.secret_ciphertext, process.env.TRADING_MASTER_KEY);
   if (!secret) fail('source secret decrypted empty');
   console.log(`::add-mask::${secret}`);
+  console.log(`SOURCE_POLICY_MODE=${mode}`);
   const routes = await data(sb.from('source_destination_routes').select('destination_id').eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('is_active', true), 'routes');
   const destinationIds = (routes || []).map((r) => r.destination_id);
   if (!destinationIds.length) fail('no active source route');
@@ -46,7 +50,7 @@ try {
   await setExecution(true);
   console.log('DEMO_EXECUTION_GATE=ON');
   const seed = Date.now();
-  const openIngress = await postExternal(secret, seed, 'BUY XAUUSD NOW');
+  const openIngress = await postExternal(secret, chatId, seed, 'BUY XAUUSD NOW');
   console.log(`OPEN_INGRESS_HTTP=${openIngress.status}`);
   const openEvent = await poll('open event', async () => (await data(sb.from('trading_events').select('id,processing_status,error_code,canonical_intent').eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('external_event_id', openIngress.externalEventId).limit(1), 'open event'))?.[0] || null);
   if (openEvent.error_code) fail(`open event error: ${openEvent.error_code}`);
@@ -60,7 +64,7 @@ try {
   console.log(`BROKER_ORDER_ID=${leg.broker_order_id || ''}`);
   console.log(`OPEN_LOTS=${leg.lots}`);
 
-  const closeIngress = await postExternal(secret, seed + 1, 'CLOSE');
+  const closeIngress = await postExternal(secret, chatId, seed + 1, 'CLOSE');
   console.log(`CLOSE_INGRESS_HTTP=${closeIngress.status}`);
   const closeEvent = await poll('close event', async () => (await data(sb.from('trading_events').select('id,processing_status,error_code').eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('external_event_id', closeIngress.externalEventId).limit(1), 'close event'))?.[0] || null);
   if (closeEvent.error_code) fail(`close event error: ${closeEvent.error_code}`);
