@@ -1,0 +1,116 @@
+name: Production Connection Readiness
+
+on:
+  workflow_run:
+    workflows:
+      - Production Cloudflare Deploy
+    types:
+      - completed
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-connection-readiness.yml'
+
+permissions:
+  contents: read
+
+env:
+  E2E_BASE_URL: https://trade.mkety.com
+
+jobs:
+  connection-readiness:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      MKETY_TRADING_ADMIN_SECRET: ${{ secrets.MKETY_TRADING_ADMIN_SECRET }}
+    steps:
+      - name: Create disposable production access code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MKETY_TRADING_ADMIN_SECRET"
+          email="connection-readiness-${GITHUB_RUN_ID}@example.test"
+          body="$(E2E_EMAIL="$email" node - <<'NODE'
+          process.stdout.write(JSON.stringify({
+            ownerEmail: process.env.E2E_EMAIL,
+            ownerName: 'Connection Readiness',
+            workspaceName: 'Connection Readiness Workspace',
+            maxRedemptions: 1,
+            entitlements: {
+              tradingExecutionDestination: true,
+              telegramDestination: true,
+              brokerModes: ['demo'],
+              liveExecution: false,
+              sourceTypes: ['custom_signed_api','external_mtproto'],
+              destinations: ['audit_only','telegram','internal_webhook','broker_account']
+            },
+            metadata: { purpose: 'production-connection-readiness', githubRunId: process.env.GITHUB_RUN_ID }
+          }))
+          NODE
+          )"
+          response="$(curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/access-codes" \
+            -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" \
+            -H 'Content-Type: application/json' --data "$body")"
+          E2E_RESPONSE="$response" E2E_EMAIL="$email" node - <<'NODE' >> "$GITHUB_ENV"
+          const b=JSON.parse(process.env.E2E_RESPONSE||'{}');
+          if(!b.ok||!b.accessCode?.plainCode||!b.accessCode?.workspaceId) throw new Error('fixture creation failed');
+          console.log(`E2E_ACCESS_CODE=${b.accessCode.plainCode}`);
+          console.log(`E2E_WORKSPACE_ID=${b.accessCode.workspaceId}`);
+          console.log(`E2E_EMAIL=${process.env.E2E_EMAIL}`);
+          NODE
+          code="$(E2E_RESPONSE="$response" node -e "const b=JSON.parse(process.env.E2E_RESPONSE);process.stdout.write(b.accessCode.plainCode)")"
+          echo "::add-mask::$code"
+
+      - name: Redeem and verify production connection readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(node - <<'NODE'
+          process.stdout.write(JSON.stringify({
+            code: process.env.E2E_ACCESS_CODE,
+            ownerEmail: process.env.E2E_EMAIL,
+            ownerName: 'Connection Readiness',
+            workspaceName: 'Connection Readiness Workspace'
+          }))
+          NODE
+          )"
+          redeemed="$(curl -fsS -X POST "$E2E_BASE_URL/api/v1/access/redeem" -H 'Content-Type: application/json' --data "$body")"
+          E2E_REDEEMED="$redeemed" node - <<'NODE' >> "$GITHUB_ENV"
+          const b=JSON.parse(process.env.E2E_REDEEMED||'{}');
+          if(!b.ok||!b.bearer||!b.workspace?.id) throw new Error('access redemption failed');
+          console.log(`E2E_BEARER=${b.bearer}`);
+          console.log(`E2E_REDEEMED_WORKSPACE=${b.workspace.id}`);
+          NODE
+          bearer="$(E2E_REDEEMED="$redeemed" node -e "const b=JSON.parse(process.env.E2E_REDEEMED);process.stdout.write(b.bearer)")"
+          echo "::add-mask::$bearer"
+          readiness="$(curl -fsS "$E2E_BASE_URL/api/v1/admin/connections" \
+            -H "Authorization: Bearer $bearer" \
+            -H "X-Mkety-Workspace-Id: $E2E_WORKSPACE_ID" \
+            -H 'Accept: application/json')"
+          READINESS="$readiness" node <<'NODE'
+          const b=JSON.parse(process.env.READINESS||'{}');
+          if(!b.ok) throw new Error(`connections readiness failed: ${b.reason||'unknown'}`);
+          if(b.readiness?.ctrader?.configured !== true) throw new Error(`cTrader Direct is not configured: ${JSON.stringify(b.readiness?.ctrader||{})}`);
+          if(b.readiness?.mt5?.bridge?.configured !== true) throw new Error(`MT5 connector encryption readiness is false: ${JSON.stringify(b.readiness?.mt5||{})}`);
+          console.log('CTRADER_DIRECT_READINESS=PASS');
+          console.log('MT5_CONNECTOR_BASE_READINESS=PASS');
+          NODE
+
+      - name: Verify no live entitlement was granted
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$E2E_WORKSPACE_ID" = "$E2E_REDEEMED_WORKSPACE"
+          echo 'LIVE_EXECUTION_ENTITLEMENT=DISABLED'
+
+      - name: Revoke disposable access code
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -n "${E2E_WORKSPACE_ID:-}" ]; then
+            list="$(curl -fsS "$E2E_BASE_URL/api/v1/mkety-admin/access-codes" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET")" || exit 0
+            id="$(E2E_LIST="$list" node -e "const b=JSON.parse(process.env.E2E_LIST); const x=(b.accessCodes||[]).find(x=>x.workspaceId===process.env.E2E_WORKSPACE_ID); if(x) process.stdout.write(x.id)")"
+            if [ -n "$id" ]; then curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/access-codes/$id/revoke" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" >/dev/null; fi
+          fi
