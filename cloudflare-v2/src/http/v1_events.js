@@ -79,6 +79,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   executionStageFn = runV1ProductionExecutionStage,
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
+  tradingAccessControlResolver,
   brokerExecutionControlResolver,
   destinationStoreFactory = createV1DestinationDeliveryStore,
   destinationStageFn = runV1DestinationDeliveryStage,
@@ -177,7 +178,8 @@ export async function handleV1EventsRequest(request, env = {}, {
       simulation,
       executionDepsFactory,
       executeProductionFn,
-      brokerExecutionControlResolver,
+      ...(tradingAccessControlResolver ? { tradingAccessControlResolver } : {}),
+      ...(brokerExecutionControlResolver ? { brokerExecutionControlResolver } : {}),
     });
 
     return json({ ...result, destinations, simulation, ...(execution ? { execution } : {}) }, 200);
