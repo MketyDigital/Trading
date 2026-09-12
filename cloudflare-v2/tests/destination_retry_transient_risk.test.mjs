@@ -21,6 +21,8 @@ const row = {
   },
 };
 
+const brokerOn = async () => ({ ok: true, enabled: true });
+
 test('temporary authoritative risk-context outage reschedules claimed retry instead of terminally failing it', async () => {
   const transitions = [];
   const baseStore = {
@@ -33,6 +35,7 @@ test('temporary authoritative risk-context outage reschedules claimed retry inst
 
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => ({}),
@@ -50,7 +53,7 @@ test('temporary authoritative risk-context outage reschedules claimed retry inst
   });
 
   const result = await runtime(
-    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
     { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
   );
 
@@ -70,6 +73,7 @@ test('true account or authority revocation remains terminal', async () => {
   };
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async () => ({}),
@@ -80,7 +84,7 @@ test('true account or authority revocation remains terminal', async () => {
   });
 
   await runtime(
-    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
     { nowMs: Date.parse('2026-09-03T10:01:00.000Z') },
   );
   assert.equal(transitions.length, 1);
