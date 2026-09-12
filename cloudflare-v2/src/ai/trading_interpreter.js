@@ -79,6 +79,10 @@ export async function interpretTradingEvent(event = {}, {
 } = {}) {
   const deterministic = buildMachinePlan(event);
   if (deterministic.status !== 'NEEDS_INTERPRETATION') {
+    if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
+      const recovered = recoverKnownNaturalLanguageSignal(event.text);
+      if (recovered) return { status: 'READY', source: 'deterministic_relaxed', intent: recovered };
+    }
     return { ...deterministic, source: 'deterministic' };
   }
 
