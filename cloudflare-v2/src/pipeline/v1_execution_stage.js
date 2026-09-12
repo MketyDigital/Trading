@@ -4,6 +4,7 @@ import { executeProductionPlan } from '../execution/production_execution_coordin
 import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';
 import {
   resolveBrokerExecutionRuntimeControl,
+  resolveLiveBrokerExecutionRuntimeControl,
   resolveTradingAccessRuntimeControl,
 } from '../persistence/supabase_runtime_control_store.js';
 
@@ -74,6 +75,7 @@ export async function runV1ProductionExecutionStage({
   executeProductionFn = executeProductionPlan,
   tradingAccessControlResolver = resolveTradingAccessRuntimeControl,
   brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
+  liveBrokerExecutionControlResolver = resolveLiveBrokerExecutionRuntimeControl,
 } = {}) {
   if (!result?.ok || result?.duplicate) {
     return null;
@@ -100,17 +102,27 @@ export async function runV1ProductionExecutionStage({
     return summary('TRADING_ACCESS_DISABLED', { blocked: accountPlans.length, transportMode });
   }
 
-  const runtimeControl = await resolveRuntimeControl(
+  const brokerExecutionControl = await resolveRuntimeControl(
     brokerExecutionControlResolver,
     { env, supabase },
     'RUNTIME_CONTROL_UNAVAILABLE',
   );
-  if (!runtimeControl?.ok) {
+  if (!brokerExecutionControl?.ok) {
     return summary('BROKER_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
   }
-  if (runtimeControl.enabled !== true) {
+  if (brokerExecutionControl.enabled !== true) {
     return summary('BROKER_OWNER_SWITCH_OFF', { blocked: accountPlans.length, transportMode });
   }
+
+  // Live-money authority is resolved here and passed into the coordinator, which
+  // evaluates it only against each freshly loaded authoritative account row.
+  // An unavailable live control must not prevent DEMO accounts from executing,
+  // but LIVE accounts fail closed inside the coordinator.
+  const liveBrokerExecutionControl = await resolveRuntimeControl(
+    liveBrokerExecutionControlResolver,
+    { env, supabase },
+    'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE',
+  );
 
   const workspaceId = String(result?.event?.workspace_hint || '').trim();
   const tradingEventId = String(result?.eventId || '').trim();
@@ -134,6 +146,8 @@ export async function runV1ProductionExecutionStage({
     eventId: tradingEventId,
     accountPlans,
     brokerExecutionEnabled: true,
+    liveBrokerExecutionEnabled: liveBrokerExecutionControl?.ok === true && liveBrokerExecutionControl.enabled === true,
+    liveBrokerExecutionControlAvailable: liveBrokerExecutionControl?.ok === true,
   }, {
     ...dependencies,
     bindingRepairRecorder,
