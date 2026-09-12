@@ -12,10 +12,6 @@ function json(body, status = 200, extraHeaders = {}) {
   });
 }
 
-function enabled(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
-}
-
 function bearerOrHeaderSecret(request) {
   const auth = request.headers.get('Authorization') || '';
   if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
@@ -198,18 +194,46 @@ function revokeIdFromPath(pathname) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function runtimeControlResponse(runtimeStore) {
-  const current = await runtimeStore.getBrokerExecutionEnabled();
+async function readRuntimeControl(runtimeStore, getter, fallback = null) {
+  if (typeof runtimeStore?.[getter] !== 'function') return fallback;
+  const current = await runtimeStore[getter]();
   if (!current?.ok) throw new Error(current?.reason || 'RUNTIME_CONTROL_UNAVAILABLE');
-  const ownerEnabled = current?.enabled === true;
+  return current;
+}
+
+async function runtimeControlResponse(runtimeStore) {
+  const [trading, broker, live] = await Promise.all([
+    readRuntimeControl(runtimeStore, 'getTradingAccessEnabled'),
+    readRuntimeControl(runtimeStore, 'getBrokerExecutionEnabled'),
+    readRuntimeControl(runtimeStore, 'getLiveBrokerExecutionEnabled', { ok: true, enabled: false, updatedAt: null, updatedBy: null }),
+  ]);
+  const tradingEnabled = trading?.enabled === true;
+  const brokerEnabled = broker?.enabled === true;
+  const liveEnabled = live?.enabled === true;
   return {
     ok: true,
+    tradingAccessEnabled: tradingEnabled,
     brokerExecutionCapabilityEnabled: true,
-    brokerExecutionEnabled: ownerEnabled,
-    effectiveBrokerExecutionEnabled: ownerEnabled,
-    updatedAt: current?.updatedAt || null,
-    updatedBy: current?.updatedBy || null,
+    brokerExecutionEnabled: brokerEnabled,
+    liveBrokerExecutionEnabled: liveEnabled,
+    effectiveBrokerExecutionEnabled: tradingEnabled && brokerEnabled,
+    effectiveLiveBrokerExecutionEnabled: tradingEnabled && brokerEnabled && liveEnabled,
+    tradingAccessUpdatedAt: trading?.updatedAt || null,
+    tradingAccessUpdatedBy: trading?.updatedBy || null,
+    brokerExecutionUpdatedAt: broker?.updatedAt || null,
+    brokerExecutionUpdatedBy: broker?.updatedBy || null,
+    liveBrokerExecutionUpdatedAt: live?.updatedAt || null,
+    liveBrokerExecutionUpdatedBy: live?.updatedBy || null,
+    // Backward compatibility for clients that previously displayed one timestamp.
+    updatedAt: broker?.updatedAt || null,
+    updatedBy: broker?.updatedBy || null,
   };
+}
+
+function hasRuntimePatch(body = {}) {
+  return typeof body.tradingAccessEnabled === 'boolean'
+    || typeof body.brokerExecutionEnabled === 'boolean'
+    || typeof body.liveBrokerExecutionEnabled === 'boolean';
 }
 
 export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
@@ -235,7 +259,7 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     }
     if (request.method === 'GET') {
       try {
-        return json(await runtimeControlResponse(controls, env));
+        return json(await runtimeControlResponse(controls));
       } catch {
         return json({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }, 503);
       }
@@ -243,12 +267,22 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     if (request.method === 'PATCH') {
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-      if (typeof body.brokerExecutionEnabled !== 'boolean') {
-        return json({ ok: false, reason: 'BROKER_EXECUTION_BOOLEAN_REQUIRED' }, 400);
+      if (!hasRuntimePatch(body)) {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_BOOLEAN_REQUIRED' }, 400);
       }
       try {
-        await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
-        return json(await runtimeControlResponse(controls, env));
+        if (typeof body.tradingAccessEnabled === 'boolean') {
+          if (typeof controls.setTradingAccessEnabled !== 'function') throw new Error('TRADING_ACCESS_CONTROL_UNAVAILABLE');
+          await controls.setTradingAccessEnabled(body.tradingAccessEnabled, { updatedBy: 'mkety-admin' });
+        }
+        if (typeof body.brokerExecutionEnabled === 'boolean') {
+          await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+        }
+        if (typeof body.liveBrokerExecutionEnabled === 'boolean') {
+          if (typeof controls.setLiveBrokerExecutionEnabled !== 'function') throw new Error('LIVE_BROKER_CONTROL_UNAVAILABLE');
+          await controls.setLiveBrokerExecutionEnabled(body.liveBrokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+        }
+        return json(await runtimeControlResponse(controls));
       } catch {
         return json({ ok: false, reason: 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503);
       }
