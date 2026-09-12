@@ -17,14 +17,16 @@ const readySimulation = {
   status: 'SIMULATED',
   accounts: [{ accountId: 'account-1', status: 'READY', actions: [{ type: 'OPEN_POSITION', symbol: 'XAUUSD' }] }],
 };
+const tradingOn = async () => ({ ok: true, enabled: true });
 
 test('persisted admin broker switch can enable execution without a deployment env toggle', async () => {
   let executed = false;
   const result = await runV1ProductionExecutionStage({
-    env: { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'false' },
+    env: { TRADING_ACCESS_ENABLED: 'false', BROKER_EXECUTION_ENABLED: 'false' },
     supabase: { from() {} },
     result: ingestResult,
     simulation: readySimulation,
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     executionDepsFactory: async () => ({}),
     bindingRepairRecorderFactory: () => ({}),
@@ -38,20 +40,23 @@ test('persisted admin broker switch can enable execution without a deployment en
   assert.equal(result.status, 'SUCCEEDED');
 });
 
-test('staff runtime-control API reports the persisted DB switch as effective regardless of deployment env value', async () => {
-  let enabled = true;
+test('staff runtime-control API reports persisted switches as effective regardless of deployment env value', async () => {
+  let brokerEnabled = true;
   const runtimeStore = {
-    async getBrokerExecutionEnabled() { return { ok: true, enabled }; },
-    async setBrokerExecutionEnabled(next) { enabled = Boolean(next); return { ok: true, enabled }; },
+    async getTradingAccessEnabled() { return { ok: true, enabled: true }; },
+    async getBrokerExecutionEnabled() { return { ok: true, enabled: brokerEnabled }; },
+    async setBrokerExecutionEnabled(next) { brokerEnabled = Boolean(next); return { ok: true, enabled: brokerEnabled }; },
   };
   const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {
     headers: { 'X-Mkety-Admin-Secret': 'admin-secret' },
   }), {
     MKETY_TRADING_ADMIN_SECRET: 'admin-secret',
     BROKER_EXECUTION_ENABLED: 'false',
+    TRADING_ACCESS_ENABLED: 'false',
   }, { store: {}, runtimeStore });
   assert.equal(response.status, 200);
   const body = await response.json();
+  assert.equal(body.tradingAccessEnabled, true);
   assert.equal(body.brokerExecutionEnabled, true);
   assert.equal(body.effectiveBrokerExecutionEnabled, true);
 });

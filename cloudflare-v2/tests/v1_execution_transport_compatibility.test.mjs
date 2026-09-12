@@ -22,15 +22,18 @@ function readySimulation() {
   };
 }
 
+const tradingOn = async () => ({ ok: true, enabled: true, reason: 'TEST_TRADING_ENABLED' });
+
 test('default real execution keeps the established disabled summary contract when persisted admin control is off', async () => {
   const execution = await runV1ProductionExecutionStage({
     env: {
-      TRADING_ACCESS_ENABLED: 'true',
-      BROKER_EXECUTION_ENABLED: 'true',
+      TRADING_ACCESS_ENABLED: 'false',
+      BROKER_EXECUTION_ENABLED: 'false',
     },
     supabase: { from() {} },
     result,
     simulation: readySimulation(),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({
       ok: true,
       enabled: false,
@@ -52,14 +55,15 @@ test('default real execution keeps the established disabled summary contract whe
 test('safe simulation explicitly exposes its synthetic transport mode', async () => {
   const execution = await runV1ProductionExecutionStage({
     env: {
-      TRADING_ACCESS_ENABLED: 'true',
-      BROKER_EXECUTION_ENABLED: 'true',
+      TRADING_ACCESS_ENABLED: 'false',
+      BROKER_EXECUTION_ENABLED: 'false',
       TRADING_EXECUTION_TRANSPORT_MODE: 'simulation',
       SAFE_SIMULATION_EXTERNAL_TRANSPORTS: 'true',
     },
     supabase: { from() {} },
     result,
     simulation: readySimulation(),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({
       ok: true,
       enabled: true,

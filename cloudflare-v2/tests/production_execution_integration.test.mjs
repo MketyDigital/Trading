@@ -17,6 +17,7 @@ function baseDeps(overrides = {}) {
     simulationDepsFactory: async () => ({ safe: true }),
     orchestrateFn: async () => ({ status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [{ accountId: 'acct-1', status: 'READY', groupId: 'group-1', actions: [{ type: 'OPEN_POSITION', legId: 'leg-1', symbol: 'XAUUSD', lots: 0.01, idempotencyKey: 'group-1:leg:1', simulated: true }] }] }),
     ingestFn: async () => baseResult(),
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: true, reason: 'TEST_TRADING_ENABLED' }),
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     ...overrides,
   };
@@ -46,9 +47,10 @@ test('trading-access-disabled V1 planning cannot construct production dependenci
   const response = await handleV1EventsRequest(request(), {
     TRADING_MASTER_KEY: 'master',
     TRADING_V1_SIMULATION: 'true',
-    TRADING_ACCESS_ENABLED: 'false',
+    TRADING_ACCESS_ENABLED: 'true',
     BROKER_EXECUTION_ENABLED: 'true',
   }, baseDeps({
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: false, reason: 'TEST_TRADING_DISABLED' }),
     executionDepsFactory: async () => { executionDepsCalls += 1; return {}; },
     executeProductionFn: async () => { executeCalls += 1; return {}; },
   }));
@@ -157,7 +159,7 @@ test('real production stage uses broker-authoritative canonical policy inputs be
     let dispatchCalls = 0;
     let materializerCalls = 0;
     const account = {
-      id: 'acct-1', workspace_id: 'ws-trusted', platform: 'mt5', is_active: true, execution_enabled: true,
+      id: 'acct-1', workspace_id: 'ws-trusted', platform: 'mt5', environment: 'demo', is_active: true, execution_enabled: true,
       safety_policy: item.safety,
     };
     const response = await handleV1EventsRequest(request(), {

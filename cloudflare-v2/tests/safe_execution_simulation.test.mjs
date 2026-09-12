@@ -99,6 +99,7 @@ test('execution transport mode is selected only from server env, never request/r
     safeSimulationDepsFactory: async () => { simulationFactoryCalls += 1; return {}; },
     bindingRepairRecorderFactory: () => null,
     executeProductionFn: async (_plan, deps) => ({ ok: true, deps }),
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
   };
 

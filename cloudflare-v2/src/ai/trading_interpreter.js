@@ -72,6 +72,7 @@ function normalizeAiSignal(payload) {
 
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
+  aiRouterFactory,
   timeoutMs = 1200,
   systemPrompt = INTERPRETER_PROMPT,
 } = {}) {
@@ -80,13 +81,22 @@ export async function interpretTradingEvent(event = {}, {
     return { ...deterministic, source: 'deterministic' };
   }
 
-  if (!aiRouter?.processSignal) {
+  let resolvedAiRouter = aiRouter;
+  if (!resolvedAiRouter && typeof aiRouterFactory === 'function') {
+    try {
+      resolvedAiRouter = await aiRouterFactory();
+    } catch {
+      return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'AI interpreter unavailable' };
+    }
+  }
+
+  if (!resolvedAiRouter?.processSignal) {
     return { status: 'NEEDS_REVIEW', source: 'none', reason: 'AI interpreter unavailable' };
   }
 
   let ai;
   try {
-    ai = await aiRouter.processSignal(String(event.text ?? ''), systemPrompt, {
+    ai = await resolvedAiRouter.processSignal(String(event.text ?? ''), systemPrompt, {
       timeoutMs,
       purpose: 'ambiguity_ai',
     });

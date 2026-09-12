@@ -9,6 +9,7 @@ import { handleMketyAdminAccessCodesRequest } from '../src/http/v1_mkety_admin_a
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const sessionSecret = 'test-session-secret';
+const tradingOn = async () => ({ ok: true, enabled: true });
 
 function restoredOwner() {
   return {
@@ -110,6 +111,7 @@ test('broker execution fails closed when persisted Mkety owner switch is OFF eve
     supabase: { from() {} },
     result: ingestResult,
     simulation: readySimulation(),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: true, enabled: false }),
     executeProductionFn: async () => { executed = true; return { status: 'SUCCEEDED' }; },
   });
@@ -124,6 +126,7 @@ test('broker execution fails closed when persisted runtime control cannot be rea
     supabase: { from() {} },
     result: ingestResult,
     simulation: readySimulation(),
+    tradingAccessControlResolver: tradingOn,
     brokerExecutionControlResolver: async () => ({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }),
   });
   assert.equal(execution.executionEnabled, false);
@@ -133,6 +136,7 @@ test('broker execution fails closed when persisted runtime control cannot be rea
 test('Mkety admin can read and update the broker owner switch through the secret-guarded admin API', async () => {
   let enabled = false;
   const runtimeStore = {
+    async getTradingAccessEnabled() { return { ok: true, enabled: true }; },
     async getBrokerExecutionEnabled() { return { ok: true, enabled }; },
     async setBrokerExecutionEnabled(next) { enabled = Boolean(next); return { ok: true, enabled }; },
   };
@@ -159,6 +163,7 @@ test('Mkety admin can read and update the broker owner switch through the secret
 
 test('Mkety admin runtime-control read reports database unavailability instead of masking it as owner switch OFF', async () => {
   const runtimeStore = {
+    async getTradingAccessEnabled() { return { ok: true, enabled: true }; },
     async getBrokerExecutionEnabled() { return { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }; },
   };
   const response = await handleMketyAdminAccessCodesRequest(new Request('https://trade.mkety.com/api/v1/mkety-admin/runtime-controls', {

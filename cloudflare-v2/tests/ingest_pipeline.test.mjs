@@ -51,6 +51,25 @@ test('authenticates source, normalizes identity and reserves durable idempotency
   assert.equal(result.interpretation.status, 'READY');
 });
 
+test('deterministic signal does not initialize workspace AI router', async () => {
+  const state = stores();
+  const input = await signedInput({
+    external_event_id: 'msg-fast', text: 'BUY XAUUSD 2526 SL 2518 TP 2530 2535',
+  });
+  let aiFactoryCalls = 0;
+  const result = await ingestTradingEvent(input, {
+    ...state,
+    aiRouterFactory: async () => {
+      aiFactoryCalls += 1;
+      throw new Error('AI router must not initialize on deterministic hot path');
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.interpretation.status, 'READY');
+  assert.equal(result.interpretation.source, 'deterministic');
+  assert.equal(aiFactoryCalls, 0);
+});
+
 test('returns duplicate without running interpretation or any execution work', async () => {
   const state = stores({ duplicate: true });
   let aiCalled = false;
