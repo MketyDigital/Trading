@@ -74,6 +74,7 @@ test('duplicate source event keeps one persistent identity and does not run dest
     },
     simulationDepsFactory: async () => ({}),
     orchestrateFn: async () => structuredClone(simulatedPlan),
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: true, reason: 'TEST_TRADING_ENABLED' }),
     brokerExecutionControlResolver: async () => ({
       ok: true,
       enabled: true,
