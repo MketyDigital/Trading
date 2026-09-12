@@ -105,15 +105,7 @@ The one-time pairing token is short-lived. After the initial authenticated conne
 
 The reconnect credential authenticates only the connector's transport session. It is **not trade authority** and cannot bypass database state or Worker safety checks.
 
-Mkety's database remains authoritative for:
-
-- account existence and provider status;
-- actual broker account/server/environment identity;
-- activation and execution permission;
-- kill switch and risk policy;
-- account symbol catalog and aliases;
-- destinations/routes; and
-- server-observed pairing/revocation state.
+Mkety's database remains authoritative for account existence/provider status, broker identity/environment, activation/execution permission, kill switch/risk policy, symbol catalog/aliases, routes/destinations and pairing/revocation state.
 
 After successful MT5 identity sync, Mkety retires the original pairing token from long-lived encrypted `trade_accounts` credentials and retains only the gateway/control material needed by the managed server connection.
 
@@ -137,7 +129,7 @@ Do not instruct ordinary MT5 customers to create a public bridge URL when the ou
 
 ## 8. Shared cTrader/MT5 gateway
 
-The gateway process starts both broker WebSocket transports:
+The production gateway starts both broker WebSocket transports:
 
 ```text
 /v1/cbot   cTrader Cloud Auto Trader
@@ -146,32 +138,50 @@ The gateway process starts both broker WebSocket transports:
 
 Worker-facing control routes are authenticated with server-side control credentials. Customers never receive the control secret or token-signing key.
 
-The gateway is deployed separately from the Cloudflare Worker (for example via the repository's Azure/Coolify deployment path). A successful Worker deployment does **not** deploy or prove health of the gateway.
+The gateway is deployed separately from the Cloudflare Worker through the repository's Coolify deployment path. A successful Worker deployment does not by itself prove gateway health.
 
-Before broker acceptance, independently verify TLS, `/health`, `/v1/cbot`, `/v1/mt5`, authenticated demo connectivity and identity sync.
+The 2026-09-12 production cutover verified the current Coolify `main` deployment, repeated `/health`, and both public WebSocket routes. Each route upgrades correctly and unauthenticated sessions fail closed with `1008 AUTH_REQUIRED`.
 
-## 9. Telegram/MTProto modes
+Before broker-side acceptance, still verify authenticated demo connectivity and identity sync with a real demo connector/client.
+
+## 9. Telegram/MTProto modes and external-VM boundary
 
 ### Hosted MTProto
 
-`cloudflare-v2/containers/mtproto-listener` is Mkety-hosted and source-bound. Keep it source-bound. Do not convert it into the shared collector.
+`cloudflare-v2/containers/mtproto-listener` is Mkety-hosted and source-bound. Keep it source-bound. It is part of Mkety-controlled infrastructure.
 
-### External MTProto shared collector
+### External MTProto VM — transport-only sender
 
-`cloudflare-v2/external/mtproto-adapter` supports a shared external Telegram collector. Its recommended server endpoint is:
+An external MTProto VM is **not Mkety infrastructure** and must not be treated as a production-readiness dependency. It is a transport adapter only.
+
+The external VM should know as little as possible. Its complete Mkety-side contract is:
+
+1. receive a Telegram message with its own Telegram client/session;
+2. POST the message/payload to the single opaque Mkety ingress endpoint supplied to it.
+
+It must not be responsible for Mkety workspace selection, source configuration, allowed-chat policy, DB lookup, routing, broker selection, risk, account state or execution decisions. Those remain inside the Mkety Worker / Mkety-owned Cloudflare runtime.
+
+The existing source-specific endpoint supports this model. The external sender may be given one complete opaque URL containing the server-side source credential and can simply POST to it; it does not need separate Mkety configuration knowledge.
+
+### Shared collector — optional Mkety-owned ingress capability
+
+Mkety also supports the shared collector endpoint family:
 
 ```text
-POST /api/v1/external/mtproto/collect
-Authorization: Bearer <TRADING_COLLECTOR_TOKEN>
+POST /api/v1/external/mtproto/collect/<opaque-token>
 ```
 
-The clean endpoint URL contains no credential. In shared collector mode, the external runtime uses `TRADING_COLLECTOR_TOKEN` and must not mix in `TRADING_SOURCE_ID`, `TRADING_SOURCE_SECRET` or `ALLOWED_CHAT_IDS`.
+or the equivalent bearer-token form for Mkety-controlled components.
 
-Mkety's database is authoritative for active `external_mtproto` sources and allowed Telegram chat scope. An unselected visible chat is accepted/ignored; a selected chat is fanned out only to matching authorized source rows.
+`trading_ingress_collectors` and shared collector routing are an **internal Mkety capability** for a Mkety-owned collector/ingress topology. They are not a requirement for an unrelated external VM merely to forward payloads.
 
-### Legacy external signed-source mode
+When shared collector mode is intentionally used, Mkety's database remains authoritative for active `external_mtproto` sources and allowed Telegram chat scope. An unselected visible chat is accepted/ignored; a selected chat is delivered only to matching authorized source rows.
 
-One-runtime-per-source HMAC ingress remains available for compatibility using `TRADING_SOURCE_ID` and `TRADING_SOURCE_SECRET`. Local `ALLOWED_CHAT_IDS` is only a transport optimization and never grants server authorization.
+Production having zero `trading_ingress_collectors` rows is valid unless a separately approved Mkety-owned collector topology needs one.
+
+### Legacy signed-source compatibility
+
+One-runtime-per-source signed ingress remains available for compatibility. Local chat filtering on a transport may reduce noise but never grants server authorization.
 
 ## 10. Telegram event identity and replay safety
 
@@ -251,9 +261,11 @@ Confirm the cBot is running on the intended account, the token is current, gatew
 
 Check the explicit route, provider state, Active, Execution, Kill switch, environment, symbol catalog/aliases, risk policy, account role and both global broker gates. Do not bypass a failed safety gate to make a test pass.
 
-### External MTProto receives a Telegram chat but nothing routes
+### External MTProto VM sends payload but nothing routes
 
-For shared collector mode, verify an active `external_mtproto` source exists whose persisted chat policy selects that chat. Unselected visible chats are intentionally accepted/ignored.
+First confirm the external sender is POSTing to the exact opaque Mkety endpoint supplied to it and that the payload reaches Mkety. Do not add Mkety routing/source/broker logic to the external VM to compensate.
+
+Then diagnose authorization, source/chat selection, replay/idempotency and routing **inside Mkety**. If shared collector mode is intentionally in use, verify the matching active `external_mtproto` source/chat policy in the database. Unselected chats are intentionally accepted/ignored.
 
 ## 17. Deployment and rollback order
 
@@ -264,18 +276,18 @@ Production-safe rollout order:
 3. Apply only reviewed Trading migrations.
 4. Merge the verified PR.
 5. Deploy/verify the Cloudflare Worker and runtime controls.
-6. Publish the Windows MT5 release from the verified `main` build.
+6. Publish connector releases from verified `main` builds when required.
 7. Deploy the shared cTrader/MT5 gateway separately and prove its health.
-8. Create/rotate external MTProto collector credential through protected admin.
-9. Update only the **external** MTProto listener to the clean collector endpoint/token.
-10. Demo-test unselected/selected MTProto behavior.
-11. Demo-connect MT5 and sync its real symbol catalog.
-12. Re-sync cTrader catalog/identity as needed.
-13. Keep account execution disabled unless the specific demo/live acceptance phase separately authorizes it.
+8. If an external transport VM is used, give it only the opaque ingress endpoint needed to POST payloads; do not make it a Mkety configuration authority.
+9. Create/rotate a shared collector credential only if a separately approved Mkety-owned collector topology actually uses shared collector mode.
+10. Demo-connect MT5 and sync its real symbol catalog.
+11. Re-sync/demo-connect cTrader identity/catalog as needed.
+12. Run controlled source → parse → route → risk/symbol → demo broker acceptance.
+13. Keep account execution disabled unless the specific acceptance/live phase separately authorizes it.
 
-Rollback should reverse the changed component without changing unrelated runtime safety controls. If gateway acceptance fails, roll back the gateway independently of the Worker. If collector acceptance fails, revoke/rotate the collector token and return the external listener to its prior mode; do not modify hosted MTProto. If Worker acceptance fails, roll back the Worker using the reviewed deployment rollback path while preserving the persisted owner/master broker switch.
+Rollback should reverse the changed component without changing unrelated runtime safety controls. If gateway acceptance fails, roll back the gateway independently of the Worker. If a Mkety-owned collector acceptance fails, revoke/rotate that collector token without changing unrelated external sender architecture or hosted MTProto. If Worker acceptance fails, roll back the Worker using the reviewed deployment rollback path while preserving the persisted owner/master broker switch.
 
-## 18. What Mkety hosts vs customer runs
+## 18. What Mkety hosts vs customer/external systems run
 
 For cTrader Cloud Auto Trader, Mkety hosts Worker/database/gateway/control services; the customer runs the cBot in cTrader Cloud. No customer VPS is required.
 
@@ -283,7 +295,9 @@ For recommended MT5 Connector, Mkety hosts Worker/database/gateway/control servi
 
 For legacy MT5 HTTP bridge, the customer/operator additionally maintains the public HTTPS bridge ingress.
 
-For shared external MTProto, the external host runs the Telegram client/session and outbound collector transport; Mkety remains authoritative for workspace/source/chat policy and all trading decisions.
+For an external MTProto VM, that external machine owns only its Telegram client/session and outbound POST transport. Mkety owns all Mkety-side authentication/authorization, source/chat selection, workspace binding, canonical processing, routing, risk and execution authority. The external VM is not a Mkety service and is not a condition for Mkety infrastructure readiness.
+
+For a Mkety-owned shared collector topology, Mkety may additionally provision the collector credential and shared ingress component internally.
 
 ## 19. Core operating principle
 
