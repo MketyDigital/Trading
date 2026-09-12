@@ -71,7 +71,7 @@ test('workspace-scoped V1 admin endpoint bypasses legacy Worker when Trading acc
   assert.equal(legacyCalls, 0);
 });
 
-test('Trading access fuse blocks external V1 events and admin before their handlers', async () => {
+test('Trading access compatibility fuse blocks external V1 events and admin before their handlers', async () => {
   let legacyCalls = 0;
   let eventCalls = 0;
   let adminCalls = 0;
@@ -96,7 +96,7 @@ test('Trading access fuse blocks external V1 events and admin before their handl
   assert.equal(legacyCalls, 0);
 });
 
-test('missing Trading access flag fails closed for external V1 application APIs', async () => {
+test('missing Trading access compatibility flag fails closed for external V1 application APIs', async () => {
   let eventCalls = 0;
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => new Response('legacy') },
@@ -171,7 +171,9 @@ test('scheduled handler remains delegated to legacy Worker', async () => {
   assert.equal(called, true);
 });
 
-test('Cloudflare entrypoint switches through the unified connections wrapper while V1 remains intact underneath', async () => {
+test('Cloudflare entrypoint uses DB runtime wrapper and preserves unified connections plus V1 underneath', async () => {
   const wrangler = await fs.readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
-  assert.match(wrangler, /main\s*=\s*["']src\/v1_connections_entry\.js["']/);
+  const runtimeEntry = await fs.readFile(new URL('../src/v1_runtime_entry.js', import.meta.url), 'utf8');
+  assert.match(wrangler, /main\s*=\s*["']src\/v1_runtime_entry\.js["']/);
+  assert.match(runtimeEntry, /from ['"]\.\/v1_connections_entry\.js['"]/);
 });
