@@ -254,6 +254,7 @@ function templatePresentation(template = {}) {
     labels: safeObject(layout.labels),
     fieldOrder: Array.isArray(layout.fieldOrder) ? layout.fieldOrder : undefined,
     emojiStyle: template.emoji_style ?? null,
+    aiInstructions: text(layout.aiInstructions ?? layout.ai_instructions) || null,
     aiTimeoutMs: Number(layout.aiTimeoutMs ?? layout.ai_timeout_ms ?? 500),
   };
 }
