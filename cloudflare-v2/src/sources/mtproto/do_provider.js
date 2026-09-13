@@ -43,6 +43,20 @@ function storageAdapter(storage) {
   };
 }
 
+function canonicalReplyEventId(message = {}, chatId) {
+  const replyId = String(
+    message?.replyTo?.id
+      ?? message?.replyTo?.messageId
+      ?? message?.replyToMessageId
+      ?? message?.reply_to_message_id
+      ?? '',
+  ).trim();
+  if (!replyId) return null;
+  if (replyId.startsWith('telegram:')) return replyId;
+  const chat = String(chatId ?? '').trim();
+  return chat ? `telegram:${chat}:${replyId}` : null;
+}
+
 export function createMtprotoDoProvider({
   state,
   clientFactory,
@@ -206,7 +220,7 @@ export function createMtprotoDoProvider({
 
     const chatId = required(message?.chat?.id ?? message.chatId ?? message.chat_id, 'MTPROTO_DO_CHAT_ID_MISSING');
     const messageId = required(message.id ?? message.messageId ?? message.message_id, 'MTPROTO_DO_MESSAGE_ID_MISSING');
-    const replyId = message.replyToMessageId ?? message.reply_to_message_id ?? message.replyTo?.messageId ?? null;
+    const replyEventId = canonicalReplyEventId(message, chatId);
     const threadId = message.threadId ?? message.thread_id ?? null;
 
     const event = {
@@ -217,7 +231,7 @@ export function createMtprotoDoProvider({
       structured_payload: {},
       thread: {
         thread_id: threadId == null ? null : String(threadId),
-        reply_to_event_id: replyId == null ? null : String(replyId),
+        reply_to_event_id: replyEventId,
         edited_event_id: null,
       },
       metadata: {

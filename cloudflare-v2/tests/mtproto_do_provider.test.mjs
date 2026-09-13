@@ -113,7 +113,7 @@ test('incoming Telegram event uses queue-compatible native identity and ignores 
     chat: { id: -1001 },
     text: 'BUY XAUUSD',
     date: new Date('2026-09-02T10:00:00.000Z'),
-    replyToMessageId: 7,
+    replyTo: { id: 7 },
     media: { kind: 'photo' },
   });
 
@@ -124,7 +124,22 @@ test('incoming Telegram event uses queue-compatible native identity and ignores 
   assert.deepEqual(deliveries[0].event.metadata.native_identity, { chat_id: '-1001', message_id: '9' });
   assert.equal(deliveries[0].event.metadata.account_scope, 'acct-1');
   assert.equal(deliveries[0].event.metadata.media, true);
-  assert.equal(deliveries[0].event.thread.reply_to_event_id, '7');
+  assert.equal(deliveries[0].event.thread.reply_to_event_id, 'telegram:-1001:7');
+});
+
+test('legacy numeric MTProto reply id is canonicalized to the same external-event namespace', async () => {
+  const state = createState();
+  const client = createFakeClient();
+  const deliveries = [];
+  const provider = createMtprotoDoProvider({
+    state,
+    clientFactory: () => client,
+    enqueueSourceEvent: async (source, event) => deliveries.push({ source, event }),
+  });
+
+  await provider.start({ sourceId: 'src-do', workspaceId: 'ws-1', accountScope: 'acct-1', apiId: 1, apiHash: 'h' });
+  await client.emit({ isOutgoing: false, id: 10, chat: { id: -1001 }, text: 'close', replyToMessageId: 9 });
+  assert.equal(deliveries[0].event.thread.reply_to_event_id, 'telegram:-1001:9');
 });
 
 test('one provider failure does not mutate another provider state', async () => {
