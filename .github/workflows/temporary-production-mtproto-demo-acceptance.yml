@@ -1,0 +1,86 @@
+name: Temporary Production MTProto Demo Acceptance
+
+on:
+  push:
+    branches:
+      - 'acceptance/mtproto-demo-20260913'
+    paths:
+      - '.github/workflows/temporary-production-mtproto-demo-acceptance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  open-demo:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TRADING_WORKSPACE_ID: ${{ secrets.TRADING_WORKSPACE_ID }}
+    steps:
+      - name: Resolve active external MTProto source without logging capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}"
+          test -n "${TRADING_WORKSPACE_ID:-}"
+          service_role="${SUPABASE_SERVICE_ROLE:-${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}}"
+          test -n "$service_role"
+          echo "::add-mask::$service_role"
+          result="$(curl -fsS --get "$SUPABASE_URL/rest/v1/source_connections" \
+            -H "apikey: $service_role" \
+            -H "Authorization: Bearer $service_role" \
+            --data-urlencode 'select=id,config' \
+            --data-urlencode "workspace_id=eq.$TRADING_WORKSPACE_ID" \
+            --data-urlencode 'provider_type=eq.external_mtproto' \
+            --data-urlencode 'is_active=eq.true' \
+            --data-urlencode 'limit=1')"
+          RESOLVED="$result" node - <<'NODE' >> "$GITHUB_ENV"
+          const rows=JSON.parse(process.env.RESOLVED||'[]');
+          if(rows.length!==1) throw new Error(`expected exactly one active external MTProto source, got ${rows.length}`);
+          const sourceId=String(rows[0].id||'').trim();
+          const chats=Array.isArray(rows[0]?.config?.allowed_chat_ids)?rows[0].config.allowed_chat_ids:[];
+          const chatId=String(chats[0]||'').trim();
+          if(!sourceId||!chatId) throw new Error('source capability or allowed chat is unavailable');
+          console.log(`ACCEPT_SOURCE_ID=${sourceId}`);
+          console.log(`ACCEPT_CHAT_ID=${chatId}`);
+          NODE
+          source_id="$(RESOLVED="$result" node -e "const r=JSON.parse(process.env.RESOLVED);process.stdout.write(String(r[0].id))")"
+          chat_id="$(RESOLVED="$result" node -e "const r=JSON.parse(process.env.RESOLVED);process.stdout.write(String(r[0].config.allowed_chat_ids[0]))")"
+          echo "::add-mask::$source_id"
+          echo "::add-mask::$chat_id"
+
+      - name: Send controlled 0.01 DEMO open signal through public external MTProto endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          message_id="990${GITHUB_RUN_ID}"
+          payload="$(ACCEPT_CHAT_ID="$ACCEPT_CHAT_ID" MESSAGE_ID="$message_id" node - <<'NODE'
+          process.stdout.write(JSON.stringify({
+            chat_id: process.env.ACCEPT_CHAT_ID,
+            message_id: process.env.MESSAGE_ID,
+            text: 'BUY XAUUSD NOW'
+          }));
+          NODE
+          )"
+          response="$(curl -fsS -X POST "https://trade.mkety.com/api/v1/external/mtproto/$ACCEPT_SOURCE_ID" \
+            -H 'Content-Type: application/json' \
+            --data "$payload")"
+          RESPONSE="$response" MESSAGE_ID="$message_id" node - <<'NODE'
+          const b=JSON.parse(process.env.RESPONSE||'{}');
+          const safe={
+            messageId: process.env.MESSAGE_ID,
+            ok: b.ok,
+            duplicate: b.duplicate,
+            eventId: b.eventId||b.event?.id||null,
+            interpretationStatus: b.interpretation?.status||null,
+            simulationStatus: b.simulation?.status||null,
+            executionStatus: b.execution?.status||null,
+            executionReason: b.execution?.reason||b.execution?.errorCode||null
+          };
+          console.log(JSON.stringify(safe));
+          if(!b.ok) process.exit(2);
+          NODE
