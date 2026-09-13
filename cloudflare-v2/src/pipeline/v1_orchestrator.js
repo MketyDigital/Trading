@@ -51,6 +51,34 @@ function buildPlannedSimulationManagementActions(group, management) {
     }));
   }
 
+  if (management?.type === 'MOVE_SL') {
+    const stopLoss = Number(management.stopLoss);
+    if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
+    return plannedLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      stopLoss,
+    }));
+  }
+
+  if (management?.type === 'CHANGE_TP') {
+    const takeProfit = Number(management.takeProfit);
+    if (!Number.isFinite(takeProfit)) throw new Error('finite takeProfit is required');
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null
+      ? plannedLegs
+      : plannedLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+    return matchingLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      takeProfit,
+    }));
+  }
+
   if (management?.type === 'CLOSE_PARTIAL') {
     const fraction = Number(management.fraction);
     if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
