@@ -15,6 +15,8 @@ test('dashboard exposes only backend-supported broker account lifecycle actions'
   assert.match(html, /\/execution/);
   assert.match(html, /\/kill-switch/);
   assert.match(html, /\/fixed-lot/);
+  assert.match(html, /\/auto-tp-protection/);
+  assert.match(html, /data-action="account-auto-tp"/);
   assert.match(html, /data-fixed-lot-input/);
   assert.match(html, /lotValue/);
   assert.equal(html.includes('/api/v1/admin/accounts/'+"${id}"+'/delete'), false);
