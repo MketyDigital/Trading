@@ -20,4 +20,4 @@ Safety contract:
 
 Ordinary edits to this file with any other commit message may run the workflow test job, but both broker lifecycle jobs remain skipped.
 
-Last protected acceptance trigger: 2026-09-13 cTrader demo lifecycle final launch validation.
+Last protected acceptance trigger: 2026-09-13 MT5 demo lifecycle final launch validation.
