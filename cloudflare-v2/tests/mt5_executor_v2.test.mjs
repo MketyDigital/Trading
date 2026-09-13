@@ -45,7 +45,7 @@ test('translates, signs and dispatches canonical MT5 open action', async () => {
 test('sends canonical management action using resolved MT5 symbol constraints', async () => {
   let body;
   await executeMT5Action({
-    type: 'CLOSE_PARTIAL', brokerPositionId: '900', symbol: 'XAUUSD', lots: 0.025, idempotencyKey: 'tp1-close',
+    type: 'CLOSE_PARTIAL', brokerPositionId: '900', symbol: 'XAUUSD', lots: 0.02, idempotencyKey: 'tp1-close',
   }, {
     workspaceId: 'ws-1', accountId: 'acct-1', bridgeUrl: 'https://bridge.test/v1/command', bridgeSecret: 'secret',
     catalog: [symbol], deliveryStore: deliveryStore(),
@@ -53,7 +53,7 @@ test('sends canonical management action using resolved MT5 symbol constraints', 
   });
   assert.equal(body.command.action, 'CLOSE_PARTIAL');
   assert.equal(body.command.positionId, '900');
-  assert.equal(body.command.volume, 0.03);
+  assert.equal(body.command.volume, 0.02);
 });
 
 test('persistent duplicate reservation prevents second MT5 bridge call', async () => {
