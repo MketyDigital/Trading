@@ -10,7 +10,7 @@ test('maps legacy Telegram payload into the universal envelope', () => {
   assert.equal(result.event.source.external_id, '-100123');
   assert.equal(result.event.external_event_id, '55');
   assert.equal(result.event.text, 'BUY GOLD NOW');
-  assert.equal(result.event.thread.reply_to_event_id, '54');
+  assert.equal(result.event.thread.reply_to_event_id, 'telegram:-100123:54');
 });
 
 test('accepts a generic TradingView/custom payload using the same envelope', () => {
