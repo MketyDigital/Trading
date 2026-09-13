@@ -1,13 +1,25 @@
-function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
+function scopedGroups(activeGroups, event) {
   const sourceInstanceId = String(event?.source?.instance_id ?? '');
   const workspaceId = event?.workspace_hint == null ? '' : String(event.workspace_hint);
   return (activeGroups || []).filter((group) => {
     if (!group || !['OPEN', 'PLANNED', 'PENDING'].includes(String(group.status || 'OPEN'))) return false;
     if (workspaceId && String(group.workspaceId ?? '') !== workspaceId) return false;
     if (sourceInstanceId && String(group.sourceInstanceId ?? '') !== sourceInstanceId) return false;
+    return true;
+  });
+}
+
+function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
+  return scopedGroups(activeGroups, event).filter((group) => {
     const updatedAt = Number(group.updatedAt ?? group.createdAt ?? 0);
     return updatedAt > 0 && nowMs - updatedAt <= windowMs;
   });
+}
+
+function isDuplicateSourceEvent(groups, event) {
+  const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
+  if (!externalEventId) return false;
+  return groups.some((group) => (group.sourceEventIds || []).map(String).includes(externalEventId));
 }
 
 function fastOriginId(group) {
@@ -44,7 +56,12 @@ export function correlateTradingEvent({
   nowMs = Date.now(),
   correlationWindowMs = 120000,
 } = {}) {
-  const recent = activeRecentGroups(activeGroups, event, Number(nowMs), Number(correlationWindowMs));
+  const scoped = scopedGroups(activeGroups, event);
+  if (isDuplicateSourceEvent(scoped, event)) {
+    return { status: 'NO_ACTION', reason: 'DUPLICATE_SOURCE_EVENT' };
+  }
+
+  const recent = activeRecentGroups(scoped, {}, Number(nowMs), Number(correlationWindowMs));
   const replyId = event?.thread?.reply_to_event_id != null ? String(event.thread.reply_to_event_id) : null;
   const threadId = event?.thread?.thread_id != null ? String(event.thread.thread_id) : null;
 
