@@ -95,11 +95,38 @@ function exactPlatformMatch(requested, catalog) {
   return catalog.filter((item) => clean(item.platformSymbol).toUpperCase() === text);
 }
 
+function derivCanonicalComparisonKeys(value) {
+  const source = clean(value).toUpperCase();
+  const keys = [];
+
+  const volatility = source.match(/^DERIV:VOLATILITY_(10|15|25|30|50|75|90|100)(?:_1S)?$/);
+  if (volatility) {
+    keys.push(`VOLATILITY${volatility[1]}${source.endsWith('_1S') ? '1S' : ''}`);
+    keys.push(`V${volatility[1]}${source.endsWith('_1S') ? '1S' : ''}`);
+    return keys;
+  }
+
+  const boom = source.match(/^DERIV:BOOM_(300|500|600|900|1000)$/);
+  if (boom) return [`BOOM${boom[1]}`];
+
+  const crash = source.match(/^DERIV:CRASH_(300|500|600|900|1000)$/);
+  if (crash) return [`CRASH${crash[1]}`];
+
+  if (source === 'DERIV:STEP') return ['STEP'];
+
+  const jump = source.match(/^DERIV:JUMP_(10|25|50|75|100)$/);
+  if (jump) return [`JUMP${jump[1]}`];
+
+  return keys;
+}
+
 function requestedComparisonKeys(requested) {
   const canonical = normalizeSymbol(requested).canonical;
   return [...new Set([
     normalizeInstrumentKey(requested),
     normalizeInstrumentKey(canonical),
+    ...derivCanonicalComparisonKeys(requested),
+    ...derivCanonicalComparisonKeys(canonical),
   ].filter(Boolean))];
 }
 
@@ -166,7 +193,7 @@ export function accountSymbolCatalogFromProviderConfig(providerConfig = {}) {
 }
 
 export function providerConfigWithSymbolCatalog(providerConfig = {}, catalog = [], { updatedAt = new Date().toISOString() } = {}) {
-  const config = providerConfig && typeof providerConfig === 'object' && !Array.isArray(providerConfig) ? providerConfig : {};
+  const config = providerConfig && typeof providerConfig === 'object' && !Array.isArray(config) ? providerConfig : {};
   return {
     ...config,
     symbolCatalog: sanitizeAccountSymbolCatalog(catalog),
