@@ -70,13 +70,14 @@ test('treats clear action plus symbol as an incomplete market fast-entry signal 
   }
 });
 
-test('does not execute uncertain, negated, or question-form action-symbol commentary', () => {
+test('does not execute uncertain, negated, question-form, or prose-like action-symbol commentary', () => {
   const cases = [
     'I might buy BTCUSD later',
     'should we buy BTCUSD?',
     "don't buy BTCUSD",
     'avoid selling XAUUSD',
     'watch BTCUSD, buy later',
+    'buy gold somehow',
   ];
 
   for (const text of cases) {
