@@ -225,6 +225,18 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
+    async setFixedLot(workspaceId, accountId, lotValue) {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({ lot_sizing_type: 'fixed', lot_value: lotValue })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_FIXED_LOT_UPDATE_FAILED');
+      return data || null;
+    },
+
     async setKillSwitch(workspaceId, accountId, enabled) {
       const account = await getAccount(workspaceId, accountId);
       if (!account) return null;
@@ -384,6 +396,25 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
 
   const body = await readJson(request);
   if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+
+  if (action === 'fixed-lot') {
+    if (typeof body.lotValue !== 'number' || !Number.isFinite(body.lotValue) || body.lotValue <= 0) {
+      return json({ ok: false, reason: 'FIXED_LOT_POSITIVE_NUMBER_REQUIRED' }, 400);
+    }
+    try {
+      const account = await accountStore.setFixedLot(workspaceId, accountId, body.lotValue);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({
+        ok: true,
+        workspaceId,
+        masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env),
+        account: publicAccount(account),
+      });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_FIXED_LOT_UPDATE_FAILED' }, 503);
+    }
+  }
+
   if (typeof body.enabled !== 'boolean') return json({ ok: false, reason: 'ENABLED_BOOLEAN_REQUIRED' }, 400);
 
   try {
