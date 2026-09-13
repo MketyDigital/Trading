@@ -1,4 +1,5 @@
 import { buildMachinePlan } from '../pipeline/machine_plan.js';
+import { validateCanonicalSignalIntent } from '../pipeline/signal_intent_validator.js';
 import { normalizeSymbol, normalizeOrderIntent } from '../normalization/trading_normalizer.js';
 import { recoverKnownNaturalLanguageSignal } from './relaxed_signal_recovery.js';
 
@@ -26,27 +27,6 @@ function normalizeEntry(value) {
   throw new TypeError('invalid AI entry');
 }
 
-function validationReference(intent) {
-  if (intent.entry?.kind === 'PRICE') return intent.entry.value;
-  if (intent.entry?.kind === 'RANGE') return intent.side === 'BUY' ? intent.entry.max : intent.entry.min;
-  return null;
-}
-
-function validateGeometry(intent) {
-  const reference = validationReference(intent);
-  if (reference == null || !Number.isFinite(Number(reference))) return { ok: true };
-  const ref = Number(reference);
-  if (intent.stopLoss != null) {
-    if (intent.side === 'BUY' && !(intent.stopLoss < ref)) return { ok: false, reason: 'invalid BUY stop geometry' };
-    if (intent.side === 'SELL' && !(intent.stopLoss > ref)) return { ok: false, reason: 'invalid SELL stop geometry' };
-  }
-  for (const target of intent.takeProfits || []) {
-    if (intent.side === 'BUY' && !(target > ref)) return { ok: false, reason: 'invalid BUY target geometry' };
-    if (intent.side === 'SELL' && !(target < ref)) return { ok: false, reason: 'invalid SELL target geometry' };
-  }
-  return { ok: true };
-}
-
 function normalizeAiSignal(payload) {
   if (payload?.event_type !== 'NEW_SIGNAL') throw new TypeError('unsupported AI event type');
   const order = normalizeOrderIntent(`${payload.side || ''} ${payload.order_type || ''}`);
@@ -56,7 +36,7 @@ function normalizeAiSignal(payload) {
   const takeProfits = Array.isArray(payload.take_profits)
     ? payload.take_profits.map(Number).filter(Number.isFinite)
     : [];
-  const intent = {
+  return {
     side: order.side,
     orderType: order.orderType,
     symbol: normalizeSymbol(symbolSource),
@@ -66,9 +46,6 @@ function normalizeAiSignal(payload) {
     fastEntry: Boolean(payload.fast_entry),
     incomplete: Boolean(payload.fast_entry) || numberOrNull(payload.stop_loss) == null || takeProfits.length === 0,
   };
-  const geometry = validateGeometry(intent);
-  if (!geometry.ok) throw new RangeError(geometry.reason);
-  return intent;
 }
 
 export async function interpretTradingEvent(event = {}, {
@@ -126,6 +103,10 @@ export async function interpretTradingEvent(event = {}, {
       return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'unsupported AI event type' };
     }
     const intent = normalizeAiSignal(payload);
+    const validation = validateCanonicalSignalIntent(intent, { rawText: event.text });
+    if (!validation.ok) {
+      return { status: 'NEEDS_REVIEW', source: 'ai', reason: validation.reason };
+    }
     return {
       status: 'READY',
       source: 'ai',
