@@ -3,7 +3,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT)$/i;
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -54,10 +54,6 @@ function withManagementSymbol(text, management) {
 
 function informationalManagementPlan(text) {
   const upper = text.toUpperCase();
-  const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s+HIT\s*[!.]*\s*$/);
-  if (targetHit) {
-    return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
-  }
   if (/^\s*(?:HOLD|KEEP\s+RUNNING)\s*[!.]*\s*$/.test(upper)) {
     return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'HOLD_POSITION' } };
   }
@@ -70,6 +66,15 @@ function managementPlan(text) {
 
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
+
+  const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s+HIT\s*[!.]*\s*$/);
+  if (targetHit) {
+    return { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
+  }
+
+  if (/\bSECURE\s+PROFITS\b/.test(upper)) {
+    return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
+  }
 
   if (/\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
       || /\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)) {
@@ -250,13 +255,9 @@ export function buildMachinePlan(event = {}) {
   if (stopLossMatch && stopLoss == null) return { status: 'NEEDS_INTERPRETATION' };
   const takeProfits = extractExplicitTps(text);
   if (takeProfits == null) return { status: 'NEEDS_INTERPRETATION' };
+
   const entry = extractEntry(text, symbolToken);
-  const fastEntry = order.orderType === 'MARKET'
-    && !entry
-    && !stopLoss
-    && takeProfits.length === 0;
-  if (fastEntry && !isConciseFastMarketCommand(text, symbolToken)) return { status: 'NEEDS_INTERPRETATION' };
-  if (!fastEntry && !entry && order.orderType !== 'MARKET') return { status: 'NEEDS_INTERPRETATION' };
+  const fastEntry = order.orderType === 'MARKET' && !entry && !stopLoss && takeProfits.length === 0 && isConciseFastMarketCommand(text, symbolToken);
   if (!fastEntry && !entry && !stopLoss && takeProfits.length === 0) return { status: 'NEEDS_INTERPRETATION' };
   return { status: 'READY', intent: { side: sideInfo.side, orderType: order.orderType, symbol, entry: entry || { kind: 'MARKET' }, stopLoss, takeProfits, fastEntry, incomplete: fastEntry || !stopLoss || takeProfits.length === 0 } };
 }
