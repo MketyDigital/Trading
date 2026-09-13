@@ -139,7 +139,8 @@ function hasBrokerAffixMatch(platformSymbol, requestedKey) {
   if (separatedTokens.includes(requestedKey)) return true;
 
   const compact = normalizeInstrumentKey(raw);
-  if (!compact || compact === requestedKey) return false;
+  if (!compact) return false;
+  if (compact === requestedKey) return true;
   if (compact.startsWith(requestedKey)) {
     const suffix = compact.slice(requestedKey.length);
     if (suffix.length > 0 && suffix.length <= MAX_COMPACT_AFFIX_LENGTH) return true;
