@@ -1,10 +1,9 @@
 import { normalizeOrderIntent, normalizeSymbol } from '../normalization/trading_normalizer.js';
-import { parseSignalNumber } from '../normalization/signal_number.js';
+import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal_number.js';
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
 const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|CLOSE|HALF|CANCEL|THE|PENDING|ALL)$/i;
-const SIGNAL_NUMBER_SOURCE = '-?(?:\\d{1,3}(?:,\\d{3})+(?:,\\d{1,2}|\\.\\d+)?|\\d{1,3}(?: \\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)';
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -23,7 +22,7 @@ function parsedNumber(raw) {
 }
 
 function hasAmbiguousCommaNumber(text) {
-  const candidates = String(text ?? '').match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
+  const candidates = String(text ?? '').match(/-?\d(?:[\d,]*\d)?(?:\.\d+)?/g) || [];
   return candidates.some((candidate) => candidate.includes(',') && !parseSignalNumber(candidate, { allowNegative: true }).ok);
 }
 
