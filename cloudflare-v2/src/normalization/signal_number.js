@@ -75,15 +75,16 @@ export function parseSignalNumber(rawValue, { allowNegative = false } = {}) {
   return failure(raw);
 }
 
-// This scanner is intentionally conservative. It recognizes complete numeric
-// tokens used in trading signals without splitting thousands-grouped prices
-// into fragments. Parsing/validation remains authoritative in parseSignalNumber.
-const SIGNAL_NUMBER_TOKEN = /-?(?:\d{1,3}(?:,\d{3})+(?:,\d{1,2}|\.\d+)?|\d{1,3}(?: \d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)/g;
+// Keep the token source shared so every deterministic parser uses the same
+// syntax. The first alternative deliberately captures malformed multi-comma
+// candidates whole so they fail closed instead of being split into plausible
+// fragments.
+export const SIGNAL_NUMBER_SOURCE = String.raw`-?(?:\d+(?:,\d+){2,}(?:\.\d+)?|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{1,3}(?: \d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)`;
+export const SIGNAL_NUMBER_TOKEN = new RegExp(SIGNAL_NUMBER_SOURCE, 'g');
 
 export function extractSignalNumbers(textValue, options = {}) {
   const text = String(textValue ?? '');
-  const matches = text.match(SIGNAL_NUMBER_TOKEN) || [];
+  const matcher = new RegExp(SIGNAL_NUMBER_SOURCE, 'g');
+  const matches = text.match(matcher) || [];
   return matches.map((raw) => parseSignalNumber(raw, options));
 }
-
-export { SIGNAL_NUMBER_TOKEN };
