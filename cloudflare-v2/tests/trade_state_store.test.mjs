@@ -67,3 +67,18 @@ test('coordinator uses persisted groups to correlate full signal to prior fast e
   }, now);
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g1' });
 });
+
+test('correlation never crosses an explicit workspace boundary even when listener identity matches', async () => {
+  const store = new TradeStateStore(new MemoryStorage());
+  await store.putGroup(fastGroup());
+  const coordinator = new TradeStateCoordinator(store, { correlationWindowMs: 120000 });
+  const result = await coordinator.correlate({
+    workspace_hint: 'ws2',
+    source: { instance_id: 'listener-1' },
+    external_event_id: '101',
+    thread: {},
+  }, {
+    status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false },
+  }, now);
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
