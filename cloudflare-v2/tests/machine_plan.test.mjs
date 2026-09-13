@@ -162,3 +162,11 @@ test('keeps a numeric entry range as MARKET unless pending-order language is exp
   assert.equal(pending.status, 'READY');
   assert.equal(pending.intent.orderType, 'LIMIT');
 });
+
+test('ordinary sentence commas after prices are punctuation, not malformed grouped numbers', () => {
+  const plan = buildMachinePlan({ text: 'BUY XAUUSD 2526 SL 2518, TP1 2530, TP2 2535' });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.entry.value, 2526);
+  assert.equal(plan.intent.stopLoss, 2518);
+  assert.deepEqual(plan.intent.takeProfits, [2530, 2535]);
+});
