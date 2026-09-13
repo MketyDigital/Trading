@@ -172,11 +172,23 @@ test('one account dispatch failure cannot block a successful sibling account', a
   assert.equal(summary.succeeded, 1);
   assert.equal(summary.accounts[0].status, 'FAILED');
   assert.equal(summary.accounts[1].status, 'SUCCEEDED');
-  assert.equal(bound.length, 1);
-  assert.equal(bound[0].accountId, 'acct-b');
-  assert.equal(bound[0].groupId, 'group-b');
-  assert.equal(bound[0].legId, 'leg-b');
-  assert.equal(bound[0].brokerPositionId, 'position-b');
+
+  assert.equal(bound.length, 2);
+  const failedBinding = bound.find((binding) => binding.accountId === 'acct-a');
+  assert.ok(failedBinding);
+  assert.equal(failedBinding.groupId, 'group-a');
+  assert.equal(failedBinding.legId, 'leg-1');
+  assert.equal(failedBinding.actionType, 'OPEN_POSITION');
+  assert.equal(failedBinding.status, 'FAILED');
+  assert.equal(failedBinding.failureCode, 'BROKER_DISPATCH_FAILED');
+
+  const successBinding = bound.find((binding) => binding.accountId === 'acct-b');
+  assert.ok(successBinding);
+  assert.equal(successBinding.groupId, 'group-b');
+  assert.equal(successBinding.legId, 'leg-b');
+  assert.equal(successBinding.actionType, 'OPEN_POSITION');
+  assert.equal(successBinding.status, 'OPEN');
+  assert.equal(successBinding.brokerPositionId, 'position-b');
 });
 
 test('final durable authority is reloaded before every action so revocation after action one blocks action two', async () => {
