@@ -70,7 +70,7 @@ test('automatic TP protection is disabled by default and emits no action', async
   assert.deepEqual(result.accounts[0].actions, []);
 });
 
-test('when enabled TP1 hit moves only remaining TP legs to TP1 price', async () => {
+test('when enabled TP1 hit moves only remaining TP legs to break-even', async () => {
   let persisted;
   const result = await orchestrateTradingEventSimulation({
     event,
@@ -93,13 +93,13 @@ test('when enabled TP1 hit moves only remaining TP legs to TP1 price', async () 
     stopLoss: action.stopLoss,
     simulated: action.simulated,
   })), [
-    { type: 'MODIFY_POSITION', brokerPositionId: 'pos-2', stopLoss: 2510, simulated: true },
-    { type: 'MODIFY_POSITION', brokerPositionId: 'pos-3', stopLoss: 2510, simulated: true },
+    { type: 'MODIFY_POSITION', brokerPositionId: 'pos-2', stopLoss: 2500, simulated: true },
+    { type: 'MODIFY_POSITION', brokerPositionId: 'pos-3', stopLoss: 2500, simulated: true },
   ]);
   assert.equal(persisted.sourceEventIds.includes('tp-hit-1'), true);
 });
 
-test('when enabled TP2 hit moves only later remaining legs to TP2 price', async () => {
+test('when enabled TP2 hit moves only later remaining legs to TP1 price', async () => {
   const result = await orchestrateTradingEventSimulation({
     event: { ...event, external_event_id: 'tp-hit-2' },
     interpretation: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 2 } },
@@ -112,7 +112,7 @@ test('when enabled TP2 hit moves only later remaining legs to TP2 price', async 
   });
 
   assert.deepEqual(result.accounts[0].actions.map((action) => [action.brokerPositionId, action.stopLoss]), [
-    ['pos-3', 2520],
+    ['pos-3', 2510],
   ]);
 });
 
