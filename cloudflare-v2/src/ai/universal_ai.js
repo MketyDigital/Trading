@@ -134,6 +134,9 @@ export class UniversalAIRouter {
         if (pType.includes('cloudflare') || pType.includes('workers_ai')) {
             return this.callCloudflareAI(provider, rawText, systemPrompt, signal);
         }
+        if (pType === 'openai' || pType.startsWith('openai_')) {
+            return this.callOpenAIResponses(provider, rawText, systemPrompt, signal);
+        }
         return this.callOpenAICompatible(provider, rawText, systemPrompt, signal);
     }
 
@@ -158,6 +161,45 @@ export class UniversalAIRouter {
         if (!res.ok) throw new Error(`Gemini API HTTP ${res.status}: ${await res.text()}`);
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        return { success: Boolean(text), text };
+    }
+
+    responseText(data = {}) {
+        if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text;
+        for (const item of Array.isArray(data.output) ? data.output : []) {
+            if (item?.type !== 'message') continue;
+            for (const content of Array.isArray(item.content) ? item.content : []) {
+                if ((content?.type === 'output_text' || content?.type === 'text') && typeof content.text === 'string' && content.text.trim()) {
+                    return content.text;
+                }
+            }
+        }
+        return '';
+    }
+
+    async callOpenAIResponses(provider, rawText, systemPrompt, signal) {
+        const key = provider.resolved_api_key;
+        if (!key) throw new Error('OpenAI credential missing');
+        let baseUrl = provider.base_url || 'https://api.openai.com/v1';
+        if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
+        const model = this.requireModel(provider);
+        const res = await this.fetchFn(baseUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${key}`,
+            },
+            body: JSON.stringify({
+                model,
+                instructions: systemPrompt,
+                input: rawText,
+                max_output_tokens: Number(provider.max_output_tokens ?? 1000),
+            }),
+            signal,
+        });
+        if (!res.ok) throw new Error(`OpenAI API HTTP ${res.status}: ${await res.text()}`);
+        const data = await res.json();
+        const text = this.responseText(data);
         return { success: Boolean(text), text };
     }
 
