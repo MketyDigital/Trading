@@ -81,3 +81,44 @@ test('does not silently fall back to stale provider model names', async () => {
   assert.equal(result.success, false);
   assert.equal(fetchCalls, 0);
 });
+
+test('OpenAI provider uses Responses API and extracts output_text', async () => {
+  let requestedUrl;
+  let requestedBody;
+  const router = new UniversalAIRouter([
+    { provider_name: 'openai', api_key: 'token', model_name: 'gpt-5.6-luna', base_url: 'https://api.openai.com/v1', max_output_tokens: 321, is_active: true },
+  ], {
+    fetchFn: async (url, options) => {
+      requestedUrl = String(url);
+      requestedBody = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ output_text: 'BUY BTCUSD' }) };
+    },
+  });
+  const result = await router.processSignal('maybe btc', 'interpret safely', { timeoutMs: 100 });
+  assert.equal(result.success, true);
+  assert.equal(result.text, 'BUY BTCUSD');
+  assert.equal(requestedUrl, 'https://api.openai.com/v1/responses');
+  assert.equal(requestedBody.model, 'gpt-5.6-luna');
+  assert.equal(requestedBody.instructions, 'interpret safely');
+  assert.equal(requestedBody.input, 'maybe btc');
+  assert.equal(requestedBody.max_output_tokens, 321);
+  assert.equal('messages' in requestedBody, false);
+});
+
+test('non-OpenAI compatible provider retains chat completions contract', async () => {
+  let requestedUrl;
+  let requestedBody;
+  const router = new UniversalAIRouter([
+    { provider_name: 'compatible_vendor', api_key: 'token', model_name: 'vendor-model', base_url: 'https://vendor.example/v1', is_active: true },
+  ], {
+    fetchFn: async (url, options) => {
+      requestedUrl = String(url);
+      requestedBody = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: 'formatted' } }] }) };
+    },
+  });
+  const result = await router.processSignal('x', 'y', { timeoutMs: 100 });
+  assert.equal(result.success, true);
+  assert.equal(requestedUrl, 'https://vendor.example/v1/chat/completions');
+  assert.equal(Array.isArray(requestedBody.messages), true);
+});
