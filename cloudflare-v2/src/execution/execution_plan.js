@@ -31,7 +31,7 @@ function normalizeFixedLots(value, instrument) {
 
 function openActionsFromGroup(group) {
   return group.legs.map((leg) => ({
-    type: 'OPEN_POSITION', targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
+    type: 'OPEN_POSITION', legId: leg.legId, targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
     symbol: group.symbol, entry: group.entry, lots: leg.lots, stopLoss: leg.stopLoss, takeProfit: leg.takeProfit,
     idempotencyKey: `${group.id || 'group'}:leg:${leg.targetIndex}`,
   }));
@@ -48,7 +48,8 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   let riskEntryPrice = null;
 
   if (sizingMode === 'FIXED_LOTS') {
-    totalLots = normalizeFixedLots(account.fixedLots, instrument);
+    const fixedLotsPerTarget = normalizeFixedLots(account.fixedLots, instrument);
+    totalLots = Number((fixedLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(intent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(intent, currentMarketPrice);
