@@ -56,3 +56,27 @@ test('relaxed parser refuses prose that lacks explicit side, recognized symbol o
     assert.notEqual(result.status, 'READY', text);
   }
 });
+
+test('relaxed recovery preserves grouped BTCUSD prices and safe duplicated decimal repair', async () => {
+  let aiCalls = 0;
+  const result = await interpretTradingEvent({
+    text: 'Buy BTCUSD around 77,010.81 and protect below 76,994.00, aim 77,400.54 then 77,610,00 then 78,201.24',
+  }, {
+    aiRouter: { processSignal: async () => { aiCalls += 1; return { success: false }; } },
+  });
+
+  assert.equal(result.status, 'READY');
+  assert.equal(result.source, 'deterministic_relaxed');
+  assert.deepEqual(result.intent.entry, { kind: 'PRICE', value: 77010.81 });
+  assert.equal(result.intent.stopLoss, 76994);
+  assert.deepEqual(result.intent.takeProfits, [77400.54, 77610, 78201.24]);
+  assert.equal(aiCalls, 0);
+});
+
+test('relaxed recovery fails closed on ambiguous malformed grouped prices', async () => {
+  const result = await interpretTradingEvent({
+    text: 'Buy BTCUSD around 77,010.81 and protect below 76,994.00, aim 77,400.54 then 1,234,56,78',
+  }, { aiRouter: { processSignal: async () => ({ success: false, error: 'AI unavailable' }) } });
+
+  assert.notEqual(result.status, 'READY');
+});
