@@ -17,12 +17,16 @@ function jobBlock(workflow, name) {
   return workflow.slice(start, end);
 }
 
-function assertCommonLifecycleSafety(block, marker) {
+function assertCommonLifecycleSafety(block, marker, provider) {
   assert.match(block, /needs:\s*test/);
   assert.match(block, /environment:\s*staging/);
   assert.match(block, /github\.event_name == 'push'/);
   assert.match(block, /github\.ref == 'refs\/heads\/design\/enterprise-trading-event-core'/);
   assert.match(block, new RegExp(`github\\.event\\.head_commit\\.message == '${marker}'`));
+  assert.match(block, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(block, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(block, new RegExp(`github\\.event\\.inputs\\.provider == '${provider}'`));
+  assert.match(block, new RegExp(`github\\.event\\.inputs\\.confirmation == '${marker}'`));
   assert.match(block, /SUPABASE_URL:\s*\$\{\{\s*secrets\.SUPABASE_URL\s*\}\}/);
   assert.match(block, /SUPABASE_SERVICE_ROLE_KEY:\s*\$\{\{\s*secrets\.SUPABASE_SERVICE_ROLE_KEY\s*\}\}/);
   assert.match(block, /TRADING_WORKSPACE_ID:\s*\$\{\{\s*secrets\.TRADING_WORKSPACE_ID\s*\}\}/);
@@ -30,11 +34,24 @@ function assertCommonLifecycleSafety(block, marker) {
   assert.doesNotMatch(block, /\bwrangler\b|CLOUDFLARE_|allowLiveTrading:\s*true/i);
 }
 
-test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent and demo-only', async () => {
+test('Gate 7 workflow exposes a protected current-main manual dispatch contract', async () => {
   const workflow = await readWorkflow();
-  assert.match(workflow.slice(0, workflow.indexOf('jobs:')), /cloudflare-v2\/docs\/GATE7_DEMO_DESTINATION_TRIGGER\.md/);
+  const header = workflow.slice(0, workflow.indexOf('jobs:'));
+  assert.match(header, /cloudflare-v2\/docs\/GATE7_DEMO_DESTINATION_TRIGGER\.md/);
+  assert.match(header, /workflow_dispatch:/);
+  assert.match(header, /provider:/);
+  assert.match(header, /type:\s*choice/);
+  assert.match(header, /- mt5/);
+  assert.match(header, /- ctrader/);
+  assert.match(header, /confirmation:/);
+  assert.match(header, /demo: lifecycle mt5 gate 7/);
+  assert.match(header, /demo: lifecycle ctrader gate 7/);
+});
+
+test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent, and demo-only', async () => {
+  const workflow = await readWorkflow();
   const block = jobBlock(workflow, 'mt5-demo-lifecycle-gate7');
-  assertCommonLifecycleSafety(block, 'demo: lifecycle mt5 gate 7');
+  assertCommonLifecycleSafety(block, 'demo: lifecycle mt5 gate 7', 'mt5');
   assert.match(block, /MT5_DEMO_ACCEPTANCE_MODE:\s*['"]lifecycle['"]/);
   assert.match(block, /MT5_DEMO_ORDER_TEST:\s*['"]true['"]/);
   assert.match(block, /MT5_DEMO_SERVER:\s*\$\{\{\s*secrets\.MT5_EXPECTED_DEMO_SERVER\s*\}\}/);
@@ -42,10 +59,10 @@ test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent an
   assert.match(block, /npm run accept:mt5:demo/);
 });
 
-test('Gate 7 cTrader destination lifecycle is exact-marker, protected, persistent and demo-only', async () => {
+test('Gate 7 cTrader destination lifecycle is exact-marker, protected, persistent, and demo-only', async () => {
   const workflow = await readWorkflow();
   const block = jobBlock(workflow, 'ctrader-demo-lifecycle-gate7');
-  assertCommonLifecycleSafety(block, 'demo: lifecycle ctrader gate 7');
+  assertCommonLifecycleSafety(block, 'demo: lifecycle ctrader gate 7', 'ctrader');
   assert.match(block, /CTRADER_DEMO_ACCEPTANCE_MODE:\s*['"]lifecycle['"]/);
   assert.match(block, /CTRADER_DEMO_ORDER_TEST:\s*['"]true['"]/);
   assert.match(block, /CTRADER_DEMO_TEST_LOTS:\s*\$\{\{\s*vars\.CTRADER_DEMO_TEST_LOTS\s*\|\|\s*'0\.01'\s*\}\}/);
