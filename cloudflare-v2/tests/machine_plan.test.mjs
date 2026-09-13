@@ -47,6 +47,27 @@ test('accepts symbol-before-side and long/short signal variants', () => {
   assert.equal(shortSignal.intent.symbol.canonical, 'EURUSD');
 });
 
+test('treats bare action plus symbol as an incomplete market fast-entry signal in either order', () => {
+  const cases = [
+    ['BTCUSD buy', 'BUY', 'BTCUSD'],
+    ['buy BTCUSD', 'BUY', 'BTCUSD'],
+    ['ETHUSD SELL', 'SELL', 'ETHUSD'],
+    ['short EURUSD', 'SELL', 'EURUSD'],
+    ['GOLD long', 'BUY', 'XAUUSD'],
+  ];
+
+  for (const [text, side, canonical] of cases) {
+    const plan = buildMachinePlan({ text });
+    assert.equal(plan.status, 'READY', text);
+    assert.equal(plan.intent.side, side, text);
+    assert.equal(plan.intent.orderType, 'MARKET', text);
+    assert.equal(plan.intent.symbol.canonical, canonical, text);
+    assert.deepEqual(plan.intent.entry, { kind: 'MARKET' }, text);
+    assert.equal(plan.intent.fastEntry, true, text);
+    assert.equal(plan.intent.incomplete, true, text);
+  }
+});
+
 test('accepts NOW between side and symbol and punctuation-heavy channel formatting', () => {
   const plan = buildMachinePlan({ text: '🔥 BUY NOW GOLD 🔥\nEntry: 2526\nS/L: 2518\nT/P 1: 2530\nT/P 2: 2535' });
   assert.equal(plan.status, 'READY');
