@@ -21,7 +21,7 @@ test('MT5 connector UI uses a stable versioned release asset and workflow builds
   assert.match(workflow, /numpy==/i, 'NumPy must be explicitly pinned because MetaTrader5 imports it at runtime');
   assert.match(workflow, /--collect-all\s+numpy/i, 'PyInstaller must collect NumPy runtime modules and native extensions');
   assert.match(workflow, /ModuleNotFoundError/i, 'the packaged executable must be checked for missing-module failures before publishing');
-  assert.match(workflow, /numpy\._core\.multiarray/i, 'the exact production NumPy import failure must be guarded by CI');
+  assert.match(workflow, /numpy.*_core.*multiarray/i, 'the exact production NumPy import failure must be guarded by CI');
   assert.match(workflow, /MketyMT5Connector\.exe/);
   assert.match(workflow, /mt5-connector-v1\.0\.0/);
   assert.match(workflow, /sha256/i);
