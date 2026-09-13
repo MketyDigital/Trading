@@ -2,6 +2,7 @@ import { normalizeOrderIntent, normalizeSymbol } from '../normalization/trading_
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|CLOSE|HALF|CANCEL|THE|PENDING|ALL)$/i;
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -19,6 +20,7 @@ function numbers(text) { return [...text.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) =
 function managementSymbol(text) {
   const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&.-]{1,24}/g) || [];
   for (const token of tokens) {
+    if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
     if (!isLikelyCompactSymbol(token)) continue;
     return normalizeSymbol(token);
   }
