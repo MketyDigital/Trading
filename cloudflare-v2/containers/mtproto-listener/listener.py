@@ -24,6 +24,19 @@ def _telegram_event_id(chat_id, message_id):
     return f'telegram:{chat_id}:{message_id}'
 
 
+def _reply_to_message_id(event):
+    candidates = [
+        getattr(event, 'reply_to_msg_id', None),
+        getattr(getattr(event, 'message', None), 'reply_to_msg_id', None),
+        getattr(getattr(event, 'reply_to', None), 'reply_to_msg_id', None),
+        getattr(getattr(getattr(event, 'message', None), 'reply_to', None), 'reply_to_msg_id', None),
+    ]
+    for value in candidates:
+        if value is not None and str(value) != '':
+            return value
+    return None
+
+
 def _topic_id(event):
     reply_header = getattr(event, 'reply_to', None)
     if reply_header is None:
@@ -37,9 +50,7 @@ def _topic_id(event):
 
 
 def _thread_contract(event, chat_id, message_id):
-    reply_to_message_id = getattr(event, 'reply_to_msg_id', None)
-    if reply_to_message_id is None:
-        reply_to_message_id = getattr(getattr(event, 'message', None), 'reply_to_msg_id', None)
+    reply_to_message_id = _reply_to_message_id(event)
     topic_id = _topic_id(event)
     edited = getattr(event, 'edit_date', None) is not None or getattr(
         getattr(event, 'message', None), 'edit_date', None
@@ -120,8 +131,6 @@ class MtprotoListener:
             session_string=self.session_string,
         )
 
-        # Register before catch-up so replayed updates use the exact same path as
-        # live updates and therefore share idempotency/canonical identity rules.
         self.client.add_event_handler(self.handle_new_message)
 
         try:
@@ -137,8 +146,6 @@ class MtprotoListener:
             self._running = True
             self._worker_task = asyncio.create_task(self._delivery_worker())
 
-            # Telethon's catch_up() retrieves updates missed while the session
-            # was offline and dispatches them to the registered handlers.
             await self.client.catch_up()
             self._status = 'HEALTHY'
             return self.health()
@@ -197,9 +204,6 @@ class MtprotoListener:
             },
         }
 
-        # Intentionally do not await downstream network work here. A bounded
-        # queue applies backpressure locally without coupling the Telegram
-        # receive loop to Trading processing latency.
         self.queue.put_nowait(payload)
         self._last_event_at = utc_now_iso()
         self._last_message_id = message_id
@@ -232,9 +236,6 @@ class MtprotoListener:
         while True:
             payload = await self.queue.get()
             try:
-                # Delivery failure is isolated to this source event. Exhausting
-                # retries must not terminate the listener worker because a later
-                # event may succeed and recover the source health state.
                 await self._deliver_with_retry(payload)
             finally:
                 self.queue.task_done()
