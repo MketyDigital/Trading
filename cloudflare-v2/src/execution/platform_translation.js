@@ -1,7 +1,5 @@
 import {
   normalizePrice,
-  normalizeVolumeForMT5,
-  normalizeVolumeForCTrader,
   validateVolumeForMT5Execution,
   validateVolumeForCTraderExecution,
 } from '../normalization/trading_normalizer.js';
@@ -95,7 +93,7 @@ export function buildMT5ManagementCommand(action, symbol = {}) {
     return {
       action: 'CLOSE_PARTIAL',
       positionId: String(action.brokerPositionId),
-      volume: normalizeVolumeForMT5(action.lots, {
+      volume: validateVolumeForMT5Execution(action.lots, {
         min: symbol.minLots,
         max: symbol.maxLots,
         step: symbol.stepLots,
@@ -129,7 +127,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
       clientMsgId,
       accountId,
       positionId: action.brokerPositionId,
-      protocolVolume: normalizeVolumeForCTrader(lots, cTraderVolumeOptions(symbol)),
+      protocolVolume: validateVolumeForCTraderExecution(lots, cTraderVolumeOptions(symbol)),
     });
   }
 
