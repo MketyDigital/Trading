@@ -65,6 +65,31 @@ export function correlateTradingEvent({
   const replyId = event?.thread?.reply_to_event_id != null ? String(event.thread.reply_to_event_id) : null;
   const threadId = event?.thread?.thread_id != null ? String(event.thread.thread_id) : null;
 
+  if (interpretation.status === 'MANAGEMENT') {
+    if (replyId) {
+      const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
+      if (replyMatches.length === 1) return { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: replyMatches[0].id };
+      if (replyMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_REPLY_TARGET' };
+    }
+
+    if (threadId) {
+      const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
+      if (threadMatches.length === 1) return { status: 'MATCHED', reason: 'THREAD_TARGET', groupId: threadMatches[0].id };
+      if (threadMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_THREAD_TARGET' };
+    }
+
+    const symbol = managementSymbol(interpretation);
+    if (symbol) {
+      const symbolMatches = scoped.filter((group) => String(group.symbol ?? '').trim().toUpperCase() === symbol);
+      if (symbolMatches.length === 1) return { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: symbolMatches[0].id };
+      if (symbolMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+      return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
+    }
+    if (scoped.length === 1) return { status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: scoped[0].id };
+    if (scoped.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+    return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
+  }
+
   if (replyId) {
     const replyMatches = recent.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
     if (replyMatches.length === 1) return { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: replyMatches[0].id };
@@ -75,19 +100,6 @@ export function correlateTradingEvent({
     const threadMatches = recent.filter((group) => group.threadId != null && String(group.threadId) === threadId);
     if (threadMatches.length === 1) return { status: 'MATCHED', reason: 'THREAD_TARGET', groupId: threadMatches[0].id };
     if (threadMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_THREAD_TARGET' };
-  }
-
-  if (interpretation.status === 'MANAGEMENT') {
-    const symbol = managementSymbol(interpretation);
-    if (symbol) {
-      const symbolMatches = recent.filter((group) => String(group.symbol ?? '').trim().toUpperCase() === symbol);
-      if (symbolMatches.length === 1) return { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: symbolMatches[0].id };
-      if (symbolMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
-      return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
-    }
-    if (recent.length === 1) return { status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: recent[0].id };
-    if (recent.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
-    return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }
 
   if (interpretation.status === 'READY' && interpretation.intent) {
