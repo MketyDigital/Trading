@@ -35,7 +35,7 @@ function withManagementSymbol(text, management) {
 function managementPlan(text) {
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
-  if (/\bMOVE\b(?:.|\s)*\b(?:SL|STOP)\b(?:.|\s)*\b(?:BE|BREAK\s*EVEN|BREAKEVEN)\b|\bBREAK\s*EVEN\b|\bBREAKEVEN\b/.test(upper)) {
+  if (/\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
