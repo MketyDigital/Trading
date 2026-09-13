@@ -42,6 +42,19 @@ test('normalizes major market families and named Deriv synthetics', () => {
   }
 });
 
+test('canonical Deriv symbols are idempotent through shared normalization', () => {
+  for (const canonical of [
+    'DERIV:VOLATILITY_75',
+    'DERIV:VOLATILITY_75_1S',
+    'DERIV:BOOM_1000',
+    'DERIV:CRASH_500',
+    'DERIV:STEP',
+    'DERIV:JUMP_25',
+  ]) {
+    assert.equal(normalizeSymbol(canonical).canonical, canonical, canonical);
+  }
+});
+
 test('normalizes common broker suffixes without changing canonical intent', () => {
   assert.equal(normalizeSymbol('XAUUSD.m').canonical, 'XAUUSD');
   assert.equal(normalizeSymbol('BTCUSD.pro').canonical, 'BTCUSD');
