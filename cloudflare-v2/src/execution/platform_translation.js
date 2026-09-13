@@ -1,6 +1,5 @@
 import {
   normalizePrice,
-  normalizeVolumeForMT5,
   normalizeVolumeForCTrader,
   validateVolumeForMT5Execution,
   validateVolumeForCTraderExecution,
@@ -95,7 +94,7 @@ export function buildMT5ManagementCommand(action, symbol = {}) {
     return {
       action: 'CLOSE_PARTIAL',
       positionId: String(action.brokerPositionId),
-      volume: normalizeVolumeForMT5(action.lots, {
+      volume: validateVolumeForMT5Execution(action.lots, {
         min: symbol.minLots,
         max: symbol.maxLots,
         step: symbol.stepLots,
@@ -122,7 +121,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
     });
   }
 
-  if (action.type === 'CLOSE_POSITION' || action.type === 'CLOSE_PARTIAL') {
+  if (action.type === 'CLOSE_POSITION') {
     const lots = action.lots;
     if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
     return buildClosePositionMessage({
@@ -130,6 +129,17 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
       accountId,
       positionId: action.brokerPositionId,
       protocolVolume: normalizeVolumeForCTrader(lots, cTraderVolumeOptions(symbol)),
+    });
+  }
+
+  if (action.type === 'CLOSE_PARTIAL') {
+    const lots = action.lots;
+    if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
+    return buildClosePositionMessage({
+      clientMsgId,
+      accountId,
+      positionId: action.brokerPositionId,
+      protocolVolume: validateVolumeForCTraderExecution(lots, cTraderVolumeOptions(symbol)),
     });
   }
 

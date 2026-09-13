@@ -280,6 +280,9 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       accountRowId: accountRef(account),
       gatewayUrl,
       controlSecret,
+      expectedBrokerAccountId: brokerAccountIdOf(account),
+      expectedServerName: text(account.server_name ?? account.serverName),
+      expectedEnvironment: text(account.environment),
       symbolCatalog: symbols.catalog,
       symbolAliases: symbols.aliases,
       // Compatibility aliases keep injected tests/adapters simple while the executor uses explicit names above.

@@ -25,13 +25,13 @@ function simulationActions(actions = []) {
   return actions.map((action) => ({ ...action, simulated: true }));
 }
 
-function roundLotsToStep(value, step = 0.01) {
+function floorLotsToStep(value, step = 0.01) {
   const numeric = Number(value);
   const volumeStep = Number(step);
   if (!(numeric >= 0) || !(volumeStep > 0)) return undefined;
   const text = String(volumeStep);
   const precision = text.includes('.') ? text.split('.')[1].length : 0;
-  return Number((Math.round(numeric / volumeStep) * volumeStep).toFixed(precision));
+  return Number((Math.floor((numeric / volumeStep) + 1e-12) * volumeStep).toFixed(precision));
 }
 
 function buildPlannedSimulationManagementActions(group, management) {
@@ -51,17 +51,56 @@ function buildPlannedSimulationManagementActions(group, management) {
     }));
   }
 
-  if (management?.type === 'CLOSE_PARTIAL') {
-    const fraction = Number(management.fraction);
-    if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
+  if (management?.type === 'MOVE_SL') {
+    const stopLoss = Number(management.stopLoss);
+    if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
     return plannedLegs.map((leg) => ({
-      type: 'CLOSE_PARTIAL',
+      type: 'MODIFY_POSITION',
       legId: leg.legId,
       targetIndex: leg.targetIndex,
       symbol: group.symbol,
-      fraction,
-      lots: leg.lots == null ? undefined : roundLotsToStep(Number(leg.lots) * fraction, management.volumeStep || 0.01),
+      stopLoss,
     }));
+  }
+
+  if (management?.type === 'CHANGE_TP') {
+    const takeProfit = Number(management.takeProfit);
+    if (!Number.isFinite(takeProfit)) throw new Error('finite takeProfit is required');
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null
+      ? plannedLegs
+      : plannedLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+    return matchingLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      symbol: group.symbol,
+      takeProfit,
+    }));
+  }
+
+  if (management?.type === 'CLOSE_PARTIAL') {
+    const fraction = Number(management.fraction);
+    const volumeStep = Number(management.volumeStep || 0.01);
+    if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
+    if (!(volumeStep > 0)) throw new Error('partial-close volumeStep must be positive');
+    return plannedLegs.map((leg) => {
+      let lots;
+      if (leg.lots != null) {
+        lots = floorLotsToStep(Number(leg.lots) * fraction, volumeStep);
+        if (!(lots > 0) || lots >= Number(leg.lots)) {
+          throw new Error('partial-close volume is not representable without full close');
+        }
+      }
+      return {
+        type: 'CLOSE_PARTIAL',
+        legId: leg.legId,
+        targetIndex: leg.targetIndex,
+        symbol: group.symbol,
+        fraction,
+        lots,
+      };
+    });
   }
 
   if (management?.type === 'CANCEL_PENDING') {
@@ -192,6 +231,15 @@ async function orchestrateMatchedManagement({
       status: 'SIMULATED',
       correlation,
       accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] }],
+    };
+  }
+
+  if (interpretation.management?.type === 'TARGET_HIT' && account.safetyPolicy?.autoTpProtection !== true) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'AUTO_TP_PROTECTION_DISABLED', actions: [] }],
     };
   }
 

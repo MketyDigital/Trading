@@ -25,6 +25,15 @@ test('portal promotes outbound MT5 Connector and keeps HTTP bridge compatibility
   assert.doesNotMatch(html, /public HTTPS/i);
 });
 
+test('new MT5 pairing renders a sync action bound directly to returned connector account id', () => {
+  const mt5 = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_mt5_connector_connections.js'), 'utf8');
+  assert.match(mt5, /x\.account/);
+  assert.match(mt5, /account\.id/);
+  assert.match(mt5, /renderPairingSync/);
+  assert.match(mt5, /data-mt5-connector-sync/);
+  assert.match(mt5, /syncConnector\(accountId/);
+});
+
 test('production browser release gate exercises MT5 Connector instead of expecting legacy MT5 Cloud to remain visible', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-frontend-e2e.yml'), 'utf8');
   assert.match(workflow, /showAdvancedMt5BridgeBtn/);
