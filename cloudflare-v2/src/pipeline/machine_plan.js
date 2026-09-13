@@ -106,7 +106,7 @@ function extractEntry(text, symbolToken) {
   return price ? { kind: 'PRICE', value: Number(price[0]) } : null;
 }
 
-function isConfidentMarketCommand(text) {
+function isConfidentExecutionInstruction(text) {
   if (text.includes('?')) return false;
   if (/\bDO\s+NOT\b/i.test(text)) return false;
   return !MARKET_COMMAND_BLOCKER.test(text);
@@ -122,6 +122,11 @@ export function buildMachinePlan(event = {}) {
   if (!order.side || !sideInfo) return { status: 'NEEDS_INTERPRETATION' };
   const symbolToken = extractSymbolToken(text, sideInfo);
   if (!symbolToken) return { status: 'NEEDS_INTERPRETATION' };
+
+  // An action and symbol are executable only when the instruction is affirmative.
+  // Conditional, uncertain, interrogative, and negated prose remains on the AI/review path.
+  if (!isConfidentExecutionInstruction(text)) return { status: 'NEEDS_INTERPRETATION' };
+
   const symbol = normalizeSymbol(symbolToken);
   const stopLossMatch = text.match(/\bSL\s*[:@=-]?\s*(-?\d+(?:\.\d+)?)/i);
   const stopLoss = stopLossMatch ? Number(stopLossMatch[1]) : null;
@@ -130,8 +135,7 @@ export function buildMachinePlan(event = {}) {
   const fastEntry = order.orderType === 'MARKET'
     && !entry
     && !stopLoss
-    && takeProfits.length === 0
-    && isConfidentMarketCommand(text);
+    && takeProfits.length === 0;
   if (!fastEntry && !entry && order.orderType !== 'MARKET') return { status: 'NEEDS_INTERPRETATION' };
   if (!fastEntry && !entry && !stopLoss && takeProfits.length === 0) return { status: 'NEEDS_INTERPRETATION' };
   return { status: 'READY', intent: { side: sideInfo.side, orderType: order.orderType, symbol, entry: entry || { kind: 'MARKET' }, stopLoss, takeProfits, fastEntry, incomplete: fastEntry || !stopLoss || takeProfits.length === 0 } };
