@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections.js';
+import { handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections_account_controls.js';
+import { withUnifiedTradingConnections } from '../src/dashboard_unified_connections.js';
+import { withSimplifiedAccountControls } from '../src/dashboard_simplified_account_controls.js';
 
 const authorization = {
   ok: true,
@@ -130,8 +129,7 @@ test('live account keeps real-money permission separate from its Trading ON/OFF 
 });
 
 test('connections UI exposes one Trading toggle for demo and a separate real-money toggle only for live accounts', () => {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const ui = fs.readFileSync(path.resolve(here, '../src/dashboard_unified_connections.js'), 'utf8');
+  const ui = withSimplifiedAccountControls(withUnifiedTradingConnections('<html><body></body></html>'));
   assert.match(ui, /data-account-trading/);
   assert.match(ui, /Trading ON/);
   assert.match(ui, /Trading OFF/);
