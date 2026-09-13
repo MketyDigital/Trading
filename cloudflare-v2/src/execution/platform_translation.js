@@ -1,5 +1,6 @@
 import {
   normalizePrice,
+  normalizeVolumeForCTrader,
   validateVolumeForMT5Execution,
   validateVolumeForCTraderExecution,
 } from '../normalization/trading_normalizer.js';
@@ -120,7 +121,18 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
     });
   }
 
-  if (action.type === 'CLOSE_POSITION' || action.type === 'CLOSE_PARTIAL') {
+  if (action.type === 'CLOSE_POSITION') {
+    const lots = action.lots;
+    if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
+    return buildClosePositionMessage({
+      clientMsgId,
+      accountId,
+      positionId: action.brokerPositionId,
+      protocolVolume: normalizeVolumeForCTrader(lots, cTraderVolumeOptions(symbol)),
+    });
+  }
+
+  if (action.type === 'CLOSE_PARTIAL') {
     const lots = action.lots;
     if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
     return buildClosePositionMessage({
