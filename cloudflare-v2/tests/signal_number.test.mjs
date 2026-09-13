@@ -16,6 +16,8 @@ test('parses plain and human-grouped market prices without truncating them', () 
   assert.equal(parseSignalNumber('77400.54').value, 77400.54);
   assert.equal(parseSignalNumber('77,400').value, 77400);
   assert.equal(parseSignalNumber('77400').value, 77400);
+  assert.equal(parseSignalNumber('2,500.50').value, 2500.5);
+  assert.equal(parseSignalNumber('2500.50').value, 2500.5);
 });
 
 test('repairs one uniquely safe duplicated decimal separator but rejects ambiguous malformed prices', () => {
