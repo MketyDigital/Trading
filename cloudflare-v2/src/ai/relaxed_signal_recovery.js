@@ -29,7 +29,10 @@ function explicitTargets(text) {
 }
 
 function hasAmbiguousGroupedNumber(text) {
-  const candidates = String(text ?? '').match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
+  // Do not absorb a comma that is only sentence punctuation after a valid number.
+  // Malformed grouped values such as `1,234,56,78` still remain one candidate
+  // and therefore fail closed in parseSignalNumber().
+  const candidates = String(text ?? '').match(/-?\d(?:[\d,]*\d)?(?:\.\d+)?/g) || [];
   return candidates.some((candidate) => candidate.includes(',') && !parseSignalNumber(candidate).ok);
 }
 
