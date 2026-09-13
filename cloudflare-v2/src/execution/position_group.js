@@ -91,8 +91,33 @@ export function buildManagementActions(group, management) {
       stopLoss: Number(group.entryPrice),
     }));
   }
+  if (management?.type === 'MOVE_SL') {
+    const stopLoss = Number(management.stopLoss);
+    if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
+    return openLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      stopLoss,
+    }));
+  }
+  if (management?.type === 'CHANGE_TP') {
+    const takeProfit = Number(management.takeProfit);
+    if (!Number.isFinite(takeProfit)) throw new Error('finite takeProfit is required');
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null
+      ? openLegs
+      : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+    return matchingLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      takeProfit,
+    }));
+  }
   if (management?.type === 'CLOSE_PARTIAL') {
     const fraction = Number(management.fraction);
+    if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
     return openLegs.map((leg) => ({
       type: 'CLOSE_PARTIAL',
       brokerPositionId: leg.brokerPositionId,
@@ -100,6 +125,15 @@ export function buildManagementActions(group, management) {
       fraction,
       lots: leg.lots ? roundToStep(leg.lots * fraction, management.volumeStep || 0.01) : undefined,
     }));
+  }
+  if (management?.type === 'CANCEL_PENDING') {
+    return group.legs
+      .filter((leg) => leg.brokerOrderId)
+      .map((leg) => ({
+        type: 'CANCEL_PENDING',
+        brokerOrderId: leg.brokerOrderId,
+        symbol: group.symbol,
+      }));
   }
   if (management?.type === 'CLOSE' || management?.type === 'CLOSE_ALL') {
     return openLegs.map((leg) => ({
