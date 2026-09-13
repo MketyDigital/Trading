@@ -79,9 +79,30 @@ export function reconcileFastEntry(existingGroup, completedIntent, { totalLots, 
   return { group: desired, actions };
 }
 
+export function buildTargetProtectionActions(group, targetIndex) {
+  if (!group?.legs) return [];
+  const index = Number(targetIndex);
+  if (!Number.isInteger(index) || index < 1) throw new Error('valid targetIndex is required');
+  const hitLeg = group.legs.find((leg) => Number(leg.targetIndex) === index);
+  if (!hitLeg || !Number.isFinite(Number(hitLeg.takeProfit))) throw new Error('target-hit takeProfit is unavailable');
+  const protectedStop = Number(hitLeg.takeProfit);
+  return group.legs
+    .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
+    .map((leg) => ({
+      type: 'MODIFY_POSITION',
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      stopLoss: protectedStop,
+      targetIndex: leg.targetIndex,
+    }));
+}
+
 export function buildManagementActions(group, management) {
   if (!group?.legs) return [];
   const openLegs = group.legs.filter((leg) => leg.status === 'OPEN' && leg.brokerPositionId);
+  if (management?.type === 'TARGET_HIT') {
+    return buildTargetProtectionActions(group, management.targetIndex);
+  }
   if (management?.type === 'MOVE_SL_TO_BE') {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
     return openLegs.map((leg) => ({
