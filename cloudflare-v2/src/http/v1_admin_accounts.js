@@ -34,6 +34,7 @@ function publicAccount(account = {}) {
     ?? account.credentialConfigured
     ?? account.credentialsConfigured,
   );
+  const safetyPolicy = account.safety_policy ?? account.safetyPolicy ?? {};
   return {
     id: account.id,
     label: account.account_label ?? account.label ?? null,
@@ -42,7 +43,8 @@ function publicAccount(account = {}) {
     serverName: account.server_name ?? account.serverName ?? null,
     active: Boolean(account.is_active ?? account.active),
     executionEnabled: Boolean(account.execution_enabled ?? account.executionEnabled),
-    killSwitch: Boolean((account.safety_policy ?? account.safetyPolicy)?.killSwitch),
+    killSwitch: Boolean(safetyPolicy?.killSwitch),
+    autoTpProtection: safetyPolicy?.autoTpProtection === true,
     lotSizingType: account.lot_sizing_type ?? account.lotSizingType ?? null,
     lotValue: account.lot_value ?? account.lotValue ?? null,
     fastEntryPolicy: account.fast_entry_policy ?? account.fastEntryPolicy ?? null,
@@ -137,6 +139,24 @@ export function createAdminAccountStore(supabase) {
       .eq('id', String(accountId))
       .maybeSingle();
     if (error) throw new Error('ACCOUNT_READ_FAILED');
+    return data || null;
+  }
+
+  async function updateSafetyPolicy(workspaceId, accountId, patch, errorCode) {
+    const account = await getAccount(workspaceId, accountId);
+    if (!account) return null;
+    const safetyPolicy = {
+      ...(account.safety_policy && typeof account.safety_policy === 'object' ? account.safety_policy : {}),
+      ...patch,
+    };
+    const { data, error } = await supabase
+      .from('trade_accounts')
+      .update({ safety_policy: safetyPolicy })
+      .eq('workspace_id', String(workspaceId))
+      .eq('id', String(accountId))
+      .select(ACCOUNT_SELECT)
+      .maybeSingle();
+    if (error) throw new Error(errorCode);
     return data || null;
   }
 
@@ -238,21 +258,11 @@ export function createAdminAccountStore(supabase) {
     },
 
     async setKillSwitch(workspaceId, accountId, enabled) {
-      const account = await getAccount(workspaceId, accountId);
-      if (!account) return null;
-      const safetyPolicy = {
-        ...(account.safety_policy && typeof account.safety_policy === 'object' ? account.safety_policy : {}),
-        killSwitch: Boolean(enabled),
-      };
-      const { data, error } = await supabase
-        .from('trade_accounts')
-        .update({ safety_policy: safetyPolicy })
-        .eq('workspace_id', String(workspaceId))
-        .eq('id', String(accountId))
-        .select(ACCOUNT_SELECT)
-        .maybeSingle();
-      if (error) throw new Error('ACCOUNT_KILL_SWITCH_UPDATE_FAILED');
-      return data || null;
+      return updateSafetyPolicy(workspaceId, accountId, { killSwitch: Boolean(enabled) }, 'ACCOUNT_KILL_SWITCH_UPDATE_FAILED');
+    },
+
+    async setAutoTpProtection(workspaceId, accountId, enabled) {
+      return updateSafetyPolicy(workspaceId, accountId, { autoTpProtection: Boolean(enabled) }, 'ACCOUNT_AUTO_TP_PROTECTION_UPDATE_FAILED');
     },
   };
 }
@@ -425,6 +435,8 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       account = await accountStore.setExecutionEnabled(workspaceId, accountId, body.enabled);
     } else if (action === 'kill-switch') {
       account = await accountStore.setKillSwitch(workspaceId, accountId, body.enabled);
+    } else if (action === 'auto-tp-protection') {
+      account = await accountStore.setAutoTpProtection(workspaceId, accountId, body.enabled);
     } else {
       return json({ ok: false, reason: 'ADMIN_ACCOUNT_ROUTE_NOT_FOUND' }, 404);
     }
