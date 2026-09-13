@@ -16,13 +16,34 @@ function normalizeSignalText(value) {
 
 function numbers(text) { return [...text.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0])); }
 
+function managementSymbol(text) {
+  const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&.-]{1,24}/g) || [];
+  for (const token of tokens) {
+    if (!isLikelyCompactSymbol(token)) continue;
+    return normalizeSymbol(token);
+  }
+  return null;
+}
+
+function withManagementSymbol(text, management) {
+  const symbol = managementSymbol(text);
+  return symbol ? { status: 'MANAGEMENT', management: { ...management, symbol } } : { status: 'MANAGEMENT', management };
+}
+
 function managementPlan(text) {
   const upper = text.toUpperCase();
-  if (/MOVE\s+(?:SL\s+)?(?:TO\s+)?BE\b|BREAK\s*EVEN|BREAKEVEN/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } };
-  if (/CLOSE\s+HALF|CLOSE\s+50%/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 } };
-  if (/CANCEL\s+(?:THE\s+)?PENDING/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING' } };
-  if (/CLOSE\s+ALL/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
-  if (/\bCLOSE\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE' } };
+  if (!isConfidentExecutionInstruction(text)) return null;
+  if (/\bMOVE\b(?:.|\s)*\b(?:SL|STOP)\b(?:.|\s)*\b(?:BE|BREAK\s*EVEN|BREAKEVEN)\b|\bBREAK\s*EVEN\b|\bBREAKEVEN\b/.test(upper)) {
+    return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
+  }
+  if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
+    return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
+  }
+  if (/\bCANCEL\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&.-]+)?\s+PENDING\b/.test(upper)) {
+    return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
+  }
+  if (/\bCLOSE\s+ALL\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
+  if (/\bCLOSE\b/.test(upper)) return withManagementSymbol(text, { type: 'CLOSE' });
   return null;
 }
 
@@ -79,9 +100,6 @@ function extractSymbolToken(text, sideInfo) {
   after = after.replace(/^\s*NOW\b/i, '').trim();
   after = after.replace(/^\s*[@:=-]+\s*/, '');
 
-  // A conversational cue immediately after BUY/SELL means the message is prose,
-  // not a structured "SIDE SYMBOL" signal. Do not misread words such as
-  // "around" or "near" as broker symbols; let the AI interpreter resolve it.
   if (/^(?:AROUND|NEAR|ABOUT|FROM|HERE|NOW\s+AROUND|AT\s+(?:AROUND|ABOUT))\b/i.test(after)) return null;
 
   const synthetic = after.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
@@ -133,8 +151,6 @@ export function buildMachinePlan(event = {}) {
   const symbolToken = extractSymbolToken(text, sideInfo);
   if (!symbolToken) return { status: 'NEEDS_INTERPRETATION' };
 
-  // An action and symbol are executable only when the instruction is affirmative.
-  // Conditional, uncertain, interrogative, and negated prose remains on the AI/review path.
   if (!isConfidentExecutionInstruction(text)) return { status: 'NEEDS_INTERPRETATION' };
 
   const symbol = normalizeSymbol(symbolToken);
