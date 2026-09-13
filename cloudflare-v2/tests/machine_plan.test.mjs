@@ -47,13 +47,15 @@ test('accepts symbol-before-side and long/short signal variants', () => {
   assert.equal(shortSignal.intent.symbol.canonical, 'EURUSD');
 });
 
-test('treats bare action plus symbol as an incomplete market fast-entry signal in either order', () => {
+test('treats clear action plus symbol as an incomplete market fast-entry signal in either order', () => {
   const cases = [
     ['BTCUSD buy', 'BUY', 'BTCUSD'],
     ['buy BTCUSD', 'BUY', 'BTCUSD'],
     ['ETHUSD SELL', 'SELL', 'ETHUSD'],
     ['short EURUSD', 'SELL', 'EURUSD'],
     ['GOLD long', 'BUY', 'XAUUSD'],
+    ['please buy BTCUSD', 'BUY', 'BTCUSD'],
+    ['BTCUSD sell please', 'SELL', 'BTCUSD'],
   ];
 
   for (const [text, side, canonical] of cases) {
@@ -65,6 +67,20 @@ test('treats bare action plus symbol as an incomplete market fast-entry signal i
     assert.deepEqual(plan.intent.entry, { kind: 'MARKET' }, text);
     assert.equal(plan.intent.fastEntry, true, text);
     assert.equal(plan.intent.incomplete, true, text);
+  }
+});
+
+test('does not execute uncertain, negated, or question-form action-symbol commentary', () => {
+  const cases = [
+    'I might buy BTCUSD later',
+    'should we buy BTCUSD?',
+    "don't buy BTCUSD",
+    'avoid selling XAUUSD',
+    'watch BTCUSD, buy later',
+  ];
+
+  for (const text of cases) {
+    assert.equal(buildMachinePlan({ text }).status, 'NEEDS_INTERPRETATION', text);
   }
 });
 
