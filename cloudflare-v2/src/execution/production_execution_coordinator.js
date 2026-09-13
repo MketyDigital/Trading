@@ -80,6 +80,10 @@ function safeBrokerOutcome(action = {}, result = {}) {
   if (result?.brokerDealId != null) outcome.brokerDealId = String(result.brokerDealId);
   const fillPrice = Number(result?.fillPrice);
   if (Number.isFinite(fillPrice)) outcome.fillPrice = fillPrice;
+  for (const key of ['executedLots', 'volumeStepLots', 'minimumLots']) {
+    const value = Number(result?.[key]);
+    if (Number.isFinite(value) && value > 0) outcome[key] = value;
+  }
   return outcome;
 }
 
@@ -141,8 +145,6 @@ function validateLiveExecutionAuthority(account, requestedAccountId, {
   liveBrokerExecutionEnabled,
   liveBrokerExecutionControlAvailable,
 } = {}) {
-  // Legacy/unit callers that do not supply the global live-control contract keep
-  // their existing behavior. Production execution always supplies it.
   if (typeof liveBrokerExecutionControlAvailable !== 'boolean') return null;
 
   const environment = accountEnvironment(account);
@@ -158,6 +160,26 @@ function validateLiveExecutionAuthority(account, requestedAccountId, {
     return blockedAccount(requestedAccountId, 'ACCOUNT_LIVE_EXECUTION_DISABLED');
   }
   return null;
+}
+
+async function bindOpenFailure({ stateBinder, workspaceId, eventId, accountId, groupId, action, failureCode }) {
+  if (typeof stateBinder !== 'function' || !isRiskIncreasingAction(action) || !groupId || !action?.legId) return;
+  try {
+    await stateBinder({
+      workspaceId,
+      eventId,
+      accountId,
+      groupId,
+      legId: action.legId,
+      actionType: 'OPEN_POSITION',
+      status: 'FAILED',
+      failureCode: text(failureCode) || 'BROKER_DISPATCH_FAILED',
+    });
+  } catch {
+    // The broker failure is authoritative. A secondary state-binding failure is
+    // recorded by the delivery/audit path and must never turn into a retry that
+    // could duplicate a money-moving command.
+  }
 }
 
 async function runAccountPlan({
@@ -305,21 +327,40 @@ async function runAccountPlan({
       });
       safeMark(latencyTrace, 'BROKER_ACK');
       if (result?.ok === false || result?.success === false) {
-        outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: 'BROKER_DISPATCH_FAILED' });
+        await bindOpenFailure({
+          stateBinder, workspaceId, eventId, accountId: requestedAccountId,
+          groupId: plan?.groupId ?? null, action: executableAction,
+          failureCode: result?.errorCode || result?.code || 'BROKER_DISPATCH_FAILED',
+        });
+        outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: result?.errorCode || result?.code || 'BROKER_DISPATCH_FAILED' });
         continue;
       }
-    } catch {
-      outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: 'BROKER_DISPATCH_FAILED' });
+    } catch (error) {
+      await bindOpenFailure({
+        stateBinder, workspaceId, eventId, accountId: requestedAccountId,
+        groupId: plan?.groupId ?? null, action: executableAction,
+        failureCode: error?.code || 'BROKER_DISPATCH_FAILED',
+      });
+      outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: error?.code || 'BROKER_DISPATCH_FAILED' });
       continue;
     }
 
     if (result?.duplicate !== true && hasBindableBrokerResult(result) && typeof stateBinder === 'function') {
       try {
+        const brokerPositionId = result?.brokerPositionId ?? null;
+        const brokerOrderId = result?.brokerOrderId ?? null;
         await stateBinder({
           workspaceId, eventId, accountId: requestedAccountId, groupId: plan?.groupId ?? null,
-          legId: executableAction?.legId ?? null, brokerPositionId: result?.brokerPositionId ?? null,
-          brokerOrderId: result?.brokerOrderId ?? null, brokerDealId: result?.brokerDealId ?? null,
+          legId: executableAction?.legId ?? null,
+          actionType: executableAction?.type ?? null,
+          status: brokerPositionId != null ? 'OPEN' : brokerOrderId != null ? 'PENDING' : null,
+          brokerPositionId,
+          brokerOrderId,
+          brokerDealId: result?.brokerDealId ?? null,
           fillPrice: Number.isFinite(Number(result?.fillPrice)) ? Number(result.fillPrice) : null,
+          executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
+          volumeStepLots: Number.isFinite(Number(result?.volumeStepLots)) ? Number(result.volumeStepLots) : null,
+          minimumLots: Number.isFinite(Number(result?.minimumLots)) ? Number(result.minimumLots) : null,
         });
       } catch {
         if (typeof bindingRepairRecorder === 'function') {
