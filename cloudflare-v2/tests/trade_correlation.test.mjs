@@ -72,6 +72,18 @@ test('reply metadata targets the exact originating position group for management
   assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g1' });
 });
 
+test('reply management fans out across per-account groups created by the same source trade', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '102a', thread: { reply_to_event_id: 'telegram:-1001:238' } },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: [
+      group({ id: 'g-ctrader', tradeAccountId: 'ctrader', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+      group({ id: 'g-mt5', tradeAccountId: 'mt5', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+    ], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupIds: ['g-ctrader', 'g-mt5'] });
+});
+
 test('reply-target management remains valid for the full life of an open group', () => {
   const old = group({ updatedAt: now - 45 * 60 * 1000, sourceEventIds: ['telegram:-1001:238'] });
   const result = correlateTradingEvent({
@@ -124,6 +136,18 @@ test('symbol-targeted management selects the matching active group even outside 
   assert.deepEqual(result, { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: 'btc' });
 });
 
+test('symbol-targeted management fans out across same-trade account groups', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '106a', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE', symbol: { canonical: 'BTCUSD' } } },
+    activeGroups: [
+      group({ id: 'btc-a', tradeAccountId: 'acct-a', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+      group({ id: 'btc-b', tradeAccountId: 'acct-b', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+    ], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupIds: ['btc-a', 'btc-b'] });
+});
+
 test('symbol-targeted management fails closed when same-symbol groups are ambiguous', () => {
   const result = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '106b', thread: {} },
@@ -152,6 +176,18 @@ test('unthreaded bare management fails closed when multiple active groups could 
     activeGroups: [group(), group({ id: 'g2', sourceEventIds: ['200'], symbol: 'EURUSD', incomplete: false })], nowMs: now,
   });
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
+});
+
+test('unthreaded bare management treats per-account copies of one source signal as one active trade', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '107a', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: [
+      group({ id: 'same-a', tradeAccountId: 'acct-a', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+      group({ id: 'same-b', tradeAccountId: 'acct-b', sourceEventIds: ['telegram:-1001:238'], symbol: 'BTCUSD' }),
+    ], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'ONLY_ACTIVE_TRADE', groupIds: ['same-a', 'same-b'] });
 });
 
 test('unthreaded bare management targets the only active open group even outside the fast-entry window', () => {

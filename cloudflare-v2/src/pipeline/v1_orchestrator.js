@@ -208,102 +208,93 @@ async function orchestrateMatchedManagement({
   accountProvider,
 }) {
   const base = { executionEnabled: false, actions: [] };
-  if (!stateStore?.getGroup) {
-    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_STORE_UNAVAILABLE' };
-  }
-
-  const matchedGroup = await stateStore.getGroup(correlation.groupId);
-  if (!matchedGroup) {
-    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_GROUP_NOT_FOUND' };
+  const loaded = await loadMatchedFastGroups(correlation, stateStore);
+  if (!loaded.ok) {
+    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
   }
 
   const accounts = await accountProvider(event.workspace_hint, event, interpretation);
-  const rawAccount = (Array.isArray(accounts) ? accounts : [])
-    .find((account) => String(account?.id) === String(matchedGroup.tradeAccountId));
-  if (!rawAccount) {
-    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_ACCOUNT_NOT_FOUND' };
+  const accountById = new Map((Array.isArray(accounts) ? accounts : [])
+    .map((account) => [String(account?.id ?? ''), account])
+    .filter(([id]) => Boolean(id)));
+
+  // Validate the entire logical trade cohort before mutating any state. A missing
+  // account must fail closed instead of allowing management to drift to another account.
+  for (const matchedGroup of loaded.groups) {
+    if (!accountById.has(String(matchedGroup.tradeAccountId ?? ''))) {
+      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_ACCOUNT_NOT_FOUND' };
+    }
   }
 
-  const account = normalizeAccount(rawAccount);
-  if (account.execution_enabled !== true && account.executionEnabled !== true) {
-    return {
-      ...base,
-      status: 'SIMULATED',
-      correlation,
-      accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] }],
-    };
-  }
+  const results = [];
+  const stagedGroups = [];
 
-  if (interpretation.management?.type === 'TARGET_HIT' && account.safetyPolicy?.autoTpProtection !== true) {
-    return {
-      ...base,
-      status: 'SIMULATED',
-      correlation,
-      accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'AUTO_TP_PROTECTION_DISABLED', actions: [] }],
-    };
-  }
+  for (const matchedGroup of loaded.groups) {
+    const account = normalizeAccount(accountById.get(String(matchedGroup.tradeAccountId)));
+    if (account.execution_enabled !== true && account.executionEnabled !== true) {
+      results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
+      continue;
+    }
 
-  const policy = evaluateAccountPolicy(account.safetyPolicy, {
-    symbol: matchedGroup.symbol,
-    actionKind: 'REDUCE_RISK',
-  });
-  if (!policy.allowed) {
-    return {
-      ...base,
-      status: 'SIMULATED',
-      correlation,
-      accounts: [{ accountId: account.id, status: 'BLOCKED', policy, actions: [] }],
-    };
-  }
+    if (interpretation.management?.type === 'TARGET_HIT' && account.safetyPolicy?.autoTpProtection !== true) {
+      results.push({ accountId: account.id, status: 'SKIPPED', reason: 'AUTO_TP_PROTECTION_DISABLED', actions: [] });
+      continue;
+    }
 
-  let actions;
-  try {
-    actions = buildSimulationManagementActions(matchedGroup, interpretation.management);
-  } catch (error) {
-    return {
-      ...base,
-      status: 'SIMULATED',
-      correlation,
-      accounts: [{
+    const policy = evaluateAccountPolicy(account.safetyPolicy, {
+      symbol: matchedGroup.symbol,
+      actionKind: 'REDUCE_RISK',
+    });
+    if (!policy.allowed) {
+      results.push({ accountId: account.id, status: 'BLOCKED', policy, actions: [] });
+      continue;
+    }
+
+    let actions;
+    try {
+      actions = buildSimulationManagementActions(matchedGroup, interpretation.management);
+    } catch (error) {
+      results.push({
         accountId: account.id,
         status: 'BLOCKED',
         reason: 'MANAGEMENT_ACTION_INVALID',
         error: error.message,
         policy,
         actions: [],
-      }],
-    };
-  }
+      });
+      continue;
+    }
 
-  if (!Array.isArray(actions) || actions.length === 0) {
-    return {
-      ...base,
-      status: 'SIMULATED',
-      correlation,
-      accounts: [{
+    if (!Array.isArray(actions) || actions.length === 0) {
+      results.push({
         accountId: account.id,
         status: 'BLOCKED',
         reason: 'MANAGEMENT_ACTION_UNAVAILABLE',
         policy,
         actions: [],
-      }],
-    };
-  }
+      });
+      continue;
+    }
 
-  const auditedGroup = managementAuditGroup(matchedGroup, event, nowMs);
-  await stateStore.putGroup(auditedGroup);
-
-  return {
-    ...base,
-    status: 'SIMULATED',
-    correlation,
-    accounts: [{
+    stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs));
+    results.push({
       accountId: account.id,
       status: 'READY',
       groupId: matchedGroup.id,
       policy,
       actions: simulationActions(actions),
-    }],
+    });
+  }
+
+  for (const group of stagedGroups) {
+    await stateStore.putGroup(group);
+  }
+
+  return {
+    ...base,
+    status: 'SIMULATED',
+    correlation,
+    accounts: results,
   };
 }
 
