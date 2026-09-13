@@ -73,7 +73,7 @@ test('reply-targeted BE can simulate against PLANNED canonical legs without inve
   assert.deepEqual(persisted[0].sourceEventIds, ['signal-1', 'management-1']);
 });
 
-test('reply-targeted half close can simulate canonical lots on PLANNED legs', async () => {
+test('reply-targeted half close rounds down to broker volume step and never exceeds requested fraction', async () => {
   const existing = plannedGroup();
   const persisted = [];
   const result = await orchestrateTradingEventSimulation({
@@ -92,6 +92,28 @@ test('reply-targeted half close can simulate canonical lots on PLANNED legs', as
   assert.equal(result.accounts[0].status, 'READY');
   assert.deepEqual(result.accounts[0].actions.map((action) => action.type), ['CLOSE_PARTIAL', 'CLOSE_PARTIAL']);
   assert.deepEqual(result.accounts[0].actions.map((action) => action.legId), ['leg-1', 'leg-2']);
-  assert.equal(result.accounts[0].actions.every((action) => action.fraction === 0.5 && action.lots === 0.02 && action.simulated === true), true);
+  assert.equal(result.accounts[0].actions.every((action) => action.fraction === 0.5 && action.lots === 0.01 && action.simulated === true), true);
   assert.deepEqual(persisted[0].sourceEventIds, ['signal-1', 'management-2']);
+});
+
+test('half close fails closed when broker volume step cannot represent any partial volume', async () => {
+  const existing = plannedGroup();
+  existing.legs = existing.legs.map((leg) => ({ ...leg, lots: 0.01 }));
+  const persisted = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'management-too-small',
+      workspace_hint: 'ws-1',
+      source: { instance_id: 'acceptance-harness' },
+      thread: { reply_to_event_id: 'signal-1' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 } },
+    eventId: 'db-management-too-small',
+    nowMs: 2000,
+  }, deps(existing, persisted));
+
+  assert.equal(result.accounts[0].status, 'BLOCKED');
+  assert.equal(result.accounts[0].reason, 'MANAGEMENT_ACTION_INVALID');
+  assert.deepEqual(result.accounts[0].actions, []);
+  assert.deepEqual(persisted, []);
 });
