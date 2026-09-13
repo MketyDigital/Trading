@@ -19,7 +19,7 @@ function deliveryStoreThatMustNotReserve() {
   };
 }
 
-function baseOptions(fetchFn) {
+function baseOptions(fetchFn, deliveryStore = deliveryStoreThatMustNotReserve()) {
   return {
     workspaceId: 'ws-a',
     accountRowId: 'acct-1',
@@ -28,7 +28,7 @@ function baseOptions(fetchFn) {
     expectedBrokerAccountId: '50123456',
     expectedServerName: 'Broker-Demo',
     expectedEnvironment: 'demo',
-    deliveryStore: deliveryStoreThatMustNotReserve(),
+    deliveryStore,
     fetchFn,
   };
 }
@@ -68,4 +68,33 @@ test('MT5 connector execution fails closed before delivery reservation when term
     );
     assert.equal(calls, 1);
   }
+});
+
+test('MT5 connector execution derives demo environment from connector isLive=false identity', async () => {
+  let reserveCalls = 0;
+  let completeCalls = 0;
+  let fetchCalls = 0;
+  const deliveryStore = {
+    async reserve() { reserveCalls += 1; return { ok: true, duplicate: false }; },
+    async complete() { completeCalls += 1; },
+    async fail() {},
+  };
+  const fetchFn = async (_url, options = {}) => {
+    fetchCalls += 1;
+    if (!options.method || options.method === 'GET') {
+      return response({
+        online: true,
+        accountRowId: 'acct-1',
+        identity: { accountNumber: '50123456', serverName: 'Broker-Demo', isLive: false },
+      });
+    }
+    return response({ ok: true, orderId: 'order-1' });
+  };
+
+  const result = await executeMt5ConnectorAction(action(), baseOptions(fetchFn, deliveryStore));
+  assert.equal(result.duplicate, false);
+  assert.equal(result.brokerOrderId, 'order-1');
+  assert.equal(fetchCalls, 2);
+  assert.equal(reserveCalls, 1);
+  assert.equal(completeCalls, 1);
 });

@@ -30,13 +30,20 @@ async function identity({ baseUrl, accountRowId, controlSecret, fetchFn }) {
   if (!accountNumber) throw classifiedError('MT5 connector broker identity missing', { code: 'MT5_CONNECTOR_IDENTITY_INCOMPLETE', failureClass: 'RETRYABLE' });
   return { ...body.identity, accountNumber };
 }
+function connectedEnvironment(connected = {}) {
+  const explicit = String(connected?.environment ?? '').trim().toLowerCase();
+  if (explicit) return explicit;
+  if (connected?.isLive === true) return 'live';
+  if (connected?.isLive === false) return 'demo';
+  return '';
+}
 function assertExpectedBrokerIdentity(connected, { expectedBrokerAccountId, expectedServerName, expectedEnvironment } = {}) {
   const expectedAccount = String(expectedBrokerAccountId ?? '').trim();
   const expectedServer = String(expectedServerName ?? '').trim();
   const expectedEnv = String(expectedEnvironment ?? '').trim().toLowerCase();
   const actualAccount = String(connected?.accountNumber ?? '').trim();
   const actualServer = String(connected?.serverName ?? '').trim();
-  const actualEnv = String(connected?.environment ?? '').trim().toLowerCase();
+  const actualEnv = connectedEnvironment(connected);
   if (
     (expectedAccount && actualAccount !== expectedAccount)
     || (expectedServer && actualServer !== expectedServer)
