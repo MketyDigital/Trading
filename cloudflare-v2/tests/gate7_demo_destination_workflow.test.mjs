@@ -48,7 +48,7 @@ test('Gate 7 workflow exposes a protected current-main manual dispatch contract'
   assert.match(header, /demo: lifecycle ctrader gate 7/);
 });
 
-test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent and demo-only', async () => {
+test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent, and demo-only', async () => {
   const workflow = await readWorkflow();
   const block = jobBlock(workflow, 'mt5-demo-lifecycle-gate7');
   assertCommonLifecycleSafety(block, 'demo: lifecycle mt5 gate 7', 'mt5');
@@ -59,7 +59,7 @@ test('Gate 7 MT5 destination lifecycle is exact-marker, protected, persistent an
   assert.match(block, /npm run accept:mt5:demo/);
 });
 
-test('Gate 7 cTrader destination lifecycle is exact-marker, protected, persistent and demo-only', async () => {
+test('Gate 7 cTrader destination lifecycle is exact-marker, protected, persistent, and demo-only', async () => {
   const workflow = await readWorkflow();
   const block = jobBlock(workflow, 'ctrader-demo-lifecycle-gate7');
   assertCommonLifecycleSafety(block, 'demo: lifecycle ctrader gate 7', 'ctrader');
