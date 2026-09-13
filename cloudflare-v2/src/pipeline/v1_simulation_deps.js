@@ -1,3 +1,5 @@
+import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
+
 function parseJsonConfig(value, label) {
   if (!value) return {};
   try {
@@ -44,6 +46,34 @@ function createTradeStateClient(env, workspaceId) {
 
 function canonicalSymbol(intent = {}) {
   return String(intent?.symbol?.canonical || intent?.symbol || '').toUpperCase();
+}
+
+function codedError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function resolveDestinationSymbol(account, symbol) {
+  const { catalog, aliases } = accountSymbolCatalogFromProviderConfig(account?.provider_config ?? {});
+  if (!catalog.length) {
+    throw codedError(
+      'DESTINATION_SYMBOL_CATALOG_UNAVAILABLE',
+      `destination symbol catalog is unavailable for ${symbol || 'UNKNOWN'}`,
+    );
+  }
+
+  const resolved = resolveAccountSymbol(symbol, catalog, aliases);
+  if (!resolved.ok) {
+    const code = resolved.reason === 'AMBIGUOUS_SYMBOL'
+      ? 'DESTINATION_SYMBOL_AMBIGUOUS'
+      : 'DESTINATION_SYMBOL_NOT_SUPPORTED';
+    throw codedError(
+      code,
+      `destination symbol resolution failed for ${symbol || 'UNKNOWN'}: ${resolved.reason || 'SYMBOL_NOT_FOUND'}`,
+    );
+  }
+  return resolved;
 }
 
 async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
@@ -106,9 +136,14 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
+      const resolvedSymbol = resolveDestinationSymbol(account, symbol);
       const instrument = instruments[symbol];
       if (instrument && typeof instrument === 'object') {
-        return { canonical: symbol, ...instrument };
+        return {
+          canonical: symbol,
+          ...instrument,
+          platformSymbol: resolvedSymbol.platformSymbol,
+        };
       }
 
       const environment = String(account?.environment || '').trim().toLowerCase();
@@ -117,6 +152,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
       if (environment === 'demo' && lotSizingType === 'fixed' && Number.isFinite(lotValue) && lotValue > 0) {
         return {
           canonical: symbol,
+          platformSymbol: resolvedSymbol.platformSymbol,
           minLots: lotValue,
           maxLots: lotValue,
           stepLots: lotValue,
