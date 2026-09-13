@@ -1,12 +1,12 @@
 name: PR51 Demo Controls Patch
 on:
   push:
-    branches: [feat/simplify-demo-account-controls]
+    branches:
+      - feat/simplify-demo-account-controls
 permissions:
   contents: write
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,6 +14,7 @@ jobs:
           ref: feat/simplify-demo-account-controls
           fetch-depth: 0
       - name: Patch backend and Connections UI
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -86,14 +87,16 @@ jobs:
           p.write_text(s)
           PY
       - name: Run focused tests
+        shell: bash
         run: |
           cd cloudflare-v2
           node --test tests/demo_account_control_simplification.test.mjs tests/v1_admin_connections.test.mjs tests/ctrader_custom_hostname_oauth.test.mjs
       - name: Commit patch
+        shell: bash
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name github-actions-bot
+          git config user.email github-actions-bot@users.noreply.github.com
           git add cloudflare-v2/src/http/v1_admin_connections.js cloudflare-v2/src/dashboard_unified_connections.js
-          git diff --cached --quiet && exit 0
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m 'feat: simplify demo account trading controls'
           git push origin HEAD:feat/simplify-demo-account-controls
