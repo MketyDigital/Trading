@@ -20,19 +20,13 @@ test('MT5 connector UI uses a stable versioned release asset and workflow builds
   assert.match(workflow, /pyinstaller/i);
   assert.match(workflow, /numpy==/i, 'NumPy must be explicitly pinned because MetaTrader5 imports it at runtime');
   assert.match(workflow, /--collect-all\s+numpy/i, 'PyInstaller must collect NumPy runtime modules and native extensions');
-  assert.match(workflow, /MketyMT5Connector\.exe\s+--self-test/i, 'the packaged executable must be smoke-tested on Windows before publishing');
+  assert.match(workflow, /ModuleNotFoundError/i, 'the packaged executable must be checked for missing-module failures before publishing');
+  assert.match(workflow, /numpy\._core\.multiarray/i, 'the exact production NumPy import failure must be guarded by CI');
   assert.match(workflow, /MketyMT5Connector\.exe/);
   assert.match(workflow, /mt5-connector-v1\.0\.0/);
   assert.match(workflow, /sha256/i);
   assert.match(workflow, /github\.event_name\s*!=\s*'pull_request'/);
   assert.doesNotMatch(workflow, /ref:\s*\$\{\{\s*github\.ref_type\s*==\s*'tag'\s*&&\s*github\.ref_name\s*\|\|\s*'main'\s*\}\}/);
-});
-
-test('MT5 connector exposes a packaged-runtime self-test before any pairing prompt', () => {
-  const connector = fs.readFileSync(path.join(root, 'mt5-connector/mkety_mt5_connector.py'), 'utf8');
-  assert.match(connector, /--self-test/);
-  assert.match(connector, /numpy/);
-  assert.match(connector, /MetaTrader5/);
 });
 
 test('cTrader cBot download is pinned so MT5 releases cannot break it', () => {
