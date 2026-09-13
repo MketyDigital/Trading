@@ -49,10 +49,10 @@ test('delete pending is an alias for cancel pending and keeps explicit symbol', 
   });
 });
 
-test('informational management phrases never create an executable trade', () => {
+test('target-hit management is correlatable while hold phrases remain informational', () => {
   const tpHit = buildMachinePlan({ text: 'TP1 HIT' });
-  assert.equal(tpHit.status, 'NO_ACTION');
-  assert.deepEqual(tpHit.information, { type: 'TARGET_HIT', targetIndex: 1 });
+  assert.equal(tpHit.status, 'MANAGEMENT');
+  assert.deepEqual(tpHit.management, { type: 'TARGET_HIT', targetIndex: 1 });
 
   for (const text of ['HOLD', 'KEEP RUNNING']) {
     const plan = buildMachinePlan({ text });
