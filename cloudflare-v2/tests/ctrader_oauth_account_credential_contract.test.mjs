@@ -1,17 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+import { buildCompleteCTraderCredentials } from '../src/http/v1_admin_connections_account_controls.js';
 
-test('OAuth onboarding persists cTrader app credentials with account tokens for production dispatch', () => {
-  const source = fs.readFileSync(path.resolve(here, '../src/http/v1_admin_connections.js'), 'utf8');
-  const call = source.match(/encryptConnectionCredentials\('ctrader',\s*\{([\s\S]*?)\}\s*,\s*env\.TRADING_MASTER_KEY\)/);
-  assert.ok(call, 'cTrader OAuth credential encryption call must exist');
-  assert.match(call[1], /clientId:\s*env\.CTRADER_CLIENT_ID/);
-  assert.match(call[1], /clientSecret:\s*env\.CTRADER_CLIENT_SECRET/);
-  assert.match(call[1], /accessToken:\s*token\.accessToken/);
-  assert.match(call[1], /refreshToken:\s*token\.refreshToken/);
+test('cTrader OAuth credential completion combines app credentials with account tokens', () => {
+  assert.deepEqual(
+    buildCompleteCTraderCredentials(
+      { accessToken: 'access-token', refreshToken: 'refresh-token' },
+      { CTRADER_CLIENT_ID: 'client-id', CTRADER_CLIENT_SECRET: 'client-secret' },
+    ),
+    {
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+    },
+  );
+});
+
+test('cTrader OAuth credential completion fails closed when any required credential is missing', () => {
+  assert.throws(
+    () => buildCompleteCTraderCredentials(
+      { accessToken: 'access-token', refreshToken: 'refresh-token' },
+      { CTRADER_CLIENT_ID: 'client-id' },
+    ),
+    /CTRADER_CLIENT_SECRET_REQUIRED/,
+  );
+  assert.throws(
+    () => buildCompleteCTraderCredentials(
+      { accessToken: 'access-token' },
+      { CTRADER_CLIENT_ID: 'client-id', CTRADER_CLIENT_SECRET: 'client-secret' },
+    ),
+    /CTRADER_REFRESH_TOKEN_REQUIRED/,
+  );
 });
