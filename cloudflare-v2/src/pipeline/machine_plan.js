@@ -4,6 +4,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
 const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT)$/i;
+const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?$/i;
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -37,12 +38,20 @@ function numbers(text) {
   return values;
 }
 
+function normalizeDetectedSymbol(value) {
+  const source = String(value ?? '').trim();
+  const short = source.match(DERIV_SHORT);
+  if (!short) return normalizeSymbol(source);
+  const is1s = /\(\s*1S\s*\)/i.test(source);
+  return { canonical: `DERIV:VOLATILITY_${short[1]}${is1s ? '_1S' : ''}`, source };
+}
+
 function managementSymbol(text) {
-  const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&.-]{1,24}/g) || [];
+  const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&().-]{1,24}/g) || [];
   for (const token of tokens) {
     if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
     if (!isLikelyCompactSymbol(token)) continue;
-    return normalizeSymbol(token);
+    return normalizeDetectedSymbol(token);
   }
   return null;
 }
@@ -67,7 +76,7 @@ function managementPlan(text) {
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
 
-  const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s+HIT\s*[!.]*\s*$/);
+  const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s*(?:HIT\s*)?(?:✅+|[!.]+)?\s*$/u);
   if (targetHit) {
     return { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
   }
@@ -149,6 +158,7 @@ function isLikelyCompactSymbol(value) {
   const candidate = cleanCandidate(value);
   if (!candidate || /\s/.test(candidate)) return false;
   if (KNOWN_COMPACT_SYMBOL.test(candidate)) return true;
+  if (DERIV_SHORT.test(candidate)) return true;
   if (/^[A-Za-z]{3}[./_-]?[A-Za-z]{3}(?:[._-]?[A-Za-z0-9]{1,8})?$/.test(candidate)) return true;
   if (/^[A-Za-z]{2,10}\d{1,5}(?:[A-Za-z0-9._-]{0,8})?$/.test(candidate)) return true;
   return false;
@@ -162,12 +172,25 @@ function concisePrefixSymbol(before) {
   if (!cleaned) return null;
   const synthetic = cleaned.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)$/i)?.[1];
   if (synthetic) return synthetic;
+  if (DERIV_SHORT.test(cleaned)) return cleaned;
   const tokens = cleaned.split(/\s+/).filter(Boolean);
   if (tokens.length === 1 && isLikelyCompactSymbol(tokens[0])) return tokens[0];
   return null;
 }
 
+function labeledInstrument(text) {
+  const match = String(text ?? '').match(/\bINSTRUMENT\s*:\s*([^\n]+)/i);
+  if (!match) return null;
+  const candidate = cleanCandidate(match[1]);
+  const synthetic = candidate.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
+  if (synthetic) return synthetic;
+  return isLikelyCompactSymbol(candidate) ? candidate : null;
+}
+
 function extractSymbolToken(text, sideInfo) {
+  const labeled = labeledInstrument(text);
+  if (labeled) return labeled;
+
   const beforeSymbol = concisePrefixSymbol(text.slice(0, sideInfo.index));
   if (beforeSymbol) return beforeSymbol;
 
@@ -180,12 +203,14 @@ function extractSymbolToken(text, sideInfo) {
 
   const synthetic = after.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
   if (synthetic) return synthetic;
+  const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?)/i)?.[1];
+  if (derivShort) return derivShort;
   const compact = after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1] || null;
   return compact && isLikelyCompactSymbol(compact) ? compact : null;
 }
 
 function extractEntry(text, symbolToken) {
-  const explicitPattern = new RegExp(`\\bENTRY(?:\\s+PRICE)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})(?:\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE}))?`, 'i');
+  const explicitPattern = new RegExp(`\\bENTRY(?:\\s+(?:PRICE|ZONE))?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})(?:\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE}))?`, 'i');
   const explicit = text.match(explicitPattern);
   if (explicit) {
     const a = parsedNumber(explicit[1]);
@@ -248,7 +273,7 @@ export function buildMachinePlan(event = {}) {
   if (!isConfidentExecutionInstruction(text)) return { status: 'NEEDS_INTERPRETATION' };
   if (hasAmbiguousCommaNumber(text)) return { status: 'NEEDS_INTERPRETATION' };
 
-  const symbol = normalizeSymbol(symbolToken);
+  const symbol = normalizeDetectedSymbol(symbolToken);
   const stopLossPattern = new RegExp(`\\bSL\\s*[:@=-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i');
   const stopLossMatch = text.match(stopLossPattern);
   const stopLoss = stopLossMatch ? parsedNumber(stopLossMatch[1]) : null;
