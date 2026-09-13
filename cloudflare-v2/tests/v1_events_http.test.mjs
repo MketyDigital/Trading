@@ -65,6 +65,21 @@ test('passes exact raw body and signed source headers into persistent ingest pip
   assert.equal(ingestInput.signature, 'sig');
 });
 
+test('defaults ambiguity AI interpretation timeout to 12 seconds when unset', async () => {
+  let ingestDeps;
+  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({}),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async (_input, deps) => {
+      ingestDeps = deps;
+      return { ok: true, duplicate: true, eventId: 'existing' };
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(ingestDeps.interpretationTimeoutMs, 12000);
+});
+
 test('successful non-duplicate interpreted event enters orchestration', async () => {
   const event = { workspace_hint: 'ws-1', external_event_id: 'evt-10', source: { instance_id: 'src-1' }, thread: {} };
   const interpretation = { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } };
