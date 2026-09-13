@@ -73,6 +73,19 @@ test('rejects AI result with impossible BUY stop/target geometry instead of exec
   assert.match(result.reason, /geometry/i);
 });
 
+test('rejects AI result that invents executable numeric prices absent from the raw message', async () => {
+  const result = await interpretTradingEvent({ text: 'buy gold somehow' }, {
+    aiRouter: {
+      processSignal: async () => ({ success: true, text: JSON.stringify({
+        event_type: 'NEW_SIGNAL', side: 'BUY', symbol: 'GOLD', order_type: 'MARKET',
+        entry: 2526, stop_loss: 2518, take_profits: [2530],
+      }) }),
+    },
+  });
+  assert.equal(result.status, 'NEEDS_REVIEW');
+  assert.match(result.reason, /raw|evidence|invent/i);
+});
+
 test('rejects malformed AI JSON and unsupported event types fail closed', async () => {
   const malformed = await interpretTradingEvent({ text: 'weird signal' }, {
     aiRouter: { processSignal: async () => ({ success: true, text: 'not json' }) },
