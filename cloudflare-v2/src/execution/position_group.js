@@ -3,8 +3,8 @@ function decimals(step) {
   return s.includes('.') ? s.split('.')[1].length : 0;
 }
 
-function roundToStep(value, step) {
-  return Number((Math.round(value / step) * step).toFixed(decimals(step)));
+function floorToStep(value, step) {
+  return Number((Math.floor((Number(value) / Number(step)) + 1e-12) * Number(step)).toFixed(decimals(step)));
 }
 
 export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep = 0.01) {
@@ -151,14 +151,25 @@ export function buildManagementActions(group, management) {
   }
   if (management?.type === 'CLOSE_PARTIAL') {
     const fraction = Number(management.fraction);
+    const volumeStep = Number(management.volumeStep || 0.01);
     if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
-    return openLegs.map((leg) => ({
-      type: 'CLOSE_PARTIAL',
-      brokerPositionId: leg.brokerPositionId,
-      symbol: group.symbol,
-      fraction,
-      lots: leg.lots ? roundToStep(leg.lots * fraction, management.volumeStep || 0.01) : undefined,
-    }));
+    if (!(volumeStep > 0)) throw new Error('partial-close volumeStep must be positive');
+    return openLegs.map((leg) => {
+      let lots;
+      if (leg.lots != null) {
+        lots = floorToStep(Number(leg.lots) * fraction, volumeStep);
+        if (!(lots > 0) || lots >= Number(leg.lots)) {
+          throw new Error('partial-close volume is not representable without full close');
+        }
+      }
+      return {
+        type: 'CLOSE_PARTIAL',
+        brokerPositionId: leg.brokerPositionId,
+        symbol: group.symbol,
+        fraction,
+        lots,
+      };
+    });
   }
   if (management?.type === 'CANCEL_PENDING') {
     return group.legs
