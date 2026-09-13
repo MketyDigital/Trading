@@ -166,10 +166,10 @@ export function buildManagementActions(group, management) {
   }
   if (management?.type === 'CLOSE_PARTIAL') {
     const fraction = Number(management.fraction);
-    const volumeStep = Number(management.volumeStep || 0.01);
     if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
-    if (!(volumeStep > 0)) throw new Error('partial-close volumeStep must be positive');
     return openLegs.map((leg) => {
+      const volumeStep = Number(management.volumeStep || leg.volumeStepLots || 0.01);
+      if (!(volumeStep > 0)) throw new Error('partial-close volumeStep must be positive');
       let lots;
       if (leg.lots != null) {
         lots = floorToStep(Number(leg.lots) * fraction, volumeStep);

@@ -11,6 +11,7 @@ function required(value, name) {
 export async function createCTraderRuntime({
   environment = 'demo',
   allowLiveTrading = false,
+  allowBrokerMinimumVolumeFallback = false,
   clientId,
   clientSecret,
   accessToken,
@@ -69,11 +70,13 @@ export async function createCTraderRuntime({
     catalog,
     async execute(action) {
       if (!action) throw new TypeError('canonical action is required');
+      const demoSyntheticFallback = mode === 'demo' && String(action?.symbol || '').toUpperCase().startsWith('DERIV:');
       return executeCTraderAction(action, {
         session,
         accountId: Number(accountId),
         catalog,
         deliveryStore,
+        allowBrokerMinimumVolumeFallback: demoSyntheticFallback || (mode === 'demo' && allowBrokerMinimumVolumeFallback === true),
       });
     },
     close() {

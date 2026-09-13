@@ -138,7 +138,9 @@ test('V1 event request performs ingest, simulation planning and safe execution-s
       executeProductionFn: async (input, deps) => {
         calls.productionExecute += 1;
         executionInput = structuredClone(input);
-        assert.deepEqual(deps, { safeSimulationOnly: true, bindingRepairRecorder: deps.bindingRepairRecorder });
+        assert.equal(deps.safeSimulationOnly, true);
+        assert.equal(typeof deps.bindingRepairRecorder, 'function');
+        assert.equal(deps.stateBinder, undefined);
         return {
           executionEnabled: true,
           status: 'EXECUTED',

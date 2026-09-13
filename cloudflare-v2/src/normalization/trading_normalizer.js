@@ -187,6 +187,12 @@ function strictPositive(value, label) {
   return numeric;
 }
 
+function codedRangeError(message, code) {
+  const error = new RangeError(message);
+  error.code = code;
+  return error;
+}
+
 export function normalizePrice(value, { digits, tickSize } = {}) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) throw new TypeError('price must be finite');
@@ -251,9 +257,9 @@ export function validateVolumeForCTraderExecution(lots, {
   if (!Number.isFinite(maximum) && maximum !== Number.POSITIVE_INFINITY) throw new TypeError('maximum volume must be valid');
 
   const protocolVolume = numericLots * lotSizeCents;
-  if (protocolVolume < minimum - 1e-9) throw new RangeError('cTrader execution volume is below broker minimum');
-  if (protocolVolume > maximum + 1e-9) throw new RangeError('cTrader execution volume exceeds broker maximum');
-  if (!approximatelyInteger(protocolVolume / increment)) throw new RangeError('cTrader execution volume is not on broker volume step');
-  if (!approximatelyInteger(protocolVolume)) throw new RangeError('cTrader execution protocol volume must be integral');
+  if (protocolVolume < minimum - 1e-9) throw codedRangeError('cTrader execution volume is below broker minimum', 'CTRADER_VOLUME_BELOW_MINIMUM');
+  if (protocolVolume > maximum + 1e-9) throw codedRangeError('cTrader execution volume exceeds broker maximum', 'CTRADER_VOLUME_ABOVE_MAXIMUM');
+  if (!approximatelyInteger(protocolVolume / increment)) throw codedRangeError('cTrader execution volume is not on broker volume step', 'CTRADER_VOLUME_STEP_MISMATCH');
+  if (!approximatelyInteger(protocolVolume)) throw codedRangeError('cTrader execution protocol volume must be integral', 'CTRADER_VOLUME_NOT_INTEGRAL');
   return Math.round(protocolVolume);
 }

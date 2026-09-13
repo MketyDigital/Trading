@@ -2,6 +2,7 @@ import { createProductionExecutionDependencies } from '../execution/production_e
 import { createSafeSimulationExecutionDependencies } from '../execution/safe_simulation_execution_deps.js';
 import { executeProductionPlan } from '../execution/production_execution_coordinator.js';
 import { createProductionBindingRepairRecorder } from '../execution/production_binding_repair_recorder.js';
+import { createProductionTradeStateBinder } from '../state/production_trade_state_binder.js';
 import {
   resolveBrokerExecutionRuntimeControl,
   resolveLiveBrokerExecutionRuntimeControl,
@@ -84,8 +85,6 @@ export async function runV1ProductionExecutionStage({
   const transportMode = executionTransportMode(env);
   const accountPlans = trustedReadyPlans(simulation);
 
-  // Runtime controls protect executable broker plans. Review/blocked/duplicate
-  // paths never reach a broker and should not become DB-availability failures.
   if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
     return summary('NOT_EXECUTABLE', { transportMode });
   }
@@ -114,10 +113,6 @@ export async function runV1ProductionExecutionStage({
     return summary('BROKER_OWNER_SWITCH_OFF', { blocked: accountPlans.length, transportMode });
   }
 
-  // Live-money authority is resolved here and passed into the coordinator, which
-  // evaluates it only against each freshly loaded authoritative account row.
-  // An unavailable live control must not prevent DEMO accounts from executing,
-  // but LIVE accounts fail closed inside the coordinator.
   const liveBrokerExecutionControl = await resolveRuntimeControl(
     liveBrokerExecutionControlResolver,
     { env, supabase },
@@ -140,6 +135,9 @@ export async function runV1ProductionExecutionStage({
     workspaceId,
     tradingEventId,
   });
+  const stateBinder = transportMode === 'real' && executionDepsFactory === createProductionExecutionDependencies
+    ? createProductionTradeStateBinder({ env, workspaceId })
+    : dependencies?.stateBinder;
 
   const execution = await executeProductionFn({
     workspaceId,
@@ -150,6 +148,7 @@ export async function runV1ProductionExecutionStage({
     liveBrokerExecutionControlAvailable: liveBrokerExecutionControl?.ok === true,
   }, {
     ...dependencies,
+    stateBinder,
     bindingRepairRecorder,
   });
 

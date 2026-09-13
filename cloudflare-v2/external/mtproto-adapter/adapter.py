@@ -25,6 +25,19 @@ def _telegram_event_id(chat_id, message_id):
     return f'telegram:{chat_id}:{message_id}'
 
 
+def _reply_to_message_id(event):
+    candidates = [
+        getattr(event, 'reply_to_msg_id', None),
+        getattr(getattr(event, 'message', None), 'reply_to_msg_id', None),
+        getattr(getattr(event, 'reply_to', None), 'reply_to_msg_id', None),
+        getattr(getattr(getattr(event, 'message', None), 'reply_to', None), 'reply_to_msg_id', None),
+    ]
+    for value in candidates:
+        if value is not None and str(value) != '':
+            return value
+    return None
+
+
 def _topic_id(event):
     reply_header = getattr(event, 'reply_to', None)
     if reply_header is None:
@@ -38,9 +51,7 @@ def _topic_id(event):
 
 
 def _thread_contract(event, chat_id, message_id):
-    reply_to_message_id = getattr(event, 'reply_to_msg_id', None)
-    if reply_to_message_id is None:
-        reply_to_message_id = getattr(getattr(event, 'message', None), 'reply_to_msg_id', None)
+    reply_to_message_id = _reply_to_message_id(event)
     topic_id = _topic_id(event)
     edited = getattr(event, 'edit_date', None) is not None or getattr(
         getattr(event, 'message', None), 'edit_date', None
