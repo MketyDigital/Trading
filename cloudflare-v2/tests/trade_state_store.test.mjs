@@ -82,3 +82,33 @@ test('correlation never crosses an explicit workspace boundary even when listene
   }, now);
   assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
+
+test('replayed signal event already bound to an active group is ignored before new-group planning', async () => {
+  const store = new TradeStateStore(new MemoryStorage());
+  await store.putGroup({ ...fastGroup(), incomplete: false });
+  const coordinator = new TradeStateCoordinator(store, { correlationWindowMs: 120000 });
+  const result = await coordinator.correlate({
+    workspace_hint: 'ws1',
+    source: { instance_id: 'listener-1' },
+    external_event_id: '100',
+    thread: {},
+  }, {
+    status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false },
+  }, now);
+  assert.deepEqual(result, { status: 'NO_ACTION', reason: 'DUPLICATE_SOURCE_EVENT' });
+});
+
+test('replayed management event already audited on the group emits no second management match', async () => {
+  const store = new TradeStateStore(new MemoryStorage());
+  await store.putGroup({ ...fastGroup(), sourceEventIds: ['100', 'manage-1'] });
+  const coordinator = new TradeStateCoordinator(store, { correlationWindowMs: 120000 });
+  const result = await coordinator.correlate({
+    workspace_hint: 'ws1',
+    source: { instance_id: 'listener-1' },
+    external_event_id: 'manage-1',
+    thread: {},
+  }, {
+    status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 },
+  }, now);
+  assert.deepEqual(result, { status: 'NO_ACTION', reason: 'DUPLICATE_SOURCE_EVENT' });
+});
