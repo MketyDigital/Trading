@@ -53,6 +53,19 @@ test('translates canonical cTrader partial close using raw protocol-cent symbol 
   assert.equal(message.payload.volume, 500000);
 });
 
+test('cTrader full close retains broker-volume normalization compatibility', () => {
+  const message = buildCTraderManagementCommand({
+    type: 'CLOSE_POSITION', brokerPositionId: 456, lots: 0.015,
+  }, {
+    accountId: 123,
+    clientMsgId: 'm-full-close',
+    symbol: { protocolLotSize: 10000000, minVolume: 100000, maxVolume: 1000000000, stepVolume: 100000 },
+  });
+  assert.equal(message.payloadType, 2111);
+  assert.equal(message.payload.positionId, 456);
+  assert.equal(message.payload.volume, 200000);
+});
+
 test('partial-close translation never rounds or clamps MT5 volume upward', () => {
   assert.throws(() => buildMT5ManagementCommand({
     type: 'CLOSE_PARTIAL', brokerPositionId: '9001', lots: 0.015,
