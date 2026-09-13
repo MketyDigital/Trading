@@ -93,7 +93,7 @@ test('duplicate ingest repairs missing interpretation from persisted event, neve
   });
   const input = await signedInput(replayBody);
   let persisted;
-  let aiInput;
+  let aiCalls = 0;
   const result = await ingestTradingEvent(input, {
     sourceStore: { async getActiveSource() { return source; } },
     eventStore: {
@@ -103,23 +103,9 @@ test('duplicate ingest repairs missing interpretation from persisted event, neve
       async updateInterpretation(_eventId, interpretation) { persisted = interpretation; },
     },
     aiRouter: {
-      async processSignal(text) {
-        aiInput = text;
-        return {
-          success: true,
-          provider: 'test',
-          model: 'test',
-          text: JSON.stringify({
-            event_type: 'NEW_SIGNAL',
-            side: 'BUY',
-            symbol: 'XAUUSD',
-            order_type: 'MARKET',
-            entry: null,
-            stop_loss: 2400,
-            take_profits: [2600],
-            fast_entry: false,
-          }),
-        };
+      async processSignal() {
+        aiCalls += 1;
+        throw new Error('AI must not be called for deterministic BUY XAUUSD recovery');
       },
     },
   });
@@ -127,8 +113,10 @@ test('duplicate ingest repairs missing interpretation from persisted event, neve
   assert.equal(result.ok, true);
   assert.equal(result.duplicate, true);
   assert.deepEqual(result.event, persistedEvent);
-  assert.equal(aiInput, 'BUY XAUUSD');
+  assert.equal(aiCalls, 0);
   assert.equal(result.interpretation.status, 'READY');
+  assert.equal(result.interpretation.intent.side, 'BUY');
+  assert.equal(result.interpretation.intent.symbol.canonical, 'XAUUSD');
   assert.equal(persisted.status, 'READY');
 });
 
@@ -144,7 +132,6 @@ test('duplicate ingest re-interprets incomplete persisted interpretation from pe
     intent: { side: 'SELL', symbol: { canonical: 'EURUSD' } },
   };
   let aiCalls = 0;
-  let aiInput;
   let persistedEventId;
   let repairedInterpretation;
 
@@ -167,24 +154,9 @@ test('duplicate ingest re-interprets incomplete persisted interpretation from pe
       },
     },
     aiRouter: {
-      async processSignal(text) {
+      async processSignal() {
         aiCalls += 1;
-        aiInput = text;
-        return {
-          success: true,
-          provider: 'test',
-          model: 'test',
-          text: JSON.stringify({
-            event_type: 'NEW_SIGNAL',
-            side: 'BUY',
-            symbol: 'XAUUSD',
-            order_type: 'MARKET',
-            entry: null,
-            stop_loss: 2400,
-            take_profits: [2600],
-            fast_entry: false,
-          }),
-        };
+        throw new Error('AI must not be called for deterministic BUY XAUUSD recovery');
       },
     },
   });
@@ -192,11 +164,11 @@ test('duplicate ingest re-interprets incomplete persisted interpretation from pe
   assert.equal(result.ok, true);
   assert.equal(result.duplicate, true);
   assert.equal(result.recoveryReady, true);
-  assert.equal(aiCalls, 1);
-  assert.equal(aiInput, 'BUY XAUUSD');
+  assert.equal(aiCalls, 0);
   assert.equal(persistedEventId, 'evt-existing');
   assert.equal(result.interpretation.status, 'READY');
   assert.equal(result.interpretation.intent.side, 'BUY');
+  assert.equal(result.interpretation.intent.symbol.canonical, 'XAUUSD');
   assert.equal(repairedInterpretation.status, 'READY');
   assert.notDeepEqual(result.interpretation, staleInterpretation);
 });
