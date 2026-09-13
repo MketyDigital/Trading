@@ -5,6 +5,26 @@ const ACTIVE_STATUSES = new Set(['OPEN', 'PLANNED', 'PENDING']);
 
 function groupKey(groupId) { return `${GROUP_PREFIX}${groupId}`; }
 
+function executionStatus(existingLeg = {}, execution = {}) {
+  const explicit = String(execution?.status || '').trim().toUpperCase();
+  if (explicit) return explicit;
+  if (execution?.brokerPositionId != null && String(execution.brokerPositionId).trim()) return 'OPEN';
+  if (execution?.brokerOrderId != null && String(execution.brokerOrderId).trim()) return 'PENDING';
+  return String(existingLeg?.status || 'PLANNED').toUpperCase();
+}
+
+function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
+  const statuses = legs.map((leg) => String(leg?.status || '').toUpperCase()).filter(Boolean);
+  if (statuses.includes('OPEN')) return 'OPEN';
+  if (statuses.includes('PENDING')) return 'PENDING';
+  if (statuses.length > 0 && statuses.every((status) => status === 'CLOSED')) return 'CLOSED';
+  if (statuses.length > 0 && statuses.every((status) => ['FAILED', 'CLOSED', 'CANCELLED'].includes(status))) {
+    return statuses.includes('FAILED') ? 'FAILED' : 'CLOSED';
+  }
+  if (statuses.includes('PLANNED')) return 'PLANNED';
+  return String(currentStatus || 'PLANNED').toUpperCase();
+}
+
 export class TradeStateStore {
   constructor(storage) {
     if (!storage?.get || !storage?.put || !storage?.list) throw new TypeError('durable storage interface is required');
@@ -44,7 +64,10 @@ export class TradeStateStore {
     if (!group) throw new Error('position group not found');
     const index = (group.legs || []).findIndex((leg) => String(leg.legId) === String(legId));
     if (index < 0) throw new Error('position group leg not found');
-    group.legs[index] = { ...group.legs[index], ...execution };
+    const currentLeg = group.legs[index];
+    const status = executionStatus(currentLeg, execution);
+    group.legs[index] = { ...currentLeg, ...execution, status };
+    group.status = aggregateGroupStatus(group.legs, group.status);
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);
   }
