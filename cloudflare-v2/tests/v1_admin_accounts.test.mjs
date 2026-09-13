@@ -206,3 +206,49 @@ test('admin kill switch mutation preserves the rest of safety policy and operato
   assert.equal(operatorResponse.status, 403);
   assert.equal(operatorSupabase.updates.length, 0);
 });
+
+test('admin can update fixed lot above 0.1 without changing execution or safety controls', async () => {
+  const supabase = createSupabase([{
+    id: 'acc-1', workspace_id: 'ws-1', account_label: 'Large Demo', platform: 'ctrader', account_id: '2001',
+    credential_ciphertext: 'cipher-secret', is_active: true, execution_enabled: true,
+    live_execution_enabled: false, lot_sizing_type: 'fixed', lot_value: 0.01,
+    safety_policy: { enabled: true, killSwitch: false, maxLotsPerTrade: 5 },
+  }]);
+
+  const response = await request('/api/v1/admin/accounts/acc-1/fixed-lot', {
+    method: 'POST', body: { lotValue: 2 }, supabase,
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.account.lotSizingType, 'fixed');
+  assert.equal(body.account.lotValue, 2);
+  assert.equal(body.account.executionEnabled, true);
+  assert.equal(body.account.killSwitch, false);
+  assert.deepEqual(supabase.updates, [{
+    id: 'acc-1', workspaceId: 'ws-1', value: { lot_sizing_type: 'fixed', lot_value: 2 },
+  }]);
+});
+
+test('fixed-lot update rejects zero, negative, non-numeric values and cross-workspace accounts', async () => {
+  const account = {
+    id: 'acc-1', workspace_id: 'ws-1', account_label: 'Demo', platform: 'ctrader', account_id: '2001',
+    is_active: true, execution_enabled: true, lot_sizing_type: 'fixed', lot_value: 0.01,
+    safety_policy: { killSwitch: false },
+  };
+  for (const lotValue of [0, -1, 'not-a-number']) {
+    const supabase = createSupabase([account]);
+    const response = await request('/api/v1/admin/accounts/acc-1/fixed-lot', {
+      method: 'POST', body: { lotValue }, supabase,
+    });
+    assert.equal(response.status, 400, String(lotValue));
+    assert.equal((await response.json()).reason, 'FIXED_LOT_POSITIVE_NUMBER_REQUIRED');
+    assert.equal(supabase.updates.length, 0);
+  }
+
+  const supabase = createSupabase([account]);
+  const missing = await request('/api/v1/admin/accounts/acc-other/fixed-lot', {
+    method: 'POST', body: { lotValue: 1 }, supabase,
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(supabase.updates.length, 0);
+});
