@@ -3,7 +3,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|CLOSE|HALF|CANCEL|THE|PENDING|ALL)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|CHANGE|NEW|TP|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT)$/i;
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -52,16 +52,55 @@ function withManagementSymbol(text, management) {
   return symbol ? { status: 'MANAGEMENT', management: { ...management, symbol } } : { status: 'MANAGEMENT', management };
 }
 
+function informationalManagementPlan(text) {
+  const upper = text.toUpperCase();
+  const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s+HIT\s*[!.]*\s*$/);
+  if (targetHit) {
+    return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
+  }
+  if (/^\s*(?:HOLD|KEEP\s+RUNNING)\s*[!.]*\s*$/.test(upper)) {
+    return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'HOLD_POSITION' } };
+  }
+  return null;
+}
+
 function managementPlan(text) {
+  const informational = informationalManagementPlan(text);
+  if (informational) return informational;
+
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
-  if (/\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)) {
+
+  if (/\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
+      || /\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
+
+  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)\\s+(?:[A-Z][A-Z0-9_./#&.-]+\\s+)?(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const moveSl = text.match(moveSlPattern);
+  if (moveSl) {
+    const stopLoss = parsedNumber(moveSl[1]);
+    if (stopLoss == null) return null;
+    return withManagementSymbol(text, { type: 'MOVE_SL', stopLoss });
+  }
+
+  const changeTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET)\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const changeTp = text.match(changeTpPattern);
+  if (changeTp) {
+    const takeProfit = parsedNumber(changeTp[2]);
+    if (takeProfit == null) return null;
+    const targetIndex = changeTp[1] ? Number(changeTp[1]) : null;
+    return withManagementSymbol(text, {
+      type: 'CHANGE_TP',
+      takeProfit,
+      ...(targetIndex ? { targetIndex } : {}),
+    });
+  }
+
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
   }
-  if (/\bCANCEL\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&.-]+)?\s+PENDING\b/.test(upper)) {
+  if (/\b(?:CANCEL|DELETE)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&.-]+)?\s+PENDING\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
   }
   if (/\bCLOSE\s+ALL\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
