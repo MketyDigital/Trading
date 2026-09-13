@@ -133,3 +133,40 @@ test('ambiguous commentary fails closed for machine execution', () => {
   const plan = buildMachinePlan({ text: 'Gold looking interesting here, maybe buys later' });
   assert.equal(plan.status, 'NEEDS_INTERPRETATION');
 });
+
+test('normalizes grouped BTCUSD prices and an unambiguous duplicated decimal separator without changing MARKET semantics', () => {
+  const plan = buildMachinePlan({ text: `BTCUSD Buy (77,010.81-77,140.80)
+
+SL: 76,994.00
+TP1: 77,400.54
+TP2: 77,610,00
+TP3: 78,201.24` });
+
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.side, 'BUY');
+  assert.equal(plan.intent.orderType, 'MARKET');
+  assert.equal(plan.intent.symbol.canonical, 'BTCUSD');
+  assert.deepEqual(plan.intent.entry, { kind: 'RANGE', min: 77010.81, max: 77140.80 });
+  assert.equal(plan.intent.stopLoss, 76994);
+  assert.deepEqual(plan.intent.takeProfits, [77400.54, 77610, 78201.24]);
+  assert.equal(plan.intent.fastEntry, false);
+  assert.equal(plan.intent.incomplete, false);
+});
+
+test('keeps a numeric entry range as MARKET unless pending-order language is explicit', () => {
+  const market = buildMachinePlan({ text: 'BUY XAUUSD 3,650.10-3,655.20 SL 3,640.00 TP 3,680.00' });
+  assert.equal(market.status, 'READY');
+  assert.equal(market.intent.orderType, 'MARKET');
+
+  const pending = buildMachinePlan({ text: 'BUY LIMIT XAUUSD 3,650.10 SL 3,640.00 TP 3,680.00' });
+  assert.equal(pending.status, 'READY');
+  assert.equal(pending.intent.orderType, 'LIMIT');
+});
+
+test('ordinary sentence commas after prices are punctuation, not malformed grouped numbers', () => {
+  const plan = buildMachinePlan({ text: 'BUY XAUUSD 2526 SL 2518, TP1 2530, TP2 2535' });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.entry.value, 2526);
+  assert.equal(plan.intent.stopLoss, 2518);
+  assert.deepEqual(plan.intent.takeProfits, [2530, 2535]);
+});

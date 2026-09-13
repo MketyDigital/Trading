@@ -1,4 +1,5 @@
 import { normalizeOrderIntent, normalizeSymbol } from '../normalization/trading_normalizer.js';
+import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal_number.js';
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
@@ -15,7 +16,26 @@ function normalizeSignalText(value) {
     .trim();
 }
 
-function numbers(text) { return [...text.matchAll(/-?\d+(?:\.\d+)?/g)].map((m) => Number(m[0])); }
+function parsedNumber(raw) {
+  const parsed = parseSignalNumber(raw, { allowNegative: true });
+  return parsed.ok ? parsed.value : null;
+}
+
+function hasAmbiguousCommaNumber(text) {
+  const candidates = String(text ?? '').match(/-?\d(?:[\d,]*\d)?(?:\.\d+)?/g) || [];
+  return candidates.some((candidate) => candidate.includes(',') && !parseSignalNumber(candidate, { allowNegative: true }).ok);
+}
+
+function numbers(text) {
+  const matches = String(text ?? '').match(new RegExp(SIGNAL_NUMBER_SOURCE, 'g')) || [];
+  const values = [];
+  for (const raw of matches) {
+    const value = parsedNumber(raw);
+    if (value == null) return null;
+    values.push(value);
+  }
+  return values;
+}
 
 function managementSymbol(text) {
   const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&.-]{1,24}/g) || [];
@@ -51,8 +71,18 @@ function managementPlan(text) {
 
 function extractExplicitTps(text) {
   const labeled = [];
-  for (const match of text.matchAll(/\bTP([1-9]\d?)\s*[:@-]?\s*(-?\d+(?:\.\d+)?)/gi)) labeled.push({ index: Number(match[1]), value: Number(match[2]) });
-  for (const match of text.matchAll(/\bTP\s+([1-9]\d?)\s*[:@-]\s*(-?\d+(?:\.\d+)?)/gi)) labeled.push({ index: Number(match[1]), value: Number(match[2]) });
+  const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*[:@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  const spacedPattern = new RegExp(`\\bTP\\s+([1-9]\\d?)\\s*[:@-]\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(compactPattern)) {
+    const value = parsedNumber(match[2]);
+    if (value == null) return null;
+    labeled.push({ index: Number(match[1]), value });
+  }
+  for (const match of text.matchAll(spacedPattern)) {
+    const value = parsedNumber(match[2]);
+    if (value == null) return null;
+    labeled.push({ index: Number(match[1]), value });
+  }
   if (labeled.length) {
     const unique = new Map(labeled.map((item) => [item.index, item.value]));
     return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
@@ -111,19 +141,37 @@ function extractSymbolToken(text, sideInfo) {
 }
 
 function extractEntry(text, symbolToken) {
-  const explicit = text.match(/\bENTRY(?:\s+PRICE)?\s*[:=@-]?\s*(-?\d+(?:\.\d+)?)(?:\s*[-–—]\s*(-?\d+(?:\.\d+)?))?/i);
+  const explicitPattern = new RegExp(`\\bENTRY(?:\\s+PRICE)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})(?:\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE}))?`, 'i');
+  const explicit = text.match(explicitPattern);
   if (explicit) {
-    const a = Number(explicit[1]);
-    if (explicit[2] != null) { const b = Number(explicit[2]); return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) }; }
+    const a = parsedNumber(explicit[1]);
+    if (a == null) return null;
+    if (explicit[2] != null) {
+      const b = parsedNumber(explicit[2]);
+      if (b == null) return null;
+      return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) };
+    }
     return { kind: 'PRICE', value: a };
   }
+
   let head = text.split(/\b(?:SL|TP)\b/i)[0];
   if (symbolToken) head = head.replace(new RegExp(symbolToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
-  head = head.replace(/\b(?:BUY|SELL|LONG|SHORT|STOP\s+LIMIT|LIMIT|STOP|MARKET|NOW|ENTRY)\b/gi, ' ').replace(/[^0-9.\-–—]+/g, ' ').trim();
-  const range = head.match(/(-?\d+(?:\.\d+)?)\s*[-–—]\s*(-?\d+(?:\.\d+)?)/);
-  if (range) { const a = Number(range[1]); const b = Number(range[2]); return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) }; }
-  const price = head.match(/-?\d+(?:\.\d+)?/);
-  return price ? { kind: 'PRICE', value: Number(price[0]) } : null;
+  head = head.replace(/\b(?:BUY|SELL|LONG|SHORT|STOP\s+LIMIT|LIMIT|STOP|MARKET|NOW|ENTRY)\b/gi, ' ')
+    .replace(/[@():=]+/g, ' ')
+    .trim();
+
+  const rangePattern = new RegExp(`(${SIGNAL_NUMBER_SOURCE})\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE})`);
+  const range = head.match(rangePattern);
+  if (range) {
+    const a = parsedNumber(range[1]);
+    const b = parsedNumber(range[2]);
+    if (a == null || b == null) return null;
+    return { kind: 'RANGE', min: Math.min(a, b), max: Math.max(a, b) };
+  }
+  const price = head.match(new RegExp(SIGNAL_NUMBER_SOURCE));
+  if (!price) return null;
+  const value = parsedNumber(price[0]);
+  return value == null ? null : { kind: 'PRICE', value };
 }
 
 function isConfidentExecutionInstruction(text) {
@@ -154,11 +202,15 @@ export function buildMachinePlan(event = {}) {
   if (!symbolToken) return { status: 'NEEDS_INTERPRETATION' };
 
   if (!isConfidentExecutionInstruction(text)) return { status: 'NEEDS_INTERPRETATION' };
+  if (hasAmbiguousCommaNumber(text)) return { status: 'NEEDS_INTERPRETATION' };
 
   const symbol = normalizeSymbol(symbolToken);
-  const stopLossMatch = text.match(/\bSL\s*[:@=-]?\s*(-?\d+(?:\.\d+)?)/i);
-  const stopLoss = stopLossMatch ? Number(stopLossMatch[1]) : null;
+  const stopLossPattern = new RegExp(`\\bSL\\s*[:@=-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i');
+  const stopLossMatch = text.match(stopLossPattern);
+  const stopLoss = stopLossMatch ? parsedNumber(stopLossMatch[1]) : null;
+  if (stopLossMatch && stopLoss == null) return { status: 'NEEDS_INTERPRETATION' };
   const takeProfits = extractExplicitTps(text);
+  if (takeProfits == null) return { status: 'NEEDS_INTERPRETATION' };
   const entry = extractEntry(text, symbolToken);
   const fastEntry = order.orderType === 'MARKET'
     && !entry

@@ -67,13 +67,31 @@ function cleanSymbol(value) {
     .replace(/(?:PRO|RAW|ECN)$/i, '');
 }
 
+function normalizeDerivSynthetic(cleaned, source) {
+  const volatility = cleaned.match(/^VOLATILITY(10|15|25|30|50|75|90|100)(1S)?$/);
+  if (volatility) {
+    return { canonical: `DERIV:VOLATILITY_${volatility[1]}${volatility[2] ? '_1S' : ''}`, source };
+  }
+
+  const boom = cleaned.match(/^BOOM(300|500|600|900|1000)$/);
+  if (boom) return { canonical: `DERIV:BOOM_${boom[1]}`, source };
+
+  const crash = cleaned.match(/^CRASH(300|500|600|900|1000)$/);
+  if (crash) return { canonical: `DERIV:CRASH_${crash[1]}`, source };
+
+  if (cleaned === 'STEP') return { canonical: 'DERIV:STEP', source };
+
+  const jump = cleaned.match(/^JUMP(10|25|50|75|100)$/);
+  if (jump) return { canonical: `DERIV:JUMP_${jump[1]}`, source };
+
+  return null;
+}
+
 export function normalizeSymbol(value, registry = SYMBOL_ALIASES) {
   const source = String(value ?? '').trim();
   const cleaned = cleanSymbol(source);
-  const volMatch = cleaned.match(/^VOLATILITY(10|15|25|30|50|75|90|100)(1S)?$/);
-  if (volMatch) {
-    return { canonical: `DERIV:VOLATILITY_${volMatch[1]}${volMatch[2] ? '_1S' : ''}`, source };
-  }
+  const synthetic = normalizeDerivSynthetic(cleaned, source);
+  if (synthetic) return synthetic;
   return { canonical: registry.get(cleaned) || cleaned, source };
 }
 

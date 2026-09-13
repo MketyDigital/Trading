@@ -12,6 +12,42 @@ test('normalizes common cross-broker symbol aliases without losing source symbol
   assert.equal(normalizeSymbol('Volatility 75 Index').canonical, 'DERIV:VOLATILITY_75');
 });
 
+test('normalizes major market families and named Deriv synthetics', () => {
+  const cases = [
+    ['EURUSD', 'EURUSD'],
+    ['GBP/JPY', 'GBPJPY'],
+    ['XAUUSD', 'XAUUSD'],
+    ['SILVER', 'XAGUSD'],
+    ['BTCUSD', 'BTCUSD'],
+    ['ETHUSD', 'ETHUSD'],
+    ['US30', 'US30'],
+    ['NAS100', 'NAS100'],
+    ['US500', 'US500'],
+    ['GER40', 'GER40'],
+    ['UK100', 'UK100'],
+    ['JP225', 'JP225'],
+    ['HK50', 'HK50'],
+    ['USOIL', 'USOIL'],
+    ['UKOIL', 'UKOIL'],
+    ['Volatility 75 Index', 'DERIV:VOLATILITY_75'],
+    ['Volatility 75 (1s) Index', 'DERIV:VOLATILITY_75_1S'],
+    ['Boom 1000 Index', 'DERIV:BOOM_1000'],
+    ['Crash 500 Index', 'DERIV:CRASH_500'],
+    ['Step Index', 'DERIV:STEP'],
+    ['Jump 25 Index', 'DERIV:JUMP_25'],
+  ];
+
+  for (const [input, canonical] of cases) {
+    assert.equal(normalizeSymbol(input).canonical, canonical, input);
+  }
+});
+
+test('normalizes common broker suffixes without changing canonical intent', () => {
+  assert.equal(normalizeSymbol('XAUUSD.m').canonical, 'XAUUSD');
+  assert.equal(normalizeSymbol('BTCUSD.pro').canonical, 'BTCUSD');
+  assert.equal(normalizeSymbol('EURUSD.raw').canonical, 'EURUSD');
+});
+
 test('normalizes market and pending order language', () => {
   assert.deepEqual(normalizeOrderIntent('BUY'), { side: 'BUY', orderType: 'MARKET' });
   assert.deepEqual(normalizeOrderIntent('sell limit'), { side: 'SELL', orderType: 'LIMIT' });
