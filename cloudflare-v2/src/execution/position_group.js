@@ -112,6 +112,21 @@ export function buildTargetProtectionActions(group, targetIndex) {
 
 export function buildManagementActions(group, management) {
   if (!group?.legs) return [];
+
+  if (management?.type === 'COMPOUND') {
+    const children = Array.isArray(management.actions) ? management.actions : [];
+    if (children.length < 2) throw new Error('compound management requires at least two actions');
+    const expanded = children.map((child) => {
+      if (!child || child.type === 'COMPOUND') throw new Error('nested compound management is not supported');
+      const actions = buildManagementActions(group, child);
+      if (!Array.isArray(actions) || actions.length === 0) {
+        throw new Error(`compound management action unavailable: ${String(child?.type || 'UNKNOWN')}`);
+      }
+      return actions;
+    });
+    return expanded.flat();
+  }
+
   const openLegs = group.legs.filter((leg) => leg.status === 'OPEN' && leg.brokerPositionId);
   if (management?.type === 'TARGET_HIT') {
     return buildTargetProtectionActions(group, management.targetIndex);
