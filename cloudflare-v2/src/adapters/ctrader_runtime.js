@@ -70,12 +70,13 @@ export async function createCTraderRuntime({
     catalog,
     async execute(action) {
       if (!action) throw new TypeError('canonical action is required');
+      const demoSyntheticFallback = mode === 'demo' && String(action?.symbol || '').toUpperCase().startsWith('DERIV:');
       return executeCTraderAction(action, {
         session,
         accountId: Number(accountId),
         catalog,
         deliveryStore,
-        allowBrokerMinimumVolumeFallback: mode === 'demo' && allowBrokerMinimumVolumeFallback === true,
+        allowBrokerMinimumVolumeFallback: demoSyntheticFallback || (mode === 'demo' && allowBrokerMinimumVolumeFallback === true),
       });
     },
     close() {
