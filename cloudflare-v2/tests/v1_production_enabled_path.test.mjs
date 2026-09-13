@@ -176,10 +176,15 @@ test('V1 production-shaped DEMO path executes exactly once through real coordina
       accountId: 'acct-1',
       groupId: 'group-1',
       legId: 'leg-1',
+      actionType: 'OPEN_POSITION',
+      status: 'OPEN',
       brokerPositionId: 'fake-position-1',
       brokerOrderId: 'fake-order-1',
       brokerDealId: 'fake-deal-1',
       fillPrice: 2500.5,
+      executedLots: 0.01,
+      volumeStepLots: null,
+      minimumLots: null,
     },
   });
   assert.equal(JSON.stringify(body).includes('caller-secret-must-not-flow'), false);
