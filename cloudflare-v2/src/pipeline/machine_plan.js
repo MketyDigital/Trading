@@ -3,7 +3,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
 const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?$/i;
 
 function normalizeSignalText(value) {
@@ -81,12 +81,26 @@ function managementPlan(text) {
     return { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
   }
 
+  const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
+  const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
+    || /\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
+    || /\bMAKE\s+SURE\s+(?:(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+)?BE\b/.test(upper);
+
+  if (closeHalfRequested && breakEvenRequested) {
+    return withManagementSymbol(text, {
+      type: 'COMPOUND',
+      actions: [
+        { type: 'CLOSE_PARTIAL', fraction: 0.5 },
+        { type: 'MOVE_SL_TO_BE' },
+      ],
+    });
+  }
+
   if (/\bSECURE\s+PROFITS\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
   }
 
-  if (/\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
-      || /\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)) {
+  if (breakEvenRequested) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
 
