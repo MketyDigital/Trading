@@ -5,6 +5,9 @@ const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDE
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
 const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
 const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?$/i;
+const DERIV_SYNTHETIC_SYMBOL_SOURCE = String.raw`(?:Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)`;
+const DERIV_SYNTHETIC_SYMBOL = new RegExp(`^${DERIV_SYNTHETIC_SYMBOL_SOURCE}$`, 'i');
+const OPTIONAL_MANAGEMENT_SYMBOL_WORDS = String.raw`(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}`;
 
 function normalizeSignalText(value) {
   return String(value ?? '')
@@ -15,6 +18,13 @@ function normalizeSignalText(value) {
     .replace(/\r/g, ' ')
     .replace(/[\t ]+/g, ' ')
     .trim();
+}
+
+function extractDerivSyntheticSymbol(value, { anchored = true } = {}) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const pattern = anchored ? DERIV_SYNTHETIC_SYMBOL : new RegExp(DERIV_SYNTHETIC_SYMBOL_SOURCE, 'i');
+  return text.match(pattern)?.[0] || null;
 }
 
 function parsedNumber(raw) {
@@ -47,6 +57,9 @@ function normalizeDetectedSymbol(value) {
 }
 
 function managementSymbol(text) {
+  const synthetic = extractDerivSyntheticSymbol(text, { anchored: false });
+  if (synthetic) return normalizeDetectedSymbol(synthetic);
+
   const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&().-]{1,24}/g) || [];
   for (const token of tokens) {
     if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
@@ -83,7 +96,8 @@ function managementPlan(text) {
 
   const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
   const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
-    || /\bMOVE\b(?:\s+[A-Z0-9_./#&.-]+)?\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b|\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
+    || new RegExp(`\\bMOVE\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)\\b(?:\\s+TO)?\\s+(?:BE|BREAK\\s+EVEN|BREAKEVEN)\\b`).test(upper)
+    || /\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
     || /\bMAKE\s+SURE\s+(?:(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+)?BE\b/.test(upper);
 
   if (closeHalfRequested && breakEvenRequested) {
@@ -104,7 +118,7 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
 
-  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)\\s+(?:[A-Z][A-Z0-9_./#&.-]+\\s+)?(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
   const moveSl = text.match(moveSlPattern);
   if (moveSl) {
     const stopLoss = parsedNumber(moveSl[1]);
@@ -128,7 +142,7 @@ function managementPlan(text) {
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
   }
-  if (/\b(?:CANCEL|DELETE)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&.-]+)?\s+PENDING\b/.test(upper)) {
+  if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
   }
   if (/\bCLOSE\s+ALL\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
@@ -184,7 +198,7 @@ function concisePrefixSymbol(before) {
     .replace(/^\s*PLEASE\b\s*/i, '')
     .trim();
   if (!cleaned) return null;
-  const synthetic = cleaned.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)$/i)?.[1];
+  const synthetic = extractDerivSyntheticSymbol(cleaned);
   if (synthetic) return synthetic;
   if (DERIV_SHORT.test(cleaned)) return cleaned;
   const tokens = cleaned.split(/\s+/).filter(Boolean);
@@ -196,7 +210,7 @@ function labeledInstrument(text) {
   const match = String(text ?? '').match(/\bINSTRUMENT\s*:\s*([^\n]+)/i);
   if (!match) return null;
   const candidate = cleanCandidate(match[1]);
-  const synthetic = candidate.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
+  const synthetic = extractDerivSyntheticSymbol(candidate, { anchored: false });
   if (synthetic) return synthetic;
   return isLikelyCompactSymbol(candidate) ? candidate : null;
 }
@@ -215,7 +229,7 @@ function extractSymbolToken(text, sideInfo) {
 
   if (/^(?:AROUND|NEAR|ABOUT|FROM|HERE|NOW\s+AROUND|AT\s+(?:AROUND|ABOUT))\b/i.test(after)) return null;
 
-  const synthetic = after.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
+  const synthetic = extractDerivSyntheticSymbol(after, { anchored: false });
   if (synthetic) return synthetic;
   const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?)/i)?.[1];
   if (derivShort) return derivShort;
