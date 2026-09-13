@@ -1,7 +1,9 @@
 function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
   const sourceInstanceId = String(event?.source?.instance_id ?? '');
+  const workspaceId = event?.workspace_hint == null ? '' : String(event.workspace_hint);
   return (activeGroups || []).filter((group) => {
     if (!group || !['OPEN', 'PLANNED', 'PENDING'].includes(String(group.status || 'OPEN'))) return false;
+    if (workspaceId && String(group.workspaceId ?? '') !== workspaceId) return false;
     if (sourceInstanceId && String(group.sourceInstanceId ?? '') !== sourceInstanceId) return false;
     const updatedAt = Number(group.updatedAt ?? group.createdAt ?? 0);
     return updatedAt > 0 && nowMs - updatedAt <= windowMs;
