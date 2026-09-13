@@ -53,6 +53,34 @@ test('translates canonical cTrader partial close using raw protocol-cent symbol 
   assert.equal(message.payload.volume, 500000);
 });
 
+test('partial-close translation never rounds or clamps MT5 volume upward', () => {
+  assert.throws(() => buildMT5ManagementCommand({
+    type: 'CLOSE_PARTIAL', brokerPositionId: '9001', lots: 0.015,
+  }, {
+    minLots: 0.01, maxLots: 100, stepLots: 0.01,
+  }), /not on broker volume step/);
+
+  assert.throws(() => buildMT5ManagementCommand({
+    type: 'CLOSE_PARTIAL', brokerPositionId: '9001', lots: 0.005,
+  }, {
+    minLots: 0.01, maxLots: 100, stepLots: 0.01,
+  }), /below broker minimum/);
+});
+
+test('partial-close translation never rounds or clamps cTrader volume upward', () => {
+  const options = {
+    accountId: 123,
+    clientMsgId: 'm-strict',
+    symbol: { protocolLotSize: 10000000, minVolume: 100000, maxVolume: 1000000000, stepVolume: 100000 },
+  };
+  assert.throws(() => buildCTraderManagementCommand({
+    type: 'CLOSE_PARTIAL', brokerPositionId: 456, lots: 0.015,
+  }, options), /not on broker volume step/);
+  assert.throws(() => buildCTraderManagementCommand({
+    type: 'CLOSE_PARTIAL', brokerPositionId: 456, lots: 0.005,
+  }, options), /below broker minimum/);
+});
+
 test('translates canonical pending cancellation for MT5 and cTrader', () => {
   assert.deepEqual(buildMT5ManagementCommand({ type: 'CANCEL_PENDING', brokerOrderId: '77' }), {
     action: 'CANCEL_PENDING', orderId: '77',
