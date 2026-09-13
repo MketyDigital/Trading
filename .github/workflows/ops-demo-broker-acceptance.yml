@@ -1,0 +1,188 @@
+name: Ops Demo Broker Acceptance
+
+on:
+  push:
+    branches:
+      - ops/demo-broker-acceptance-20260913
+    paths:
+      - '.github/workflows/ops-demo-broker-acceptance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Execute protected real demo round-trip
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createClient } from '@supabase/supabase-js';
+          import { buildMachinePlan } from './src/pipeline/machine_plan.js';
+          import { buildExecutionPlan } from './src/execution/execution_plan.js';
+          import { createProductionExecutionDependencies } from './src/execution/production_execution_deps_unified.js';
+
+          const required = (name) => {
+            const value = String(process.env[name] || '').trim();
+            if (!value) throw new Error(`${name} missing`);
+            return value;
+          };
+
+          const SUPABASE_URL = required('SUPABASE_URL');
+          const SUPABASE_SERVICE_ROLE = required('SUPABASE_SERVICE_ROLE');
+          const TRADING_MASTER_KEY = required('TRADING_MASTER_KEY');
+          const workspaceId = '5f63234c-20e9-426c-995f-56d129f51ece';
+          const sourceId = '48860770-4b2c-4b13-b49f-7d998f9d7ed5';
+          const accountIds = [
+            '40eacf2a-5a8a-4648-9b90-55038748d2ed',
+            '336c34d3-4816-44ed-8684-9e5d937cf6f2',
+          ];
+          const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+
+          const { data: controls, error: controlError } = await supabase
+            .from('trading_runtime_controls')
+            .select('control_key,enabled')
+            .in('control_key', ['trading_access_enabled','broker_execution_enabled','live_broker_execution_enabled']);
+          if (controlError) throw controlError;
+          const control = Object.fromEntries((controls || []).map((x) => [x.control_key, x.enabled === true]));
+          if (!control.trading_access_enabled) throw new Error('owner trading switch is OFF');
+          if (!control.broker_execution_enabled) throw new Error('owner broker switch is OFF');
+          if (control.live_broker_execution_enabled) throw new Error('live broker execution must remain OFF during demo acceptance');
+
+          const { data: source, error: sourceError } = await supabase
+            .from('source_connections')
+            .select('id,is_active,source_type,source_instance_id')
+            .eq('workspace_id', workspaceId)
+            .eq('id', sourceId)
+            .maybeSingle();
+          if (sourceError || !source || source.is_active !== true) throw new Error('acceptance source is not active');
+
+          const rawText = 'EURUSD BUY NOW';
+          const interpretation = buildMachinePlan({ text: rawText });
+          if (interpretation?.status !== 'READY' || interpretation?.intent?.symbol?.canonical !== 'FX:EURUSD') {
+            throw new Error(`parser did not produce canonical EURUSD READY intent: ${JSON.stringify(interpretation)}`);
+          }
+
+          const externalEventId = `ops-demo-${Date.now()}-${process.env.GITHUB_RUN_ID || 'local'}`;
+          const { data: event, error: eventError } = await supabase
+            .from('trading_events')
+            .insert({
+              workspace_id: workspaceId,
+              source_connection_id: sourceId,
+              external_event_id: externalEventId,
+              source_type: source.source_type || 'telegram_mtproto',
+              source_external_id: source.source_instance_id || 'main signal2',
+              occurred_at: new Date().toISOString(),
+              raw_text: rawText,
+              structured_payload: {},
+              thread: {},
+              metadata: { purpose: 'real-demo-broker-acceptance', githubRunId: process.env.GITHUB_RUN_ID || null },
+              processing_status: 'READY',
+              canonical_intent: interpretation.intent,
+              canonical_event_id: externalEventId,
+            })
+            .select('id')
+            .single();
+          if (eventError || !event?.id) throw eventError || new Error('failed to create durable acceptance event');
+
+          const deps = createProductionExecutionDependencies({
+            env: {
+              TRADING_MASTER_KEY,
+              CTRADER_LIVE_TRADING_ENABLED: 'false',
+            },
+            supabase,
+            workspaceId,
+            tradingEventId: event.id,
+          });
+
+          const results = [];
+          try {
+            for (const accountId of accountIds) {
+              const account = await deps.accountLoader(workspaceId, accountId);
+              if (!account) throw new Error(`account not found: ${accountId}`);
+              if (String(account.environment).toLowerCase() !== 'demo') throw new Error(`non-demo account blocked: ${accountId}`);
+              if (account.is_active !== true || account.execution_enabled !== true) throw new Error(`demo account is not executable: ${accountId}`);
+              if (account.live_execution_enabled === true) throw new Error(`demo account unexpectedly has live execution enabled: ${accountId}`);
+              if (account.safety_policy?.killSwitch === true) throw new Error(`account kill switch is ON: ${accountId}`);
+
+              await deps.authorityLoader({ workspaceId, tradingEventId: event.id, accountId });
+
+              const groupId = `ops-${process.env.GITHUB_RUN_ID || Date.now()}-${account.platform}`;
+              const plan = buildExecutionPlan(interpretation.intent, {
+                account: {
+                  sizingMode: 'FIXED_LOTS',
+                  fixedLots: Number(account.lot_value || 0.01),
+                  safetyPolicy: account.safety_policy || { enabled: true },
+                },
+                instrument: { minLots: 0.01, maxLots: 100, stepLots: 0.01 },
+                groupId,
+              });
+              if (plan.status !== 'READY' || plan.actions.length !== 1) throw new Error(`execution plan blocked for ${account.platform}`);
+
+              let openAction = plan.actions[0];
+              const materialized = await deps.riskMaterializer({ workspaceId, account, action: openAction });
+              if (materialized?.allowed !== true) throw new Error(`risk authority blocked ${account.platform}: ${materialized?.reason || 'unknown'}`);
+              openAction = materialized.action || openAction;
+
+              const opened = await deps.dispatchAction({ workspaceId, groupId, account, action: openAction });
+              if (!opened?.brokerPositionId) throw new Error(`${account.platform} open did not return brokerPositionId`);
+
+              const duplicateOpen = await deps.dispatchAction({ workspaceId, groupId, account, action: openAction });
+              if (duplicateOpen?.duplicate !== true) throw new Error(`${account.platform} duplicate open was not idempotently suppressed`);
+
+              const closeAction = {
+                type: 'CLOSE_POSITION',
+                brokerPositionId: String(opened.brokerPositionId),
+                symbol: 'FX:EURUSD',
+                lots: Number(openAction.lots || 0.01),
+                idempotencyKey: `${groupId}:close`,
+              };
+              const closed = await deps.dispatchAction({ workspaceId, groupId, account, action: closeAction });
+              const duplicateClose = await deps.dispatchAction({ workspaceId, groupId, account, action: closeAction });
+              if (duplicateClose?.duplicate !== true) throw new Error(`${account.platform} duplicate close was not idempotently suppressed`);
+
+              results.push({
+                platform: account.platform,
+                brokerAccountId: account.account_id,
+                serverName: account.server_name || null,
+                openPositionId: String(opened.brokerPositionId),
+                openOrderId: opened.brokerOrderId != null ? String(opened.brokerOrderId) : null,
+                fillPrice: opened.fillPrice ?? null,
+                closeAccepted: Boolean(closed),
+                duplicateOpenSuppressed: true,
+                duplicateCloseSuppressed: true,
+              });
+            }
+          } finally {
+            await deps.finalizeExecutionBatch?.();
+          }
+
+          console.log(JSON.stringify({
+            ok: true,
+            eventId: event.id,
+            parserStatus: interpretation.status,
+            canonicalSymbol: interpretation.intent.symbol.canonical,
+            ownerTradingEnabled: true,
+            ownerBrokerExecutionEnabled: true,
+            liveBrokerExecutionEnabled: false,
+            results,
+          }, null, 2));
+          NODE
