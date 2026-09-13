@@ -154,6 +154,25 @@ function hasBrokerAffixMatch(platformSymbol, requestedKey) {
 
 function resolveBrokerAffixMatch(requested, catalog) {
   const keys = requestedComparisonKeys(requested);
+
+  // Exact normalized broker names have stronger semantics than generic broker
+  // affixes. Prefer them before suffix/prefix fallback so related instruments
+  // such as Volatility 75 and Volatility 75 (1s) cannot become false peers.
+  const exactNormalizedMatches = catalog.filter((item) => {
+    const platformKey = normalizeInstrumentKey(item.platformSymbol);
+    return platformKey && keys.includes(platformKey);
+  });
+  if (exactNormalizedMatches.length === 1) {
+    return { ok: true, ...exactNormalizedMatches[0], matchType: 'broker_affix' };
+  }
+  if (exactNormalizedMatches.length > 1) {
+    return {
+      ok: false,
+      reason: 'AMBIGUOUS_SYMBOL',
+      candidates: exactNormalizedMatches.map((item) => item.platformSymbol),
+    };
+  }
+
   const matches = catalog.filter((item) => keys.some((key) => hasBrokerAffixMatch(item.platformSymbol, key)));
   if (matches.length === 1) return { ok: true, ...matches[0], matchType: 'broker_affix' };
   if (matches.length > 1) {
