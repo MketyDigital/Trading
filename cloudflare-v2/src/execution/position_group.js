@@ -83,9 +83,22 @@ export function buildTargetProtectionActions(group, targetIndex) {
   if (!group?.legs) return [];
   const index = Number(targetIndex);
   if (!Number.isInteger(index) || index < 1) throw new Error('valid targetIndex is required');
+
   const hitLeg = group.legs.find((leg) => Number(leg.targetIndex) === index);
   if (!hitLeg || !Number.isFinite(Number(hitLeg.takeProfit))) throw new Error('target-hit takeProfit is unavailable');
-  const protectedStop = Number(hitLeg.takeProfit);
+
+  let protectedStop;
+  if (index === 1) {
+    if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for TP1 protection');
+    protectedStop = Number(group.entryPrice);
+  } else {
+    const previousLeg = group.legs.find((leg) => Number(leg.targetIndex) === index - 1);
+    if (!previousLeg || !Number.isFinite(Number(previousLeg.takeProfit))) {
+      throw new Error('previous target takeProfit is unavailable');
+    }
+    protectedStop = Number(previousLeg.takeProfit);
+  }
+
   return group.legs
     .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
     .map((leg) => ({
