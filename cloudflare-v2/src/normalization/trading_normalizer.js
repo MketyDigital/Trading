@@ -56,6 +56,8 @@ const SYMBOL_ALIASES = new Map([
   ['ETHUSD', 'ETHUSD'],
 ]);
 
+const CANONICAL_DERIV_SYMBOL = /^DERIV:(?:VOLATILITY_(?:10|15|25|30|50|75|90|100)(?:_1S)?|BOOM_(?:300|500|600|900|1000)|CRASH_(?:300|500|600|900|1000)|STEP|JUMP_(?:10|25|50|75|100))$/;
+
 function cleanSymbol(value) {
   return String(value ?? '')
     .trim()
@@ -89,6 +91,10 @@ function normalizeDerivSynthetic(cleaned, source) {
 
 export function normalizeSymbol(value, registry = SYMBOL_ALIASES) {
   const source = String(value ?? '').trim();
+  const canonicalSource = source.toUpperCase();
+  if (CANONICAL_DERIV_SYMBOL.test(canonicalSource)) {
+    return { canonical: canonicalSource, source };
+  }
   const cleaned = cleanSymbol(source);
   const synthetic = normalizeDerivSynthetic(cleaned, source);
   if (synthetic) return synthetic;
