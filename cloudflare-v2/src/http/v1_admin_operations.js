@@ -120,6 +120,90 @@ function safeRecentFailure(row = {}) {
   };
 }
 
+function canonicalSymbol(intent = {}) {
+  if (typeof intent?.symbol === 'string') return intent.symbol || null;
+  return intent?.symbol?.canonical ?? null;
+}
+
+function safeRecentEvent(row = {}, { source = null, groups = [], accountsById = new Map(), deliveries = [] } = {}) {
+  const canonicalIntent = row.canonical_intent == null ? null : sanitizePersistedValue(row.canonical_intent);
+  const intent = canonicalIntent?.intent && typeof canonicalIntent.intent === 'object' ? canonicalIntent.intent : null;
+  const management = canonicalIntent?.management && typeof canonicalIntent.management === 'object' ? canonicalIntent.management : null;
+  const matchedExisting = groups.some((group) => {
+    const primary = text(group?.source_event_id);
+    const linked = Array.isArray(group?.source_event_ids) ? group.source_event_ids.map(String) : [];
+    return primary !== text(row.id) && linked.includes(String(row.id));
+  });
+  const group = groups[0] || null;
+  const destinations = groups.map((item) => {
+    const account = accountsById.get(text(item.trade_account_id));
+    return {
+      positionGroupId: item.id ?? null,
+      tradeAccountId: item.trade_account_id ?? null,
+      accountLabel: account?.account_label ?? null,
+      platform: account?.platform ?? null,
+      groupStatus: item.status ?? null,
+    };
+  });
+  const safeDeliveries = deliveries.map((delivery) => ({
+    deliveryId: delivery.id ?? null,
+    destinationType: delivery.destination_type ?? null,
+    destinationRef: delivery.destination_ref ?? null,
+    status: delivery.status ?? null,
+    errorCode: delivery.error_code ?? null,
+    failureClass: delivery.failure_class ?? null,
+    reconciliationStatus: delivery.failure_class === 'STATE_BINDING_PENDING'
+      ? 'STATE_BINDING_PENDING'
+      : delivery.status === 'SUCCEEDED'
+        ? 'BROKER_SUCCEEDED'
+        : null,
+    updatedAt: delivery.updated_at ?? null,
+  }));
+
+  return {
+    eventId: row.id ?? null,
+    drilldownEventId: row.id ?? null,
+    externalEventId: row.external_event_id ?? null,
+    receivedAt: row.received_at ?? null,
+    processingStatus: row.processing_status ?? null,
+    parserSource: canonicalIntent?.source ?? null,
+    source: source ? {
+      sourceConnectionId: source.id ?? null,
+      sourceType: source.source_type ?? row.source_type ?? null,
+      providerType: source.provider_type ?? null,
+      sourceInstanceId: source.source_instance_id ?? null,
+      displayName: source.display_name ?? null,
+      sourceExternalId: row.source_external_id ?? null,
+    } : {
+      sourceConnectionId: row.source_connection_id ?? null,
+      sourceType: row.source_type ?? null,
+      providerType: null,
+      sourceInstanceId: null,
+      displayName: null,
+      sourceExternalId: row.source_external_id ?? null,
+    },
+    eventType: canonicalIntent?.status ?? null,
+    canonicalSymbol: canonicalSymbol(intent) ?? group?.canonical_symbol ?? null,
+    side: intent?.side ?? group?.side ?? null,
+    orderType: intent?.orderType ?? intent?.order_type ?? group?.order_type ?? null,
+    managementType: management?.type ?? null,
+    numericInterpretation: intent ? {
+      entry: intent.entry ?? null,
+      stopLoss: intent.stopLoss ?? intent.stop_loss ?? null,
+      takeProfits: Array.isArray(intent.takeProfits) ? intent.takeProfits : Array.isArray(intent.take_profits) ? intent.take_profits : [],
+      normalization: canonicalIntent?.normalization ?? null,
+    } : null,
+    correlation: group ? {
+      kind: matchedExisting ? 'MATCHED_EXISTING_GROUP' : 'PRIMARY_GROUP_EVENT',
+      positionGroupId: group.id ?? null,
+      correlationKey: group.correlation_key ?? null,
+    } : null,
+    destinations,
+    deliveries: safeDeliveries,
+    errorCode: row.error_code ?? null,
+  };
+}
+
 function accountSafetyBlock(account = {}) {
   const reasons = [];
   if (account.is_active !== true) reasons.push('ACCOUNT_INACTIVE');
@@ -272,14 +356,104 @@ export function createAdminOperationsStore(supabase, {
         .select('id,workspace_id,account_label,platform,is_active,execution_enabled,safety_policy')
         .eq('workspace_id', boundWorkspaceId)
         .order('id', { ascending: true }), 'account safety');
-      const blocked = exactWorkspaceRows(accountsResult.data, boundWorkspaceId)
+      const accountRows = exactWorkspaceRows(accountsResult.data, boundWorkspaceId);
+      const blocked = accountRows
         .map(accountSafetyBlock)
         .filter(Boolean);
+
+      const recentEventsResult = assertQuery(await supabase
+        .from('trading_events')
+        .select('id,workspace_id,source_connection_id,external_event_id,source_type,source_external_id,received_at,processing_status,canonical_intent,error_code,created_at')
+        .eq('workspace_id', boundWorkspaceId)
+        .order('received_at', { ascending: false })
+        .limit(boundedRecentLimit), 'recent trading events');
+      const eventRows = exactWorkspaceRows(recentEventsResult.data, boundWorkspaceId);
+      const eventIds = eventRows.map((row) => text(row.id)).filter(Boolean);
+      const sourceIds = [...new Set(eventRows.map((row) => text(row.source_connection_id)).filter(Boolean))];
+
+      let sourceRows = [];
+      if (sourceIds.length > 0) {
+        const sourceResult = assertQuery(await supabase
+          .from('source_connections')
+          .select('id,workspace_id,source_type,provider_type,source_instance_id,display_name')
+          .eq('workspace_id', boundWorkspaceId)
+          .in('id', sourceIds), 'recent event sources');
+        sourceRows = exactWorkspaceRows(sourceResult.data, boundWorkspaceId);
+      }
+      const sourcesById = new Map(sourceRows.map((row) => [text(row.id), row]));
+
+      const groupRows = [];
+      const seenGroupIds = new Set();
+      if (eventIds.length > 0) {
+        const groupColumns = 'id,workspace_id,trade_account_id,source_event_id,source_event_ids,correlation_key,canonical_symbol,side,order_type,status,updated_at';
+        const directGroupsResult = assertQuery(await supabase
+          .from('position_groups')
+          .select(groupColumns)
+          .eq('workspace_id', boundWorkspaceId)
+          .in('source_event_id', eventIds), 'recent direct position groups');
+        for (const row of exactWorkspaceRows(directGroupsResult.data, boundWorkspaceId)) {
+          const id = text(row?.id);
+          if (!id || seenGroupIds.has(id)) continue;
+          seenGroupIds.add(id);
+          groupRows.push(row);
+        }
+        for (const eventId of eventIds) {
+          const linkedGroupsResult = assertQuery(await supabase
+            .from('position_groups')
+            .select(groupColumns)
+            .eq('workspace_id', boundWorkspaceId)
+            .contains('source_event_ids', [eventId]), 'recent linked position groups');
+          for (const row of exactWorkspaceRows(linkedGroupsResult.data, boundWorkspaceId)) {
+            const id = text(row?.id);
+            if (!id || seenGroupIds.has(id)) continue;
+            seenGroupIds.add(id);
+            groupRows.push(row);
+          }
+        }
+      }
+
+      const accountIds = [...new Set(groupRows.map((row) => text(row.trade_account_id)).filter(Boolean))];
+      let recentAccountRows = [];
+      if (accountIds.length > 0) {
+        const recentAccountsResult = assertQuery(await supabase
+          .from('trade_accounts')
+          .select('id,workspace_id,account_label,platform')
+          .eq('workspace_id', boundWorkspaceId)
+          .in('id', accountIds), 'recent event accounts');
+        recentAccountRows = exactWorkspaceRows(recentAccountsResult.data, boundWorkspaceId);
+      }
+      const accountsById = new Map(recentAccountRows.map((row) => [text(row.id), row]));
+
+      let recentDeliveryRows = [];
+      if (eventIds.length > 0) {
+        const deliveriesResult = assertQuery(await supabase
+          .from('destination_deliveries')
+          .select('id,workspace_id,trading_event_id,destination_type,destination_ref,status,error_code,failure_class,updated_at')
+          .eq('workspace_id', boundWorkspaceId)
+          .in('trading_event_id', eventIds)
+          .order('updated_at', { ascending: false }), 'recent event deliveries');
+        recentDeliveryRows = exactWorkspaceRows(deliveriesResult.data, boundWorkspaceId);
+      }
+
+      const recentEvents = eventRows.map((row) => {
+        const eventId = text(row.id);
+        const groups = groupRows.filter((group) => text(group.source_event_id) === eventId
+          || (Array.isArray(group.source_event_ids) && group.source_event_ids.map(String).includes(eventId)));
+        const deliveries = recentDeliveryRows.filter((delivery) => text(delivery.trading_event_id) === eventId);
+        return safeRecentEvent(row, {
+          source: sourcesById.get(text(row.source_connection_id)) || null,
+          groups,
+          accountsById,
+          deliveries,
+        });
+      });
+
       const resilience = await loadResilienceSummary(resilienceMetricsSource, boundWorkspaceId);
 
       return {
         workspaceId: boundWorkspaceId,
         observedAt,
+        recentEvents,
         deliveries: {
           counts: Object.fromEntries(countEntries),
           overdueRetryable: Number(overdue.count || 0),
