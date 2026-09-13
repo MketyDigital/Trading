@@ -98,18 +98,51 @@ test('does not correlate opposite-side or expired trades to a new full signal', 
   assert.equal(expired.status, 'NEW_GROUP');
 });
 
-test('unthreaded management fails closed when multiple active groups could be targeted', () => {
+test('symbol-targeted management selects only the matching recent group', () => {
   const result = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '106', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE', symbol: { canonical: 'BTCUSD' } } },
+    activeGroups: [
+      group({ id: 'gold', symbol: 'XAUUSD' }),
+      group({ id: 'btc', sourceEventIds: ['200'], symbol: 'BTCUSD', incomplete: false }),
+    ], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: 'btc' });
+});
+
+test('symbol-targeted management fails closed when same-symbol groups are ambiguous', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '106b', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE', symbol: { canonical: 'BTCUSD' } } },
+    activeGroups: [
+      group({ id: 'btc-buy', symbol: 'BTCUSD', side: 'BUY' }),
+      group({ id: 'btc-sell', sourceEventIds: ['201'], symbol: 'BTCUSD', side: 'SELL', incomplete: false }),
+    ], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
+});
+
+test('symbol-targeted management never falls back to a different only-active symbol', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '106c', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE', symbol: { canonical: 'BTCUSD' } } },
+    activeGroups: [group({ id: 'gold', symbol: 'XAUUSD' })], nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' });
+});
+
+test('unthreaded bare management fails closed when multiple active groups could be targeted', () => {
+  const result = correlateTradingEvent({
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '107', thread: {} },
     interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
     activeGroups: [group(), group({ id: 'g2', sourceEventIds: ['200'], symbol: 'EURUSD', incomplete: false })], nowMs: now,
   });
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
 });
 
-test('unthreaded management may target the only recent open group from the same source', () => {
+test('unthreaded bare management may target the only recent open group from the same source', () => {
   const result = correlateTradingEvent({
-    event: { source: { instance_id: 'listener-1' }, external_event_id: '107', thread: {} },
+    event: { source: { instance_id: 'listener-1' }, external_event_id: '108', thread: {} },
     interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } },
     activeGroups: [group()], nowMs: now,
   });
