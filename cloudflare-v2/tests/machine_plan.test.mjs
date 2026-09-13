@@ -100,6 +100,27 @@ test('classifies management instructions without inventing a new trade', () => {
   assert.deepEqual(buildMachinePlan({ text: 'CANCEL PENDING' }), { status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING' } });
 });
 
+test('extracts an explicit symbol from concise management instructions', () => {
+  assert.deepEqual(buildMachinePlan({ text: 'CLOSE BTCUSD' }), {
+    status: 'MANAGEMENT', management: { type: 'CLOSE', symbol: { source: 'BTCUSD', canonical: 'BTCUSD' } },
+  });
+  assert.deepEqual(buildMachinePlan({ text: 'BTCUSD CLOSE HALF' }), {
+    status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5, symbol: { source: 'BTCUSD', canonical: 'BTCUSD' } },
+  });
+  assert.deepEqual(buildMachinePlan({ text: 'MOVE GOLD SL TO BE' }), {
+    status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE', symbol: { source: 'GOLD', canonical: 'XAUUSD' } },
+  });
+  assert.deepEqual(buildMachinePlan({ text: 'CANCEL BTCUSD PENDING' }), {
+    status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING', symbol: { source: 'BTCUSD', canonical: 'BTCUSD' } },
+  });
+});
+
+test('management language fails closed when negated, uncertain, conditional, or interrogative', () => {
+  for (const text of ["don't close BTCUSD", 'maybe close BTCUSD later', 'should we close BTCUSD?', 'close BTCUSD if it reverses']) {
+    assert.equal(buildMachinePlan({ text }).status, 'NEEDS_INTERPRETATION', text);
+  }
+});
+
 test('fast signal stays executable but explicitly incomplete for later reconciliation', () => {
   const plan = buildMachinePlan({ text: 'BUY GOLD NOW' });
   assert.equal(plan.status, 'READY');

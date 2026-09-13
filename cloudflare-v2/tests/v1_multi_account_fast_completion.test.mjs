@@ -68,7 +68,7 @@ function fastGroup(id, tradeAccountId) {
       {
         legId: `${id}-leg-1`,
         targetIndex: 1,
-        lots: 0.03,
+        lots: 0.09,
         stopLoss: null,
         takeProfit: null,
         status: 'PLANNED',
@@ -124,19 +124,23 @@ test('completed signal reconciles every matched fast account and opens normally 
     'MODIFY_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
   ]);
   assert.equal(byAccount.get('acct-a').groupId, 'group-a');
+  assert.deepEqual(byAccount.get('acct-a').actions.slice(1).map((action) => action.lots), [0.09, 0.09]);
   assert.deepEqual(byAccount.get('acct-b').actions.map((action) => action.type), [
     'MODIFY_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
   ]);
   assert.equal(byAccount.get('acct-b').groupId, 'group-b');
+  assert.deepEqual(byAccount.get('acct-b').actions.slice(1).map((action) => action.lots), [0.09, 0.09]);
 
   assert.deepEqual(byAccount.get('acct-wait').actions.map((action) => action.type), [
     'OPEN_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
   ]);
+  assert.deepEqual(byAccount.get('acct-wait').actions.map((action) => action.lots), [0.09, 0.09, 0.09]);
   assert.equal(byAccount.get('acct-wait').groupId, 'db-event-complete:acct-wait');
 
   assert.equal(persisted.length, 3);
   assert.equal(persisted.filter((group) => group.id === 'group-a').length, 1);
   assert.equal(persisted.filter((group) => group.id === 'group-b').length, 1);
   assert.equal(persisted.filter((group) => group.id === 'db-event-complete:acct-wait').length, 1);
+  for (const group of persisted) assert.deepEqual(group.legs.map((leg) => leg.lots), [0.09, 0.09, 0.09]);
   assert.equal(result.accounts.every((row) => row.actions.every((action) => action.simulated === true)), true);
 });

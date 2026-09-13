@@ -31,6 +31,10 @@ function correlateFastCompletion(matches) {
   };
 }
 
+function managementSymbol(interpretration = {}) {
+  return String(interpretration?.management?.symbol?.canonical ?? '').trim().toUpperCase();
+}
+
 export function correlateTradingEvent({
   event = {},
   interpretation = {},
@@ -55,6 +59,13 @@ export function correlateTradingEvent({
   }
 
   if (interpretation.status === 'MANAGEMENT') {
+    const symbol = managementSymbol(interpretation);
+    if (symbol) {
+      const symbolMatches = recent.filter((group) => String(group.symbol ?? '').trim().toUpperCase() === symbol);
+      if (symbolMatches.length === 1) return { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: symbolMatches[0].id };
+      if (symbolMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+      return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
+    }
     if (recent.length === 1) return { status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: recent[0].id };
     if (recent.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };

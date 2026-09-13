@@ -15,6 +15,16 @@ test('builds risk-sized three-leg plan from one canonical intent', () => {
   assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2510, 2520, 2530]);
 });
 
+test('preserves stable leg identity on every open-position action', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510, 2520, 2530], fastEntry: false,
+  }, { account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 }, instrument, groupId: 'group-1' });
+  assert.deepEqual(plan.group.legs.map((leg) => leg.legId), ['leg-1', 'leg-2', 'leg-3']);
+  assert.deepEqual(plan.actions.map((action) => action.legId), ['leg-1', 'leg-2', 'leg-3']);
+  assert.deepEqual(plan.actions.map((action) => action.idempotencyKey), ['group-1:leg:1', 'group-1:leg:2', 'group-1:leg:3']);
+});
+
 test('uses worst-case entry from BUY range when calculating stop risk', () => {
   const plan = buildExecutionPlan({ side:'BUY', orderType:'LIMIT', symbol:{canonical:'XAUUSD'}, entry:{kind:'RANGE',min:2525,max:2528}, stopLoss:2518, takeProfits:[2535] }, { account:{balance:10000,sizingMode:'RISK_PERCENT',riskPercent:1}, instrument });
   assert.equal(plan.riskEntryPrice, 2528);
@@ -29,10 +39,28 @@ test('requires a current market price to risk-size MARKET/NOW entry without expl
   assert.throws(() => buildExecutionPlan({ side:'BUY',orderType:'MARKET',symbol:{canonical:'XAUUSD'},entry:{kind:'MARKET'},stopLoss:2490,takeProfits:[2510],fastEntry:true }, { account:{balance:10000,sizingMode:'RISK_PERCENT',riskPercent:1},instrument }), /current market price/i);
 });
 
+test('treats configured fixed lot as per-target lot size', () => {
+  const plan = buildExecutionPlan({ side:'SELL',orderType:'MARKET',symbol:{canonical:'EURUSD'},entry:{kind:'MARKET'},stopLoss:1.09,takeProfits:[1.08,1.07,1.06] }, { account:{sizingMode:'FIXED_LOTS',fixedLots:0.10},instrument:{...instrument,stepLots:0.01},currentMarketPrice:1.085,groupId:'fixed-group' });
+  assert.equal(plan.risk, null);
+  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.10, 0.10, 0.10]);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.10, 0.10, 0.10]);
+  assert.deepEqual(plan.actions.map((action) => action.legId), ['leg-1', 'leg-2', 'leg-3']);
+});
+
+test('fixed-lot safety policy evaluates aggregate exposure across all target legs', () => {
+  const plan = buildExecutionPlan({ side:'BUY',orderType:'MARKET',symbol:{canonical:'XAUUSD'},entry:{kind:'MARKET'},stopLoss:null,takeProfits:[2510,2520,2530] }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.10,safetyPolicy:{enabled:true,killSwitch:false,maxLotsPerTrade:0.20}},
+    instrument,
+    currentMarketPrice:2500,
+  });
+  assert.equal(plan.status, 'BLOCKED');
+  assert.deepEqual(plan.actions, []);
+});
+
 test('supports fixed-lot enterprise policies without running risk math', () => {
   const plan = buildExecutionPlan({ side:'SELL',orderType:'MARKET',symbol:{canonical:'EURUSD'},entry:{kind:'MARKET'},stopLoss:1.09,takeProfits:[1.08,1.07] }, { account:{sizingMode:'FIXED_LOTS',fixedLots:0.06},instrument:{...instrument,stepLots:0.01},currentMarketPrice:1.085 });
   assert.equal(plan.risk, null);
-  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.03, 0.03]);
+  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.06, 0.06]);
 });
 
 test('returns BLOCKED before emitting broker actions when account safety policy rejects new risk', () => {

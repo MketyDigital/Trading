@@ -141,7 +141,7 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
     incomplete: true,
     positionMode: 'HEDGED',
     legs: [
-      { legId: 'fast-leg-1', targetIndex: 1, lots: 0.03, stopLoss: null, takeProfit: null, status: 'PLANNED' },
+      { legId: 'fast-leg-1', targetIndex: 1, lots: 0.09, stopLoss: null, takeProfit: null, status: 'PLANNED' },
     ],
     createdAt: 1000,
     updatedAt: 1000,
@@ -181,6 +181,7 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
   assert.equal(result.accounts[0].actions[0].takeProfit, 2510);
   assert.equal(result.accounts[0].actions[0].simulated, true);
   assert.deepEqual(result.accounts[0].actions.slice(1).map((action) => action.targetIndex), [2, 3]);
+  assert.deepEqual(result.accounts[0].actions.slice(1).map((action) => action.lots), [0.09, 0.09]);
   assert.equal(result.accounts[0].actions.every((action) => action.simulated === true), true);
 
   assert.equal(persisted.id, 'existing-group');
@@ -189,7 +190,7 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
   assert.equal(persisted.legs.length, 3);
   assert.equal(persisted.legs[0].legId, 'fast-leg-1');
   assert.equal(persisted.legs[0].takeProfit, 2510);
-  assert.deepEqual(persisted.legs.map((leg) => leg.lots), [0.03, 0.03, 0.03]);
+  assert.deepEqual(persisted.legs.map((leg) => leg.lots), [0.09, 0.09, 0.09]);
 });
 
 test('reply-targeted break-even management emits simulated risk-reducing actions even under drawdown lock', async () => {
