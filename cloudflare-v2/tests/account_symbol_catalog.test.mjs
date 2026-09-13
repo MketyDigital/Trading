@@ -34,6 +34,30 @@ test('canonical and broker-provided aliases resolve generically across instrumen
   assert.equal(resolveAccountSymbol('DOW', catalog, {}).platformSymbol, 'US30.cash');
 });
 
+test('canonical Deriv synthetic symbols resolve against raw platform catalog names', () => {
+  for (const [canonical, platformSymbol] of [
+    ['DERIV:VOLATILITY_75', 'Volatility 75 Index'],
+    ['DERIV:VOLATILITY_75_1S', 'Volatility 75 (1s) Index'],
+    ['DERIV:BOOM_1000', 'Boom 1000 Index'],
+    ['DERIV:CRASH_500', 'Crash 500 Index'],
+    ['DERIV:STEP', 'Step Index'],
+    ['DERIV:JUMP_25', 'Jump 25 Index'],
+  ]) {
+    const result = resolveAccountSymbol(canonical, [{ platformSymbol, tradable: true }], {});
+    assert.equal(result.ok, true, `${canonical} should resolve to ${platformSymbol}`);
+    assert.equal(result.platformSymbol, platformSymbol);
+  }
+});
+
+test('canonical Deriv synthetic catalog matching stays precise between 1s and non-1s variants', () => {
+  const catalogWithBoth = [
+    { platformSymbol: 'Volatility 75 Index', tradable: true },
+    { platformSymbol: 'Volatility 75 (1s) Index', tradable: true },
+  ];
+  assert.equal(resolveAccountSymbol('DERIV:VOLATILITY_75', catalogWithBoth, {}).platformSymbol, 'Volatility 75 Index');
+  assert.equal(resolveAccountSymbol('DERIV:VOLATILITY_75_1S', catalogWithBoth, {}).platformSymbol, 'Volatility 75 (1s) Index');
+});
+
 test('raw live broker catalogs resolve common suffixes and prefixes without precomputed canonical fields', () => {
   assert.equal(resolveAccountSymbol('GOLD', [{ platformSymbol: 'XAUUSD.r', tradable: true }], {}).platformSymbol, 'XAUUSD.r');
   assert.equal(resolveAccountSymbol('GOLD', [{ platformSymbol: 'm.XAUUSD', tradable: true }], {}).platformSymbol, 'm.XAUUSD');
