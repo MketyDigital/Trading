@@ -223,6 +223,15 @@ async function orchestrateMatchedManagement({
     };
   }
 
+  if (interpretation.management?.type === 'TARGET_HIT' && account.safetyPolicy?.autoTpProtection !== true) {
+    return {
+      ...base,
+      status: 'SIMULATED',
+      correlation,
+      accounts: [{ accountId: account.id, status: 'SKIPPED', reason: 'AUTO_TP_PROTECTION_DISABLED', actions: [] }],
+    };
+  }
+
   const policy = evaluateAccountPolicy(account.safetyPolicy, {
     symbol: matchedGroup.symbol,
     actionKind: 'REDUCE_RISK',
