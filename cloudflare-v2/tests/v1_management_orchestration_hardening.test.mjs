@@ -102,10 +102,22 @@ test('matched management never falls through to a different account', async () =
   assert.deepEqual(result.actions, []);
 });
 
-test('matched management fans out to every account-specific group for the same logical trade', async () => {
+test('matched management fans out to every broker-bound account group for the same logical trade', async () => {
   const groups = new Map([
-    ['group-a', plannedGroup({ id: 'group-a', tradeAccountId: 'acct-a', sourceEventIds: ['evt-origin'], legs: [{ legId: 'leg-a', targetIndex: 1, lots: 0.03, status: 'PLANNED' }] })],
-    ['group-b', plannedGroup({ id: 'group-b', tradeAccountId: 'acct-b', sourceEventIds: ['evt-origin'], legs: [{ legId: 'leg-b', targetIndex: 1, lots: 0.03, status: 'PLANNED' }] })],
+    ['group-a', plannedGroup({
+      id: 'group-a',
+      tradeAccountId: 'acct-a',
+      sourceEventIds: ['evt-origin'],
+      status: 'OPEN',
+      legs: [{ legId: 'leg-a', targetIndex: 1, lots: 0.03, status: 'OPEN', brokerPositionId: 'position-a' }],
+    })],
+    ['group-b', plannedGroup({
+      id: 'group-b',
+      tradeAccountId: 'acct-b',
+      sourceEventIds: ['evt-origin'],
+      status: 'OPEN',
+      legs: [{ legId: 'leg-b', targetIndex: 1, lots: 0.03, status: 'OPEN', brokerPositionId: 'position-b' }],
+    })],
   ]);
   const persisted = [];
   const result = await orchestrateTradingEventSimulation({
@@ -130,5 +142,7 @@ test('matched management fans out to every account-specific group for the same l
   assert.equal(result.accounts.length, 2);
   assert.deepEqual(result.accounts.map((account) => account.accountId), ['acct-a', 'acct-b']);
   assert.ok(result.accounts.every((account) => account.status === 'READY'));
+  assert.deepEqual(result.accounts.map((account) => account.actions[0]?.brokerPositionId), ['position-a', 'position-b']);
+  assert.ok(result.accounts.every((account) => account.actions[0]?.type === 'CLOSE_POSITION'));
   assert.equal(persisted.length, 2);
 });
