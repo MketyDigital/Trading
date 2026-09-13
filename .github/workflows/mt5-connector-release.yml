@@ -55,6 +55,7 @@ jobs:
             mt5-connector/mkety_mt5_connector.py
           if (!(Test-Path "dist/MketyMT5Connector.exe")) { throw "MT5 connector executable was not produced" }
 
+      # Exercise the packaged EXE so binary-only dependency omissions fail before release publication.
       - name: Smoke-test packaged runtime dependencies
         shell: pwsh
         run: |
