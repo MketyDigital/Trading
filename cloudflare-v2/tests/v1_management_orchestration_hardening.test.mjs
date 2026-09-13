@@ -77,3 +77,25 @@ test('planned-group indexed TP modification changes only the selected target thr
     { type: 'MODIFY_POSITION', legId: 'leg-2', targetIndex: 2, symbol: 'XAUUSD', takeProfit: 2540, simulated: true },
   ]);
 });
+
+test('matched management never falls through to a different account', async () => {
+  const result = await orchestrateTradingEventSimulation({
+    event,
+    interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL', stopLoss: 2505 } },
+    eventId: 'db-management-wrong-account',
+    nowMs: 3000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'planned-group' }) },
+    stateStore: {
+      getGroup: async () => structuredClone(plannedGroup()),
+      putGroup: async () => { throw new Error('wrong-account management must not mutate group state'); },
+    },
+    accountProvider: async () => [{ ...enabledAccount(), id: 'acct-2' }],
+    instrumentProvider: async () => { throw new Error('management must not require market metadata'); },
+  });
+
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.reason, 'MATCHED_ACCOUNT_NOT_FOUND');
+  assert.deepEqual(result.accounts, []);
+  assert.deepEqual(result.actions, []);
+});
