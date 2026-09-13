@@ -6,6 +6,19 @@ on:
       - design/enterprise-trading-event-core
     paths:
       - 'cloudflare-v2/docs/GATE7_DEMO_DESTINATION_TRIGGER.md'
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'Demo lifecycle provider to probe'
+        required: true
+        type: choice
+        options:
+          - mt5
+          - ctrader
+      confirmation:
+        description: 'Type exact marker: demo: lifecycle mt5 gate 7 or demo: lifecycle ctrader gate 7'
+        required: true
+        type: string
 
 jobs:
   test:
@@ -46,7 +59,22 @@ jobs:
   mt5-demo-lifecycle-gate7:
     needs: test
     if: >-
-      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: lifecycle mt5 gate 7' }}
+      ${{
+        needs.test.result == 'success' &&
+        (
+          (
+            github.event_name == 'push' &&
+            github.ref == 'refs/heads/design/enterprise-trading-event-core' &&
+            github.event.head_commit.message == 'demo: lifecycle mt5 gate 7'
+          ) ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            github.ref == 'refs/heads/main' &&
+            github.event.inputs.provider == 'mt5' &&
+            github.event.inputs.confirmation == 'demo: lifecycle mt5 gate 7'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -102,7 +130,22 @@ jobs:
   ctrader-demo-lifecycle-gate7:
     needs: test
     if: >-
-      ${{ github.event_name == 'push' && github.ref == 'refs/heads/design/enterprise-trading-event-core' && github.event.head_commit.message == 'demo: lifecycle ctrader gate 7' }}
+      ${{
+        needs.test.result == 'success' &&
+        (
+          (
+            github.event_name == 'push' &&
+            github.ref == 'refs/heads/design/enterprise-trading-event-core' &&
+            github.event.head_commit.message == 'demo: lifecycle ctrader gate 7'
+          ) ||
+          (
+            github.event_name == 'workflow_dispatch' &&
+            github.ref == 'refs/heads/main' &&
+            github.event.inputs.provider == 'ctrader' &&
+            github.event.inputs.confirmation == 'demo: lifecycle ctrader gate 7'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     environment: staging
     permissions:
