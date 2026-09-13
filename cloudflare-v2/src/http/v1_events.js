@@ -106,7 +106,7 @@ export async function handleV1EventsRequest(request, env = {}, {
     const rawBody = await request.text();
     const supabase = await supabaseFactory(env);
     const stores = storesFactory(supabase, { masterKey });
-    const interpretationTimeoutMs = Math.max(100, Number(env.TRADING_V1_AI_TIMEOUT_MS || 800));
+    const interpretationTimeoutMs = Math.max(100, Number(env.TRADING_V1_AI_TIMEOUT_MS || 12000));
     let workspaceAiRouterPromise = null;
     let workspaceAiRouterWorkspaceId = null;
     const aiRouterForWorkspace = (workspaceId) => {

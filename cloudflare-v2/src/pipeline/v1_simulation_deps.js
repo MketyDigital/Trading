@@ -104,13 +104,26 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
       const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
       return accountIds.map((id) => accountMap.get(id)).filter(Boolean);
     },
-    async instrumentProvider(_account, intent) {
+    async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
       const instrument = instruments[symbol];
-      if (!instrument || typeof instrument !== 'object') {
-        throw new Error(`simulation instrument metadata is not configured for ${symbol || 'UNKNOWN'}`);
+      if (instrument && typeof instrument === 'object') {
+        return { canonical: symbol, ...instrument };
       }
-      return { canonical: symbol, ...instrument };
+
+      const environment = String(account?.environment || '').trim().toLowerCase();
+      const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
+      const lotValue = Number(account?.lot_value);
+      if (environment === 'demo' && lotSizingType === 'fixed' && Number.isFinite(lotValue) && lotValue > 0) {
+        return {
+          canonical: symbol,
+          minLots: lotValue,
+          maxLots: lotValue,
+          stepLots: lotValue,
+        };
+      }
+
+      throw new Error(`simulation instrument metadata is not configured for ${symbol || 'UNKNOWN'}`);
     },
     async marketPriceProvider(_account, intent) {
       const symbol = canonicalSymbol(intent);
