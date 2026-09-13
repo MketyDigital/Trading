@@ -60,7 +60,7 @@ function isLikelyCompactSymbol(value) {
 function concisePrefixSymbol(before) {
   const cleaned = cleanCandidate(before)
     .replace(/^\s*(?:SIGNAL|TRADE|ENTRY)\s*[:=-]?\s*/i, '')
-    .replace(/^\s*PLEASE\s+/i, '')
+    .replace(/^\s*PLEASE\b\s*/i, '')
     .trim();
   if (!cleaned) return null;
   const synthetic = cleaned.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)$/i)?.[1];
@@ -112,6 +112,16 @@ function isConfidentExecutionInstruction(text) {
   return !MARKET_COMMAND_BLOCKER.test(text);
 }
 
+function isConciseFastMarketCommand(text, symbolToken) {
+  const escapedSymbol = symbolToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const residue = text
+    .replace(new RegExp(escapedSymbol, 'i'), ' ')
+    .replace(/\b(?:BUY|SELL|LONG|SHORT|MARKET|NOW|PLEASE|SIGNAL|TRADE)\b/gi, ' ')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .trim();
+  return residue.length === 0;
+}
+
 export function buildMachinePlan(event = {}) {
   const text = normalizeSignalText(event.text);
   if (!text) return { status: 'NO_ACTION' };
@@ -136,6 +146,7 @@ export function buildMachinePlan(event = {}) {
     && !entry
     && !stopLoss
     && takeProfits.length === 0;
+  if (fastEntry && !isConciseFastMarketCommand(text, symbolToken)) return { status: 'NEEDS_INTERPRETATION' };
   if (!fastEntry && !entry && order.orderType !== 'MARKET') return { status: 'NEEDS_INTERPRETATION' };
   if (!fastEntry && !entry && !stopLoss && takeProfits.length === 0) return { status: 'NEEDS_INTERPRETATION' };
   return { status: 'READY', intent: { side: sideInfo.side, orderType: order.orderType, symbol, entry: entry || { kind: 'MARKET' }, stopLoss, takeProfits, fastEntry, incomplete: fastEntry || !stopLoss || takeProfits.length === 0 } };
