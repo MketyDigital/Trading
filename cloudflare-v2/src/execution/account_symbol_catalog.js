@@ -95,11 +95,38 @@ function exactPlatformMatch(requested, catalog) {
   return catalog.filter((item) => clean(item.platformSymbol).toUpperCase() === text);
 }
 
+function derivCanonicalComparisonKeys(value) {
+  const source = clean(value).toUpperCase();
+  const keys = [];
+
+  const volatility = source.match(/^DERIV:VOLATILITY_(10|15|25|30|50|75|90|100)(?:_1S)?$/);
+  if (volatility) {
+    keys.push(`VOLATILITY${volatility[1]}${source.endsWith('_1S') ? '1S' : ''}`);
+    keys.push(`V${volatility[1]}${source.endsWith('_1S') ? '1S' : ''}`);
+    return keys;
+  }
+
+  const boom = source.match(/^DERIV:BOOM_(300|500|600|900|1000)$/);
+  if (boom) return [`BOOM${boom[1]}`];
+
+  const crash = source.match(/^DERIV:CRASH_(300|500|600|900|1000)$/);
+  if (crash) return [`CRASH${crash[1]}`];
+
+  if (source === 'DERIV:STEP') return ['STEP'];
+
+  const jump = source.match(/^DERIV:JUMP_(10|25|50|75|100)$/);
+  if (jump) return [`JUMP${jump[1]}`];
+
+  return keys;
+}
+
 function requestedComparisonKeys(requested) {
   const canonical = normalizeSymbol(requested).canonical;
   return [...new Set([
     normalizeInstrumentKey(requested),
     normalizeInstrumentKey(canonical),
+    ...derivCanonicalComparisonKeys(requested),
+    ...derivCanonicalComparisonKeys(canonical),
   ].filter(Boolean))];
 }
 
@@ -112,7 +139,8 @@ function hasBrokerAffixMatch(platformSymbol, requestedKey) {
   if (separatedTokens.includes(requestedKey)) return true;
 
   const compact = normalizeInstrumentKey(raw);
-  if (!compact || compact === requestedKey) return false;
+  if (!compact) return false;
+  if (compact === requestedKey) return true;
   if (compact.startsWith(requestedKey)) {
     const suffix = compact.slice(requestedKey.length);
     if (suffix.length > 0 && suffix.length <= MAX_COMPACT_AFFIX_LENGTH) return true;
@@ -126,6 +154,25 @@ function hasBrokerAffixMatch(platformSymbol, requestedKey) {
 
 function resolveBrokerAffixMatch(requested, catalog) {
   const keys = requestedComparisonKeys(requested);
+
+  // Exact normalized broker names have stronger semantics than generic broker
+  // affixes. Prefer them before suffix/prefix fallback so related instruments
+  // such as Volatility 75 and Volatility 75 (1s) cannot become false peers.
+  const exactNormalizedMatches = catalog.filter((item) => {
+    const platformKey = normalizeInstrumentKey(item.platformSymbol);
+    return platformKey && keys.includes(platformKey);
+  });
+  if (exactNormalizedMatches.length === 1) {
+    return { ok: true, ...exactNormalizedMatches[0], matchType: 'broker_affix' };
+  }
+  if (exactNormalizedMatches.length > 1) {
+    return {
+      ok: false,
+      reason: 'AMBIGUOUS_SYMBOL',
+      candidates: exactNormalizedMatches.map((item) => item.platformSymbol),
+    };
+  }
+
   const matches = catalog.filter((item) => keys.some((key) => hasBrokerAffixMatch(item.platformSymbol, key)));
   if (matches.length === 1) return { ok: true, ...matches[0], matchType: 'broker_affix' };
   if (matches.length > 1) {
