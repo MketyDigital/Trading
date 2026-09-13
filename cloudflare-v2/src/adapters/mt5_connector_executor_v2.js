@@ -30,6 +30,23 @@ async function identity({ baseUrl, accountRowId, controlSecret, fetchFn }) {
   if (!accountNumber) throw classifiedError('MT5 connector broker identity missing', { code: 'MT5_CONNECTOR_IDENTITY_INCOMPLETE', failureClass: 'RETRYABLE' });
   return { ...body.identity, accountNumber };
 }
+function assertExpectedBrokerIdentity(connected, { expectedBrokerAccountId, expectedServerName, expectedEnvironment } = {}) {
+  const expectedAccount = String(expectedBrokerAccountId ?? '').trim();
+  const expectedServer = String(expectedServerName ?? '').trim();
+  const expectedEnv = String(expectedEnvironment ?? '').trim().toLowerCase();
+  const actualAccount = String(connected?.accountNumber ?? '').trim();
+  const actualServer = String(connected?.serverName ?? '').trim();
+  const actualEnv = String(connected?.environment ?? '').trim().toLowerCase();
+  if (
+    (expectedAccount && actualAccount !== expectedAccount)
+    || (expectedServer && actualServer !== expectedServer)
+    || (expectedEnv && actualEnv !== expectedEnv)
+  ) {
+    throw classifiedError('MT5 connector broker identity changed since account synchronization', {
+      code: 'MT5_CONNECTOR_BROKER_IDENTITY_MISMATCH', failureClass: 'TERMINAL',
+    });
+  }
+}
 function commandFor(action, resolved) {
   if (action.type === 'OPEN_POSITION') {
     const command = buildMT5OrderCommand(action, resolved);
@@ -50,6 +67,9 @@ export async function executeMt5ConnectorAction(action, {
   accountRowId,
   gatewayUrl,
   controlSecret,
+  expectedBrokerAccountId,
+  expectedServerName,
+  expectedEnvironment,
   symbolCatalog = [],
   symbolAliases = {},
   deliveryStore,
@@ -63,6 +83,7 @@ export async function executeMt5ConnectorAction(action, {
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) throw new TypeError('delivery store required');
   const baseUrl = normalizeGatewayUrl(gatewayUrl);
   const connected = await identity({ baseUrl, accountRowId, controlSecret, fetchFn });
+  assertExpectedBrokerIdentity(connected, { expectedBrokerAccountId, expectedServerName, expectedEnvironment });
   const catalog = Array.isArray(connected.symbols) && connected.symbols.length ? connected.symbols : symbolCatalog;
   const resolved = action.symbol ? resolveAccountSymbol(action.symbol, catalog, symbolAliases) : null;
   if (action.symbol && !resolved?.ok) {
