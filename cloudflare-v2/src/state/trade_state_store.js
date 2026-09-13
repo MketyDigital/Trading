@@ -66,7 +66,13 @@ export class TradeStateStore {
     if (index < 0) throw new Error('position group leg not found');
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
-    group.legs[index] = { ...currentLeg, ...execution, status };
+    const executedLots = Number(execution?.executedLots);
+    group.legs[index] = {
+      ...currentLeg,
+      ...execution,
+      ...(Number.isFinite(executedLots) && executedLots > 0 ? { lots: executedLots } : {}),
+      status,
+    };
     group.status = aggregateGroupStatus(group.legs, group.status);
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);
