@@ -1,5 +1,8 @@
 import { normalizeOrderIntent, normalizeSymbol } from '../normalization/trading_normalizer.js';
 
+const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
+const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
+
 function normalizeSignalText(value) {
   return String(value ?? '')
     .replace(/S\s*\/\s*L/gi, 'SL')
@@ -45,14 +48,25 @@ function cleanCandidate(value) {
   return String(value ?? '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9_./#&() -]+$/g, '').trim();
 }
 
+function isLikelyCompactSymbol(value) {
+  const candidate = cleanCandidate(value);
+  if (!candidate || /\s/.test(candidate)) return false;
+  if (KNOWN_COMPACT_SYMBOL.test(candidate)) return true;
+  if (/^[A-Za-z]{3}[./_-]?[A-Za-z]{3}(?:[._-]?[A-Za-z0-9]{1,8})?$/.test(candidate)) return true;
+  if (/^[A-Za-z]{2,10}\d{1,5}(?:[A-Za-z0-9._-]{0,8})?$/.test(candidate)) return true;
+  return false;
+}
+
 function concisePrefixSymbol(before) {
-  const cleaned = cleanCandidate(before).replace(/^\s*(?:SIGNAL|TRADE|ENTRY)\s*[:=-]?\s*/i, '').trim();
+  const cleaned = cleanCandidate(before)
+    .replace(/^\s*(?:SIGNAL|TRADE|ENTRY)\s*[:=-]?\s*/i, '')
+    .replace(/^\s*PLEASE\s+/i, '')
+    .trim();
   if (!cleaned) return null;
-  const tokens = cleaned.split(/\s+/).filter(Boolean);
-  if (tokens.length > 2) return null;
   const synthetic = cleaned.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)$/i)?.[1];
   if (synthetic) return synthetic;
-  if (tokens.length === 1 && /^[A-Za-z][A-Za-z0-9_./#&.-]{1,24}$/.test(tokens[0])) return tokens[0];
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length === 1 && isLikelyCompactSymbol(tokens[0])) return tokens[0];
   return null;
 }
 
@@ -72,7 +86,8 @@ function extractSymbolToken(text, sideInfo) {
 
   const synthetic = after.match(/^(Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)/i)?.[1];
   if (synthetic) return synthetic;
-  return after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1] || null;
+  const compact = after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1] || null;
+  return compact && isLikelyCompactSymbol(compact) ? compact : null;
 }
 
 function extractEntry(text, symbolToken) {
@@ -91,6 +106,12 @@ function extractEntry(text, symbolToken) {
   return price ? { kind: 'PRICE', value: Number(price[0]) } : null;
 }
 
+function isConfidentMarketCommand(text) {
+  if (text.includes('?')) return false;
+  if (/\bDO\s+NOT\b/i.test(text)) return false;
+  return !MARKET_COMMAND_BLOCKER.test(text);
+}
+
 export function buildMachinePlan(event = {}) {
   const text = normalizeSignalText(event.text);
   if (!text) return { status: 'NO_ACTION' };
@@ -106,7 +127,11 @@ export function buildMachinePlan(event = {}) {
   const stopLoss = stopLossMatch ? Number(stopLossMatch[1]) : null;
   const takeProfits = extractExplicitTps(text);
   const entry = extractEntry(text, symbolToken);
-  const fastEntry = /\bNOW\b/i.test(text) && !stopLoss && takeProfits.length === 0 && !entry;
+  const fastEntry = order.orderType === 'MARKET'
+    && !entry
+    && !stopLoss
+    && takeProfits.length === 0
+    && isConfidentMarketCommand(text);
   if (!fastEntry && !entry && order.orderType !== 'MARKET') return { status: 'NEEDS_INTERPRETATION' };
   if (!fastEntry && !entry && !stopLoss && takeProfits.length === 0) return { status: 'NEEDS_INTERPRETATION' };
   return { status: 'READY', intent: { side: sideInfo.side, orderType: order.orderType, symbol, entry: entry || { kind: 'MARKET' }, stopLoss, takeProfits, fastEntry, incomplete: fastEntry || !stopLoss || takeProfits.length === 0 } };
