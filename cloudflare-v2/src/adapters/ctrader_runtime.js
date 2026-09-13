@@ -11,6 +11,7 @@ function required(value, name) {
 export async function createCTraderRuntime({
   environment = 'demo',
   allowLiveTrading = false,
+  allowBrokerMinimumVolumeFallback = false,
   clientId,
   clientSecret,
   accessToken,
@@ -74,6 +75,7 @@ export async function createCTraderRuntime({
         accountId: Number(accountId),
         catalog,
         deliveryStore,
+        allowBrokerMinimumVolumeFallback: mode === 'demo' && allowBrokerMinimumVolumeFallback === true,
       });
     },
     close() {
