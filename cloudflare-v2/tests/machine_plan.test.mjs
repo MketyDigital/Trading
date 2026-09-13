@@ -135,12 +135,7 @@ test('ambiguous commentary fails closed for machine execution', () => {
 });
 
 test('normalizes grouped BTCUSD prices and an unambiguous duplicated decimal separator without changing MARKET semantics', () => {
-  const plan = buildMachinePlan({ text: `BTCUSD Buy (77,010.81-77,140.80)
-
-SL: 76,994.00
-TP1: 77,400.54
-TP2: 77,610,00
-TP3: 78,201.24` });
+  const plan = buildMachinePlan({ text: `BTCUSD Buy (77,010.81-77,140.80)\n\nSL: 76,994.00\nTP1: 77,400.54\nTP2: 77,610,00\nTP3: 78,201.24` });
 
   assert.equal(plan.status, 'READY');
   assert.equal(plan.intent.side, 'BUY');
@@ -169,4 +164,41 @@ test('ordinary sentence commas after prices are punctuation, not malformed group
   assert.equal(plan.intent.entry.value, 2526);
   assert.equal(plan.intent.stopLoss, 2518);
   assert.deepEqual(plan.intent.takeProfits, [2530, 2535]);
+});
+
+test('parses real labeled Deriv synthetic signal cards without AI', () => {
+  const plan = buildMachinePlan({ text: `QAS VIP SIGNAL\n\n📊 Instrument: Volatility 50 (1s) Index\n⏰ Timeframe: M15\n\n🟢 Direction: BUY\n\n🎯 Entry Zone: 236500 - 236800\n\n✅ TP1: 237300\n✅ TP2: 237900\n✅ TP3: 238500\n\n🛑 Stop Loss: 235700` });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.side, 'BUY');
+  assert.equal(plan.intent.orderType, 'MARKET');
+  assert.equal(plan.intent.symbol.canonical, 'DERIV:VOLATILITY_50_1S');
+  assert.deepEqual(plan.intent.entry, { kind: 'RANGE', min: 236500, max: 236800 });
+  assert.equal(plan.intent.stopLoss, 235700);
+  assert.deepEqual(plan.intent.takeProfits, [237300, 237900, 238500]);
+  assert.equal(plan.intent.fastEntry, false);
+  assert.equal(plan.intent.incomplete, false);
+});
+
+test('accepts common Vxx Deriv shorthand as fast market commands', () => {
+  for (const [text, side, canonical] of [
+    ['V50(1s) Sell Now!!! 😡😡😡', 'SELL', 'DERIV:VOLATILITY_50_1S'],
+    ['V25(1s) Sell Now!!!! 😡😡', 'SELL', 'DERIV:VOLATILITY_25_1S'],
+    ['V100 Buy Now!!! 🤑🤑🤑', 'BUY', 'DERIV:VOLATILITY_100'],
+  ]) {
+    const plan = buildMachinePlan({ text });
+    assert.equal(plan.status, 'READY', text);
+    assert.equal(plan.intent.side, side, text);
+    assert.equal(plan.intent.symbol.canonical, canonical, text);
+    assert.deepEqual(plan.intent.entry, { kind: 'MARKET' }, text);
+    assert.equal(plan.intent.fastEntry, true, text);
+  }
+});
+
+test('treats compact TP checkmark updates as target-hit management', () => {
+  assert.deepEqual(buildMachinePlan({ text: 'Tp 1 ✅' }), {
+    status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 1 },
+  });
+  assert.deepEqual(buildMachinePlan({ text: 'TP2 ✅✅' }), {
+    status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 2 },
+  });
 });
