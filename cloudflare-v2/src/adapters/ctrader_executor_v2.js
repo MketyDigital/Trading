@@ -36,8 +36,49 @@ function resolveCTraderSymbol(action, catalog) {
   const symbolName = action.symbol;
   if (!symbolName) return null;
   const resolved = resolveSymbolAgainstCatalog(symbolName, catalog);
-  if (!resolved.ok) throw new Error(`cTrader symbol resolution failed: ${resolved.reason}`);
+  if (!resolved.ok) {
+    const error = new Error(`cTrader symbol resolution failed: ${resolved.reason}`);
+    error.code = `CTRADER_${resolved.reason || 'SYMBOL_RESOLUTION_FAILED'}`;
+    throw error;
+  }
   return resolved;
+}
+
+function symbolVolumeMetadata(symbol = {}) {
+  const lotSize = Number(symbol.protocolLotSize ?? symbol.lotSize);
+  const minVolume = Number(symbol.minVolume);
+  const stepVolume = Number(symbol.stepVolume);
+  return {
+    lotSize,
+    minVolume,
+    stepVolume,
+    minimumLots: Number.isFinite(lotSize) && lotSize > 0 && Number.isFinite(minVolume) && minVolume > 0
+      ? minVolume / lotSize
+      : null,
+    volumeStepLots: Number.isFinite(lotSize) && lotSize > 0 && Number.isFinite(stepVolume) && stepVolume > 0
+      ? stepVolume / lotSize
+      : null,
+  };
+}
+
+function buildOpenMessage(action, { label, accountId, clientMsgId, symbol, allowBrokerMinimumVolumeFallback }) {
+  try {
+    return {
+      message: buildCTraderOrderCommand({ ...action, label }, { accountId, clientMsgId, symbol }),
+      executableAction: action,
+      ...symbolVolumeMetadata(symbol),
+    };
+  } catch (error) {
+    if (error?.code !== 'CTRADER_VOLUME_BELOW_MINIMUM' || allowBrokerMinimumVolumeFallback !== true) throw error;
+    const meta = symbolVolumeMetadata(symbol);
+    if (!(meta.minimumLots > 0)) throw error;
+    const executableAction = { ...action, lots: meta.minimumLots };
+    return {
+      message: buildCTraderOrderCommand({ ...executableAction, label }, { accountId, clientMsgId, symbol }),
+      executableAction,
+      ...meta,
+    };
+  }
 }
 
 function executionType(message) {
@@ -101,8 +142,6 @@ async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, ret
         nextAttemptAt: new Date(Number(nowMs) + Number(retryDelayMs)).toISOString(),
       });
     } else {
-      // Compatibility/fail-closed path for older injected stores: never invent an
-      // automatic retry when durable retry semantics are unavailable.
       await deliveryStore.fail(idempotencyKey, failure);
     }
     return;
@@ -111,8 +150,6 @@ async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, ret
     if (deliveryStore?.markUncertain) {
       await deliveryStore.markUncertain(idempotencyKey, failure);
     } else {
-      // Preserve the original broker error while terminally recording the
-      // outcome when the store cannot represent UNCERTAIN explicitly.
       await deliveryStore.fail(idempotencyKey, failure);
     }
     return;
@@ -128,6 +165,7 @@ export async function executeCTraderAction(action, {
   label = 'Mkety Trading',
   nowMs = Date.now(),
   retryDelayMs = 15000,
+  allowBrokerMinimumVolumeFallback = false,
 } = {}) {
   if (!session?.request) throw new TypeError('cTrader session required');
   if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) {
@@ -138,37 +176,41 @@ export async function executeCTraderAction(action, {
   if (reserved.duplicate) return { duplicate: true, ...(reserved.previous || {}) };
 
   const clientMsgId = String(action.idempotencyKey);
-  const symbol = resolveCTraderSymbol(action, catalog);
   let brokerAccepted = false;
 
   try {
+    const symbol = resolveCTraderSymbol(action, catalog);
     let response;
     if (action.type === 'OPEN_POSITION') {
-      const message = buildCTraderOrderCommand({ ...action, label }, {
+      const prepared = buildOpenMessage(action, {
+        label,
         accountId,
         clientMsgId,
         symbol,
+        allowBrokerMinimumVolumeFallback,
       });
-      response = await session.request(message, { successPayloadTypes: [2126] });
+      response = await session.request(prepared.message, { successPayloadTypes: [2126] });
       brokerAccepted = true;
 
       let executionResponse = response;
-      if (action.orderType === 'MARKET') executionResponse = await resolveMarketFill(session, response, action);
+      if (prepared.executableAction.orderType === 'MARKET') {
+        executionResponse = await resolveMarketFill(session, response, prepared.executableAction);
+      }
 
       const ids = extractBrokerIds(executionResponse);
       const acceptedIds = extractBrokerIds(response);
       if (!ids.brokerOrderId && acceptedIds.brokerOrderId) ids.brokerOrderId = acceptedIds.brokerOrderId;
       const fillPrice = extractFillPrice(executionResponse);
 
-      if (action.orderType === 'MARKET' && (action.stopLoss != null || action.takeProfit != null)) {
+      if (prepared.executableAction.orderType === 'MARKET' && (prepared.executableAction.stopLoss != null || prepared.executableAction.takeProfit != null)) {
         if (!ids.brokerPositionId) {
           throw classifiedError('cTrader market fill did not provide a position ID', 'UNCERTAIN', 'CTRADER_FILL_STATUS_UNCERTAIN');
         }
         const amend = buildCTraderManagementCommand({
           type: 'MODIFY_POSITION',
           brokerPositionId: ids.brokerPositionId,
-          stopLoss: action.stopLoss,
-          takeProfit: action.takeProfit,
+          stopLoss: prepared.executableAction.stopLoss,
+          takeProfit: prepared.executableAction.takeProfit,
         }, {
           accountId,
           clientMsgId: `${clientMsgId}:protect`,
@@ -182,7 +224,15 @@ export async function executeCTraderAction(action, {
         }
       }
 
-      const result = { duplicate: false, ...ids, fillPrice, response: executionResponse };
+      const result = {
+        duplicate: false,
+        ...ids,
+        fillPrice,
+        executedLots: Number(prepared.executableAction.lots),
+        ...(prepared.volumeStepLots > 0 ? { volumeStepLots: prepared.volumeStepLots } : {}),
+        ...(prepared.minimumLots > 0 ? { minimumLots: prepared.minimumLots } : {}),
+        response: executionResponse,
+      };
       await deliveryStore.complete(action.idempotencyKey, result);
       return result;
     }
