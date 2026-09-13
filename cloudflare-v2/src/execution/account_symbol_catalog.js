@@ -193,7 +193,7 @@ export function accountSymbolCatalogFromProviderConfig(providerConfig = {}) {
 }
 
 export function providerConfigWithSymbolCatalog(providerConfig = {}, catalog = [], { updatedAt = new Date().toISOString() } = {}) {
-  const config = providerConfig && typeof providerConfig === 'object' && !Array.isArray(config) ? providerConfig : {};
+  const config = providerConfig && typeof providerConfig === 'object' && !Array.isArray(providerConfig) ? providerConfig : {};
   return {
     ...config,
     symbolCatalog: sanitizeAccountSymbolCatalog(catalog),
