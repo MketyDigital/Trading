@@ -12,6 +12,19 @@ function baseEnv() {
   };
 }
 
+function demoFixedAccount({ catalog = [], aliases = {} } = {}) {
+  return {
+    environment: 'demo',
+    lot_sizing_type: 'fixed',
+    lot_value: 0.01,
+    provider_config: {
+      symbolCatalog: catalog,
+      symbolAliases: aliases,
+      symbolCatalogUpdatedAt: '2026-09-14T00:00:00.000Z',
+    },
+  };
+}
+
 test('V1 simulation dependencies expose authenticated matched-group reads for fast-entry completion', async () => {
   const calls = [];
   const group = { id: 'group/fast 1', tradeAccountId: 'acct-1', incomplete: true };
@@ -47,24 +60,89 @@ test('V1 simulation dependencies expose authenticated matched-group reads for fa
   assert.equal(calls[0].headers['x-mkety-internal-token'], 'internal-secret');
 });
 
-test('fixed-lot DEMO planning derives a bounded lot-only instrument when static market metadata is absent', async () => {
+test('fixed-lot DEMO planning derives a bounded lot-only instrument only after destination catalog support is proven', async () => {
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
     supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
     event: { workspace_hint: 'workspace-1' },
   });
 
-  const instrument = await deps.instrumentProvider({
-    environment: 'demo',
-    lot_sizing_type: 'fixed',
-    lot_value: 0.01,
-  }, { symbol: { canonical: 'XAUUSD' } });
+  const instrument = await deps.instrumentProvider(demoFixedAccount({
+    catalog: [{ platformSymbol: 'XAUUSD' }],
+  }), { symbol: { canonical: 'XAUUSD' } });
 
   assert.deepEqual(instrument, {
     canonical: 'XAUUSD',
+    platformSymbol: 'XAUUSD',
     minLots: 0.01,
     maxLots: 0.01,
     stepLots: 0.01,
+  });
+});
+
+test('destination catalog resolves canonical Deriv synthetic against the raw broker symbol before planning', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  const instrument = await deps.instrumentProvider(demoFixedAccount({
+    catalog: [
+      { platformSymbol: 'Volatility 75 Index' },
+      { platformSymbol: 'Volatility 75 (1s) Index' },
+    ],
+  }), { symbol: { canonical: 'DERIV:VOLATILITY_75' } });
+
+  assert.equal(instrument.canonical, 'DERIV:VOLATILITY_75');
+  assert.equal(instrument.platformSymbol, 'Volatility 75 Index');
+});
+
+test('planning blocks an instrument that the routed destination account does not advertise', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  await assert.rejects(() => deps.instrumentProvider(demoFixedAccount({
+    catalog: [{ platformSymbol: 'XAUUSD' }],
+  }), { symbol: { canonical: 'DERIV:VOLATILITY_75' } }), (error) => {
+    assert.equal(error.code, 'DESTINATION_SYMBOL_NOT_SUPPORTED');
+    assert.match(error.message, /SYMBOL_NOT_FOUND/);
+    return true;
+  });
+});
+
+test('planning fails closed when a routed destination has no authoritative symbol catalog', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  await assert.rejects(() => deps.instrumentProvider(demoFixedAccount(), { symbol: { canonical: 'XAUUSD' } }), (error) => {
+    assert.equal(error.code, 'DESTINATION_SYMBOL_CATALOG_UNAVAILABLE');
+    return true;
+  });
+});
+
+test('planning fails closed when destination broker symbol resolution is ambiguous', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  await assert.rejects(() => deps.instrumentProvider(demoFixedAccount({
+    catalog: [
+      { platformSymbol: 'm.XAUUSD' },
+      { platformSymbol: 'XAUUSD.r' },
+    ],
+  }), { symbol: { canonical: 'XAUUSD' } }), (error) => {
+    assert.equal(error.code, 'DESTINATION_SYMBOL_AMBIGUOUS');
+    assert.match(error.message, /AMBIGUOUS_SYMBOL/);
+    return true;
   });
 });
 
@@ -79,5 +157,6 @@ test('LIVE planning still fails closed when broker instrument metadata is absent
     environment: 'live',
     lot_sizing_type: 'fixed',
     lot_value: 0.01,
+    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD' }] },
   }, { symbol: { canonical: 'XAUUSD' } }), /simulation instrument metadata is not configured for XAUUSD/);
 });
