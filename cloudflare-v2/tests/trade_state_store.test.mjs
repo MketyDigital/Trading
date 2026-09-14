@@ -10,14 +10,26 @@ class MemoryStorage {
   async list({ prefix = '' } = {}) { return new Map([...this.map].filter(([key]) => key.startsWith(prefix))); }
 }
 
+class MemoryPersistence {
+  constructor(groups = []) { this.groups = new Map(groups.map((group) => [String(group.id), structuredClone(group)])); this.saved = []; }
+  async saveGroup(group) { this.groups.set(String(group.id), structuredClone(group)); this.saved.push(structuredClone(group)); return group; }
+  async loadGroup(groupId) { return structuredClone(this.groups.get(String(groupId)) || null); }
+  async loadActive(workspaceId) {
+    return [...this.groups.values()]
+      .filter((group) => String(group.workspaceId) === String(workspaceId))
+      .filter((group) => ['OPEN', 'PLANNED', 'PENDING'].includes(String(group.status)))
+      .map((group) => structuredClone(group));
+  }
+}
+
 const now = 1700000000000;
 
 function fastGroup() {
   return {
     id: 'g1', workspaceId: 'ws1', sourceInstanceId: 'listener-1', sourceEventIds: ['100'],
-    threadId: null, symbol: 'XAUUSD', side: 'BUY', status: 'OPEN', incomplete: true,
+    threadId: null, symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET', status: 'OPEN', incomplete: true,
     createdAt: now - 1000, updatedAt: now - 1000,
-    legs: [{ legId: 'leg-1', status: 'OPEN', brokerPositionId: 'p1', lots: 0.03 }],
+    legs: [{ legId: 'leg-1', targetIndex: 1, status: 'OPEN', brokerPositionId: 'p1', lots: 0.03 }],
   };
 }
 
@@ -26,6 +38,49 @@ test('persists and reloads active position groups from durable storage', async (
   await store.putGroup(fastGroup());
   assert.deepEqual(await store.getGroup('g1'), fastGroup());
   assert.deepEqual((await store.listActive()).map((g) => g.id), ['g1']);
+});
+
+test('writes every state mutation through to durable relational persistence', async () => {
+  const persistence = new MemoryPersistence();
+  const store = new TradeStateStore(new MemoryStorage(), { persistence });
+  await store.putGroup(fastGroup());
+  await store.appendSourceEvent('g1', '101', now);
+  await store.bindLegExecution('g1', 'leg-1', { brokerPositionId: 'p99', brokerOrderId: 'o88', brokerDealId: 'd77', actionType: 'OPEN_POSITION', executedLots: 0.03 }, now + 1);
+  await store.setGroupStatus('g1', 'OPEN', now + 2);
+
+  assert.equal(persistence.saved.length, 4);
+  const persisted = await persistence.loadGroup('g1');
+  assert.deepEqual(persisted.sourceEventIds, ['100', '101']);
+  assert.equal(persisted.legs[0].brokerPositionId, 'p99');
+  assert.equal(persisted.legs[0].brokerOrderId, 'o88');
+  assert.equal(persisted.legs[0].brokerDealId, 'd77');
+  assert.equal(persisted.updatedAt, now + 2);
+});
+
+test('recovers an individual group from relational persistence when local durable state is missing', async () => {
+  const persistence = new MemoryPersistence([fastGroup()]);
+  const storage = new MemoryStorage();
+  const store = new TradeStateStore(storage, { persistence, workspaceId: 'ws1' });
+
+  assert.deepEqual(await store.getGroup('g1'), fastGroup());
+  assert.deepEqual(await storage.get('group:g1'), fastGroup());
+});
+
+test('hydrates active groups from relational persistence so reply correlation survives local state loss', async () => {
+  const persistence = new MemoryPersistence([fastGroup()]);
+  const store = new TradeStateStore(new MemoryStorage(), { persistence, workspaceId: 'ws1' });
+  const coordinator = new TradeStateCoordinator(store, { correlationWindowMs: 120000 });
+
+  const result = await coordinator.correlate({
+    workspace_hint: 'ws1',
+    source: { instance_id: 'listener-1' }, external_event_id: '101',
+    thread: { reply_to_external_event_id: '100' },
+  }, {
+    status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' },
+  }, now);
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY', groupId: 'g1' });
+  assert.deepEqual((await store.listActive()).map((group) => group.id), ['g1']);
 });
 
 test('appends source event ids idempotently and updates timestamp', async () => {
