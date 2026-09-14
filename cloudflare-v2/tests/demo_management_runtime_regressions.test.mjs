@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import { handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections_account_controls.js';
 import { orchestrateTradingEventSimulation } from '../src/pipeline/v1_orchestrator.js';
+import { runV1ProductionExecutionStage } from '../src/pipeline/v1_execution_stage.js';
 import { validateProductionRiskAction } from '../src/execution/production_risk_authority.js';
-import { executeProductionPlan } from '../src/execution/production_execution_coordinator.js';
+import { productionTradeStateBindingPayload } from '../src/state/production_trade_state_binder.js';
+import { TradeStateStore } from '../src/state/trade_state_store.js';
 
 const authorization = {
   ok: true,
@@ -54,6 +56,29 @@ function accountControlSupabase(initial) {
   };
 }
 
+function managementFixture() {
+  const group = {
+    id: 'group-1', workspaceId: 'ws-1', tradeAccountId: 'acc-demo', sourceInstanceId: 'src-1',
+    sourceEventIds: ['telegram:-1001:10'], symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
+    entryPrice: 2500, status: 'OPEN', incomplete: false, createdAt: 1000, updatedAt: 1000,
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.02, status: 'OPEN', brokerPositionId: 'p-1', volumeStepLots: 0.01 }],
+  };
+  const event = {
+    workspace_hint: 'ws-1', source: { instance_id: 'src-1' },
+    external_event_id: 'telegram:-1001:11', thread: { reply_to_event_id: 'telegram:-1001:10' },
+  };
+  const deps = {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'group-1' }) },
+    stateStore: {
+      getGroup: async () => structuredClone(group),
+      putGroup: async (value) => value,
+    },
+    accountProvider: async () => [accountRow()],
+    instrumentProvider: async () => ({}),
+  };
+  return { group, event, deps };
+}
+
 test('connected DEMO execution account cannot be switched off from account controls', async () => {
   const supabase = accountControlSupabase(accountRow());
   const response = await handleV1AdminConnectionsRequest(
@@ -71,47 +96,53 @@ test('connected DEMO execution account cannot be switched off from account contr
   assert.equal(supabase.updates.length, 0);
 });
 
-test('matched management actions preserve leg identity and get replay-stable idempotency keys', async () => {
-  const group = {
-    id: 'group-1', workspaceId: 'ws-1', tradeAccountId: 'acc-demo', sourceInstanceId: 'src-1',
-    sourceEventIds: ['telegram:-1001:10'], symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
-    entryPrice: 2500, status: 'OPEN', incomplete: false, createdAt: 1000, updatedAt: 1000,
-    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.02, status: 'OPEN', brokerPositionId: 'p-1', volumeStepLots: 0.01 }],
-  };
-  const persisted = [];
-  const event = {
-    workspace_hint: 'ws-1', source: { instance_id: 'src-1' },
-    external_event_id: 'telegram:-1001:11', thread: { reply_to_event_id: 'telegram:-1001:10' },
-  };
-  const deps = {
-    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'group-1' }) },
-    stateStore: {
-      getGroup: async () => structuredClone(group),
-      putGroup: async (value) => { persisted.push(structuredClone(value)); return value; },
-    },
-    accountProvider: async () => [accountRow()],
-    instrumentProvider: async () => ({}),
-  };
-
-  const first = await orchestrateTradingEventSimulation({
-    event,
-    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
-    eventId: 'db-event-11', nowMs: 2000,
-  }, deps);
-  const second = await orchestrateTradingEventSimulation({
+test('matched management planning preserves the exact broker-bound leg identity', async () => {
+  const { event, deps } = managementFixture();
+  const planned = await orchestrateTradingEventSimulation({
     event,
     interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
     eventId: 'db-event-11', nowMs: 2000,
   }, deps);
 
-  const a = first.accounts[0].actions[0];
-  const b = second.accounts[0].actions[0];
-  assert.equal(a.legId, 'leg-1');
-  assert.equal(a.targetIndex, 1);
-  assert.ok(a.idempotencyKey);
-  assert.equal(a.idempotencyKey, b.idempotencyKey);
-  assert.match(a.idempotencyKey, /telegram:-1001:11/);
-  assert.equal(persisted.length, 2);
+  const action = planned.accounts[0].actions[0];
+  assert.equal(action.legId, 'leg-1');
+  assert.equal(action.targetIndex, 1);
+  assert.equal(action.brokerPositionId, 'p-1');
+});
+
+test('production stage assigns replay-stable idempotency to management actions before dispatch', async () => {
+  const { event, deps } = managementFixture();
+  const simulation = await orchestrateTradingEventSimulation({
+    event,
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    eventId: 'db-event-11', nowMs: 2000,
+  }, deps);
+  let firstPlans;
+  let secondPlans;
+  const common = {
+    env: {}, supabase: {}, result: { ok: true, duplicate: false, eventId: 'db-event-11', event }, simulation,
+    executionDepsFactory: async () => ({ stateBinder: async () => {} }),
+    bindingRepairRecorderFactory: () => async () => {},
+    tradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
+    brokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
+    liveBrokerExecutionControlResolver: async () => ({ ok: true, enabled: false }),
+  };
+
+  await runV1ProductionExecutionStage({
+    ...common,
+    executeProductionFn: async ({ accountPlans }) => { firstPlans = structuredClone(accountPlans); return { status: 'SUCCEEDED' }; },
+  });
+  await runV1ProductionExecutionStage({
+    ...common,
+    executeProductionFn: async ({ accountPlans }) => { secondPlans = structuredClone(accountPlans); return { status: 'SUCCEEDED' }; },
+  });
+
+  const first = firstPlans[0].actions[0];
+  const second = secondPlans[0].actions[0];
+  assert.ok(first.idempotencyKey);
+  assert.equal(first.idempotencyKey, second.idempotencyKey);
+  assert.match(first.idempotencyKey, /telegram:-1001:11/);
+  assert.equal(first.legId, 'leg-1');
 });
 
 test('non-volume management can pass production risk validation without lots', () => {
@@ -133,24 +164,42 @@ test('non-volume management can pass production risk validation without lots', (
   assert.equal(cancel.action.lots, undefined);
 });
 
-test('production lifecycle binds full close as CLOSED rather than reopening the durable leg', async () => {
-  const bindings = [];
-  const result = await executeProductionPlan({
-    workspaceId: 'ws-1', eventId: 'evt-close', brokerExecutionEnabled: true,
-    liveBrokerExecutionEnabled: false, liveBrokerExecutionControlAvailable: true,
-    accountPlans: [{
-      accountId: 'acc-demo', groupId: 'group-1',
-      actions: [{ type: 'CLOSE_POSITION', legId: 'leg-1', brokerPositionId: 'p-1', symbol: 'XAUUSD', lots: 0.01, idempotencyKey: 'close-1' }],
-    }],
-  }, {
-    accountLoader: async () => accountRow(),
-    authorityLoader: async () => ({ account: accountRow(), source: { id: 'src-1' } }),
-    riskMaterializer: async ({ action }) => ({ allowed: true, action }),
-    dispatchAction: async () => ({ ok: true, brokerPositionId: 'p-1', brokerDealId: 'd-close', executedLots: 0.01 }),
-    stateBinder: async (binding) => { bindings.push(binding); },
+test('production binding normalizes full close and pending cancel lifecycle status', () => {
+  const close = productionTradeStateBindingPayload({
+    actionType: 'CLOSE_POSITION', status: 'OPEN', brokerPositionId: 'p-1', executedLots: 0.01,
+  });
+  assert.equal(close.status, 'CLOSED');
+
+  const cancel = productionTradeStateBindingPayload({
+    actionType: 'CANCEL_PENDING', status: 'PENDING', brokerOrderId: 'o-1',
+  });
+  assert.equal(cancel.status, 'CANCELLED');
+});
+
+test('durable state subtracts partial-close volume and closes a fully closed leg', async () => {
+  const values = new Map();
+  const storage = {
+    async get(key) { return values.get(key); },
+    async put(key, value) { values.set(key, structuredClone(value)); },
+    async list() { return new Map(values); },
+  };
+  const store = new TradeStateStore(storage);
+  await store.putGroup({
+    id: 'g', status: 'OPEN', sourceEventIds: ['evt'],
+    legs: [{ legId: 'leg-1', status: 'OPEN', lots: 0.02, brokerPositionId: 'p-1' }],
   });
 
-  assert.equal(result.status, 'SUCCEEDED');
-  assert.equal(bindings.length, 1);
-  assert.equal(bindings[0].status, 'CLOSED');
+  const partial = await store.bindLegExecution('g', 'leg-1', {
+    actionType: 'CLOSE_PARTIAL', status: 'OPEN', executedLots: 0.01, brokerPositionId: 'p-1',
+  }, 10);
+  assert.equal(partial.status, 'OPEN');
+  assert.equal(partial.legs[0].status, 'OPEN');
+  assert.equal(partial.legs[0].lots, 0.01);
+
+  const closed = await store.bindLegExecution('g', 'leg-1', {
+    actionType: 'CLOSE_POSITION', status: 'OPEN', executedLots: 0.01, brokerPositionId: 'p-1',
+  }, 20);
+  assert.equal(closed.status, 'CLOSED');
+  assert.equal(closed.legs[0].status, 'CLOSED');
+  assert.equal(closed.legs[0].lots, 0);
 });
