@@ -127,6 +127,43 @@ test('planning fails closed when a routed destination has no authoritative symbo
   });
 });
 
+test('missing cTrader OAuth catalog is repaired from broker metadata before symbol routing', async () => {
+  let refreshCalls = 0;
+  const account = {
+    id: 'ctrader-demo-1',
+    account_id: '48685071',
+    platform: 'ctrader',
+    provider_mode: 'ctrader_oauth',
+    environment: 'demo',
+    lot_sizing_type: 'fixed',
+    lot_value: 0.01,
+    provider_config: {},
+  };
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used when refresher is injected'); } },
+    event: { workspace_hint: 'workspace-1' },
+    symbolCatalogRefresher: async (candidate) => {
+      refreshCalls += 1;
+      assert.equal(candidate.id, account.id);
+      return {
+        catalog: [
+          { platformSymbol: 'XAU/USD' },
+          { platformSymbol: 'Volatility 75 (1s) Index' },
+        ],
+        aliases: {},
+      };
+    },
+  });
+
+  const gold = await deps.instrumentProvider(account, { symbol: { canonical: 'XAUUSD' } });
+  const synthetic = await deps.instrumentProvider(account, { symbol: { canonical: 'DERIV:VOLATILITY_75_1S' } });
+
+  assert.equal(refreshCalls, 1);
+  assert.equal(gold.platformSymbol, 'XAU/USD');
+  assert.equal(synthetic.platformSymbol, 'Volatility 75 (1s) Index');
+});
+
 test('planning fails closed when destination broker symbol resolution is ambiguous', async () => {
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
