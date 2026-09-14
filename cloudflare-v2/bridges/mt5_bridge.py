@@ -9,14 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
-MT5_COMMENT_MAX_LENGTH = 31
+MT5_COMMENT_MAX_LENGTH = 20
 MT5_RECONCILIATION_LOOKBACK_DAYS = 7
 
 
 def command_marker(command_id):
-    """Return a deterministic broker-visible command marker that fits MT5 comments."""
+    """Return a deterministic broker-visible command marker that fits restrictive MT5 brokers."""
     digest = hashlib.sha256(str(command_id).encode('utf-8')).hexdigest()
-    return f'mkety:{digest[:MT5_COMMENT_MAX_LENGTH - len("mkety:")]}'
+    return f'mkety{digest[:MT5_COMMENT_MAX_LENGTH - len("mkety")]}'
 
 
 class ReplayLedger:
@@ -99,9 +99,6 @@ class MT5Engine:
 
         filling_mode = int(getattr(symbol_info, 'filling_mode', 0) or 0)
         candidates = []
-        # SYMBOL_FILLING_FOK=1 and SYMBOL_FILLING_IOC=2 are capability flags;
-        # ORDER_FILLING_* values are request enums. Respect the broker catalog
-        # instead of sending unsupported policies first.
         if filling_mode & 2:
             candidates.append(self.mt5.ORDER_FILLING_IOC)
         if filling_mode & 1:
