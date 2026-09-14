@@ -21,16 +21,34 @@ function sanitizeAction(action = {}) {
   return trusted;
 }
 
-function trustedReadyPlans(simulation = {}) {
+function withDurableActionIdentity(action, { result, accountId, groupId, index } = {}) {
+  if (!action) return null;
+  if (String(action.idempotencyKey || '').trim()) return action;
+  const sourceEventId = String(result?.event?.external_event_id || result?.eventId || '').trim();
+  const group = String(groupId || '').trim();
+  const account = String(accountId || '').trim();
+  const actionType = String(action.type || 'ACTION').trim().toUpperCase();
+  const leg = String(action.legId || action.brokerPositionId || action.brokerOrderId || `index-${Number(index) + 1}`).trim();
+  if (!sourceEventId || !account || !group) return action;
+  return {
+    ...action,
+    idempotencyKey: `${group}:event:${sourceEventId}:account:${account}:${actionType}:${leg}:${Number(index) + 1}`,
+  };
+}
+
+function trustedReadyPlans(simulation = {}, result = {}) {
   return (Array.isArray(simulation?.accounts) ? simulation.accounts : [])
     .filter((account) => account?.status === 'READY')
     .map((account) => {
+      const accountId = String(account?.accountId || '').trim();
+      const groupId = account?.groupId == null ? null : String(account.groupId);
       const actions = (Array.isArray(account?.actions) ? account.actions : [])
         .map(sanitizeAction)
+        .map((action, index) => withDurableActionIdentity(action, { result, accountId, groupId, index }))
         .filter(Boolean);
       return {
-        accountId: String(account?.accountId || '').trim(),
-        groupId: account?.groupId == null ? null : String(account.groupId),
+        accountId,
+        groupId,
         actions,
         ...(Number.isFinite(Number(account?.currentRiskUsd)) ? { currentRiskUsd: Number(account.currentRiskUsd) } : {}),
         ...(Number.isFinite(Number(account?.dailyPnlPct)) ? { dailyPnlPct: Number(account.dailyPnlPct) } : {}),
@@ -83,7 +101,7 @@ export async function runV1ProductionExecutionStage({
   }
 
   const transportMode = executionTransportMode(env);
-  const accountPlans = trustedReadyPlans(simulation);
+  const accountPlans = trustedReadyPlans(simulation, result);
 
   if (simulation?.status !== 'SIMULATED' || accountPlans.length === 0) {
     return summary('NOT_EXECUTABLE', { transportMode });
