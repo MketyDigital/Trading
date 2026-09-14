@@ -1,4 +1,8 @@
 import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
+import { decryptConnectionCredentials } from '../security/connection_credentials.js';
+import { CTraderJsonSession } from '../adapters/ctrader_session.js';
+import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
+import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -52,6 +56,102 @@ function codedError(code, message) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+
+function text(value) {
+  return String(value ?? '').trim();
+}
+
+function providerConfigOf(account = {}) {
+  const config = account?.provider_config ?? account?.providerConfig;
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+}
+
+function isCTraderOauthAccount(account = {}) {
+  return text(account?.platform).toLowerCase() === 'ctrader'
+    && text(account?.provider_mode ?? account?.providerMode).toLowerCase() === 'ctrader_oauth';
+}
+
+function hasAuthoritativeCatalog(account = {}) {
+  return accountSymbolCatalogFromProviderConfig(providerConfigOf(account)).catalog.length > 0;
+}
+
+async function defaultCTraderAccountCatalogLoader(account, env = {}) {
+  if (!isCTraderOauthAccount(account)) return null;
+  const masterKey = text(env?.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  const accountId = Number(account?.account_id ?? account?.brokerAccountId);
+  const environment = text(account?.environment ?? account?.server_name ?? account?.serverName).toLowerCase();
+  if (!masterKey || !ciphertext || !Number.isInteger(accountId) || !['demo', 'live'].includes(environment)) return null;
+
+  const credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey);
+  const session = new CTraderJsonSession({
+    endpoint: ctraderEndpoint(environment, 'json'),
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+  });
+
+  try {
+    await session.open();
+    await session.authenticateAccount(accountId, credentials.accessToken);
+    const marketData = new CTraderMarketData({ session, accountId });
+    const brokerAccount = await marketData.loadAccount();
+    if (!brokerAccount?.canOpenTrades) return null;
+    const catalog = await marketData.loadCatalog();
+    if (!Array.isArray(catalog) || catalog.length === 0) return null;
+    return { catalog, aliases: providerConfigOf(account).symbolAliases || {} };
+  } finally {
+    session.close?.();
+  }
+}
+
+async function persistAccountCatalog(supabase, account, hydrated = {}) {
+  const catalog = Array.isArray(hydrated?.catalog) ? hydrated.catalog : [];
+  if (!catalog.length) return account;
+  const currentConfig = providerConfigOf(account);
+  const aliases = hydrated?.aliases && typeof hydrated.aliases === 'object' && !Array.isArray(hydrated.aliases)
+    ? hydrated.aliases
+    : (currentConfig.symbolAliases || {});
+  const providerConfig = {
+    ...currentConfig,
+    symbolCatalog: catalog,
+    symbolAliases: aliases,
+    symbolCatalogUpdatedAt: new Date().toISOString(),
+  };
+
+  const query = supabase
+    .from('trade_accounts')
+    .update({ provider_config: providerConfig })
+    .eq('workspace_id', text(account?.workspace_id ?? account?.workspaceId))
+    .eq('id', text(account?.id));
+  if (query?.select) {
+    const result = await query.select('id');
+    if (result?.error) throw new Error('failed to persist hydrated broker symbol catalog');
+  } else {
+    const result = await query;
+    if (result?.error) throw new Error('failed to persist hydrated broker symbol catalog');
+  }
+  return { ...account, provider_config: providerConfig };
+}
+
+async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountCatalogLoader } = {}) {
+  const loader = typeof accountCatalogLoader === 'function'
+    ? accountCatalogLoader
+    : (account) => defaultCTraderAccountCatalogLoader(account, env);
+
+  return Promise.all((accounts || []).map(async (account) => {
+    if (!isCTraderOauthAccount(account) || hasAuthoritativeCatalog(account)) return account;
+    try {
+      const hydrated = await loader(account);
+      if (!Array.isArray(hydrated?.catalog) || hydrated.catalog.length === 0) return account;
+      return await persistAccountCatalog(supabase, account, hydrated);
+    } catch {
+      // Keep the account in the routing set. The existing destination-symbol gate
+      // will fail this destination closed without preventing other routed brokers
+      // from being evaluated.
+      return account;
+    }
+  }));
 }
 
 function resolveDestinationSymbol(account, symbol) {
@@ -109,7 +209,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, sourceId } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, sourceId, accountCatalogLoader } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -132,7 +232,8 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
         .in('id', accountIds);
       if (error) throw new Error(`failed to load routed execution accounts: ${error.message || 'database error'}`);
       const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
-      return accountIds.map((id) => accountMap.get(id)).filter(Boolean);
+      const orderedAccounts = accountIds.map((id) => accountMap.get(id)).filter(Boolean);
+      return hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader });
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
