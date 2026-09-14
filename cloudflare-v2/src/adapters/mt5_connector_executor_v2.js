@@ -2,10 +2,11 @@ import { buildMT5OrderCommand, buildMT5ManagementCommand } from '../execution/pl
 import { resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
 import { buildMt5ConnectorEnvelope } from './mt5_connector_protocol.js';
 
-function classifiedError(message, { code, failureClass, cause } = {}) {
+function classifiedError(message, { code, failureClass, cause, result } = {}) {
   const error = new Error(String(message || code || 'MT5 connector execution failed'), cause ? { cause } : undefined);
   if (code) error.code = code;
   if (failureClass) error.failureClass = failureClass;
+  if (result && typeof result === 'object') error.result = result;
   return error;
 }
 function normalizeGatewayUrl(value) {
@@ -24,10 +25,10 @@ async function identity({ baseUrl, accountRowId, controlSecret, fetchFn }) {
     throw classifiedError('MT5 connector identity unavailable', { code: 'MT5_CONNECTOR_OFFLINE', failureClass: 'RETRYABLE', cause });
   }
   let body = {}; try { body = await response.json(); } catch {}
-  if (!response.ok || body?.online !== true) throw classifiedError('MT5 connector offline', { code: 'MT5_CONNECTOR_OFFLINE', failureClass: 'RETRYABLE' });
-  if (String(body.accountRowId ?? '') !== String(accountRowId)) throw classifiedError('MT5 connector account mismatch', { code: 'MT5_CONNECTOR_ACCOUNT_MISMATCH', failureClass: 'TERMINAL' });
+  if (!response.ok || body?.online !== true) throw classifiedError('MT5 connector offline', { code: 'MT5_CONNECTOR_OFFLINE', failureClass: 'RETRYABLE', result: body });
+  if (String(body.accountRowId ?? '') !== String(accountRowId)) throw classifiedError('MT5 connector account mismatch', { code: 'MT5_CONNECTOR_ACCOUNT_MISMATCH', failureClass: 'TERMINAL', result: body });
   const accountNumber = String(body?.identity?.accountNumber ?? '').trim();
-  if (!accountNumber) throw classifiedError('MT5 connector broker identity missing', { code: 'MT5_CONNECTOR_IDENTITY_INCOMPLETE', failureClass: 'RETRYABLE' });
+  if (!accountNumber) throw classifiedError('MT5 connector broker identity missing', { code: 'MT5_CONNECTOR_IDENTITY_INCOMPLETE', failureClass: 'RETRYABLE', result: body });
   return { ...body.identity, accountNumber };
 }
 function connectedEnvironment(connected = {}) {
@@ -63,7 +64,11 @@ function commandFor(action, resolved) {
   return buildMT5ManagementCommand(action, resolved || {});
 }
 async function persistFailure(store, key, error, nowMs, retryDelayMs) {
-  const failure = { code: error.code || 'MT5_CONNECTOR_EXECUTION_FAILED', error: error.message };
+  const failure = {
+    code: error.code || 'MT5_CONNECTOR_EXECUTION_FAILED',
+    error: error.message,
+    ...(error.result && typeof error.result === 'object' ? { result: error.result } : {}),
+  };
   if (error.failureClass === 'RETRYABLE' && store.markRetryable) return store.markRetryable(key, failure, { nextAttemptAt: new Date(nowMs + retryDelayMs).toISOString() });
   if (error.failureClass === 'UNCERTAIN' && store.markUncertain) return store.markUncertain(key, failure);
   return store.fail(key, failure);
@@ -119,9 +124,9 @@ export async function executeMt5ConnectorAction(action, {
     let body = {}; try { body = await response.json(); } catch { throw classifiedError('MT5 connector response unreadable', { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN' }); }
     if (!response.ok || body?.ok === false) {
       const reason = String(body?.reason || body?.error || `HTTP_${response.status}`);
-      if (reason === 'MT5_CONNECTOR_OFFLINE') throw classifiedError(reason, { code: reason, failureClass: 'RETRYABLE' });
-      if (reason === 'MT5_RESULT_TIMEOUT') throw classifiedError(reason, { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN' });
-      throw classifiedError(reason, { code: 'MT5_CONNECTOR_REJECTED', failureClass: 'TERMINAL' });
+      if (reason === 'MT5_CONNECTOR_OFFLINE') throw classifiedError(reason, { code: reason, failureClass: 'RETRYABLE', result: body });
+      if (reason === 'MT5_RESULT_TIMEOUT') throw classifiedError(reason, { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN', result: body });
+      throw classifiedError(reason, { code: 'MT5_CONNECTOR_REJECTED', failureClass: 'TERMINAL', result: body });
     }
     const fillPrice = Number(body.fillPrice ?? body.fill_price);
     const result = {
