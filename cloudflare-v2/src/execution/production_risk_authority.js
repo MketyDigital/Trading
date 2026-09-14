@@ -51,7 +51,7 @@ function exposureValue(exposure = {}, name) {
 
 function canonicalPolicyContext({ action, riskPercent, exposure }) {
   return {
-    totalLots: Number(action.lots),
+    totalLots: numberOrUndefined(action.lots) ?? 0,
     riskPercent: numberOrUndefined(riskPercent) ?? 0,
     currentDailyPnlPercent: exposureValue(exposure, 'currentDailyPnlPercent'),
     currentOpenRiskPercent: exposureValue(exposure, 'currentOpenRiskPercent'),
@@ -82,18 +82,24 @@ export function validateProductionRiskAction({
   currentMarketPrice,
   exposure = {},
 } = {}) {
-  const plannedLots = assertPositiveLots(action);
   const mode = sizingMode(account);
   const riskPercent = configuredRiskPercent(account, action);
 
+  // Risk-reducing/neutral management commands do not need a synthetic lot
+  // quantity. Broker position/order identity is authoritative for CLOSE,
+  // MODIFY, BE/SL/TP changes and pending-order cancellation. Requiring lots
+  // here either blocks valid management or tempts callers to invent volume.
   if (!isRiskIncreasingOpen(action)) {
+    const finalAction = { ...action };
     return {
       allowed: true,
-      action: { ...action, lots: plannedLots },
-      policyContext: canonicalPolicyContext({ action: { ...action, lots: plannedLots }, riskPercent, exposure }),
+      action: finalAction,
+      policyContext: canonicalPolicyContext({ action: finalAction, riskPercent, exposure }),
       risk: null,
     };
   }
+
+  const plannedLots = assertPositiveLots(action);
 
   // Fixed-lot OPENs are still subject to final account policy and strict broker
   // volume validation in platform translation. They do not invent a monetary
