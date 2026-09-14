@@ -32,12 +32,7 @@ async function readMessage(socket) {
   return JSON.parse(data.toString());
 }
 
-async function waitForClose(socket) {
-  const [code, reason] = await once(socket, 'close');
-  return { code, reason: reason.toString() };
-}
-
-test('MT5 gateway converts one-time pairing into instance-bound reconnect auth and serves fresh context', async (t) => {
+test('MT5 gateway accepts reusable pairing auth until expiry, issues instance reconnect auth, and serves fresh context', async (t) => {
   const wsPort = await freePort();
   const controlPort = await freePort();
   const signingKey = 'test-signing-key';
@@ -73,16 +68,19 @@ test('MT5 gateway converts one-time pairing into instance-bound reconnect auth a
   assert.match(auth.reconnectToken, /^mt5r1\./);
 
   const reusedPair = new WebSocket(`ws://127.0.0.1:${wsPort}/v1/mt5`);
+  t.after(() => reusedPair.close());
   await once(reusedPair, 'open');
-  const reusedPairClosed = waitForClose(reusedPair);
   reusedPair.send(JSON.stringify({
     type: 'auth', connectionToken: token, accountNumber: '50123456', serverName: 'Broker-Demo',
     brokerName: 'Broker Ltd', isLive: false, connectorInstanceId: 'mt5-instance-1', symbols: [],
   }));
-  assert.equal((await reusedPairClosed).reason, 'PAIR_TOKEN_ALREADY_USED');
+  const reusedAuth = await readMessage(reusedPair);
+  assert.equal(reusedAuth.type, 'auth_ok');
+  assert.equal(reusedAuth.accountRowId, accountRowId);
+  assert.match(reusedAuth.reconnectToken, /^mt5r1\./);
 
-  socket.close();
-  await once(socket, 'close');
+  reusedPair.close();
+  await once(reusedPair, 'close');
   const reconnect = new WebSocket(`ws://127.0.0.1:${wsPort}/v1/mt5`);
   t.after(() => reconnect.close());
   await once(reconnect, 'open');
