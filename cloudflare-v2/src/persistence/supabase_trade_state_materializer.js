@@ -3,6 +3,7 @@ function text(value) {
 }
 
 function finiteNumber(value) {
+  if (value == null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -60,6 +61,8 @@ function legRow(group, leg, workspaceId) {
   const requestedLots = finiteNumber(leg?.requestedLots ?? leg?.requested_lots);
   const executedLots = finiteNumber(leg?.executedLots ?? leg?.executed_lots);
   const status = text(leg?.status).toUpperCase() || 'PLANNED';
+  const actionType = text(leg?.actionType ?? leg?.last_action_type).toUpperCase();
+  const lifecycleAt = isoTime(group?.updatedAt ?? group?.updated_at) || new Date().toISOString();
 
   if (!stateLegId) throw new TypeError('state leg id is required for durable materialization');
   if (!(Number.isInteger(targetIndex) && targetIndex > 0)) throw new TypeError('target index is required for durable materialization');
@@ -83,10 +86,10 @@ function legRow(group, leg, workspaceId) {
     volume_step_lots: finiteNumber(leg?.volumeStepLots ?? leg?.volume_step_lots) ?? undefined,
     minimum_lots: finiteNumber(leg?.minimumLots ?? leg?.minimum_lots) ?? undefined,
     failure_code: text(leg?.failureCode ?? leg?.failure_code) || undefined,
-    last_action_type: text(leg?.actionType ?? leg?.last_action_type).toUpperCase() || undefined,
-    opened_at: status === 'OPEN' ? (isoTime(group?.updatedAt ?? group?.updated_at) || new Date().toISOString()) : undefined,
-    closed_at: status === 'CLOSED' ? (isoTime(group?.updatedAt ?? group?.updated_at) || new Date().toISOString()) : undefined,
-    updated_at: isoTime(group?.updatedAt ?? group?.updated_at) || new Date().toISOString(),
+    last_action_type: actionType || undefined,
+    opened_at: actionType === 'OPEN_POSITION' ? lifecycleAt : undefined,
+    closed_at: actionType === 'CLOSE_POSITION' || status === 'CLOSED' ? lifecycleAt : undefined,
+    updated_at: lifecycleAt,
   });
 }
 
