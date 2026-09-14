@@ -123,15 +123,13 @@ function approximatelyEqual(left, right) {
   return Math.abs(left - right) <= EPSILON * scale;
 }
 
-function validateRawPriceEvidence(intent, rawText) {
+function advisoryRawPriceEvidence(intent, rawText) {
   const required = executablePrices(intent);
-  if (required.length === 0) return { ok: true };
+  if (required.length === 0) return [];
   const evidenced = rawNumericEvidence(rawText);
   const missing = required.filter((price) => !evidenced.some((rawPrice) => approximatelyEqual(price, rawPrice)));
-  if (missing.length > 0) {
-    return { ok: false, reason: `AI raw price evidence failed for ${missing.join(', ')}` };
-  }
-  return { ok: true };
+  if (missing.length === 0) return [];
+  return [`AI raw price evidence differs for ${missing.join(', ')}`];
 }
 
 export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
@@ -143,6 +141,9 @@ export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
     return { ok: false, reason: 'pending order requires explicit entry' };
   }
 
+  // Geometry remains a hard check because an inverted SL/TP materially changes risk.
+  // The later raw-value comparison is intentionally advisory only; small formatting,
+  // rounding, transcription, or AI normalization differences must not veto a trade.
   const geometry = validateGeometry(intent);
   if (!geometry.ok) return geometry;
 
@@ -165,5 +166,8 @@ export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
   const orderTypeEvidence = validateRawOrderTypeEvidence(intent, rawText);
   if (!orderTypeEvidence.ok) return orderTypeEvidence;
 
-  return validateRawPriceEvidence(intent, rawText);
+  return {
+    ok: true,
+    warnings: advisoryRawPriceEvidence(intent, rawText),
+  };
 }

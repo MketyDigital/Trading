@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ingestTradingEvent } from '../src/pipeline/ingest.js';
 import { signSourcePayload } from '../src/security/source_auth.js';
 
-test('ingest gives ambiguous AI interpretation the default 12 second budget', async () => {
+test('ingest gives ambiguous AI interpretation the default 12 second budget then falls back when material evidence is complete', async () => {
   const source = { id: 'source-db-1', workspace_id: 'ws-1', source_instance_id: 'source-1', source_type: 'custom_webhook', secret: 'shared-secret' };
   const payload = { external_event_id: 'msg-timeout', text: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535' };
   const rawBody = JSON.stringify(payload);
@@ -21,6 +21,8 @@ test('ingest gives ambiguous AI interpretation the default 12 second budget', as
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.interpretation.status, 'NEEDS_REVIEW');
+  assert.equal(result.interpretation.status, 'READY');
+  assert.equal(result.interpretation.source, 'deterministic_fallback');
+  assert.equal(result.interpretation.intent.symbol.canonical, 'XAUUSD');
   assert.equal(seenTimeout, 12000);
 });

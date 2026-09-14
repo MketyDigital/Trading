@@ -37,7 +37,7 @@ function ambiguityRouter({ breaker, workspaceId = 'ws-a', fetchFn } = {}) {
   });
 }
 
-test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', async () => {
+test('open ambiguity-AI circuit reaches deterministic fallback without calling provider', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
   openCircuit(breaker, { purpose: 'ambiguity_ai', provider: 'fast-ai', workspaceId: 'ws-a' });
   let calls = 0;
@@ -53,7 +53,7 @@ test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', 
 
   assert.equal(calls, 0);
   assert.equal(result.status, 'NEEDS_REVIEW');
-  assert.equal(result.source, 'ai');
+  assert.equal(result.source, 'fallback');
   assert.equal(result.reason, 'AI_CIRCUIT_OPEN');
 });
 
@@ -151,5 +151,6 @@ test('breaker internal failure is fail-open to existing AI fallback semantics', 
   });
   const ambiguity = await interpretTradingEvent(AMBIGUOUS, { aiRouter });
   assert.equal(ambiguity.status, 'NEEDS_REVIEW');
+  assert.equal(ambiguity.source, 'fallback');
   assert.equal(ambiguity.reason, 'All AI providers failed in cascade.');
 });

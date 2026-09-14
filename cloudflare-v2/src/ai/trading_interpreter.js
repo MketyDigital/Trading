@@ -1,7 +1,7 @@
 import { buildMachinePlan } from '../pipeline/machine_plan.js';
 import { validateCanonicalSignalIntent } from '../pipeline/signal_intent_validator.js';
 import { normalizeSymbol, normalizeOrderIntent } from '../normalization/trading_normalizer.js';
-import { recoverKnownNaturalLanguageSignal } from './relaxed_signal_recovery.js';
+import { recoverKnownNaturalLanguageSignal, recoverMaterialSignalFallback } from './relaxed_signal_recovery.js';
 
 const INTERPRETER_PROMPT = `Return JSON only. Classify the trading message into one of: NEW_SIGNAL, MANAGEMENT, NON_ACTIONABLE. For NEW_SIGNAL use fields: side BUY|SELL, symbol, order_type MARKET|LIMIT|STOP|STOP_LIMIT, entry (number, {min,max}, or null for current market), stop_loss (number|null), take_profits (number array), fast_entry (boolean). Never invent missing numeric prices. If uncertain return {"event_type":"NON_ACTIONABLE"}.`;
 
@@ -48,12 +48,44 @@ function normalizeAiSignal(payload) {
   };
 }
 
+function realWorldManagementAlias(text) {
+  const upper = String(text ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (/^STOPPED\s+(?:OUT\s+)?AT\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)\b/.test(upper)) {
+    return {
+      status: 'NO_ACTION',
+      source: 'deterministic',
+      reason: 'INFORMATIONAL_MANAGEMENT',
+      information: { type: 'POSITION_STOPPED_AT_BREAK_EVEN' },
+    };
+  }
+  if (/^(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)(?:\s+NOW)?[!.]*$/.test(upper)) {
+    return { status: 'MANAGEMENT', source: 'deterministic', management: { type: 'MOVE_SL_TO_BE' } };
+  }
+  return null;
+}
+
+function deterministicFallback(event, reason, detail = null) {
+  const intent = recoverMaterialSignalFallback(event?.text);
+  if (!intent) {
+    return { status: 'NEEDS_REVIEW', source: 'fallback', reason: detail || reason };
+  }
+  return {
+    status: 'READY',
+    source: 'deterministic_fallback',
+    intent,
+    fallback: { reason, detail: detail || null },
+  };
+}
+
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
   aiRouterFactory,
   timeoutMs = 12000,
   systemPrompt = INTERPRETER_PROMPT,
 } = {}) {
+  const realWorldAlias = realWorldManagementAlias(event.text);
+  if (realWorldAlias) return realWorldAlias;
+
   const deterministic = buildMachinePlan(event);
   if (deterministic.status !== 'NEEDS_INTERPRETATION') {
     if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
@@ -74,13 +106,13 @@ export async function interpretTradingEvent(event = {}, {
   if (!resolvedAiRouter && typeof aiRouterFactory === 'function') {
     try {
       resolvedAiRouter = await aiRouterFactory();
-    } catch {
-      return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'AI interpreter unavailable' };
+    } catch (error) {
+      return deterministicFallback(event, 'AI interpreter unavailable', error?.message);
     }
   }
 
   if (!resolvedAiRouter?.processSignal) {
-    return { status: 'NEEDS_REVIEW', source: 'none', reason: 'AI interpreter unavailable' };
+    return deterministicFallback(event, 'AI interpreter unavailable');
   }
 
   let ai;
@@ -89,31 +121,32 @@ export async function interpretTradingEvent(event = {}, {
       timeoutMs,
       purpose: 'ambiguity_ai',
     });
-  } catch {
-    return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'AI interpretation failed' };
+  } catch (error) {
+    return deterministicFallback(event, 'AI interpretation failed', error?.message);
   }
 
   if (!ai?.success) {
-    return { status: 'NEEDS_REVIEW', source: 'ai', reason: ai?.error || 'AI interpretation failed' };
+    return deterministicFallback(event, 'AI interpretation failed', ai?.error);
   }
 
   try {
     const payload = parseJson(ai.text);
     if (payload.event_type !== 'NEW_SIGNAL') {
-      return { status: 'NEEDS_REVIEW', source: 'ai', reason: 'unsupported AI event type' };
+      return deterministicFallback(event, 'unsupported AI event type');
     }
     const intent = normalizeAiSignal(payload);
     const validation = validateCanonicalSignalIntent(intent, { rawText: event.text });
     if (!validation.ok) {
-      return { status: 'NEEDS_REVIEW', source: 'ai', reason: validation.reason };
+      return deterministicFallback(event, 'AI hard validation conflict', validation.reason);
     }
     return {
       status: 'READY',
       source: 'ai',
       intent,
+      validationWarnings: validation.warnings || [],
       ai: { provider: ai.provider ?? null, model: ai.model ?? null },
     };
   } catch (error) {
-    return { status: 'NEEDS_REVIEW', source: 'ai', reason: error.message || 'invalid AI output' };
+    return deterministicFallback(event, 'invalid AI output', error?.message || 'invalid AI output');
   }
 }

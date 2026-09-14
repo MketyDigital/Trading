@@ -8,62 +8,33 @@ function parsedValue(raw) {
   return parsed.ok ? parsed.value : null;
 }
 
-function explicitEntry(text) {
-  const match = text.match(new RegExp(`\\b(?:AROUND|NEAR|ABOUT|AT)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
-  return match ? parsedValue(match[1]) : null;
-}
-
-function explicitProtection(text) {
-  const match = text.match(new RegExp(`\\b(?:PROTECT|PROTECTION|STOP)\\s+(UNDER|BELOW|ABOVE|OVER)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
-  if (!match) return null;
-  const value = parsedValue(match[2]);
-  return value == null ? null : { direction: match[1].toUpperCase(), value };
-}
-
-function explicitTargets(text) {
-  const match = text.match(/\b(?:AIM(?:ING)?(?:\s+FOR)?|TARGET(?:S|ING)?(?:\s+AT)?|TAKE\s+PROFITS?(?:\s+AT)?)\s+(.+)$/i);
-  if (!match) return [];
-  const tokens = extractSignalNumbers(match[1]);
-  if (tokens.some((token) => !token.ok)) return null;
-  return tokens.map((token) => token.value);
-}
-
 function hasAmbiguousGroupedNumber(text) {
-  // Do not absorb a comma that is only sentence punctuation after a valid number.
-  // Malformed grouped values such as `1,234,56,78` still remain one candidate
-  // and therefore fail closed in parseSignalNumber().
   const candidates = String(text ?? '').match(/-?\d(?:[\d,]*\d)?(?:\.\d+)?/g) || [];
   return candidates.some((candidate) => candidate.includes(',') && !parseSignalNumber(candidate).ok);
 }
 
-function geometryValid(intent, protectionDirection) {
-  const entry = intent.entry.value;
-  if (intent.side === 'BUY') {
-    if (!['UNDER', 'BELOW'].includes(protectionDirection)) return false;
-    if (!(intent.stopLoss < entry)) return false;
-    return intent.takeProfits.every((target) => target > entry);
-  }
-  if (!['ABOVE', 'OVER'].includes(protectionDirection)) return false;
-  if (!(intent.stopLoss > entry)) return false;
-  return intent.takeProfits.every((target) => target < entry);
+function valuesFromTail(tail) {
+  const tokens = extractSignalNumbers(tail);
+  if (tokens.some((token) => !token.ok)) return null;
+  return tokens.map((token) => token.value);
 }
 
-export function recoverKnownNaturalLanguageSignal(textValue) {
-  const text = String(textValue ?? '').trim();
-  if (!text) return null;
-  if (hasAmbiguousGroupedNumber(text)) return null;
+function geometryValid(intent, protectionDirection = null) {
+  const entry = intent.entry.value;
+  if (intent.side === 'BUY') {
+    if (protectionDirection && !['UNDER', 'BELOW'].includes(protectionDirection)) return false;
+    return intent.stopLoss < entry && intent.takeProfits.every((target) => target > entry);
+  }
+  if (protectionDirection && !['ABOVE', 'OVER'].includes(protectionDirection)) return false;
+  return intent.stopLoss > entry && intent.takeProfits.every((target) => target < entry);
+}
 
+function makeIntent(text, { entry, protection, takeProfits }) {
+  if (!text || hasAmbiguousGroupedNumber(text)) return null;
   const order = normalizeOrderIntent(text);
-  if (!order.side) return null;
-
   const symbolMatch = text.match(KNOWN_SYMBOL);
-  if (!symbolMatch) return null;
-
-  const entry = explicitEntry(text);
-  const protection = explicitProtection(text);
-  const takeProfits = explicitTargets(text);
-  if (!Number.isFinite(entry) || !protection || !Number.isFinite(protection.value) || !Array.isArray(takeProfits) || takeProfits.length === 0) return null;
-  if (!takeProfits.every(Number.isFinite)) return null;
+  if (!order.side || !symbolMatch || !Number.isFinite(entry) || !protection || !Number.isFinite(protection.value)) return null;
+  if (!Array.isArray(takeProfits) || takeProfits.length === 0 || !takeProfits.every(Number.isFinite)) return null;
 
   const intent = {
     side: order.side,
@@ -75,6 +46,57 @@ export function recoverKnownNaturalLanguageSignal(textValue) {
     fastEntry: false,
     incomplete: false,
   };
-
   return geometryValid(intent, protection.direction) ? intent : null;
+}
+
+function strictRecovery(text) {
+  const entryMatch = text.match(new RegExp(`\\b(?:AROUND|NEAR|ABOUT|AT)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  const protectionMatch = text.match(new RegExp(`\\b(?:PROTECT|PROTECTION|STOP)\\s+(UNDER|BELOW|ABOVE|OVER)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  const targetMatch = text.match(/\b(?:AIM(?:ING)?(?:\s+FOR)?|TARGET(?:S|ING)?(?:\s+AT)?|TAKE\s+PROFITS?(?:\s+AT)?)\s+(.+)$/i);
+  if (!entryMatch || !protectionMatch || !targetMatch) return null;
+  const takeProfits = valuesFromTail(targetMatch[1]);
+  const value = parsedValue(protectionMatch[2]);
+  return makeIntent(text, {
+    entry: parsedValue(entryMatch[1]),
+    protection: value == null ? null : { direction: protectionMatch[1].toUpperCase(), value },
+    takeProfits,
+  });
+}
+
+function fallbackRecovery(text) {
+  const entryMatch = text.match(new RegExp(`\\bENTRY(?:\\s+(?:PRICE|ZONE))?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  const protectionMatch = text.match(new RegExp(`\\b(?:SL|STOP\\s+LOSS|RISK)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  if (!entryMatch || !protectionMatch) return null;
+
+  const numbered = [];
+  const numberedPattern = new RegExp(`\\b(?:TP|TARGET|OBJECTIVE)\\s*([1-9]\\d?)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(numberedPattern)) {
+    const value = parsedValue(match[2]);
+    if (value == null) return null;
+    numbered.push({ index: Number(match[1] || numbered.length + 1), value });
+  }
+
+  let takeProfits;
+  if (numbered.length) {
+    const unique = new Map(numbered.map((item) => [item.index, item.value]));
+    takeProfits = [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+  } else {
+    const tailMatch = text.match(/\b(?:OBJECTIVE(?:S)?|TARGETS?|TPS?)\s*[:=@-]?\s+(.+)$/i);
+    takeProfits = tailMatch ? valuesFromTail(tailMatch[1]) : [];
+  }
+
+  const stop = parsedValue(protectionMatch[1]);
+  return makeIntent(text, {
+    entry: parsedValue(entryMatch[1]),
+    protection: stop == null ? null : { direction: null, value: stop },
+    takeProfits,
+  });
+}
+
+export function recoverKnownNaturalLanguageSignal(textValue) {
+  return strictRecovery(String(textValue ?? '').trim());
+}
+
+export function recoverMaterialSignalFallback(textValue) {
+  return fallbackRecovery(String(textValue ?? '').trim());
 }

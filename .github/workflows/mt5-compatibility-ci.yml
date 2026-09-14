@@ -1,0 +1,32 @@
+name: MT5 Compatibility CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cloudflare-v2/bridges/mt5_bridge.py'
+      - 'cloudflare-v2/bridges/test_mt5_bridge*.py'
+      - '.github/workflows/mt5-compatibility-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-v2/bridges/mt5_bridge.py'
+      - 'cloudflare-v2/bridges/test_mt5_bridge*.py'
+      - '.github/workflows/mt5-compatibility-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mt5-compatibility:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run all MT5 bridge compatibility tests
+        run: PYTHONPATH=bridges python -m unittest discover -s bridges -p 'test_mt5_bridge*.py' -v
