@@ -154,7 +154,7 @@ export async function runV1ProductionExecutionStage({
     tradingEventId,
   });
   const stateBinder = transportMode === 'real' && executionDepsFactory === createProductionExecutionDependencies
-    ? createProductionTradeStateBinder({ env, workspaceId })
+    ? createProductionTradeStateBinder({ env, workspaceId, supabase })
     : dependencies?.stateBinder;
 
   const execution = await executeProductionFn({
