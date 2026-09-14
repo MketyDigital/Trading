@@ -3,6 +3,7 @@ import { decryptConnectionCredentials } from '../security/connection_credentials
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
 import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
+import { createSupabaseTradeStateMaterializer } from '../persistence/supabase_trade_state_materializer.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -20,11 +21,12 @@ function internalHeaders(env) {
   return { 'content-type': 'application/json', 'x-mkety-internal-token': token };
 }
 
-function createTradeStateClient(env, workspaceId) {
+function createTradeStateClient(env, workspaceId, supabase) {
   const namespace = env?.TRADE_STATE_NAMESPACE;
   if (!namespace?.idFromName || !namespace?.get) throw new Error('TRADE_STATE_NAMESPACE is not configured');
   const stub = namespace.get(namespace.idFromName(String(workspaceId)));
   const headers = internalHeaders(env);
+  const materializer = createSupabaseTradeStateMaterializer({ supabase, workspaceId });
 
   async function call(path, method, payload) {
     const response = await stub.fetch(`https://trade-state.internal${path}`, {
@@ -43,7 +45,11 @@ function createTradeStateClient(env, workspaceId) {
     },
     stateStore: {
       getGroup: (groupId) => call(`/groups/${encodeURIComponent(String(groupId))}`, 'GET'),
-      putGroup: (group) => call('/groups', 'POST', group),
+      async putGroup(group) {
+        const canonical = await call('/groups', 'POST', group);
+        await materializer.putGroup(canonical);
+        return canonical;
+      },
     },
   };
 }
@@ -214,7 +220,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
 
-  const state = createTradeStateClient(env, workspaceId);
+  const state = createTradeStateClient(env, workspaceId, supabase);
   const instruments = parseJsonConfig(env.TRADING_V1_SIMULATION_INSTRUMENTS, 'TRADING_V1_SIMULATION_INSTRUMENTS');
   const prices = parseJsonConfig(env.TRADING_V1_SIMULATION_PRICES, 'TRADING_V1_SIMULATION_PRICES');
   const exposures = parseJsonConfig(env.TRADING_V1_SIMULATION_EXPOSURES, 'TRADING_V1_SIMULATION_EXPOSURES');
