@@ -5,12 +5,37 @@ const ACTIVE_STATUSES = new Set(['OPEN', 'PLANNED', 'PENDING']);
 
 function groupKey(groupId) { return `${GROUP_PREFIX}${groupId}`; }
 
+function actionTypeOf(execution = {}) {
+  return String(execution?.actionType || '').trim().toUpperCase();
+}
+
 function executionStatus(existingLeg = {}, execution = {}) {
+  const actionType = actionTypeOf(execution);
+  if (actionType === 'CLOSE_POSITION') return 'CLOSED';
+  if (actionType === 'CANCEL_PENDING') return 'CANCELLED';
+  if (actionType === 'CLOSE_PARTIAL' || actionType === 'MODIFY_POSITION') return 'OPEN';
+
   const explicit = String(execution?.status || '').trim().toUpperCase();
   if (explicit) return explicit;
   if (execution?.brokerPositionId != null && String(execution.brokerPositionId).trim()) return 'OPEN';
   if (execution?.brokerOrderId != null && String(execution.brokerOrderId).trim()) return 'PENDING';
   return String(existingLeg?.status || 'PLANNED').toUpperCase();
+}
+
+function nextLegLots(currentLeg = {}, execution = {}) {
+  const actionType = actionTypeOf(execution);
+  const executedLots = Number(execution?.executedLots);
+  const currentLots = Number(currentLeg?.lots);
+
+  if (actionType === 'CLOSE_POSITION') return Number.isFinite(currentLots) ? 0 : undefined;
+  if (actionType === 'CLOSE_PARTIAL') {
+    if (!(Number.isFinite(executedLots) && executedLots > 0 && Number.isFinite(currentLots) && currentLots > 0)) return undefined;
+    const remaining = currentLots - executedLots;
+    if (!(remaining > 0) || remaining >= currentLots) return undefined;
+    return Number(remaining.toFixed(12));
+  }
+  if (actionType === 'OPEN_POSITION' && Number.isFinite(executedLots) && executedLots > 0) return executedLots;
+  return undefined;
 }
 
 function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
@@ -66,11 +91,11 @@ export class TradeStateStore {
     if (index < 0) throw new Error('position group leg not found');
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
-    const executedLots = Number(execution?.executedLots);
+    const lots = nextLegLots(currentLeg, execution);
     group.legs[index] = {
       ...currentLeg,
       ...execution,
-      ...(Number.isFinite(executedLots) && executedLots > 0 ? { lots: executedLots } : {}),
+      ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
       status,
     };
     group.status = aggregateGroupStatus(group.legs, group.status);
