@@ -20,6 +20,12 @@ test('break-even is blocked for a SELL until market has moved below entry', () =
   assert.equal(evaluateBreakEvenEligibility({ side: 'SELL', entryPrice: 4306.45, marketPrice: 4306.40 }).allowed, true);
 });
 
+test('break-even context is unavailable when side, entry or live trigger price is missing', () => {
+  assert.equal(evaluateBreakEvenEligibility({ side: 'BUY', entryPrice: null, marketPrice: 4307 }).reason, 'BREAK_EVEN_CONTEXT_UNAVAILABLE');
+  assert.equal(evaluateBreakEvenEligibility({ side: 'BUY', entryPrice: 4306.45, marketPrice: null }).reason, 'BREAK_EVEN_CONTEXT_UNAVAILABLE');
+  assert.equal(evaluateBreakEvenEligibility({ side: 'HOLD', entryPrice: 4306.45, marketPrice: 4307 }).reason, 'BREAK_EVEN_CONTEXT_UNAVAILABLE');
+});
+
 test('MOVE_SL_TO_BE actions carry the semantic metadata required for broker preflight', () => {
   const actions = buildManagementActions({
     id: 'g1', symbol: 'XAUUSD', side: 'BUY', entryPrice: 4306.45,
@@ -54,6 +60,8 @@ test('broker-aware BE no-op is reported as blocked rather than a failed broker c
   });
 
   assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.failed, 0);
+  assert.equal(result.accounts[0].status, 'BLOCKED');
+  assert.equal(result.accounts[0].reason, 'ACCOUNT_POLICY_BLOCKED');
   assert.equal(result.accounts[0].blockReason, 'BREAK_EVEN_NOT_ELIGIBLE_YET');
-  assert.equal(result.accounts[0].actions[0].status, 'BLOCKED');
 });
