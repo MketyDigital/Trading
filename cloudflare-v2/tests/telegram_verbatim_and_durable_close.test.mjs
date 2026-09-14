@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { handleTelegramBotWebhookRequest } from '../src/http/telegram_bot_webhook.js';
 import { formatTelegramDestinationMessage } from '../src/destinations/formatting.js';
 import { sendTelegramDestination } from '../src/destinations/telegram_destination.js';
+import { runV1DestinationDeliveryStage } from '../src/destinations/v1_destination_delivery_stage.js';
 import { productionTradeStateBindingPayload } from '../src/state/production_trade_state_binder.js';
 import { TradeStateStore } from '../src/state/trade_state_store.js';
 
@@ -40,9 +41,9 @@ class MemoryStorage {
   async list() { return new Map(this.values); }
 }
 
-test('Telegram Bot source preserves exact message text and native entities for verbatim destinations', async () => {
+test('Telegram Bot source preserves exact message text and native entities for exact forwarding', async () => {
   const queued = [];
-  const text = '  🔥 <BUY> XAUUSD\nSL 2490  ';
+  const sourceText = '  🔥 <BUY> XAUUSD\nSL 2490  ';
   const entities = [
     { type: 'bold', offset: 5, length: 5 },
     { type: 'custom_emoji', offset: 2, length: 2, custom_emoji_id: 'emoji-1' },
@@ -53,7 +54,7 @@ test('Telegram Bot source preserves exact message text and native entities for v
       message_id: 92,
       date: 1789236000,
       chat: { id: -100123, type: 'channel' },
-      text,
+      text: sourceText,
       entities,
     },
   }), { TRADING_MASTER_KEY: 'master' }, {
@@ -64,14 +65,14 @@ test('Telegram Bot source preserves exact message text and native entities for v
 
   assert.equal(response.status, 200);
   assert.equal(queued.length, 1);
-  assert.equal(queued[0].text, text);
+  assert.equal(queued[0].text, sourceText);
   assert.deepEqual(queued[0].metadata.telegram_entities, entities);
 });
 
-test('verbatim formatting mode never invokes canonical reconstruction and keeps raw text byte-for-byte', () => {
+test('none formatting mode is the exact no-AI/no-clean/no-rebuild path', () => {
   const rawText = '🔥 **BUY** XAUUSD\n\nSL: 2490\nTP: 2510';
   const formatted = formatTelegramDestinationMessage({
-    mode: 'verbatim',
+    mode: 'none',
     rawText,
     interpretation: null,
   }, {});
@@ -100,6 +101,38 @@ test('Telegram destination can send native entities without parse_mode', async (
   assert.equal(result.ok, true);
   assert.deepEqual(body.entities, entities);
   assert.equal('parse_mode' in body, false);
+});
+
+test('none mode passes exact Telegram source text/entities through the destination stage without AI', async () => {
+  const sourceText = '  🔥 BUY XAUUSD\nSL 2490\nTP 2510  ';
+  const entities = [{ type: 'bold', offset: 5, length: 3 }];
+  let sent;
+  let aiCalls = 0;
+  const stage = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-bot-1',
+    event: { text: sourceText, metadata: { telegram_entities: entities } },
+    interpretation: { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' }, orderType: 'MARKET', entry: { kind: 'MARKET' } } },
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    destinationStore: {
+      listRoutedDestinations: async () => [{
+        id: 'dest-1', workspace_id: 'ws-1', destination_type: 'telegram', destination_ref: '-100999',
+        credential_ciphertext: 'cipher', is_active: true,
+        template: { formatting_mode: 'none', parse_mode: 'plain' },
+      }],
+      recordDestinationOutcome: async () => {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'token' } }),
+    aiFormatterFactory: async () => { aiCalls += 1; return async () => 'must-not-run'; },
+    sendTelegram: async (input) => { sent = input; return { ok: true, messageId: 101, status: 200 }; },
+  });
+
+  assert.equal(stage.status, 'DELIVERED');
+  assert.equal(aiCalls, 0);
+  assert.equal(sent.text, sourceText);
+  assert.deepEqual(sent.entities, entities);
+  assert.equal(sent.parseMode, 'plain');
 });
 
 test('production binding does not turn missing management fill price into zero', () => {
