@@ -151,6 +151,9 @@ async function handleSimplifiedUpdate(request, env, dependencies, accountId, bod
   }
 
   const environment = String(current.environment || '').trim().toLowerCase();
+  if (hasTrading && environment === 'demo' && body.tradingEnabled === false) {
+    return json({ ok: false, reason: 'DEMO_TRADING_ALWAYS_ENABLED' }, 409);
+  }
   if (hasLive && environment !== 'live') {
     return json({ ok: false, reason: 'ACCOUNT_LIVE_EXECUTION_NOT_APPLICABLE' }, 400);
   }
