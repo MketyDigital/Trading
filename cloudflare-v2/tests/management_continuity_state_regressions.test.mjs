@@ -39,6 +39,120 @@ class MemoryStorage {
   async list({ prefix = '' } = {}) { return new Map([...this.map].filter(([key]) => key.startsWith(prefix))); }
 }
 
+test('explicit Telegram reply targets an old-but-open logical trade regardless of elapsed time', () => {
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws1',
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:410',
+      thread: { reply_to_event_id: 'telegram:-1001:100' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: [
+      group({ id: 'ctrader-old', tradeAccountId: 'ctrader', sourceEventIds: ['telegram:-1001:100'], updatedAt: now - 8 * 60 * 60 * 1000 }),
+      group({ id: 'mt5-old', tradeAccountId: 'mt5', sourceEventIds: ['telegram:-1001:100'], updatedAt: now - 8 * 60 * 60 * 1000 }),
+      group({ id: 'newer', tradeAccountId: 'other', sourceEventIds: ['telegram:-1001:409'], symbol: 'GBPUSD', updatedAt: now - 1000 }),
+    ],
+    nowMs: now,
+    correlationWindowMs: 120000,
+  });
+
+  assert.deepEqual(result, {
+    status: 'MATCHED',
+    reason: 'REPLY_TARGET',
+    groupIds: ['ctrader-old', 'mt5-old'],
+  });
+});
+
+test('explicit reply that does not resolve must fail closed instead of falling through to a newer unrelated trade', () => {
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws1',
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:410',
+      thread: { reply_to_event_id: 'telegram:-1001:50' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: [
+      group({ id: 'newer', sourceEventIds: ['telegram:-1001:409'], symbol: 'GBPUSD', updatedAt: now - 1000 }),
+    ],
+    nowMs: now,
+    correlationWindowMs: 120000,
+  });
+
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
+});
+
+test('reply to a previous management message resolves the same durable trade cohort', () => {
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws1',
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:350',
+      thread: { reply_to_event_id: 'telegram:-1001:340' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } },
+    activeGroups: [
+      group({ id: 'ctrader', tradeAccountId: 'ctrader', sourceEventIds: ['telegram:-1001:100', 'telegram:-1001:340'] }),
+      group({ id: 'mt5', tradeAccountId: 'mt5', sourceEventIds: ['telegram:-1001:100', 'telegram:-1001:340'] }),
+    ],
+    nowMs: now,
+    correlationWindowMs: 120000,
+  });
+
+  assert.deepEqual(result, {
+    status: 'MATCHED',
+    reason: 'REPLY_TARGET',
+    groupIds: ['ctrader', 'mt5'],
+  });
+});
+
+test('symbol-qualified management can target a unique old-but-open trade without a time limit', () => {
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws1',
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:500',
+      thread: {},
+    },
+    interpretation: {
+      status: 'MANAGEMENT',
+      management: { type: 'CLOSE', symbol: { canonical: 'GBPUSD' } },
+    },
+    activeGroups: [
+      group({ id: 'gbp-old', symbol: 'GBPUSD', updatedAt: now - 12 * 60 * 60 * 1000 }),
+      group({ id: 'gold-new', symbol: 'XAUUSD', sourceEventIds: ['telegram:-1001:499'], updatedAt: now - 1000 }),
+    ],
+    nowMs: now,
+    correlationWindowMs: 120000,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'SYMBOL_TARGET', groupId: 'gbp-old' });
+});
+
+test('symbol-qualified management remains fail-closed when multiple logical trades share the symbol', () => {
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws1',
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:500',
+      thread: {},
+    },
+    interpretation: {
+      status: 'MANAGEMENT',
+      management: { type: 'CLOSE', symbol: { canonical: 'XAUUSD' } },
+    },
+    activeGroups: [
+      group({ id: 'gold-a', sourceEventIds: ['telegram:-1001:100'] }),
+      group({ id: 'gold-b', sourceEventIds: ['telegram:-1001:200'] }),
+    ],
+    nowMs: now,
+    correlationWindowMs: 120000,
+  });
+
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
+});
+
 test('adjacent Telegram management message can target the immediately preceding logical trade even outside the time window', () => {
   const result = correlateTradingEvent({
     event: {
