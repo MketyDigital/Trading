@@ -97,11 +97,7 @@ function renderTemplate({ interpretation = {} }, template = {}) {
 
 export function formatTelegramDestinationMessage(input = {}, template = {}) {
   const mode = String(input.mode ?? template.formattingMode ?? template.formatting_mode ?? 'template').trim() || 'template';
-  const parseMode = String(template.parseMode ?? template.parse_mode ?? (mode === 'none' || mode === 'clean' || mode === 'verbatim' ? 'plain' : 'HTML'));
-
-  if (mode === 'verbatim') {
-    return { ok: true, text: asText(input.rawText), parseMode: 'plain' };
-  }
+  const parseMode = String(template.parseMode ?? template.parse_mode ?? (mode === 'none' || mode === 'clean' ? 'plain' : 'HTML'));
 
   if (mode === 'none') {
     return { ok: true, text: asText(input.rawText), parseMode: 'plain' };
