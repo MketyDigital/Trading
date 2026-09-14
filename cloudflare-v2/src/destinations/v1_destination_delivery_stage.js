@@ -326,7 +326,7 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
 
   if (mode !== 'ai_then_fallback') {
     const formatted = deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
-    if (mode === 'verbatim' && formatted?.ok) {
+    if ((mode === 'none' || mode === 'verbatim') && formatted?.ok) {
       return { ...formatted, entities: telegramEntities(event) };
     }
     return formatted;
