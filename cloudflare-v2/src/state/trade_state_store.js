@@ -50,6 +50,12 @@ function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
   return String(currentStatus || 'PLANNED').toUpperCase();
 }
 
+function executionPatch(execution = {}) {
+  const patch = { ...execution };
+  if (patch.fillPrice == null || patch.fillPrice === '') delete patch.fillPrice;
+  return patch;
+}
+
 export class TradeStateStore {
   constructor(storage, { persistence = null, workspaceId = null } = {}) {
     if (!storage?.get || !storage?.put || !storage?.list) throw new TypeError('durable storage interface is required');
@@ -116,11 +122,13 @@ export class TradeStateStore {
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
     const lots = nextLegLots(currentLeg, execution);
+    const patch = executionPatch(execution);
     group.legs[index] = {
       ...currentLeg,
-      ...execution,
+      ...patch,
       requestedLots: Number.isFinite(Number(currentLeg?.requestedLots)) ? Number(currentLeg.requestedLots) : Number(currentLeg?.lots),
       ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
+      ...(status === 'CLOSED' || status === 'CANCELLED' ? { closedAt: Number(nowMs) } : {}),
       status,
     };
     group.status = aggregateGroupStatus(group.legs, group.status);
