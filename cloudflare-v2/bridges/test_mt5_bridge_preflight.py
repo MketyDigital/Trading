@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from mt5_bridge import MT5Engine
+from mt5_bridge import MT5Engine, command_marker
 
 
 class _BaseMT5:
@@ -65,6 +65,13 @@ class NoneCheckMT5(_BaseMT5):
 
 
 class MT5PreflightRegressionTests(unittest.TestCase):
+    def test_command_marker_is_short_ascii_alphanumeric_for_broker_compatibility(self):
+        marker = command_marker('very-long-command-id:with:punctuation:and:broker:scope')
+        self.assertLessEqual(len(marker), 20)
+        self.assertTrue(marker.isascii())
+        self.assertTrue(marker.isalnum())
+        self.assertTrue(marker.startswith('mkety'))
+
     def test_market_deal_does_not_send_pending_only_time_in_force_field(self):
         mt5 = SuccessfulMT5()
         result = MT5Engine(mt5).execute({
