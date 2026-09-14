@@ -35,9 +35,9 @@ test('promotes a fast first position to TP1 and creates only missing TP legs', (
   assert.equal(result.actions[0].legId, 'leg-1');
 });
 
-test('generates break-even changes only for remaining open legs and retains symbol context', () => {
+test('generates break-even changes only for remaining open legs and retains broker preflight context', () => {
   const group = {
-    symbol: 'XAUUSD', entryPrice: 2526,
+    symbol: 'XAUUSD', side: 'BUY', entryPrice: 2526,
     legs: [
       { legId: '1', brokerPositionId: 'p1', status: 'CLOSED' },
       { legId: '2', brokerPositionId: 'p2', status: 'OPEN' },
@@ -46,8 +46,8 @@ test('generates break-even changes only for remaining open legs and retains symb
   };
   const actions = buildManagementActions(group, { type: 'MOVE_SL_TO_BE' });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 2526 },
-    { type: 'MODIFY_POSITION', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 2526 }
+    { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', side: 'BUY', entryPrice: 2526, stopLoss: 2526 },
+    { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', side: 'BUY', entryPrice: 2526, stopLoss: 2526 }
   ]);
 });
 
