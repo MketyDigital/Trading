@@ -11,7 +11,6 @@ const signingKey = process.env.CBOT_TOKEN_SIGNING_KEY || '';
 const controlSecret = process.env.CBOT_CONTROL_SECRET || '';
 const commandTimeoutMs = Number(process.env.MT5_CONNECTOR_COMMAND_TIMEOUT_MS || process.env.CBOT_COMMAND_TIMEOUT_MS || 8000);
 const contextTimeoutMs = Number(process.env.MT5_CONNECTOR_CONTEXT_TIMEOUT_MS || 5000);
-const reconnectTtlMs = Number(process.env.MT5_CONNECTOR_RECONNECT_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const maxSymbols = 2000;
 
 if (!signingKey || !controlSecret) {
@@ -23,7 +22,6 @@ const sessions = new Map();
 const pending = new Map();
 const pendingContext = new Map();
 const delivered = new Map();
-const consumedPairTokens = new Map();
 
 function json(response, status, body) {
   const raw = JSON.stringify(body);
@@ -37,8 +35,6 @@ function authorizedControl(request) {
 function commandKey(accountRowId, commandId) { return `${accountRowId}:${commandId}`; }
 function contextKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function pruneDelivered(now = Date.now()) { for (const [key, expiresAt] of delivered.entries()) if (expiresAt < now) delivered.delete(key); }
-function pruneConsumedPairTokens(now = Date.now()) { for (const [key, expiresAt] of consumedPairTokens.entries()) if (expiresAt < now) consumedPairTokens.delete(key); }
-function pairTokenKey(token) { return crypto.createHash('sha256').update(String(token)).digest('hex'); }
 function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
   const current = sessions.get(socket.mketyAccountRowId);
@@ -130,12 +126,6 @@ wsServer.on('connection', (socket) => {
       if (verified.purpose === 'reconnect' && verified.connectorInstanceId !== identity.connectorInstanceId) {
         return socket.close(1008, 'CONNECTOR_INSTANCE_MISMATCH');
       }
-      if (verified.purpose === 'pair') {
-        pruneConsumedPairTokens();
-        const tokenKey = pairTokenKey(suppliedToken);
-        if (consumedPairTokens.has(tokenKey)) return socket.close(1008, 'PAIR_TOKEN_ALREADY_USED');
-        consumedPairTokens.set(tokenKey, verified.expiresAt);
-      }
       clearTimeout(timer);
       socket.authenticated = true;
       socket.mketyAccountRowId = verified.accountRowId;
@@ -147,7 +137,7 @@ wsServer.on('connection', (socket) => {
         authResponse.reconnectToken = createMt5ReconnectToken({
           accountRowId: verified.accountRowId,
           connectorInstanceId: identity.connectorInstanceId,
-          expiresAt: Date.now() + reconnectTtlMs,
+          expiresAt: verified.expiresAt,
         }, signingKey);
       }
       socket.send(JSON.stringify(authResponse));
