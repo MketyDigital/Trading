@@ -135,7 +135,13 @@ async function resolveMarketFill(session, acceptedResponse, action) {
 }
 
 async function persistFailure(deliveryStore, idempotencyKey, error, { nowMs, retryDelayMs }) {
-  const failure = { code: error?.code || 'CTRADER_EXECUTION_FAILED', error: error?.message || 'cTrader execution failed' };
+  const code = error?.code || 'CTRADER_EXECUTION_FAILED';
+  const message = error?.message || 'cTrader execution failed';
+  const failure = {
+    code,
+    error: message,
+    result: { code, message },
+  };
   if (error?.deliveryFailureClass === 'RETRYABLE') {
     if (deliveryStore?.markRetryable) {
       await deliveryStore.markRetryable(idempotencyKey, failure, {
