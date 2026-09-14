@@ -700,6 +700,7 @@ const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cb
         headers: {
           'content-type': 'application/json',
           'x-mkety-internal-token': token,
+          'x-mkety-workspace-id': boundWorkspaceId,
         },
         body: JSON.stringify(payload),
       },
