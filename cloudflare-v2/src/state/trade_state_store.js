@@ -92,9 +92,14 @@ export class TradeStateStore {
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
     const lots = nextLegLots(currentLeg, execution);
+    const requestedLots = Number(currentLeg?.requestedLots);
+    const originalLots = Number(currentLeg?.lots);
     group.legs[index] = {
       ...currentLeg,
       ...execution,
+      ...(!Number.isFinite(requestedLots) && Number.isFinite(originalLots) && originalLots >= 0
+        ? { requestedLots: originalLots }
+        : {}),
       ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
       status,
     };
