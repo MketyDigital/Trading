@@ -83,7 +83,9 @@ function validateRawOrderTypeEvidence(intent, rawText) {
 }
 
 function rawSymbolCandidates(rawText) {
-  const tokens = String(rawText ?? '').match(/[A-Za-z0-9&:.()_/-]+/g) || [];
+  const tokens = (String(rawText ?? '').match(/[A-Za-z0-9&:.()_/-]+/g) || [])
+    .map((token) => token.replace(/^[.:]+|[.:]+$/g, ''))
+    .filter(Boolean);
   const candidates = [];
   const maxWidth = Math.min(6, tokens.length);
   for (let width = 1; width <= maxWidth; width += 1) {
