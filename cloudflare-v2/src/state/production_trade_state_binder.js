@@ -1,3 +1,5 @@
+import { createSupabaseTradeStateMaterializer } from '../persistence/supabase_trade_state_materializer.js';
+
 function text(value) { return String(value ?? '').trim(); }
 
 function lifecycleStatus(binding = {}) {
@@ -22,9 +24,12 @@ function payloadFrom(binding = {}) {
   return payload;
 }
 
-export function createProductionTradeStateBinder({ env = {}, workspaceId } = {}) {
+export function createProductionTradeStateBinder({ env = {}, supabase, workspaceId } = {}) {
   const boundWorkspaceId = text(workspaceId);
   if (!boundWorkspaceId) throw new TypeError('workspaceId is required');
+  const materializer = supabase?.from
+    ? createSupabaseTradeStateMaterializer({ supabase, workspaceId: boundWorkspaceId })
+    : null;
 
   return async function stateBinder(binding = {}) {
     if (text(binding.workspaceId) !== boundWorkspaceId) throw new Error('production execution workspace mismatch');
@@ -55,6 +60,7 @@ export function createProductionTradeStateBinder({ env = {}, workspaceId } = {})
     );
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`Trade State binding failed (${response.status}): ${body?.error || 'unknown error'}`);
+    if (materializer) await materializer.putGroup(body);
     return body;
   };
 }
