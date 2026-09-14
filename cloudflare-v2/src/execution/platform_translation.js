@@ -17,6 +17,19 @@ function entryValue(action) {
   return undefined;
 }
 
+function boundedCTraderClientMsgId(value) {
+  const text = String(value ?? '').trim();
+  if (!text) throw new TypeError('cTrader clientMsgId required');
+  if (text.length <= 64) return text;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const suffix = (hash >>> 0).toString(16).padStart(8, '0');
+  return `${text.slice(0, 55)}${suffix}`;
+}
+
 function cTraderVolumeOptions(symbol = {}) {
   return {
     protocolLotSize: symbol.protocolLotSize,
@@ -54,7 +67,7 @@ export function buildCTraderOrderCommand(action, { accountId, clientMsgId, symbo
   const isMarket = action.orderType === 'MARKET';
 
   return buildNewOrderMessage({
-    clientMsgId,
+    clientMsgId: boundedCTraderClientMsgId(clientMsgId),
     accountId,
     symbolId: symbol.platformId,
     side: action.side,
@@ -111,9 +124,10 @@ export function buildMT5ManagementCommand(action, symbol = {}) {
 }
 
 export function buildCTraderManagementCommand(action, { accountId, clientMsgId, symbol = {} }) {
+  const boundedClientMsgId = boundedCTraderClientMsgId(clientMsgId);
   if (action.type === 'MODIFY_POSITION') {
     return buildAmendPositionSLTPMessage({
-      clientMsgId,
+      clientMsgId: boundedClientMsgId,
       accountId,
       positionId: action.brokerPositionId,
       stopLoss: action.stopLoss,
@@ -125,7 +139,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
     const lots = action.lots;
     if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
     return buildClosePositionMessage({
-      clientMsgId,
+      clientMsgId: boundedClientMsgId,
       accountId,
       positionId: action.brokerPositionId,
       protocolVolume: normalizeVolumeForCTrader(lots, cTraderVolumeOptions(symbol)),
@@ -136,7 +150,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
     const lots = action.lots;
     if (!(Number(lots) > 0)) throw new TypeError('lots required for cTrader close action');
     return buildClosePositionMessage({
-      clientMsgId,
+      clientMsgId: boundedClientMsgId,
       accountId,
       positionId: action.brokerPositionId,
       protocolVolume: validateVolumeForCTraderExecution(lots, cTraderVolumeOptions(symbol)),
@@ -145,7 +159,7 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
 
   if (action.type === 'CANCEL_PENDING') {
     return buildCancelOrderMessage({
-      clientMsgId,
+      clientMsgId: boundedClientMsgId,
       accountId,
       orderId: action.brokerOrderId,
     });
