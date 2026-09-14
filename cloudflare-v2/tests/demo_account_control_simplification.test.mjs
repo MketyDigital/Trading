@@ -90,19 +90,14 @@ test('demo Trading ON atomically enables execution and clears the internal kill 
   assert.equal(body.account.liveExecutionEnabled, false);
 });
 
-test('demo Trading OFF disables execution, restores kill switch, and keeps live permission off', async () => {
+test('connected demo Trading OFF is rejected and cannot disable broker acceptance', async () => {
   const { response, supabase } = await putAccount(accountRow({
     execution_enabled: true,
     safety_policy: { killSwitch: false },
   }), { tradingEnabled: false });
-  assert.equal(response.status, 200);
-  assert.deepEqual(supabase.updates.at(-1), {
-    execution_enabled: false,
-    live_execution_enabled: false,
-    safety_policy: { killSwitch: true },
-  });
-  const body = await response.json();
-  assert.equal(body.account.tradingEnabled, false);
+  assert.equal(response.status, 409);
+  assert.equal(supabase.updates.length, 0);
+  assert.deepEqual(await response.json(), { ok: false, reason: 'DEMO_TRADING_ALWAYS_ENABLED' });
 });
 
 test('demo accounts reject a real-money permission toggle because it is not applicable', async () => {
