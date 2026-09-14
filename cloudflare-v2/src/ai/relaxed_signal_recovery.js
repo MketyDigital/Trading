@@ -9,19 +9,37 @@ function parsedValue(raw) {
 }
 
 function explicitEntry(text) {
-  const match = text.match(new RegExp(`\\b(?:AROUND|NEAR|ABOUT|AT)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  const match = text.match(new RegExp(`\\b(?:ENTRY(?:\\s+(?:PRICE|ZONE))?|AROUND|NEAR|ABOUT|AT)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i'));
   return match ? parsedValue(match[1]) : null;
 }
 
 function explicitProtection(text) {
-  const match = text.match(new RegExp(`\\b(?:PROTECT|PROTECTION|STOP)\\s+(UNDER|BELOW|ABOVE|OVER)\\s+(${SIGNAL_NUMBER_SOURCE})`, 'i'));
-  if (!match) return null;
-  const value = parsedValue(match[2]);
-  return value == null ? null : { direction: match[1].toUpperCase(), value };
+  const directional = text.match(new RegExp(`\\b(?:PROTECT|PROTECTION|STOP|SL|STOP\\s+LOSS|RISK)\\s+(UNDER|BELOW|ABOVE|OVER)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  if (directional) {
+    const value = parsedValue(directional[2]);
+    return value == null ? null : { direction: directional[1].toUpperCase(), value };
+  }
+
+  const labeled = text.match(new RegExp(`\\b(?:SL|STOP\\s+LOSS|RISK)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i'));
+  if (!labeled) return null;
+  const value = parsedValue(labeled[1]);
+  return value == null ? null : { direction: null, value };
 }
 
 function explicitTargets(text) {
-  const match = text.match(/\b(?:AIM(?:ING)?(?:\s+FOR)?|TARGET(?:S|ING)?(?:\s+AT)?|TAKE\s+PROFITS?(?:\s+AT)?)\s+(.+)$/i);
+  const labeled = [];
+  const numbered = new RegExp(`\\b(?:TP|TARGET|OBJECTIVE)\\s*([1-9]\\d?)\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  for (const match of text.matchAll(numbered)) {
+    const value = parsedValue(match[2]);
+    if (value == null) return null;
+    labeled.push({ index: Number(match[1] || labeled.length + 1), value });
+  }
+  if (labeled.length) {
+    const unique = new Map(labeled.map((item) => [item.index, item.value]));
+    return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+  }
+
+  const match = text.match(/\b(?:AIM(?:ING)?(?:\s+FOR)?|OBJECTIVE(?:S)?|TARGET(?:S|ING)?(?:\s+AT)?|TAKE\s+PROFITS?(?:\s+AT)?|TP)\s*[:=@-]?\s+(.+)$/i);
   if (!match) return [];
   const tokens = extractSignalNumbers(match[1]);
   if (tokens.some((token) => !token.ok)) return null;
@@ -29,29 +47,24 @@ function explicitTargets(text) {
 }
 
 function hasAmbiguousGroupedNumber(text) {
-  // Do not absorb a comma that is only sentence punctuation after a valid number.
-  // Malformed grouped values such as `1,234,56,78` still remain one candidate
-  // and therefore fail closed in parseSignalNumber().
   const candidates = String(text ?? '').match(/-?\d(?:[\d,]*\d)?(?:\.\d+)?/g) || [];
   return candidates.some((candidate) => candidate.includes(',') && !parseSignalNumber(candidate).ok);
 }
 
-function geometryValid(intent, protectionDirection) {
+function geometryValid(intent, protectionDirection = null) {
   const entry = intent.entry.value;
   if (intent.side === 'BUY') {
-    if (!['UNDER', 'BELOW'].includes(protectionDirection)) return false;
+    if (protectionDirection && !['UNDER', 'BELOW'].includes(protectionDirection)) return false;
     if (!(intent.stopLoss < entry)) return false;
     return intent.takeProfits.every((target) => target > entry);
   }
-  if (!['ABOVE', 'OVER'].includes(protectionDirection)) return false;
+  if (protectionDirection && !['ABOVE', 'OVER'].includes(protectionDirection)) return false;
   if (!(intent.stopLoss > entry)) return false;
   return intent.takeProfits.every((target) => target < entry);
 }
 
-export function recoverKnownNaturalLanguageSignal(textValue) {
-  const text = String(textValue ?? '').trim();
-  if (!text) return null;
-  if (hasAmbiguousGroupedNumber(text)) return null;
+function buildRecoveredIntent(text) {
+  if (!text || hasAmbiguousGroupedNumber(text)) return null;
 
   const order = normalizeOrderIntent(text);
   if (!order.side) return null;
@@ -77,4 +90,14 @@ export function recoverKnownNaturalLanguageSignal(textValue) {
   };
 
   return geometryValid(intent, protection.direction) ? intent : null;
+}
+
+export function recoverKnownNaturalLanguageSignal(textValue) {
+  return buildRecoveredIntent(String(textValue ?? '').trim());
+}
+
+export function recoverMaterialSignalFallback(textValue) {
+  const text = String(textValue ?? '').trim();
+  if (!text) return null;
+  return buildRecoveredIntent(text);
 }
