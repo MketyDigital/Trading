@@ -13,7 +13,11 @@ class MemoryStorage {
 class MemoryPersistence {
   constructor(groups = []) { this.groups = new Map(groups.map((group) => [String(group.id), structuredClone(group)])); this.saved = []; }
   async saveGroup(group) { this.groups.set(String(group.id), structuredClone(group)); this.saved.push(structuredClone(group)); return group; }
-  async loadGroup(groupId) { return structuredClone(this.groups.get(String(groupId)) || null); }
+  async loadGroup(workspaceId, groupId) {
+    const group = this.groups.get(String(groupId));
+    if (!group || String(group.workspaceId) !== String(workspaceId)) return null;
+    return structuredClone(group);
+  }
   async loadActive(workspaceId) {
     return [...this.groups.values()]
       .filter((group) => String(group.workspaceId) === String(workspaceId))
@@ -49,7 +53,7 @@ test('writes every state mutation through to durable relational persistence', as
   await store.setGroupStatus('g1', 'OPEN', now + 2);
 
   assert.equal(persistence.saved.length, 4);
-  const persisted = await persistence.loadGroup('g1');
+  const persisted = await persistence.loadGroup('ws1', 'g1');
   assert.deepEqual(persisted.sourceEventIds, ['100', '101']);
   assert.equal(persisted.legs[0].brokerPositionId, 'p99');
   assert.equal(persisted.legs[0].brokerOrderId, 'o88');
@@ -74,12 +78,12 @@ test('hydrates active groups from relational persistence so reply correlation su
   const result = await coordinator.correlate({
     workspace_hint: 'ws1',
     source: { instance_id: 'listener-1' }, external_event_id: '101',
-    thread: { reply_to_external_event_id: '100' },
+    thread: { reply_to_event_id: '100' },
   }, {
     status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' },
   }, now);
 
-  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY', groupId: 'g1' });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g1' });
   assert.deepEqual((await store.listActive()).map((group) => group.id), ['g1']);
 });
 
