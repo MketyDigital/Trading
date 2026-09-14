@@ -29,27 +29,48 @@ const group = {
   updatedAt: 1_700_000_001_000,
   legs: [
     {
-      legId: 'leg-1', targetIndex: 1, lots: 0.01, stopLoss: 3490, takeProfit: 3510,
-      status: 'OPEN', brokerPositionId: 'p-1', brokerOrderId: 'o-1', fillPrice: 3500.5,
-      volumeStepLots: 0.01, minimumLots: 0.01,
+      legId: 'leg-1', targetIndex: 1, lots: 0.01, requestedLots: 0.01, executedLots: 0.01,
+      stopLoss: 3490, takeProfit: 3510, status: 'OPEN', brokerPositionId: 'p-1',
+      brokerOrderId: 'o-1', brokerDealId: 'd-1', fillPrice: 3500.5,
+      volumeStepLots: 0.01, minimumLots: 0.01, actionType: 'OPEN_POSITION',
     },
     {
-      legId: 'leg-2', targetIndex: 2, lots: 0.01, stopLoss: 3490, takeProfit: 3520,
-      status: 'PENDING', brokerOrderId: 'o-2',
+      legId: 'leg-2', targetIndex: 2, lots: 0.01, requestedLots: 0.01,
+      stopLoss: 3490, takeProfit: 3520, status: 'PENDING', brokerOrderId: 'o-2',
     },
   ],
 };
 
-test('serializes DO group state to relational group and leg rows without requiring text state key to be a UUID', () => {
+test('serializes composite runtime ids beside UUID relational keys and preserves broker lifecycle fields', () => {
   const rows = groupToPersistenceRows(group);
-  assert.equal(rows.group.state_key, group.id);
+  assert.equal(rows.group.runtime_group_id, group.id);
   assert.equal(rows.group.workspace_id, group.workspaceId);
-  assert.equal(rows.group.canonical_symbol, 'XAUUSD');
+  assert.equal(rows.group.source_event_id, group.sourceEventId);
   assert.deepEqual(rows.group.source_event_ids, ['100', '101']);
-  assert.equal(rows.legs[0].leg_key, 'leg-1');
+  assert.equal(rows.legs[0].runtime_leg_id, 'leg-1');
   assert.equal(rows.legs[0].broker_position_id, 'p-1');
   assert.equal(rows.legs[0].broker_order_id, 'o-1');
-  assert.equal(rows.legs[0].metadata.fillPrice, 3500.5);
+  assert.equal(rows.legs[0].broker_deal_id, 'd-1');
+  assert.equal(rows.legs[0].fill_price, 3500.5);
+  assert.equal(rows.legs[0].requested_lots, 0.01);
+  assert.equal(rows.legs[0].executed_lots, 0.01);
+  assert.equal(rows.legs[0].remaining_lots, 0.01);
+});
+
+test('does not write a non-UUID external source id into the UUID source_event_id column', () => {
+  const rows = groupToPersistenceRows({ ...group, sourceEventId: 'telegram:-1001822170589:25151' });
+  assert.equal(rows.group.source_event_id, undefined);
+  assert.equal(rows.group.runtime_group_id, group.id);
+});
+
+test('allows fully closed legs to persist with zero remaining lots', () => {
+  const rows = groupToPersistenceRows({
+    ...group,
+    legs: [{ ...group.legs[0], lots: 0, status: 'CLOSED', actionType: 'CLOSE_POSITION' }],
+  });
+  assert.equal(rows.legs[0].lots, 0);
+  assert.equal(rows.legs[0].remaining_lots, 0);
+  assert.equal(rows.legs[0].requested_lots, 0.01);
 });
 
 test('hydrates relational rows back to canonical correlation and lifecycle state', () => {
@@ -73,5 +94,8 @@ test('hydrates relational rows back to canonical correlation and lifecycle state
   assert.equal(hydrated.legs[0].legId, 'leg-1');
   assert.equal(hydrated.legs[0].brokerPositionId, 'p-1');
   assert.equal(hydrated.legs[0].brokerOrderId, 'o-1');
+  assert.equal(hydrated.legs[0].brokerDealId, 'd-1');
   assert.equal(hydrated.legs[0].fillPrice, 3500.5);
+  assert.equal(hydrated.legs[0].requestedLots, 0.01);
+  assert.equal(hydrated.legs[0].executedLots, 0.01);
 });
