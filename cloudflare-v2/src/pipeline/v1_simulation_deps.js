@@ -1,4 +1,8 @@
 import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
+import { decryptConnectionCredentials } from '../security/connection_credentials.js';
+import { CTraderJsonSession } from '../adapters/ctrader_session.js';
+import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
+import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -48,32 +52,101 @@ function canonicalSymbol(intent = {}) {
   return String(intent?.symbol?.canonical || intent?.symbol || '').toUpperCase();
 }
 
-function codedError(code, message) {
-  const error = new Error(message);
+function codedError(code, message, cause = null) {
+  const error = cause ? new Error(message, { cause }) : new Error(message);
   error.code = code;
   return error;
 }
 
-function resolveDestinationSymbol(account, symbol) {
-  const { catalog, aliases } = accountSymbolCatalogFromProviderConfig(account?.provider_config ?? {});
-  if (!catalog.length) {
-    throw codedError(
-      'DESTINATION_SYMBOL_CATALOG_UNAVAILABLE',
-      `destination symbol catalog is unavailable for ${symbol || 'UNKNOWN'}`,
-    );
+function text(value) {
+  return String(value ?? '').trim();
+}
+
+function providerModeOf(account = {}) {
+  return text(account.provider_mode ?? account.providerMode).toLowerCase();
+}
+
+function platformOf(account = {}) {
+  return text(account.platform).toLowerCase();
+}
+
+function providerConfigOf(account = {}) {
+  const value = account?.provider_config ?? account?.providerConfig;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function accountRowIdOf(account = {}) {
+  return text(account.id);
+}
+
+function brokerAccountIdOf(account = {}) {
+  return text(account.account_id ?? account.accountId);
+}
+
+function environmentOf(account = {}) {
+  return text(account.environment).toLowerCase();
+}
+
+function credentialCiphertextOf(account = {}) {
+  return text(account.credential_ciphertext ?? account.credentialCiphertext);
+}
+
+async function defaultSymbolCatalogRefresher(account, { env = {}, supabase, workspaceId } = {}) {
+  if (platformOf(account) !== 'ctrader' || providerModeOf(account) !== 'ctrader_oauth') return null;
+  const environment = environmentOf(account);
+  if (!['demo', 'live'].includes(environment)) throw new Error('cTrader account environment is unavailable');
+
+  const rowId = accountRowIdOf(account);
+  const brokerAccountId = brokerAccountIdOf(account);
+  const ciphertext = credentialCiphertextOf(account);
+  const masterKey = text(env.TRADING_MASTER_KEY);
+  if (!rowId || !brokerAccountId || !ciphertext || !masterKey) {
+    throw new Error('cTrader account credentials are unavailable for symbol catalog refresh');
   }
 
-  const resolved = resolveAccountSymbol(symbol, catalog, aliases);
-  if (!resolved.ok) {
-    const code = resolved.reason === 'AMBIGUOUS_SYMBOL'
-      ? 'DESTINATION_SYMBOL_AMBIGUOUS'
-      : 'DESTINATION_SYMBOL_NOT_SUPPORTED';
-    throw codedError(
-      code,
-      `destination symbol resolution failed for ${symbol || 'UNKNOWN'}: ${resolved.reason || 'SYMBOL_NOT_FOUND'}`,
-    );
+  const credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey);
+  const clientId = text(credentials.clientId || env.CTRADER_CLIENT_ID);
+  const clientSecret = text(credentials.clientSecret || env.CTRADER_CLIENT_SECRET);
+  const accessToken = text(credentials.accessToken);
+  if (!clientId || !clientSecret || !accessToken) {
+    throw new Error('cTrader API credentials are incomplete for symbol catalog refresh');
   }
-  return resolved;
+
+  const numericAccountId = Number(brokerAccountId);
+  if (!Number.isInteger(numericAccountId)) throw new Error('cTrader broker account id is invalid');
+
+  const session = new CTraderJsonSession({
+    endpoint: ctraderEndpoint(environment, 'json'),
+    clientId,
+    clientSecret,
+  });
+  try {
+    await session.open();
+    await session.authenticateAccount(numericAccountId, accessToken);
+    const marketData = new CTraderMarketData({ session, accountId: numericAccountId });
+    const catalog = await marketData.loadCatalog();
+    if (!Array.isArray(catalog) || !catalog.length) throw new Error('cTrader broker returned no enabled symbols');
+
+    const existing = providerConfigOf(account);
+    const updatedAt = new Date().toISOString();
+    const providerConfig = {
+      ...existing,
+      symbolCatalog: catalog,
+      symbolCatalogUpdatedAt: updatedAt,
+    };
+    const { error } = await supabase
+      .from('trade_accounts')
+      .update({ provider_config: providerConfig })
+      .eq('workspace_id', workspaceId)
+      .eq('id', rowId);
+    if (error) throw new Error(`failed to persist cTrader broker symbol catalog: ${error.message || 'database error'}`);
+
+    account.provider_config = providerConfig;
+    const { aliases } = accountSymbolCatalogFromProviderConfig(providerConfig);
+    return { catalog, aliases };
+  } finally {
+    try { session.close(); } catch {}
+  }
 }
 
 async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
@@ -109,7 +182,13 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, sourceId } = {}) {
+export async function createV1SimulationDependencies({
+  env = {},
+  supabase,
+  event = {},
+  sourceId,
+  symbolCatalogRefresher = null,
+} = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -118,6 +197,60 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   const instruments = parseJsonConfig(env.TRADING_V1_SIMULATION_INSTRUMENTS, 'TRADING_V1_SIMULATION_INSTRUMENTS');
   const prices = parseJsonConfig(env.TRADING_V1_SIMULATION_PRICES, 'TRADING_V1_SIMULATION_PRICES');
   const exposures = parseJsonConfig(env.TRADING_V1_SIMULATION_EXPOSURES, 'TRADING_V1_SIMULATION_EXPOSURES');
+  const refreshedCatalogs = new Map();
+  const refreshCatalog = typeof symbolCatalogRefresher === 'function'
+    ? symbolCatalogRefresher
+    : (account) => defaultSymbolCatalogRefresher(account, { env, supabase, workspaceId });
+
+  async function destinationSymbolMetadata(account, symbol) {
+    let { catalog, aliases } = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
+    const accountKey = accountRowIdOf(account) || brokerAccountIdOf(account);
+    const cached = accountKey ? refreshedCatalogs.get(accountKey) : null;
+    if (!catalog.length && cached?.catalog?.length) {
+      catalog = cached.catalog;
+      aliases = cached.aliases || aliases;
+    }
+
+    if (!catalog.length && refreshCatalog) {
+      try {
+        const refreshed = await refreshCatalog(account);
+        if (Array.isArray(refreshed?.catalog) && refreshed.catalog.length) {
+          catalog = refreshed.catalog;
+          aliases = refreshed.aliases || aliases;
+          if (accountKey) refreshedCatalogs.set(accountKey, { catalog, aliases });
+        }
+      } catch (cause) {
+        throw codedError(
+          'DESTINATION_SYMBOL_CATALOG_UNAVAILABLE',
+          `destination symbol catalog is unavailable for ${symbol || 'UNKNOWN'}`,
+          cause,
+        );
+      }
+    }
+
+    if (!catalog.length) {
+      throw codedError(
+        'DESTINATION_SYMBOL_CATALOG_UNAVAILABLE',
+        `destination symbol catalog is unavailable for ${symbol || 'UNKNOWN'}`,
+      );
+    }
+    return { catalog, aliases };
+  }
+
+  async function resolveDestinationSymbol(account, symbol) {
+    const { catalog, aliases } = await destinationSymbolMetadata(account, symbol);
+    const resolved = resolveAccountSymbol(symbol, catalog, aliases);
+    if (!resolved.ok) {
+      const code = resolved.reason === 'AMBIGUOUS_SYMBOL'
+        ? 'DESTINATION_SYMBOL_AMBIGUOUS'
+        : 'DESTINATION_SYMBOL_NOT_SUPPORTED';
+      throw codedError(
+        code,
+        `destination symbol resolution failed for ${symbol || 'UNKNOWN'}: ${resolved.reason || 'SYMBOL_NOT_FOUND'}`,
+      );
+    }
+    return resolved;
+  }
 
   return {
     ...state,
@@ -136,7 +269,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
-      const resolvedSymbol = resolveDestinationSymbol(account, symbol);
+      const resolvedSymbol = await resolveDestinationSymbol(account, symbol);
       const instrument = instruments[symbol];
       if (instrument && typeof instrument === 'object') {
         return {
