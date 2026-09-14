@@ -42,19 +42,39 @@ function fakeSession() {
   };
 }
 
-test('bootstraps demo cTrader session, account rights and live account symbol catalog before execution is available', async () => {
-  const session = fakeSession();
-  const runtime = await createCTraderRuntime({
+function runtimeOptions(session) {
+  return {
     environment: 'demo',
     clientId: 'client-id',
     clientSecret: 'client-secret',
     accessToken: 'access-token',
     accountId: 77,
+    sessionFactory: () => session,
+    deliveryStore: { reserve: async () => ({ ok: true }), complete: async () => {}, fail: async () => {} },
+  };
+}
+
+function beAction() {
+  return {
+    type: 'MODIFY_POSITION',
+    managementType: 'MOVE_SL_TO_BE',
+    brokerPositionId: '136564456',
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    entryPrice: 4306.45,
+    stopLoss: 4306.45,
+    idempotencyKey: 'be-1',
+  };
+}
+
+test('bootstraps demo cTrader session, account rights and live account symbol catalog before execution is available', async () => {
+  const session = fakeSession();
+  const runtime = await createCTraderRuntime({
+    ...runtimeOptions(session),
     sessionFactory: ({ endpoint }) => {
       assert.equal(endpoint, 'wss://demo.ctraderapi.com:5036');
       return session;
     },
-    deliveryStore: { reserve: async () => ({ ok: true }), complete: async () => {}, fail: async () => {} },
   });
 
   assert.deepEqual(session.calls.slice(0, 2), ['open', ['account-auth', 77, 'access-token']]);
@@ -67,26 +87,9 @@ test('bootstraps demo cTrader session, account rights and live account symbol ca
 
 test('cTrader BE command is safely blocked before dispatch when stop-trigger price has not crossed entry', async () => {
   const session = fakeSession();
-  const runtime = await createCTraderRuntime({
-    environment: 'demo',
-    clientId: 'client-id',
-    clientSecret: 'client-secret',
-    accessToken: 'access-token',
-    accountId: 77,
-    sessionFactory: () => session,
-    deliveryStore: { reserve: async () => ({ ok: true }), complete: async () => {}, fail: async () => {} },
-  });
+  const runtime = await createCTraderRuntime(runtimeOptions(session));
 
-  const result = await runtime.execute({
-    type: 'MODIFY_POSITION',
-    managementType: 'MOVE_SL_TO_BE',
-    brokerPositionId: '136564456',
-    symbol: 'XAUUSD',
-    side: 'BUY',
-    entryPrice: 4306.45,
-    stopLoss: 4306.45,
-    idempotencyKey: 'be-1',
-  });
+  const result = await runtime.execute(beAction());
 
   assert.deepEqual(result, {
     ok: false,
@@ -96,6 +99,29 @@ test('cTrader BE command is safely blocked before dispatch when stop-trigger pri
     marketPrice: 4305.9,
   });
   assert.equal(session.calls.some((call) => Array.isArray(call) && call[1] === 2127), true);
+});
+
+test('cTrader BE ignores a stale profitable cached quote and waits for a fresh stop-trigger quote', async () => {
+  const session = fakeSession();
+  const runtime = await createCTraderRuntime(runtimeOptions(session));
+  runtime.marketData.quotes.set(41, { bid: 9999, ask: 10000, timestamp: 1 });
+
+  const result = await runtime.execute(beAction());
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.code, 'BREAK_EVEN_NOT_ELIGIBLE_YET');
+  assert.equal(result.marketPrice, 4305.9);
+});
+
+test('cTrader BE fails closed as context-unavailable when no fresh quote can be obtained', async () => {
+  const session = fakeSession();
+  session.waitForEvent = async () => { throw new Error('quote timeout'); };
+  const runtime = await createCTraderRuntime(runtimeOptions(session));
+
+  const result = await runtime.execute(beAction());
+
+  assert.equal(result.blocked, true);
+  assert.equal(result.code, 'BREAK_EVEN_CONTEXT_UNAVAILABLE');
 });
 
 test('fails closed when cTrader account is close-only/no-trading', async () => {
