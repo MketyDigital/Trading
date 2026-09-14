@@ -166,6 +166,42 @@ test('ordinary sentence commas after prices are punctuation, not malformed group
   assert.deepEqual(plan.intent.takeProfits, [2530, 2535]);
 });
 
+test('parses repeated unnumbered TP lines without collapsing to the final target', () => {
+  const plan = buildMachinePlan({ text: `xauusd buy\n\nentry 4280.12-4300.10\nsl 4180.6\ntp 4300.5\ntp 4360.9\ntp 4450.3` });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [4300.5, 4360.9, 4450.3]);
+});
+
+test('parses comma-separated unnumbered TP values while preserving source order', () => {
+  const plan = buildMachinePlan({ text: 'BUY XAUUSD 2400 SL 2300 TP 2453, 6635, 8634.6' });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [2453, 6635, 8634.6]);
+});
+
+test('parses repeated TP labels on one line', () => {
+  const plan = buildMachinePlan({ text: 'BUY XAUUSD 6000 SL 5000 TP 8376, TP 6353, TP 7363' });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [8376, 6353, 7363]);
+});
+
+test('parses numbered TP labels separated by commas', () => {
+  const plan = buildMachinePlan({ text: 'BUY EURUSD 0.1200 SL 0.1100 TP1 0.1273, TP2 0.1300, TP3 0.1350' });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [0.1273, 0.13, 0.135]);
+});
+
+test('does not split a thousands-grouped TP price into multiple targets', () => {
+  const plan = buildMachinePlan({ text: 'BUY BTCUSD 76000 SL 75000 TP 77,536.637' });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [77536.637]);
+});
+
+test('parses numbered thousands-grouped TP prices separated by punctuation', () => {
+  const plan = buildMachinePlan({ text: 'BUY BTCUSD 76000 SL 75000 TP1 77,536.637, TP2 78,100.25' });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.intent.takeProfits, [77536.637, 78100.25]);
+});
+
 test('parses real labeled Deriv synthetic signal cards without AI', () => {
   const plan = buildMachinePlan({ text: `QAS VIP SIGNAL\n\n📊 Instrument: Volatility 50 (1s) Index\n⏰ Timeframe: M15\n\n🟢 Direction: BUY\n\n🎯 Entry Zone: 236500 - 236800\n\n✅ TP1: 237300\n✅ TP2: 237900\n✅ TP3: 238500\n\n🛑 Stop Loss: 235700` });
   assert.equal(plan.status, 'READY');
