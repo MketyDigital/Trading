@@ -8,6 +8,24 @@ class _Reply:
         self.id = message_id
 
 
+class _ReplyHeader:
+    def __init__(self, message_id):
+        self.reply_to_msg_id = message_id
+        self.forum_topic = False
+        self.reply_to_top_id = None
+
+
+class _WrappedMessage:
+    def __init__(self, reply_to_message_id):
+        self.reply_to_msg_id = None
+        self.reply_to = _ReplyHeader(reply_to_message_id)
+
+
+class _OriginalUpdate:
+    def __init__(self, reply_to_message_id):
+        self.message = _WrappedMessage(reply_to_message_id)
+
+
 class _Event:
     def __init__(self):
         self.chat_id = -1001
@@ -23,6 +41,16 @@ class _Event:
 
     async def get_reply_message(self):
         return _Reply(49)
+
+
+class _WrappedEvent(_Event):
+    def __init__(self):
+        super().__init__()
+        self.is_reply = False
+        self.original_update = _OriginalUpdate(48)
+
+    async def get_reply_message(self):
+        raise AssertionError('direct wrapped reply metadata should be used before network fallback')
 
 
 class _Client:
@@ -43,14 +71,12 @@ class _Client:
 
 
 class ReplyFallbackTest(unittest.IsolatedAsyncioTestCase):
-    async def test_handle_new_message_resolves_reply_when_telegram_header_fields_are_missing(self):
-        deliveries = []
-
+    def make_adapter(self, deliveries):
         async def sink(payload):
             deliveries.append(payload)
             return {'ok': True, 'duplicate': False}
 
-        adapter = ExternalMtprotoAdapter(
+        return ExternalMtprotoAdapter(
             api_id=1,
             api_hash='hash',
             session_string='session',
@@ -59,10 +85,23 @@ class ReplyFallbackTest(unittest.IsolatedAsyncioTestCase):
             sink=sink,
             retry_delays=(),
         )
+
+    async def test_handle_new_message_resolves_reply_when_telegram_header_fields_are_missing(self):
+        deliveries = []
+        adapter = self.make_adapter(deliveries)
         await adapter.start()
         self.assertTrue(await adapter.handle_new_message(_Event()))
         await adapter.wait_until_idle()
         self.assertEqual(deliveries[0]['thread']['reply_to_event_id'], 'telegram:-1001:49')
+        await adapter.stop()
+
+    async def test_handle_new_message_preserves_reply_from_wrapped_original_update(self):
+        deliveries = []
+        adapter = self.make_adapter(deliveries)
+        await adapter.start()
+        self.assertTrue(await adapter.handle_new_message(_WrappedEvent()))
+        await adapter.wait_until_idle()
+        self.assertEqual(deliveries[0]['thread']['reply_to_event_id'], 'telegram:-1001:48')
         await adapter.stop()
 
 
