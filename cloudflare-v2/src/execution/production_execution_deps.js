@@ -82,6 +82,11 @@ function requiresDynamicExposure(account = {}) {
   return configuredPositive(policy, 'maxDailyLossPercent') || configuredPositive(policy, 'maxOpenRiskPercent');
 }
 
+function isRiskReducingManagement(action = {}) {
+  return ['MODIFY_POSITION', 'CLOSE_POSITION', 'CLOSE_PARTIAL', 'CANCEL_PENDING']
+    .includes(text(action?.type).toUpperCase());
+}
+
 function snapshotStaticConfig(account = {}) {
   return {
     platform: platformOf(account),
@@ -471,7 +476,9 @@ export function createProductionExecutionDependencies({
     assertBoundAccount(account, boundWorkspaceId);
     if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
 
-    const exposure = await loadExposure(account, action);
+    const exposure = isRiskReducingManagement(action)
+      ? { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }
+      : await loadExposure(account, action);
     const platform = platformOf(account);
     const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
 
@@ -565,8 +572,8 @@ export function createProductionExecutionDependencies({
   }
 
   async function dispatchCTraderCbot(account, action, groupId) {
-        assertCTraderCbotConnected(account);
-const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+    assertCTraderCbotConnected(account);
+    const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
     const gatewayUrl = required(credentials.gatewayUrl, 'trade account cTrader cBot gatewayUrl');
     const controlSecret = required(credentials.controlSecret, 'trade account cTrader cBot controlSecret');
     const environment = environmentOf(account);
