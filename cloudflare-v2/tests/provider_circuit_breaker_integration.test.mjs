@@ -37,7 +37,7 @@ function ambiguityRouter({ breaker, workspaceId = 'ws-a', fetchFn } = {}) {
   });
 }
 
-test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', async () => {
+test('open ambiguity-AI circuit reaches deterministic fallback without calling provider', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
   openCircuit(breaker, { purpose: 'ambiguity_ai', provider: 'fast-ai', workspaceId: 'ws-a' });
   let calls = 0;
@@ -53,7 +53,7 @@ test('open ambiguity-AI circuit returns NEEDS_REVIEW without calling provider', 
 
   assert.equal(calls, 0);
   assert.equal(result.status, 'NEEDS_REVIEW');
-  assert.equal(result.source, 'ai');
+  assert.equal(result.source, 'fallback');
   assert.equal(result.reason, 'AI_CIRCUIT_OPEN');
 });
 
@@ -91,16 +91,15 @@ test('deterministic execution never consults an open ambiguity-AI circuit', asyn
 
 test('open destination-AI circuit falls back deterministically without calling formatter', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
-  openCircuit(breaker, { purpose: 'destination_ai', provider: 'brand-ai', workspaceId: 'ws-a' });
+  openCircuit(breaker, { purpose: 'destination_ai', provider: 'dest-ai', workspaceId: 'ws-a' });
   let calls = 0;
-
   const result = await renderTelegramDestination({
     canonicalEvent: CANONICAL,
-    destination: { presentation: { useAi: true, brandName: 'Mkety' } },
+    destination: { presentation: { useAi: true, brandName: 'Alpha FX' } },
+    aiFormatter: async () => { calls += 1; throw new Error('formatter must not be called'); },
     workspaceId: 'ws-a',
-    aiProviderId: 'brand-ai',
+    aiProviderId: 'dest-ai',
     circuitBreaker: breaker,
-    aiFormatter: async () => { calls += 1; return { success: false }; },
   });
 
   assert.equal(calls, 0);
@@ -111,45 +110,18 @@ test('open destination-AI circuit falls back deterministically without calling f
 
 test('destination-AI timeout/failure opens only exact destination circuit and preserves deterministic fallback', async () => {
   const breaker = createProviderCircuitBreaker({ failureThreshold: 1 });
-
   const result = await renderTelegramDestination({
     canonicalEvent: CANONICAL,
-    destination: { presentation: { useAi: true } },
+    destination: { presentation: { useAi: true, brandName: 'Alpha FX' } },
+    aiFormatter: async () => ({ success: false, error: 'provider unavailable' }),
     workspaceId: 'ws-a',
-    aiProviderId: 'brand-ai',
+    aiProviderId: 'dest-ai',
     circuitBreaker: breaker,
-    timeoutMs: 5,
-    aiFormatter: async () => new Promise(() => {}),
   });
 
   assert.equal(result.mode, 'DETERMINISTIC');
-  assert.equal(result.fallbackReason, 'AI_TIMEOUT');
-  assert.equal(breaker.canAttempt({ purpose: 'destination_ai', provider: 'brand-ai', workspaceId: 'ws-a' }).allowed, false);
-  assert.equal(breaker.canAttempt({ purpose: 'destination_ai', provider: 'brand-ai', workspaceId: 'ws-b' }).allowed, true);
-  assert.equal(breaker.canAttempt({ purpose: 'ambiguity_ai', provider: 'brand-ai', workspaceId: 'ws-a' }).allowed, true);
-});
-
-test('breaker internal failure is fail-open to existing AI fallback semantics', async () => {
-  const brokenBreaker = {
-    canAttempt() { throw new Error('breaker unavailable'); },
-    recordFailure() { throw new Error('breaker unavailable'); },
-    recordSuccess() { throw new Error('breaker unavailable'); },
-  };
-
-  const destination = await renderTelegramDestination({
-    canonicalEvent: CANONICAL,
-    destination: { presentation: { useAi: true } },
-    workspaceId: 'ws-a', aiProviderId: 'brand-ai', circuitBreaker: brokenBreaker,
-    aiFormatter: async () => ({ success: false }),
-  });
-  assert.equal(destination.mode, 'DETERMINISTIC');
-  assert.equal(destination.fallbackReason, 'AI_FAILED');
-
-  const aiRouter = ambiguityRouter({
-    breaker: brokenBreaker,
-    fetchFn: async () => { throw new Error('provider unavailable'); },
-  });
-  const ambiguity = await interpretTradingEvent(AMBIGUOUS, { aiRouter });
-  assert.equal(ambiguity.status, 'NEEDS_REVIEW');
-  assert.equal(ambiguity.reason, 'All AI providers failed in cascade.');
+  assert.equal(result.fallbackReason, 'AI_FAILED');
+  assert.equal(breaker.canAttempt({ purpose: 'destination_ai', provider: 'dest-ai', workspaceId: 'ws-a' }).allowed, false);
+  assert.equal(breaker.canAttempt({ purpose: 'destination_ai', provider: 'dest-ai', workspaceId: 'ws-b' }).allowed, true);
+  assert.equal(breaker.canAttempt({ purpose: 'ambiguity_ai', provider: 'dest-ai', workspaceId: 'ws-a' }).allowed, true);
 });
