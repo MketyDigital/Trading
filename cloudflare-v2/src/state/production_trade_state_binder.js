@@ -16,6 +16,7 @@ function payloadFrom(binding = {}) {
   const status = lifecycleStatus(binding);
   if (status) payload.status = status;
   for (const key of ['fillPrice', 'executedLots', 'volumeStepLots', 'minimumLots']) {
+    if (binding[key] == null || binding[key] === '') continue;
     const value = Number(binding[key]);
     if (Number.isFinite(value)) payload[key] = value;
   }

@@ -23,6 +23,13 @@ function safeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function telegramEntities(event = {}) {
+  const entities = event?.metadata?.telegram_entities ?? event?.metadata?.telegramEntities;
+  return Array.isArray(entities)
+    ? entities.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }))
+    : [];
+}
+
 function sanitizeErrorCode(value, fallback) {
   const code = text(value).toUpperCase().replace(/[^A-Z0-9_:-]/g, '_').slice(0, 96);
   return code || fallback;
@@ -318,7 +325,11 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
   const mode = text(template.formatting_mode ?? template.formattingMode) || 'template';
 
   if (mode !== 'ai_then_fallback') {
-    return deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
+    const formatted = deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
+    if ((mode === 'none' || mode === 'verbatim') && formatted?.ok) {
+      return { ...formatted, entities: telegramEntities(event) };
+    }
+    return formatted;
   }
 
   // Ambiguous/non-canonical signals are still useful to Telegram humans. Never let
@@ -395,6 +406,7 @@ async function deliverTelegram({ destination, event, interpretation, env }, deps
     chatId: destination.destination_ref,
     text: formatted.text,
     parseMode: formatted.parseMode,
+    entities: formatted.entities,
     fetchFn: deps.fetchFn,
     timeoutMs: destination?.settings?.timeoutMs,
   });
