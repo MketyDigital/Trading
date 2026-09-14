@@ -38,6 +38,23 @@ def _reply_to_message_id(event):
     return None
 
 
+async def _resolve_reply_to_message_id(event):
+    direct = _reply_to_message_id(event)
+    if direct is not None:
+        return direct
+    if not getattr(event, 'is_reply', False):
+        return None
+    getter = getattr(event, 'get_reply_message', None)
+    if not callable(getter):
+        return None
+    try:
+        replied = await getter()
+    except Exception:
+        return None
+    value = getattr(replied, 'id', None)
+    return value if value is not None and str(value) != '' else None
+
+
 def _topic_id(event):
     reply_header = getattr(event, 'reply_to', None)
     if reply_header is None:
@@ -217,6 +234,11 @@ class ExternalMtprotoAdapter:
         )
         if payload is None:
             return False
+
+        if payload['thread'].get('reply_to_event_id') is None:
+            reply_to_message_id = await _resolve_reply_to_message_id(event)
+            if reply_to_message_id is not None:
+                payload['thread']['reply_to_event_id'] = _telegram_event_id(chat_id, reply_to_message_id)
 
         try:
             self.queue.put_nowait(payload)
