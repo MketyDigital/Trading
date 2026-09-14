@@ -49,6 +49,7 @@ export function createProductionTradeStateBinder({ env = {}, workspaceId } = {})
         headers: {
           'content-type': 'application/json',
           'x-mkety-internal-token': token,
+          'x-mkety-workspace-id': boundWorkspaceId,
         },
         body: JSON.stringify(payload),
       },
