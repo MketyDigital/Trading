@@ -19,3 +19,5 @@ Safety contract:
 - never use either marker for a live/real-money account.
 
 Ordinary edits to this file with any other commit message may run the workflow test job, but both broker lifecycle jobs remain skipped.
+
+Acceptance trigger refresh: current-main cTrader lifecycle verification on 2026-09-14.
