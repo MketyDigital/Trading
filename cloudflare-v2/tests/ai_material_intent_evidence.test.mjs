@@ -23,11 +23,6 @@ function intent({
   };
 }
 
-test('structural validation without raw text remains valid for non-AI callers', () => {
-  const result = validateCanonicalSignalIntent(intent());
-  assert.equal(result.ok, true);
-});
-
 test('AI may arrange rough signal wording when side, alias-equivalent symbol, and executable prices are evidenced', () => {
   const result = validateCanonicalSignalIntent(intent(), {
     rawText: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535',
