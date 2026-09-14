@@ -24,7 +24,7 @@ function createTradeStateClient(env, workspaceId) {
   const namespace = env?.TRADE_STATE_NAMESPACE;
   if (!namespace?.idFromName || !namespace?.get) throw new Error('TRADE_STATE_NAMESPACE is not configured');
   const stub = namespace.get(namespace.idFromName(String(workspaceId)));
-  const headers = internalHeaders(env);
+  const headers = { ...internalHeaders(env), 'x-mkety-workspace-id': String(workspaceId) };
 
   async function call(path, method, payload) {
     const response = await stub.fetch(`https://trade-state.internal${path}`, {

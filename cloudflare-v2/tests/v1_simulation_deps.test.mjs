@@ -25,7 +25,7 @@ function demoFixedAccount({ catalog = [], aliases = {} } = {}) {
   };
 }
 
-test('V1 simulation dependencies expose authenticated matched-group reads for fast-entry completion', async () => {
+test('V1 simulation dependencies expose authenticated workspace-scoped matched-group reads for fast-entry completion', async () => {
   const calls = [];
   const group = { id: 'group/fast 1', tradeAccountId: 'acct-1', incomplete: true };
   const stub = {
@@ -58,6 +58,7 @@ test('V1 simulation dependencies expose authenticated matched-group reads for fa
   assert.equal(calls[0].method, 'GET');
   assert.match(calls[0].url, /\/groups\/group%2Ffast%201$/);
   assert.equal(calls[0].headers['x-mkety-internal-token'], 'internal-secret');
+  assert.equal(calls[0].headers['x-mkety-workspace-id'], 'workspace-1');
 });
 
 test('fixed-lot DEMO planning derives a bounded lot-only instrument only after destination catalog support is proven', async () => {
