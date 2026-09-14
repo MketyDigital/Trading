@@ -1,0 +1,50 @@
+name: PR85 Node Test Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cloudflare-v2/src/**'
+      - 'cloudflare-v2/tests/**'
+      - '.github/workflows/debug-pr85-node-tests.yml'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: '0'
+
+jobs:
+  node-diagnostics:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Run Node tests and capture output
+        shell: bash
+        run: |
+          set +e
+          npm run test:ci > "$RUNNER_TEMP/node-tests.log" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/node-tests.log"
+          echo "$status" > "$RUNNER_TEMP/node-tests.status"
+          exit 0
+      - name: Upload diagnostic output
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr85-node-test-diagnostics
+          path: |
+            ${{ runner.temp }}/node-tests.log
+            ${{ runner.temp }}/node-tests.status
+          retention-days: 1
+      - name: Fail if Node tests failed
+        shell: bash
+        run: |
+          status="$(cat "$RUNNER_TEMP/node-tests.status")"
+          test "$status" = '0'
