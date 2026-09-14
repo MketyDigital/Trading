@@ -1,7 +1,9 @@
 import { extractSignalNumbers } from '../normalization/signal_number.js';
+import { normalizeSymbol } from '../normalization/trading_normalizer.js';
 
 const EXECUTION_ORDER_TYPES = new Set(['MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT']);
 const EPSILON = 1e-9;
+const NEGATED_SIDE_PATTERN = /\b(?:DO\s+NOT|DON['’]?T|NEVER)\s+(?:GO\s+)?(?:BUY|SELL|LONG|SHORT)\b/g;
 
 function validationReference(intent) {
   if (intent?.entry?.kind === 'PRICE') return Number(intent.entry.value);
@@ -30,27 +32,72 @@ function validateGeometry(intent) {
   return { ok: true };
 }
 
+function normalizedRawText(rawText) {
+  return String(rawText ?? '').toUpperCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+}
+
+function hasNegatedSideInstruction(rawText, side) {
+  const sidePattern = side === 'BUY' ? '(?:BUY|LONG)' : '(?:SELL|SHORT)';
+  const pattern = new RegExp(`\\b(?:DO\\s+NOT|DON['’]?T|NEVER)\\s+(?:GO\\s+)?${sidePattern}\\b`);
+  return pattern.test(normalizedRawText(rawText));
+}
+
 function explicitSideFromText(rawText) {
-  const text = String(rawText ?? '').toUpperCase();
+  const text = normalizedRawText(rawText).replace(NEGATED_SIDE_PATTERN, ' ');
   const buy = /\b(?:BUY|LONG)\b/.test(text);
   const sell = /\b(?:SELL|SHORT)\b/.test(text);
   if (buy === sell) return null;
   return buy ? 'BUY' : 'SELL';
 }
 
-function hasExplicitPendingEvidence(rawText, orderType) {
-  if (orderType === 'MARKET') return true;
-  const text = String(rawText ?? '').toUpperCase().replace(/[_-]+/g, ' ');
-  if (orderType === 'LIMIT') {
-    return /\b(?:BUY|SELL)\s+LIMIT\b/.test(text) || /\bLIMIT\s+(?:ORDER|ENTRY)\b/.test(text);
+function explicitPendingOrderType(rawText) {
+  const text = normalizedRawText(rawText);
+  if (/\b(?:BUY|SELL)\s+STOP\s+LIMIT\b/.test(text) || /\bSTOP\s+LIMIT(?:\s+(?:ORDER|ENTRY))?\b/.test(text)) {
+    return 'STOP_LIMIT';
   }
-  if (orderType === 'STOP') {
-    return /\b(?:BUY|SELL)\s+STOP\b/.test(text) || /\bSTOP\s+(?:ORDER|ENTRY)\b/.test(text);
+  if (/\b(?:BUY|SELL)\s+LIMIT\b/.test(text) || /\bLIMIT\s+(?:ORDER|ENTRY)\b/.test(text)) {
+    return 'LIMIT';
   }
-  if (orderType === 'STOP_LIMIT') {
-    return /\b(?:BUY|SELL)\s+STOP\s+LIMIT\b/.test(text) || /\bSTOP\s+LIMIT\b/.test(text);
+  if (/\b(?:BUY|SELL)\s+STOP\b/.test(text) || /\bSTOP\s+(?:ORDER|ENTRY)\b/.test(text)) {
+    return 'STOP';
   }
-  return false;
+  return null;
+}
+
+function validateRawOrderTypeEvidence(intent, rawText) {
+  const explicitOrderType = explicitPendingOrderType(rawText);
+  if (intent.orderType === 'MARKET') {
+    if (explicitOrderType) {
+      return { ok: false, reason: `AI MARKET order conflicts with raw ${explicitOrderType} instruction` };
+    }
+    return { ok: true };
+  }
+
+  if (!explicitOrderType) {
+    return { ok: false, reason: `AI pending order lacks raw ${intent.orderType} evidence` };
+  }
+  if (explicitOrderType !== intent.orderType) {
+    return { ok: false, reason: `AI ${intent.orderType} order conflicts with raw ${explicitOrderType} instruction` };
+  }
+  return { ok: true };
+}
+
+function rawSymbolCandidates(rawText) {
+  const tokens = (String(rawText ?? '').match(/[A-Za-z0-9&:.()_/-]+/g) || [])
+    .map((token) => token.replace(/^[.:]+|[.:]+$/g, ''))
+    .filter(Boolean);
+  const candidates = [];
+  const maxWidth = Math.min(6, tokens.length);
+  for (let width = 1; width <= maxWidth; width += 1) {
+    for (let start = 0; start + width <= tokens.length; start += 1) {
+      candidates.push(tokens.slice(start, start + width).join(' '));
+    }
+  }
+  return candidates;
+}
+
+function hasRawSymbolEvidence(rawText, canonicalSymbol) {
+  return rawSymbolCandidates(rawText).some((candidate) => normalizeSymbol(candidate).canonical === canonicalSymbol);
 }
 
 function executablePrices(intent) {
@@ -99,14 +146,24 @@ export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
   const geometry = validateGeometry(intent);
   if (!geometry.ok) return geometry;
 
+  if (hasNegatedSideInstruction(rawText, intent.side)) {
+    return { ok: false, reason: `AI executable ${intent.side} is blocked by negated raw instruction` };
+  }
+
   const explicitSide = explicitSideFromText(rawText);
-  if (explicitSide && explicitSide !== intent.side) {
+  if (!explicitSide) {
+    return { ok: false, reason: 'AI side lacks unambiguous raw evidence' };
+  }
+  if (explicitSide !== intent.side) {
     return { ok: false, reason: `AI side conflicts with raw ${explicitSide} instruction` };
   }
 
-  if (!hasExplicitPendingEvidence(rawText, intent.orderType)) {
-    return { ok: false, reason: `AI pending order lacks raw ${intent.orderType} evidence` };
+  if (!hasRawSymbolEvidence(rawText, intent.symbol.canonical)) {
+    return { ok: false, reason: `AI symbol lacks raw evidence for ${intent.symbol.canonical}` };
   }
+
+  const orderTypeEvidence = validateRawOrderTypeEvidence(intent, rawText);
+  if (!orderTypeEvidence.ok) return orderTypeEvidence;
 
   return validateRawPriceEvidence(intent, rawText);
 }
