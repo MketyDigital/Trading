@@ -48,12 +48,31 @@ function normalizeAiSignal(payload) {
   };
 }
 
+function realWorldManagementAlias(text) {
+  const upper = String(text ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (/^STOPPED\s+(?:OUT\s+)?AT\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)\b/.test(upper)) {
+    return {
+      status: 'NO_ACTION',
+      source: 'deterministic',
+      reason: 'INFORMATIONAL_MANAGEMENT',
+      information: { type: 'POSITION_STOPPED_AT_BREAK_EVEN' },
+    };
+  }
+  if (/^(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)(?:\s+NOW)?[!.]*$/.test(upper)) {
+    return { status: 'MANAGEMENT', source: 'deterministic', management: { type: 'MOVE_SL_TO_BE' } };
+  }
+  return null;
+}
+
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
   aiRouterFactory,
   timeoutMs = 12000,
   systemPrompt = INTERPRETER_PROMPT,
 } = {}) {
+  const realWorldAlias = realWorldManagementAlias(event.text);
+  if (realWorldAlias) return realWorldAlias;
+
   const deterministic = buildMachinePlan(event);
   if (deterministic.status !== 'NEEDS_INTERPRETATION') {
     if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
