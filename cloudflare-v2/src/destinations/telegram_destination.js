@@ -15,11 +15,18 @@ function failure(errorCode, status = 0) {
   return { ok: false, status: Number(status) || 0, errorCode };
 }
 
+function safeEntities(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }))
+    : [];
+}
+
 export async function sendTelegramDestination({
   botToken,
   chatId,
   text: messageText,
   parseMode = 'plain',
+  entities = null,
   fetchFn = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
@@ -27,11 +34,13 @@ export async function sendTelegramDestination({
   const target = text(chatId);
   const message = String(messageText ?? '');
   const mode = text(parseMode) || 'plain';
+  const nativeEntities = safeEntities(entities);
 
   if (!token) return failure('TELEGRAM_BOT_TOKEN_REQUIRED');
   if (!target) return failure('TELEGRAM_CHAT_ID_REQUIRED');
   if (!message.trim()) return failure('TELEGRAM_MESSAGE_REQUIRED');
   if (mode !== 'plain' && !ALLOWED_PARSE_MODES.has(mode)) return failure('TELEGRAM_PARSE_MODE_UNSUPPORTED');
+  if (nativeEntities.length && mode !== 'plain') return failure('TELEGRAM_ENTITIES_PARSE_MODE_CONFLICT');
   if (typeof fetchFn !== 'function') return failure('TELEGRAM_TRANSPORT_UNAVAILABLE');
 
   const controller = new AbortController();
@@ -42,7 +51,8 @@ export async function sendTelegramDestination({
       text: message,
       disable_web_page_preview: true,
     };
-    if (mode !== 'plain') body.parse_mode = mode;
+    if (nativeEntities.length) body.entities = nativeEntities;
+    else if (mode !== 'plain') body.parse_mode = mode;
 
     const response = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
