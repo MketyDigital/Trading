@@ -1,4 +1,4 @@
-name: PR85 Node Test Diagnostics
+name: PR85 Node and MT5 Diagnostics
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
     paths:
       - 'cloudflare-v2/src/**'
       - 'cloudflare-v2/tests/**'
+      - 'cloudflare-v2/bridges/**'
       - '.github/workflows/debug-pr85-node-tests.yml'
 
 permissions:
@@ -15,7 +16,7 @@ env:
   FORCE_COLOR: '0'
 
 jobs:
-  node-diagnostics:
+  diagnostics:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -25,26 +26,38 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: npm install --no-audit --no-fund
       - name: Run Node tests and capture output
         shell: bash
         run: |
           set +e
           npm run test:ci > "$RUNNER_TEMP/node-tests.log" 2>&1
-          status=$?
-          cat "$RUNNER_TEMP/node-tests.log"
-          echo "$status" > "$RUNNER_TEMP/node-tests.status"
+          echo "$?" > "$RUNNER_TEMP/node-tests.status"
+          exit 0
+      - name: Run MT5 bridge tests and capture output
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=bridges python -m unittest bridges/test_mt5_bridge.py -v > "$RUNNER_TEMP/mt5-tests.log" 2>&1
+          echo "$?" > "$RUNNER_TEMP/mt5-tests.status"
           exit 0
       - name: Upload diagnostic output
         uses: actions/upload-artifact@v4
         with:
-          name: pr85-node-test-diagnostics
+          name: pr85-test-diagnostics
           path: |
             ${{ runner.temp }}/node-tests.log
             ${{ runner.temp }}/node-tests.status
+            ${{ runner.temp }}/mt5-tests.log
+            ${{ runner.temp }}/mt5-tests.status
           retention-days: 1
-      - name: Fail if Node tests failed
+      - name: Fail if tests failed
         shell: bash
         run: |
-          status="$(cat "$RUNNER_TEMP/node-tests.status")"
-          test "$status" = '0'
+          node_status="$(cat "$RUNNER_TEMP/node-tests.status")"
+          mt5_status="$(cat "$RUNNER_TEMP/mt5-tests.status")"
+          test "$node_status" = '0'
+          test "$mt5_status" = '0'
