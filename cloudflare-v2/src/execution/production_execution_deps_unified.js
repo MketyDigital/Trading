@@ -266,7 +266,9 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     assertBoundConnectorAccount(account, workspaceId);
     const action = input.action;
     if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
-    const exposure = await loadExposure(account, action);
+    const exposure = isManagementAction(action)
+      ? { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }
+      : await loadExposure(account, action);
 
     if (isBreakEvenAction(action)) {
       const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
