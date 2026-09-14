@@ -5,16 +5,34 @@ import { handleV1AdminMt5ConnectorRequest } from '../src/http/v1_admin_mt5_conne
 import { decryptConnectionCredentials, encryptConnectionCredentials } from '../src/security/connection_credentials.js';
 import { verifyMt5ConnectionToken } from '../../ctrader-cbot-gateway/src/mt5_protocol.js';
 
+const WORKSPACE_EXPIRES_AT = '2027-09-08T23:00:00.000Z';
+const ACCESS_CODE_ID = 'access-code-1';
+
 const authorizeOwner = async () => ({
   ok: true,
-  workspace: { id: 'ws-1' },
+  workspace: {
+    id: 'ws-1',
+    metadata: { accessCodeId: ACCESS_CODE_ID, accessCodeProvisioned: true },
+  },
   membership: { role: 'owner' },
   auth: { subject: 'user-1' },
 });
 
-function createSupabase(capture, current = null) {
+function createSupabase(capture, current = null, accessExpiresAt = WORKSPACE_EXPIRES_AT) {
   return {
     from(table) {
+      if (table === 'trading_access_codes') {
+        return {
+          select() {
+            return {
+              eq() { return this; },
+              async maybeSingle() {
+                return { data: { id: ACCESS_CODE_ID, workspace_id: 'ws-1', expires_at: accessExpiresAt }, error: null };
+              },
+            };
+          },
+        };
+      }
       assert.equal(table, 'trade_accounts');
       return {
         insert(row) {
@@ -61,9 +79,8 @@ const env = {
   CBOT_CONTROL_SECRET: 'gateway-control-secret',
 };
 
-test('MT5 connector onboarding returns short-lived one-time outbound pairing material and persists no customer env configuration', async () => {
+test('MT5 connector onboarding returns reusable outbound pairing material expiring with workspace access', async () => {
   const capture = {};
-  const startedAt = Date.now();
   const request = new Request('https://trade.mkety.com/api/v1/admin/connections/mt5/connector', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -84,10 +101,9 @@ test('MT5 connector onboarding returns short-lived one-time outbound pairing mat
   assert.equal(body.account.killSwitch, true);
   assert.equal(body.account.providerConfig.status, 'awaiting_connector');
   assert.equal(body.gatewayWebSocketUrl, 'wss://cbot.mkety.example:25345/v1/mt5');
-  assert.match(body.oneTimeConnectionToken, /^mt5v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
-  const expiresAt = Date.parse(body.connectionTokenExpiresAt);
-  assert.ok(expiresAt >= startedAt + 14 * 60 * 1000);
-  assert.ok(expiresAt <= Date.now() + 16 * 60 * 1000);
+  assert.match(body.connectionToken, /^mt5v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(body.oneTimeConnectionToken, body.connectionToken);
+  assert.equal(body.connectionTokenExpiresAt, WORKSPACE_EXPIRES_AT);
 
   assert.equal(capture.inserted.platform, 'mt5');
   assert.equal(capture.inserted.provider_mode, 'mt5_connector');
@@ -98,17 +114,70 @@ test('MT5 connector onboarding returns short-lived one-time outbound pairing mat
   assert.deepEqual(capture.inserted.safety_policy, { killSwitch: true });
 
   const credentials = await decryptConnectionCredentials('mt5_connector', capture.inserted.credential_ciphertext, env.TRADING_MASTER_KEY);
-  assert.equal(credentials.connectionToken, body.oneTimeConnectionToken);
+  assert.equal(credentials.connectionToken, body.connectionToken);
   assert.equal(credentials.gatewayUrl, env.CTRADER_CBOT_GATEWAY_URL);
   assert.equal(credentials.controlSecret, env.CBOT_CONTROL_SECRET);
 
-  const verified = verifyMt5ConnectionToken(body.oneTimeConnectionToken, env.CBOT_TOKEN_SIGNING_KEY, Date.now());
+  const verified = verifyMt5ConnectionToken(body.connectionToken, env.CBOT_TOKEN_SIGNING_KEY, Date.parse('2026-09-14T09:00:00.000Z'));
   assert.equal(verified.ok, true);
   assert.equal(verified.accountRowId, body.account.id);
   assert.equal(verified.purpose, 'pair');
+  assert.equal(verified.expiresAt, Date.parse(WORKSPACE_EXPIRES_AT));
 });
 
-test('MT5 connector sync persists terminal identity, retires pairing token and keeps only gateway control credentials', async () => {
+test('existing MT5 destination can regenerate a reusable token without creating another destination', async () => {
+  const capture = {};
+  const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
+    gatewayUrl: env.CTRADER_CBOT_GATEWAY_URL,
+    controlSecret: env.CBOT_CONTROL_SECRET,
+  }, env.TRADING_MASTER_KEY);
+  const current = {
+    id: 'acct-mt5-1', workspace_id: 'ws-1', account_label: 'Main MT5', platform: 'mt5',
+    account_id: '50123456', server_name: 'Broker-Demo', lot_sizing_type: 'fixed', lot_value: 0.01,
+    is_active: true, execution_enabled: true, safety_policy: { killSwitch: false },
+    fast_entry_policy: {}, entry_zone_policy: {}, credential_ciphertext: credentialCiphertext,
+    provider_mode: 'mt5_connector', environment: 'demo', roles: ['execution'],
+    provider_config: { status: 'connected' }, created_at: '2026-09-11T15:00:00.000Z',
+  };
+
+  const response = await handleV1AdminMt5ConnectorRequest(
+    new Request('https://trade.mkety.com/api/v1/admin/connections/mt5/connector/acct-mt5-1/token', { method: 'POST' }),
+    env,
+    { supabaseFactory: async () => createSupabase(capture, current), authorizeFn: authorizeOwner },
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.accountId, 'acct-mt5-1');
+  assert.match(body.connectionToken, /^mt5v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(body.connectionTokenExpiresAt, WORKSPACE_EXPIRES_AT);
+  assert.equal(capture.updated.account_id, undefined);
+  const credentials = await decryptConnectionCredentials('mt5_connector', capture.updated.credential_ciphertext, env.TRADING_MASTER_KEY);
+  assert.equal(credentials.connectionToken, body.connectionToken);
+  assert.equal(credentials.gatewayUrl, env.CTRADER_CBOT_GATEWAY_URL);
+  assert.equal(credentials.controlSecret, env.CBOT_CONTROL_SECRET);
+});
+
+test('MT5 connector token generation is rejected after workspace access expiry', async () => {
+  const capture = {};
+  const current = {
+    id: 'acct-mt5-1', workspace_id: 'ws-1', account_label: 'Main MT5', platform: 'mt5', account_id: '50123456',
+    provider_mode: 'mt5_connector', environment: 'demo', roles: ['execution'], provider_config: {}, safety_policy: {},
+  };
+  const response = await handleV1AdminMt5ConnectorRequest(
+    new Request('https://trade.mkety.com/api/v1/admin/connections/mt5/connector/acct-mt5-1/token', { method: 'POST' }),
+    env,
+    {
+      supabaseFactory: async () => createSupabase(capture, current, '2020-01-01T00:00:00.000Z'),
+      authorizeFn: authorizeOwner,
+    },
+  );
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { ok: false, reason: 'WORKSPACE_ACCESS_EXPIRED' });
+});
+
+test('MT5 connector sync persists terminal identity, retires local pairing storage and keeps only gateway control credentials', async () => {
   const capture = {};
   const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
     connectionToken: 'mt5v1.test.test',
