@@ -60,6 +60,7 @@ test('production state binder targets exact workspace shard and exact group leg 
   assert.match(seen.url, /\/groups\/group-1\/legs\/leg-2\/execution$/);
   assert.equal(seen.options.method, 'POST');
   assert.equal(seen.options.headers['x-mkety-internal-token'], 'internal-state-token');
+  assert.equal(seen.options.headers['x-mkety-workspace-id'], 'ws-a');
 
   const persisted = JSON.parse(seen.options.body);
   assert.deepEqual(persisted, {
