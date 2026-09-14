@@ -16,6 +16,6 @@ test('demo invariant promotes only connected demo broker rows and never live exe
   assert.match(sql, /NEW\.is_active\s*:=\s*true/i);
   assert.match(sql, /NEW\.execution_enabled\s*:=\s*true/i);
   assert.match(sql, /NEW\.live_execution_enabled\s*:=\s*false/i);
-  assert.match(sql, /killSwitch[^\n]*false/i);
+  assert.match(sql, /\{killSwitch\}[\s\S]*?'false'::jsonb/i);
   assert.match(sql, /BEFORE INSERT OR UPDATE ON public\.trade_accounts/i);
 });
