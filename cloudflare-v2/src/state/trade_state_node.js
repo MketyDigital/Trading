@@ -17,15 +17,33 @@ function hasSupabaseCredentials(env = {}) {
   return Boolean(env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY));
 }
 
+function lazyPersistence(promise) {
+  return {
+    async saveGroup(group) {
+      const persistence = await promise;
+      return persistence ? persistence.saveGroup(group) : group;
+    },
+    async loadGroup(workspaceId, groupId) {
+      const persistence = await promise;
+      return persistence ? persistence.loadGroup(workspaceId, groupId) : null;
+    },
+    async loadActive(workspaceId) {
+      const persistence = await promise;
+      return persistence ? persistence.loadActive(workspaceId) : [];
+    },
+  };
+}
+
 export class TradeStateNode {
   constructor(state, env = {}) {
     this.state = state;
     this.env = env;
-    this.store = new TradeStateStore(state.storage);
+    const persistencePromise = hasSupabaseCredentials(env) ? createSupabaseTradeStatePersistence(env) : Promise.resolve(null);
+    this.persistence = lazyPersistence(persistencePromise);
+    this.store = new TradeStateStore(state.storage, { persistence: this.persistence });
     this.coordinator = new TradeStateCoordinator(this.store, {
       correlationWindowMs: Number(env.TRADE_CORRELATION_WINDOW_MS || 120000),
     });
-    this.persistencePromise = hasSupabaseCredentials(env) ? createSupabaseTradeStatePersistence(env) : Promise.resolve(null);
     this.workspaceStores = new Map();
   }
 
@@ -35,20 +53,19 @@ export class TradeStateNode {
     return Boolean(expected && received && expected === received);
   }
 
-  async runtimeFor(request) {
-    const workspaceId = workspaceHeader(request);
-    if (!workspaceId) return { store: this.store, coordinator: this.coordinator };
-    if (!this.workspaceStores.has(workspaceId)) {
-      const persistence = await this.persistencePromise;
-      const store = new TradeStateStore(this.state.storage, { persistence, workspaceId });
-      this.workspaceStores.set(workspaceId, {
+  runtimeForWorkspace(workspaceId) {
+    const id = String(workspaceId || '').trim();
+    if (!id) return { store: this.store, coordinator: this.coordinator };
+    if (!this.workspaceStores.has(id)) {
+      const store = new TradeStateStore(this.state.storage, { persistence: this.persistence, workspaceId: id });
+      this.workspaceStores.set(id, {
         store,
         coordinator: new TradeStateCoordinator(store, {
           correlationWindowMs: Number(this.env.TRADE_CORRELATION_WINDOW_MS || 120000),
         }),
       });
     }
-    return this.workspaceStores.get(workspaceId);
+    return this.workspaceStores.get(id);
   }
 
   async fetch(request) {
@@ -56,28 +73,33 @@ export class TradeStateNode {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
-    const { store, coordinator } = await this.runtimeFor(request);
+    const headerWorkspaceId = workspaceHeader(request);
 
     if (method === 'GET' && path === '/groups/active') {
+      const { store } = this.runtimeForWorkspace(headerWorkspaceId);
       return json({ groups: await store.listActive() });
     }
 
     if (method === 'POST' && path === '/groups') {
       const group = await body(request);
       if (!group?.id) return json({ error: 'group id required' }, 400);
-      const workspaceId = workspaceHeader(request);
-      if (workspaceId && group?.workspaceId && String(group.workspaceId) !== workspaceId) {
+      const workspaceId = headerWorkspaceId || String(group.workspaceId || '').trim();
+      if (headerWorkspaceId && group?.workspaceId && String(group.workspaceId) !== headerWorkspaceId) {
         return json({ error: 'workspace mismatch' }, 400);
       }
+      const { store } = this.runtimeForWorkspace(workspaceId);
       return json(await store.putGroup(group), 201);
     }
 
     if (method === 'POST' && path === '/correlate') {
       const payload = await body(request);
       if (!payload?.event || !payload?.interpretation) return json({ error: 'event and interpretation required' }, 400);
+      const workspaceId = headerWorkspaceId || String(payload.event?.workspace_hint || '').trim();
+      const { coordinator } = this.runtimeForWorkspace(workspaceId);
       return json(await coordinator.correlate(payload.event, payload.interpretation, payload.nowMs ?? Date.now()));
     }
 
+    const { store } = this.runtimeForWorkspace(headerWorkspaceId);
     const groupMatch = path.match(/^\/groups\/([^/]+)$/);
     if (method === 'GET' && groupMatch) {
       const group = await store.getGroup(decodeURIComponent(groupMatch[1]));
