@@ -15,8 +15,9 @@ test('portal promotes outbound MT5 Connector and keeps HTTP bridge compatibility
   assert.match(html, /api\/v1\/admin\/connections\/mt5\/connector/);
   assert.match(html, /MketyMT5Connector\.exe/);
   assert.match(html, /Sync MT5 identity/);
-  assert.match(html, /one-time pairing token/i);
-  assert.match(html, /Paste (?:the )?one-time (?:pairing )?token/i);
+  assert.match(html, /reusable connection token/i);
+  assert.match(html, /Paste (?:the )?(?:reusable )?connection token/i);
+  assert.doesNotMatch(html, /one-time pairing token/i);
   assert.match(html, /gateway is preconfigured/i);
   assert.doesNotMatch(html, /paste the WebSocket URL/i);
   assert.match(html, /Advanced HTTP Bridge/);
@@ -32,6 +33,14 @@ test('new MT5 pairing renders a sync action bound directly to returned connector
   assert.match(mt5, /renderPairingSync/);
   assert.match(mt5, /data-mt5-connector-sync/);
   assert.match(mt5, /syncConnector\(accountId/);
+});
+
+test('existing MT5 connector destinations expose token regeneration without recreating the destination', () => {
+  const mt5 = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_mt5_connector_connections.js'), 'utf8');
+  assert.match(mt5, /data-mt5-connector-token/);
+  assert.match(mt5, /Regenerate connection token/);
+  assert.match(mt5, /\/api\/v1\/admin\/connections\/mt5\/connector\/'\+encodeURIComponent\(id\)\+'\/token/);
+  assert.match(mt5, /connectionTokenExpiresAt/);
 });
 
 test('production browser release gate exercises MT5 Connector instead of expecting legacy MT5 Cloud to remain visible', () => {
