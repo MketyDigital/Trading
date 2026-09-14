@@ -55,16 +55,18 @@ export function reconcileFastEntry(existingGroup, completedIntent, { totalLots, 
 
   const actions = [{
     type: 'MODIFY_POSITION',
+    legId: firstOpen.legId,
     brokerPositionId: firstOpen.brokerPositionId,
     symbol: completedIntent.symbol?.canonical,
     stopLoss: completedIntent.stopLoss ?? null,
     takeProfit: desired.legs[0]?.takeProfit ?? null,
-    targetIndex: 1,
+    targetIndex: firstOpen.targetIndex ?? 1,
   }];
 
   for (let i = 1; i < desired.legs.length; i += 1) {
     actions.push({
       type: 'OPEN_POSITION',
+      legId: desired.legs[i].legId,
       targetIndex: i + 1,
       side: completedIntent.side,
       orderType: completedIntent.orderType,
@@ -103,6 +105,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
     .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
     .map((leg) => ({
       type: 'MODIFY_POSITION',
+      legId: leg.legId,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss: protectedStop,
@@ -135,6 +138,8 @@ export function buildManagementActions(group, management) {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
     return openLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss: Number(group.entryPrice),
@@ -145,6 +150,8 @@ export function buildManagementActions(group, management) {
     if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
     return openLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss,
@@ -159,6 +166,8 @@ export function buildManagementActions(group, management) {
       : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
     return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       takeProfit,
@@ -179,6 +188,8 @@ export function buildManagementActions(group, management) {
       }
       return {
         type: 'CLOSE_PARTIAL',
+        legId: leg.legId,
+        targetIndex: leg.targetIndex,
         brokerPositionId: leg.brokerPositionId,
         symbol: group.symbol,
         fraction,
@@ -191,6 +202,8 @@ export function buildManagementActions(group, management) {
       .filter((leg) => leg.brokerOrderId)
       .map((leg) => ({
         type: 'CANCEL_PENDING',
+        legId: leg.legId,
+        targetIndex: leg.targetIndex,
         brokerOrderId: leg.brokerOrderId,
         symbol: group.symbol,
       }));
@@ -198,6 +211,8 @@ export function buildManagementActions(group, management) {
   if (management?.type === 'CLOSE' || management?.type === 'CLOSE_ALL') {
     return openLegs.map((leg) => ({
       type: 'CLOSE_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       lots: leg.lots,

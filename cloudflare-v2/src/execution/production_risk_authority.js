@@ -50,8 +50,9 @@ function exposureValue(exposure = {}, name) {
 }
 
 function canonicalPolicyContext({ action, riskPercent, exposure }) {
+  const lots = numberOrUndefined(action?.lots);
   return {
-    totalLots: Number(action.lots),
+    totalLots: lots != null ? lots : 0,
     riskPercent: numberOrUndefined(riskPercent) ?? 0,
     currentDailyPnlPercent: exposureValue(exposure, 'currentDailyPnlPercent'),
     currentOpenRiskPercent: exposureValue(exposure, 'currentOpenRiskPercent'),
@@ -68,6 +69,15 @@ function isRiskIncreasingOpen(action = {}) {
   return text(action.type).toUpperCase() === 'OPEN_POSITION';
 }
 
+function normalizedReduceRiskAction(action = {}) {
+  const actionType = text(action.type).toUpperCase();
+  const lots = numberOrUndefined(action.lots);
+  if (actionType === 'CLOSE_PARTIAL' && !(lots > 0)) {
+    throw new TypeError('production partial-close lots must be positive');
+  }
+  return lots != null ? { ...action, lots } : { ...action };
+}
+
 /**
  * Revalidates one production action against current broker account/symbol
  * economics immediately before broker dispatch. Planning remains useful intent,
@@ -82,18 +92,20 @@ export function validateProductionRiskAction({
   currentMarketPrice,
   exposure = {},
 } = {}) {
-  const plannedLots = assertPositiveLots(action);
   const mode = sizingMode(account);
   const riskPercent = configuredRiskPercent(account, action);
 
   if (!isRiskIncreasingOpen(action)) {
+    const finalAction = normalizedReduceRiskAction(action);
     return {
       allowed: true,
-      action: { ...action, lots: plannedLots },
-      policyContext: canonicalPolicyContext({ action: { ...action, lots: plannedLots }, riskPercent, exposure }),
+      action: finalAction,
+      policyContext: canonicalPolicyContext({ action: finalAction, riskPercent, exposure }),
       risk: null,
     };
   }
+
+  const plannedLots = assertPositiveLots(action);
 
   // Fixed-lot OPENs are still subject to final account policy and strict broker
   // volume validation in platform translation. They do not invent a monetary
