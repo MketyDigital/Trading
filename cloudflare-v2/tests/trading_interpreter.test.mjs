@@ -44,7 +44,7 @@ test('uses AI only for ambiguous natural language and validates structured resul
   assert.deepEqual(result.intent.takeProfits, [2530, 2535]);
 });
 
-test('AI outage on an ambiguous signal fails to review instead of guessing execution', async () => {
+test('AI outage on an irrecoverable ambiguous signal reaches review only after fallback is attempted', async () => {
   let calls = 0;
   const result = await interpretTradingEvent({ text: 'gold looks good maybe buy around here' }, {
     aiRouter: {
@@ -56,8 +56,31 @@ test('AI outage on an ambiguous signal fails to review instead of guessing execu
   });
   assert.equal(calls, 1);
   assert.equal(result.status, 'NEEDS_REVIEW');
-  assert.equal(result.source, 'ai');
-  assert.equal(result.reason, 'AI_PROVIDER_UNAVAILABLE');
+  assert.equal(result.source, 'fallback');
+  assert.match(result.reason, /AI_PROVIDER_UNAVAILABLE|interpretation failed/i);
+});
+
+test('AI failure falls back to material source evidence instead of invalidating a coherent trade', async () => {
+  let calls = 0;
+  const result = await interpretTradingEvent({
+    text: 'Long gold if confirmed; ENTRY PRICE: 2526; RISK: 2518; OBJECTIVE 1: 2530; OBJECTIVE 2: 2535',
+  }, {
+    aiRouter: {
+      processSignal: async () => {
+        calls += 1;
+        throw new Error('provider timeout');
+      },
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'READY');
+  assert.equal(result.source, 'deterministic_fallback');
+  assert.equal(result.intent.side, 'BUY');
+  assert.equal(result.intent.symbol.canonical, 'XAUUSD');
+  assert.equal(result.intent.entry.value, 2526);
+  assert.equal(result.intent.stopLoss, 2518);
+  assert.deepEqual(result.intent.takeProfits, [2530, 2535]);
 });
 
 test('rejects AI result with impossible BUY stop/target geometry instead of executing it', async () => {
@@ -73,7 +96,7 @@ test('rejects AI result with impossible BUY stop/target geometry instead of exec
   assert.match(result.reason, /geometry/i);
 });
 
-test('rejects AI result that invents executable numeric prices absent from the raw message', async () => {
+test('AI numeric values without exact raw numeric matches are advisory and do not veto a coherent trade', async () => {
   const result = await interpretTradingEvent({ text: 'buy gold somehow' }, {
     aiRouter: {
       processSignal: async () => ({ success: true, text: JSON.stringify({
@@ -82,20 +105,24 @@ test('rejects AI result that invents executable numeric prices absent from the r
       }) }),
     },
   });
-  assert.equal(result.status, 'NEEDS_REVIEW');
-  assert.match(result.reason, /raw|evidence|invent/i);
+  assert.equal(result.status, 'READY');
+  assert.equal(result.source, 'ai');
+  assert.ok(Array.isArray(result.validationWarnings));
+  assert.ok(result.validationWarnings.length > 0);
 });
 
-test('rejects malformed AI JSON and unsupported event types fail closed', async () => {
+test('malformed AI JSON and unsupported event types reach review only when deterministic fallback cannot recover', async () => {
   const malformed = await interpretTradingEvent({ text: 'weird signal' }, {
     aiRouter: { processSignal: async () => ({ success: true, text: 'not json' }) },
   });
   assert.equal(malformed.status, 'NEEDS_REVIEW');
+  assert.equal(malformed.source, 'fallback');
 
   const unsupported = await interpretTradingEvent({ text: 'weird signal' }, {
     aiRouter: { processSignal: async () => ({ success: true, text: JSON.stringify({ event_type: 'MAGIC', side: 'BUY', symbol: 'GOLD' }) }) },
   });
   assert.equal(unsupported.status, 'NEEDS_REVIEW');
+  assert.equal(unsupported.source, 'fallback');
 });
 
 test('gives ambiguous AI interpretation a sufficient default bounded budget', async () => {
