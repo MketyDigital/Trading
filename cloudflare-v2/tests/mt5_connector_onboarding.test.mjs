@@ -161,8 +161,13 @@ test('existing MT5 destination can regenerate a reusable token without creating 
 
 test('MT5 connector token generation is rejected after workspace access expiry', async () => {
   const capture = {};
+  const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
+    gatewayUrl: env.CTRADER_CBOT_GATEWAY_URL,
+    controlSecret: env.CBOT_CONTROL_SECRET,
+  }, env.TRADING_MASTER_KEY);
   const current = {
     id: 'acct-mt5-1', workspace_id: 'ws-1', account_label: 'Main MT5', platform: 'mt5', account_id: '50123456',
+    credential_ciphertext: credentialCiphertext,
     provider_mode: 'mt5_connector', environment: 'demo', roles: ['execution'], provider_config: {}, safety_policy: {},
   };
   const response = await handleV1AdminMt5ConnectorRequest(
