@@ -78,15 +78,23 @@ function occurredAt(message, nowMs) {
   return new Date(Number(nowMs())).toISOString();
 }
 
+function telegramEntities(message = {}) {
+  const source = typeof message.text === 'string' ? message.entities : message.caption_entities;
+  return Array.isArray(source)
+    ? source.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }))
+    : [];
+}
+
 function nativeEventFromUpdate(update, extracted, nowMs) {
   const { kind, message } = extracted;
   const chatId = text(message?.chat?.id);
   const messageId = text(message?.message_id);
-  const body = String(message?.text ?? message?.caption ?? '').trim();
+  const body = String(message?.text ?? message?.caption ?? '');
   if (!chatId || !messageId) return { ok: false, reason: 'TELEGRAM_BOT_NATIVE_IDENTITY_REQUIRED' };
-  if (!body) return { ok: true, ignored: true, reason: 'TELEGRAM_BOT_EMPTY_MESSAGE' };
+  if (!body.trim()) return { ok: true, ignored: true, reason: 'TELEGRAM_BOT_EMPTY_MESSAGE' };
 
   const replyTo = text(message?.reply_to_message?.message_id);
+  const entities = telegramEntities(message);
   return {
     ok: true,
     event: {
@@ -101,6 +109,7 @@ function nativeEventFromUpdate(update, extracted, nowMs) {
         telegram_update_kind: kind,
         telegram_chat_type: message?.chat?.type ?? null,
         telegram_from_id: message?.from?.id ?? message?.sender_chat?.id ?? null,
+        telegram_entities: entities,
         native_identity: {
           chat_id: chatId,
           message_id: messageId,
