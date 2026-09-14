@@ -19,5 +19,3 @@ Safety contract:
 - never use either marker for a live/real-money account.
 
 Ordinary edits to this file with any other commit message may run the workflow test job, but both broker lifecycle jobs remain skipped.
-
-Current acceptance trigger: cTrader demo lifecycle on the current synchronized candidate.

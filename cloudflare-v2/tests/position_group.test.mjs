@@ -32,6 +32,7 @@ test('promotes a fast first position to TP1 and creates only missing TP legs', (
   assert.equal(result.actions[0].takeProfit, 2530);
   assert.equal(result.actions[0].stopLoss, 2518);
   assert.equal(result.actions[0].symbol, 'XAUUSD');
+  assert.equal(result.actions[0].legId, 'leg-1');
 });
 
 test('generates break-even changes only for remaining open legs and retains symbol context', () => {
@@ -45,12 +46,12 @@ test('generates break-even changes only for remaining open legs and retains symb
   };
   const actions = buildManagementActions(group, { type: 'MOVE_SL_TO_BE' });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 2526 },
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 2526 }
+    { type: 'MODIFY_POSITION', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 2526 },
+    { type: 'MODIFY_POSITION', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 2526 }
   ]);
 });
 
-test('full close actions preserve each open leg volume and symbol context', () => {
+test('full close actions preserve each open leg volume, identity, and symbol context', () => {
   const group = {
     symbol: 'XAUUSD',
     legs: [
@@ -60,7 +61,7 @@ test('full close actions preserve each open leg volume and symbol context', () =
     ]
   };
   assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_ALL' }), [
-    { type: 'CLOSE_POSITION', brokerPositionId: 'p1', symbol: 'XAUUSD', lots: 0.04 },
-    { type: 'CLOSE_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', lots: 0.03 }
+    { type: 'CLOSE_POSITION', legId: '1', targetIndex: undefined, brokerPositionId: 'p1', symbol: 'XAUUSD', lots: 0.04 },
+    { type: 'CLOSE_POSITION', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', lots: 0.03 }
   ]);
 });

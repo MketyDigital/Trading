@@ -90,6 +90,12 @@ def load_local_config(path):
     return body
 
 
+def decode_gateway_message(raw):
+    if raw is None or raw == '' or raw == b'':
+        raise RuntimeError('Mkety gateway disconnected')
+    return json.loads(raw)
+
+
 def _finite(value):
     try:
         number = float(value)
@@ -311,9 +317,7 @@ class MketyMt5Connector:
                         if _is_receive_timeout(exc):
                             continue
                         raise
-                    if raw is None:
-                        raise RuntimeError('Mkety gateway disconnected')
-                    message = json.loads(raw)
+                    message = decode_gateway_message(raw)
                     kind = str(message.get('type') or '')
                     if kind == 'auth_ok':
                         self.handle_auth_ok(message)
@@ -327,7 +331,7 @@ class MketyMt5Connector:
             except KeyboardInterrupt:
                 return
             except Exception as exc:
-                print(f'Mkety MT5 Connector reconnecting: {type(exc).__name__}')
+                print(f'Mkety MT5 Connector reconnecting: {type(exc).__name__}: {exc}')
                 time.sleep(3)
             finally:
                 if socket is not None:
@@ -340,7 +344,7 @@ class MketyMt5Connector:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description='Mkety outbound MetaTrader 5 connector')
     parser.add_argument('--gateway', default=None, help=f'Mkety gateway (default {DEFAULT_GATEWAY})')
-    parser.add_argument('--token', default=None, help='One-time/pairing connection token from Mkety Trading')
+    parser.add_argument('--token', default=None, help='Pairing/reconnect connection token from Mkety Trading')
     parser.add_argument('--config', default=str(default_config_path()), help='Local protected connector configuration path')
     parser.add_argument('--reset', action='store_true', help='Forget local connector pairing and require a new token')
     return parser.parse_args(argv)
@@ -359,7 +363,7 @@ def resolve_startup_config(args, input_fn=input):
         })
     if config:
         return config
-    token = str(input_fn('Paste the one-time pairing token from Mkety Trading: ') or '').strip()
+    token = str(input_fn('Paste the MT5 connection token from Mkety Trading: ') or '').strip()
     if not token:
         return None
     return save_local_config(config_path, {
@@ -373,7 +377,7 @@ def main(argv=None):
     args = parse_args(argv)
     config = resolve_startup_config(args)
     if not config:
-        print('Mkety MT5 pairing token is required.')
+        print('Mkety MT5 connection token is required.')
         return 2
 
     import MetaTrader5 as mt5

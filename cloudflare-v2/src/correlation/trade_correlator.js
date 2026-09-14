@@ -27,6 +27,34 @@ function fastOriginId(group) {
   return first == null || String(first) === '' ? null : String(first);
 }
 
+function logicalTradeKey(group) {
+  return fastOriginId(group) || (group?.id == null ? '' : String(group.id));
+}
+
+function logicalCohorts(groups = []) {
+  const byKey = new Map();
+  for (const group of groups) {
+    const key = logicalTradeKey(group);
+    if (!key) continue;
+    const cohort = byKey.get(key) || [];
+    cohort.push(group);
+    byKey.set(key, cohort);
+  }
+  return [...byKey.values()];
+}
+
+function cohortUpdatedAt(cohort = []) {
+  return Math.max(0, ...cohort.map((group) => Number(group?.updatedAt ?? group?.createdAt ?? 0)).filter(Number.isFinite));
+}
+
+function targetForCohort(cohort = [], reason = 'MATCHED') {
+  if (cohort.length === 1) return { status: 'MATCHED', reason, groupId: cohort[0].id };
+  if (cohort.length > 1 && sameLogicalTrade(cohort)) {
+    return { status: 'MATCHED', reason, groupIds: cohort.map((group) => group.id) };
+  }
+  return null;
+}
+
 function correlateFastCompletion(matches) {
   if (matches.length === 1) {
     return { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: matches[0].id };
@@ -72,15 +100,50 @@ function matchedManagementTarget(matches, reason, ambiguousReason) {
   return null;
 }
 
-function activeLogicalTradeTarget(groups = []) {
+function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
-  if (groups.length === 1) {
-    return { status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: groups[0].id };
+  const cohorts = logicalCohorts(groups);
+  if (cohorts.length === 1) {
+    return targetForCohort(cohorts[0], cohorts[0].length === 1 ? 'ONLY_ACTIVE_GROUP' : 'ONLY_ACTIVE_TRADE');
   }
-  if (sameLogicalTrade(groups)) {
-    return { status: 'MATCHED', reason: 'ONLY_ACTIVE_TRADE', groupIds: groups.map((group) => group.id) };
+
+  const recentCohorts = cohorts
+    .map((cohort) => ({ cohort, updatedAt: cohortUpdatedAt(cohort) }))
+    .filter((entry) => entry.updatedAt > 0 && Number(nowMs) - entry.updatedAt <= Number(windowMs))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  if (recentCohorts.length > 0) {
+    const newest = recentCohorts[0];
+    const runnerUp = recentCohorts[1];
+    const clearlyNewest = !runnerUp || newest.updatedAt - runnerUp.updatedAt >= Number(recencyGapMs);
+    if (clearlyNewest) {
+      const target = targetForCohort(newest.cohort, 'RECENT_ACTIVE_TRADE');
+      if (target) return target;
+    }
   }
+
   return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+}
+
+function recentFastDuplicateTarget(recent = [], intent = {}) {
+  if (intent?.fastEntry !== true || intent?.incomplete !== true) return null;
+  const symbol = String(intent?.symbol?.canonical ?? '').trim().toUpperCase();
+  const side = String(intent?.side ?? '').trim().toUpperCase();
+  if (!symbol || !side) return null;
+
+  const matches = recent.filter((group) =>
+    group?.incomplete === true
+    && String(group?.symbol ?? '').trim().toUpperCase() === symbol
+    && String(group?.side ?? '').trim().toUpperCase() === side
+  );
+  const cohorts = logicalCohorts(matches);
+  if (cohorts.length !== 1) return null;
+  const cohort = cohorts[0];
+  return {
+    status: 'NO_ACTION',
+    reason: 'RECENT_FAST_ENTRY_DUPLICATE',
+    ...(cohort.length === 1 ? { groupId: cohort[0].id } : { groupIds: cohort.map((group) => group.id) }),
+  };
 }
 
 export function correlateTradingEvent({
@@ -120,7 +183,10 @@ export function correlateTradingEvent({
       return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
     }
 
-    const target = activeLogicalTradeTarget(scoped);
+    const target = activeLogicalTradeTarget(scoped, {
+      nowMs: Number(nowMs),
+      windowMs: Number(correlationWindowMs),
+    });
     if (target) return target;
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }
@@ -150,6 +216,9 @@ export function correlateTradingEvent({
       const fastCompletion = correlateFastCompletion(fastCompletionMatches);
       if (fastCompletion) return fastCompletion;
     }
+
+    const duplicateFastEntry = recentFastDuplicateTarget(recent, interpretation.intent);
+    if (duplicateFastEntry) return duplicateFastEntry;
 
     return { status: 'NEW_GROUP' };
   }

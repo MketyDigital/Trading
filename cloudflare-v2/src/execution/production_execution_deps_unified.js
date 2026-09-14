@@ -32,6 +32,17 @@ function requiresDynamicExposure(account = {}) {
 function isMt5Connector(account = {}) {
   return platformOf(account) === 'mt5' && providerModeOf(account) === 'mt5_connector';
 }
+function isManagementAction(action = {}) {
+  return ['MODIFY_POSITION', 'CLOSE_POSITION', 'CLOSE_PARTIAL', 'CANCEL_PENDING'].includes(text(action.type).toUpperCase());
+}
+function preserveManagementBrokerIdentity(action = {}, result = {}) {
+  if (!isManagementAction(action) || !result || typeof result !== 'object') return result;
+  return {
+    ...result,
+    brokerPositionId: result.brokerPositionId ?? action.brokerPositionId ?? null,
+    brokerOrderId: result.brokerOrderId ?? action.brokerOrderId ?? null,
+  };
+}
 function assertBoundConnectorAccount(account, workspaceId) {
   if (!account || typeof account !== 'object') throw new Error('production trade account is required');
   if (workspaceOf(account) !== workspaceId) throw new Error('production execution workspace mismatch');
@@ -257,11 +268,14 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
 
   async function dispatchAction(input = {}) {
     const account = input.account;
-    if (!isMt5Connector(account)) return base.dispatchAction(input);
-    if (text(input.workspaceId) !== workspaceId) throw new Error('production execution workspace mismatch');
-    assertBoundConnectorAccount(account, workspaceId);
     const action = input.action;
     if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
+    if (!isMt5Connector(account)) {
+      const result = await base.dispatchAction(input);
+      return preserveManagementBrokerIdentity(action, result);
+    }
+    if (text(input.workspaceId) !== workspaceId) throw new Error('production execution workspace mismatch');
+    assertBoundConnectorAccount(account, workspaceId);
     const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
     const gatewayUrl = normalizeGatewayUrl(credentials.gatewayUrl);
     const controlSecret = text(credentials.controlSecret);
@@ -275,7 +289,7 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       tradingEventId,
       groupId: input.groupId,
     });
-    return mt5ConnectorExecutor(action, {
+    const result = await mt5ConnectorExecutor(action, {
       workspaceId,
       accountRowId: accountRef(account),
       gatewayUrl,
@@ -291,6 +305,7 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       deliveryStore,
       fetchFn,
     });
+    return preserveManagementBrokerIdentity(action, result);
   }
 
   return { ...base, riskMaterializer, dispatchAction };

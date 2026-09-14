@@ -102,6 +102,40 @@ async function readBody(request) {
   }
 }
 
+async function workspaceTokenExpiry(authorization, supabase, env, nowMs = Date.now()) {
+  const workspaceId = String(authorization?.workspace?.id || '');
+  const accessCodeId = text(authorization?.workspace?.metadata?.accessCodeId);
+  if (accessCodeId) {
+    const { data, error } = await supabase
+      .from('trading_access_codes')
+      .select('id,workspace_id,expires_at')
+      .eq('id', accessCodeId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle();
+    if (error) throw new Error('WORKSPACE_ACCESS_LOOKUP_FAILED');
+    if (data?.expires_at) {
+      const expiresAt = Date.parse(data.expires_at);
+      if (!Number.isFinite(expiresAt)) throw new Error('WORKSPACE_ACCESS_EXPIRY_INVALID');
+      if (expiresAt <= Number(nowMs)) throw new Error('WORKSPACE_ACCESS_EXPIRED');
+      return expiresAt;
+    }
+  }
+  const configuredTtl = Number(env.MT5_CONNECTOR_TOKEN_TTL_MS);
+  const ttlMs = Number.isFinite(configuredTtl) && configuredTtl > 0 ? configuredTtl : DEFAULT_TOKEN_TTL_MS;
+  return Number(nowMs) + ttlMs;
+}
+
+async function createReusableToken(accountRowId, authorization, supabase, env, issuedAt = Date.now()) {
+  const expiresAt = await workspaceTokenExpiry(authorization, supabase, env, issuedAt);
+  const connectionToken = await createMt5ConnectorToken({
+    accountRowId,
+    signingKey: env.CBOT_TOKEN_SIGNING_KEY,
+    issuedAt,
+    ttlMs: expiresAt - issuedAt,
+  });
+  return { connectionToken, expiresAt };
+}
+
 async function createConnection(request, authorization, supabase, env) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
@@ -121,16 +155,15 @@ async function createConnection(request, authorization, supabase, env) {
 
   const accountRowId = crypto.randomUUID();
   const issuedAt = Date.now();
-  const configuredTtl = Number(env.MT5_CONNECTOR_TOKEN_TTL_MS);
-  const ttlMs = Number.isFinite(configuredTtl) && configuredTtl > 0 ? configuredTtl : DEFAULT_TOKEN_TTL_MS;
-  const oneTimeConnectionToken = await createMt5ConnectorToken({
-    accountRowId,
-    signingKey: env.CBOT_TOKEN_SIGNING_KEY,
-    issuedAt,
-    ttlMs,
-  });
+  let tokenMaterial;
+  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt); }
+  catch (error) {
+    const reason = error?.message || 'WORKSPACE_ACCESS_LOOKUP_FAILED';
+    return json({ ok: false, reason }, reason === 'WORKSPACE_ACCESS_EXPIRED' ? 403 : 503);
+  }
+  const { connectionToken, expiresAt } = tokenMaterial;
   const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
-    connectionToken: oneTimeConnectionToken,
+    connectionToken,
     gatewayUrl: gateway.gatewayUrl,
     controlSecret: String(env.CBOT_CONTROL_SECRET),
   }, env.TRADING_MASTER_KEY);
@@ -168,9 +201,78 @@ async function createConnection(request, authorization, supabase, env) {
     ok: true,
     account: publicAccount(data),
     gatewayWebSocketUrl: gateway.gatewayWebSocketUrl,
-    oneTimeConnectionToken,
-    connectionTokenExpiresAt: new Date(issuedAt + ttlMs).toISOString(),
+    connectionToken,
+    oneTimeConnectionToken: connectionToken,
+    connectionTokenExpiresAt: new Date(expiresAt).toISOString(),
   }, 201);
+}
+
+async function readMt5Account(accountRowId, authorization, supabase) {
+  const workspaceId = String(authorization.workspace.id);
+  const { data: current, error } = await supabase
+    .from('trade_accounts')
+    .select(ACCOUNT_SELECT)
+    .eq('workspace_id', workspaceId)
+    .eq('id', accountRowId)
+    .maybeSingle();
+  if (error) return { error: json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503) };
+  if (!current) return { error: json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404) };
+  if (String(current.platform || '').toLowerCase() !== 'mt5' || String(current.provider_mode || '').toLowerCase() !== 'mt5_connector') {
+    return { error: json({ ok: false, reason: 'MT5_CONNECTOR_ACCOUNT_REQUIRED' }, 409) };
+  }
+  return { current };
+}
+
+async function regenerateToken(accountRowId, authorization, supabase, env) {
+  if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
+    return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  }
+  let gateway;
+  try { gateway = gatewayConfig(env); }
+  catch { return json({ ok: false, reason: 'MT5_CONNECTOR_NOT_CONFIGURED' }, 503); }
+  const found = await readMt5Account(accountRowId, authorization, supabase);
+  if (found.error) return found.error;
+
+  let credentials;
+  try {
+    credentials = await decryptConnectionCredentials('mt5_connector', found.current.credential_ciphertext, env.TRADING_MASTER_KEY);
+  } catch {
+    return json({ ok: false, reason: 'MT5_CONNECTOR_CREDENTIALS_UNAVAILABLE' }, 503);
+  }
+  const gatewayUrl = text(credentials.gatewayUrl, gateway.gatewayUrl);
+  const controlSecret = text(credentials.controlSecret, env.CBOT_CONTROL_SECRET);
+  if (!gatewayUrl || !controlSecret) return json({ ok: false, reason: 'MT5_CONNECTOR_CREDENTIALS_UNAVAILABLE' }, 503);
+
+  const issuedAt = Date.now();
+  let tokenMaterial;
+  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt); }
+  catch (error) {
+    const reason = error?.message || 'WORKSPACE_ACCESS_LOOKUP_FAILED';
+    return json({ ok: false, reason }, reason === 'WORKSPACE_ACCESS_EXPIRED' ? 403 : 503);
+  }
+  const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
+    connectionToken: tokenMaterial.connectionToken,
+    gatewayUrl,
+    controlSecret,
+  }, env.TRADING_MASTER_KEY);
+  const providerConfig = {
+    ...(found.current.provider_config && typeof found.current.provider_config === 'object' ? found.current.provider_config : {}),
+    connectionTokenExpiresAt: new Date(tokenMaterial.expiresAt).toISOString(),
+  };
+  const { error: updateError } = await supabase
+    .from('trade_accounts')
+    .update({ credential_ciphertext: credentialCiphertext, provider_config: providerConfig })
+    .eq('workspace_id', String(authorization.workspace.id))
+    .eq('id', accountRowId);
+  if (updateError) return json({ ok: false, reason: 'MT5_CONNECTOR_TOKEN_REFRESH_FAILED' }, 503);
+  return json({
+    ok: true,
+    accountId: accountRowId,
+    gatewayWebSocketUrl: gateway.gatewayWebSocketUrl,
+    connectionToken: tokenMaterial.connectionToken,
+    oneTimeConnectionToken: tokenMaterial.connectionToken,
+    connectionTokenExpiresAt: new Date(tokenMaterial.expiresAt).toISOString(),
+  });
 }
 
 async function syncConnection(accountRowId, authorization, supabase, env, fetchFn) {
@@ -179,17 +281,9 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
   }
   if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'ACCOUNT_ENCRYPTION_NOT_CONFIGURED' }, 503);
   const workspaceId = String(authorization.workspace.id);
-  const { data: current, error: readError } = await supabase
-    .from('trade_accounts')
-    .select(ACCOUNT_SELECT)
-    .eq('workspace_id', workspaceId)
-    .eq('id', accountRowId)
-    .maybeSingle();
-  if (readError) return json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503);
-  if (!current) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
-  if (String(current.platform || '').toLowerCase() !== 'mt5' || String(current.provider_mode || '').toLowerCase() !== 'mt5_connector') {
-    return json({ ok: false, reason: 'MT5_CONNECTOR_ACCOUNT_REQUIRED' }, 409);
-  }
+  const found = await readMt5Account(accountRowId, authorization, supabase);
+  if (found.error) return found.error;
+  const current = found.current;
 
   let credentials;
   try {
@@ -294,6 +388,14 @@ export async function handleV1AdminMt5ConnectorRequest(request, env = {}, {
   if (url.pathname === '/api/v1/admin/connections/mt5/connector') {
     if (request.method === 'POST') return createConnection(request, authorization, supabase, env);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+  }
+  const tokenMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/mt5\/connector\/([^/]+)\/token$/);
+  if (tokenMatch) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    let accountRowId;
+    try { accountRowId = decodeURIComponent(tokenMatch[1]); }
+    catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
+    return regenerateToken(accountRowId, authorization, supabase, env);
   }
   const syncMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/mt5\/connector\/([^/]+)\/sync$/);
   if (syncMatch) {

@@ -25,7 +25,7 @@ function demoFixedAccount({ catalog = [], aliases = {} } = {}) {
   };
 }
 
-test('V1 simulation dependencies expose authenticated matched-group reads for fast-entry completion', async () => {
+test('V1 simulation dependencies expose authenticated workspace-scoped matched-group reads for fast-entry completion', async () => {
   const calls = [];
   const group = { id: 'group/fast 1', tradeAccountId: 'acct-1', incomplete: true };
   const stub = {
@@ -58,6 +58,7 @@ test('V1 simulation dependencies expose authenticated matched-group reads for fa
   assert.equal(calls[0].method, 'GET');
   assert.match(calls[0].url, /\/groups\/group%2Ffast%201$/);
   assert.equal(calls[0].headers['x-mkety-internal-token'], 'internal-secret');
+  assert.equal(calls[0].headers['x-mkety-workspace-id'], 'workspace-1');
 });
 
 test('fixed-lot DEMO planning derives a bounded lot-only instrument only after destination catalog support is proven', async () => {
@@ -159,4 +160,61 @@ test('LIVE planning still fails closed when broker instrument metadata is absent
     lot_value: 0.01,
     provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD' }] },
   }, { symbol: { canonical: 'XAUUSD' } }), /simulation instrument metadata is not configured for XAUUSD/);
+});
+
+test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
+  const account = {
+    id: 'acct-ctrader-demo',
+    workspace_id: 'workspace-1',
+    platform: 'ctrader',
+    provider_mode: 'ctrader_oauth',
+    environment: 'demo',
+    lot_sizing_type: 'fixed',
+    lot_value: 0.01,
+    is_active: true,
+    provider_config: {},
+  };
+  const updates = [];
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') {
+        return {
+          select() { return this; }, eq() { return this; }, order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
+        };
+      }
+      if (table === 'trading_destinations') {
+        return {
+          select() { return this; }, eq() { return this; }, in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'acct-ctrader-demo', destination_type: 'broker_account', is_active: true }], error: null }),
+        };
+      }
+      if (table === 'trade_accounts') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          in: async () => ({ data: [account], error: null }),
+          update(value) { updates.push(value); return { eq() { return this; }, select: async () => ({ data: null, error: null }) }; },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+  const hydratedCatalog = [{ platformSymbol: 'XAUUSD', platformId: 41, tradable: true }];
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+    accountCatalogLoader: async (candidate) => {
+      assert.equal(candidate.id, 'acct-ctrader-demo');
+      return { catalog: hydratedCatalog, aliases: {} };
+    },
+  });
+
+  const [routed] = await deps.accountProvider();
+  const instrument = await deps.instrumentProvider(routed, { symbol: { canonical: 'XAUUSD' } });
+
+  assert.equal(instrument.platformSymbol, 'XAUUSD');
+  assert.deepEqual(routed.provider_config.symbolCatalog, hydratedCatalog);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].provider_config.symbolCatalog, hydratedCatalog);
 });

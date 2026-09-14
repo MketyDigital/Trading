@@ -5,12 +5,37 @@ const ACTIVE_STATUSES = new Set(['OPEN', 'PLANNED', 'PENDING']);
 
 function groupKey(groupId) { return `${GROUP_PREFIX}${groupId}`; }
 
+function actionTypeOf(execution = {}) {
+  return String(execution?.actionType || '').trim().toUpperCase();
+}
+
 function executionStatus(existingLeg = {}, execution = {}) {
+  const actionType = actionTypeOf(execution);
+  if (actionType === 'CLOSE_POSITION') return 'CLOSED';
+  if (actionType === 'CANCEL_PENDING') return 'CANCELLED';
+  if (actionType === 'CLOSE_PARTIAL' || actionType === 'MODIFY_POSITION') return 'OPEN';
+
   const explicit = String(execution?.status || '').trim().toUpperCase();
   if (explicit) return explicit;
   if (execution?.brokerPositionId != null && String(execution.brokerPositionId).trim()) return 'OPEN';
   if (execution?.brokerOrderId != null && String(execution.brokerOrderId).trim()) return 'PENDING';
   return String(existingLeg?.status || 'PLANNED').toUpperCase();
+}
+
+function nextLegLots(currentLeg = {}, execution = {}) {
+  const actionType = actionTypeOf(execution);
+  const executedLots = Number(execution?.executedLots);
+  const currentLots = Number(currentLeg?.lots);
+
+  if (actionType === 'CLOSE_POSITION') return Number.isFinite(currentLots) ? 0 : undefined;
+  if (actionType === 'CLOSE_PARTIAL') {
+    if (!(Number.isFinite(executedLots) && executedLots > 0 && Number.isFinite(currentLots) && currentLots > 0)) return undefined;
+    const remaining = currentLots - executedLots;
+    if (!(remaining > 0) || remaining >= currentLots) return undefined;
+    return Number(remaining.toFixed(12));
+  }
+  if (actionType === 'OPEN_POSITION' && Number.isFinite(executedLots) && executedLots > 0) return executedLots;
+  return undefined;
 }
 
 function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
@@ -26,27 +51,51 @@ function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
 }
 
 export class TradeStateStore {
-  constructor(storage) {
+  constructor(storage, { persistence = null, workspaceId = null } = {}) {
     if (!storage?.get || !storage?.put || !storage?.list) throw new TypeError('durable storage interface is required');
+    if (persistence && (!persistence?.saveGroup || !persistence?.loadActive || !persistence?.loadGroup)) {
+      throw new TypeError('trade state persistence interface is invalid');
+    }
     this.storage = storage;
+    this.persistence = persistence;
+    this.workspaceId = workspaceId == null ? null : String(workspaceId);
+    this.hydrated = false;
+  }
+
+  async hydrateActive() {
+    if (this.hydrated || !this.persistence || !this.workspaceId) return;
+    const groups = await this.persistence.loadActive(this.workspaceId);
+    for (const group of groups || []) await this.storage.put(groupKey(group.id), group);
+    this.hydrated = true;
   }
 
   async getGroup(groupId) {
-    return await this.storage.get(groupKey(groupId)) || null;
+    const local = await this.storage.get(groupKey(groupId));
+    if (local) return local;
+    if (!this.persistence || !this.workspaceId) return null;
+    const recovered = await this.persistence.loadGroup(this.workspaceId, groupId);
+    if (!recovered) return null;
+    await this.storage.put(groupKey(groupId), recovered);
+    return recovered;
   }
 
   async putGroup(group) {
     if (!group?.id) throw new TypeError('group id is required');
+    if (this.workspaceId && group?.workspaceId && String(group.workspaceId) !== this.workspaceId) {
+      throw new Error('trade state store workspace mismatch');
+    }
     const value = {
       ...group,
       sourceEventIds: [...new Set((group.sourceEventIds || []).map(String))],
-      legs: Array.isArray(group.legs) ? group.legs : [],
+      legs: Array.isArray(group.legs) ? group.legs.map((leg) => ({ ...leg })) : [],
     };
+    if (this.persistence) await this.persistence.saveGroup(value);
     await this.storage.put(groupKey(group.id), value);
     return value;
   }
 
   async listActive() {
+    await this.hydrateActive();
     const rows = await this.storage.list({ prefix: GROUP_PREFIX });
     return [...rows.values()].filter((group) => ACTIVE_STATUSES.has(String(group?.status || '')));
   }
@@ -66,11 +115,12 @@ export class TradeStateStore {
     if (index < 0) throw new Error('position group leg not found');
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
-    const executedLots = Number(execution?.executedLots);
+    const lots = nextLegLots(currentLeg, execution);
     group.legs[index] = {
       ...currentLeg,
       ...execution,
-      ...(Number.isFinite(executedLots) && executedLots > 0 ? { lots: executedLots } : {}),
+      requestedLots: Number.isFinite(Number(currentLeg?.requestedLots)) ? Number(currentLeg.requestedLots) : Number(currentLeg?.lots),
+      ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
       status,
     };
     group.status = aggregateGroupStatus(group.legs, group.status);

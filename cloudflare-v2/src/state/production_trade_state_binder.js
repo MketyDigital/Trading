@@ -1,10 +1,20 @@
 function text(value) { return String(value ?? '').trim(); }
 
+function lifecycleStatus(binding = {}) {
+  const actionType = text(binding.actionType).toUpperCase();
+  if (actionType === 'CLOSE_POSITION') return 'CLOSED';
+  if (actionType === 'CANCEL_PENDING') return 'CANCELLED';
+  if (actionType === 'CLOSE_PARTIAL' || actionType === 'MODIFY_POSITION') return 'OPEN';
+  return text(binding.status).toUpperCase() || null;
+}
+
 function payloadFrom(binding = {}) {
   const payload = {};
-  for (const key of ['brokerPositionId', 'brokerOrderId', 'brokerDealId', 'actionType', 'status', 'failureCode']) {
+  for (const key of ['brokerPositionId', 'brokerOrderId', 'brokerDealId', 'actionType', 'failureCode']) {
     if (binding[key] != null && text(binding[key])) payload[key] = String(binding[key]);
   }
+  const status = lifecycleStatus(binding);
+  if (status) payload.status = status;
   for (const key of ['fillPrice', 'executedLots', 'volumeStepLots', 'minimumLots']) {
     const value = Number(binding[key]);
     if (Number.isFinite(value)) payload[key] = value;
@@ -39,6 +49,7 @@ export function createProductionTradeStateBinder({ env = {}, workspaceId } = {})
         headers: {
           'content-type': 'application/json',
           'x-mkety-internal-token': token,
+          'x-mkety-workspace-id': boundWorkspaceId,
         },
         body: JSON.stringify(payload),
       },

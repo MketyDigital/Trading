@@ -9,14 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
-MT5_COMMENT_MAX_LENGTH = 31
+MT5_COMMENT_MAX_LENGTH = 20
 MT5_RECONCILIATION_LOOKBACK_DAYS = 7
 
 
 def command_marker(command_id):
-    """Return a deterministic broker-visible command marker that fits MT5 comments."""
+    """Return a deterministic broker-visible command marker that fits restrictive MT5 brokers."""
     digest = hashlib.sha256(str(command_id).encode('utf-8')).hexdigest()
-    return f'mkety:{digest[:MT5_COMMENT_MAX_LENGTH - len("mkety:")]}'
+    return f'mkety{digest[:MT5_COMMENT_MAX_LENGTH - len("mkety")]}'
 
 
 class ReplayLedger:
@@ -93,22 +93,55 @@ class MT5Engine:
             raise RuntimeError(f'cannot select symbol: {name}')
         return info
 
-    def _filling_candidates(self, pending=False):
+    def _filling_candidates(self, symbol_info=None, pending=False):
         if pending:
             return [self.mt5.ORDER_FILLING_RETURN]
-        return [self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_FOK, self.mt5.ORDER_FILLING_RETURN]
 
-    def _check_and_send(self, request, pending=False):
+        filling_mode = int(getattr(symbol_info, 'filling_mode', 0) or 0)
+        candidates = []
+        if filling_mode & 2:
+            candidates.append(self.mt5.ORDER_FILLING_IOC)
+        if filling_mode & 1:
+            candidates.append(self.mt5.ORDER_FILLING_FOK)
+
+        if not candidates:
+            candidates.extend([self.mt5.ORDER_FILLING_IOC, self.mt5.ORDER_FILLING_FOK])
+
+        market_execution = getattr(self.mt5, 'SYMBOL_TRADE_EXECUTION_MARKET', 2)
+        execution_mode = getattr(symbol_info, 'trade_exemode', None)
+        if execution_mode != market_execution:
+            candidates.append(self.mt5.ORDER_FILLING_RETURN)
+
+        unique = []
+        for item in candidates:
+            if item not in unique:
+                unique.append(item)
+        return unique
+
+    def _last_error_text(self):
+        try:
+            value = self.mt5.last_error()
+        except Exception:
+            return ''
+        if isinstance(value, (tuple, list)) and value:
+            code = value[0]
+            message = value[1] if len(value) > 1 else ''
+            return f' last_error={code} {message}'.rstrip()
+        return f' last_error={value}' if value is not None else ''
+
+    def _check_and_send(self, request, pending=False, symbol_info=None, use_filling=True):
         last_check = None
-        for filling in self._filling_candidates(pending=pending):
+        candidates = self._filling_candidates(symbol_info=symbol_info, pending=pending) if use_filling else [None]
+        for filling in candidates:
             candidate = dict(request)
-            candidate['type_filling'] = filling
+            if filling is not None:
+                candidate['type_filling'] = filling
             check = self.mt5.order_check(candidate)
             last_check = check
             if check is not None and getattr(check, 'retcode', None) == 0:
                 result = self.mt5.order_send(candidate)
                 if result is None:
-                    raise RuntimeError('order_send returned no result')
+                    raise RuntimeError(f'order_send returned no result{self._last_error_text()}')
                 accepted = {
                     getattr(self.mt5, 'TRADE_RETCODE_DONE', 10009),
                     getattr(self.mt5, 'TRADE_RETCODE_PLACED', 10008),
@@ -117,6 +150,8 @@ class MT5Engine:
                 if getattr(result, 'retcode', None) not in accepted:
                     raise RuntimeError(f'order_send failed: retcode={getattr(result,"retcode",None)} {getattr(result,"comment","")}')
                 return result
+        if last_check is None:
+            raise RuntimeError(f'order_check failed: retcode=None{self._last_error_text()}')
         raise RuntimeError(f'order_check failed: retcode={getattr(last_check,"retcode",None)} {getattr(last_check,"comment","")}')
 
     def _base(self, command_id):
@@ -124,16 +159,17 @@ class MT5Engine:
             'deviation': self.deviation,
             'magic': self.magic,
             'comment': command_marker(command_id),
-            'type_time': self.mt5.ORDER_TIME_GTC,
         }
 
     def _open(self, command, command_id):
         symbol = command['symbol']
-        self._symbol(symbol)
+        symbol_info = self._symbol(symbol)
         side = command['side'].upper()
         order_type = command.get('orderType', 'MARKET').upper()
         volume = float(command['volume'])
         tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise RuntimeError(f'tick unavailable for symbol: {symbol}{self._last_error_text()}')
         req = {**self._base(command_id), 'symbol': symbol, 'volume': volume}
         if command.get('stopLoss') is not None:
             req['sl'] = float(command['stopLoss'])
@@ -144,7 +180,7 @@ class MT5Engine:
             req['action'] = self.mt5.TRADE_ACTION_DEAL
             req['type'] = self.mt5.ORDER_TYPE_BUY if side == 'BUY' else self.mt5.ORDER_TYPE_SELL
             req['price'] = float(tick.ask if side == 'BUY' else tick.bid)
-            result = self._check_and_send(req, pending=False)
+            result = self._check_and_send(req, pending=False, symbol_info=symbol_info)
         else:
             type_map = {
                 ('BUY', 'LIMIT'): self.mt5.ORDER_TYPE_BUY_LIMIT,
@@ -157,16 +193,17 @@ class MT5Engine:
             req['action'] = self.mt5.TRADE_ACTION_PENDING
             req['type'] = type_map[(side, order_type)]
             req['price'] = float(command['entryPrice'])
-            result = self._check_and_send(req, pending=True)
+            req['type_time'] = self.mt5.ORDER_TIME_GTC
+            result = self._check_and_send(req, pending=True, symbol_info=symbol_info)
         return self._result(result)
 
     def _modify(self, command, command_id):
-        request = {**self._base(command_id), 'action': self.mt5.TRADE_ACTION_SLTP, 'position': int(command['positionId'])}
+        request = {'action': self.mt5.TRADE_ACTION_SLTP, 'position': int(command['positionId'])}
         if command.get('stopLoss') is not None:
             request['sl'] = float(command['stopLoss'])
         if command.get('takeProfit') is not None:
             request['tp'] = float(command['takeProfit'])
-        return self._result(self._check_and_send(request))
+        return self._result(self._check_and_send(request, use_filling=False))
 
     def _close(self, command, command_id):
         position_id = int(command['positionId'])
@@ -175,7 +212,10 @@ class MT5Engine:
             raise RuntimeError(f'position not found: {position_id}')
         position = positions[0]
         symbol = position.symbol
+        symbol_info = self._symbol(symbol)
         tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise RuntimeError(f'tick unavailable for symbol: {symbol}{self._last_error_text()}')
         is_buy = int(position.type) == int(self.mt5.ORDER_TYPE_BUY)
         volume = float(command.get('volume') or position.volume)
         request = {
@@ -184,11 +224,11 @@ class MT5Engine:
             'type': self.mt5.ORDER_TYPE_SELL if is_buy else self.mt5.ORDER_TYPE_BUY,
             'price': float(tick.bid if is_buy else tick.ask),
         }
-        return self._result(self._check_and_send(request))
+        return self._result(self._check_and_send(request, symbol_info=symbol_info))
 
     def _cancel(self, command, command_id):
-        request = {**self._base(command_id), 'action': self.mt5.TRADE_ACTION_REMOVE, 'order': int(command['orderId'])}
-        return self._result(self._check_and_send(request, pending=True))
+        request = {'action': self.mt5.TRADE_ACTION_REMOVE, 'order': int(command['orderId'])}
+        return self._result(self._check_and_send(request, use_filling=False))
 
     def _result(self, result):
         order = getattr(result, 'order', None)

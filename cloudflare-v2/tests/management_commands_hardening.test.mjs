@@ -70,16 +70,16 @@ test('conditional explicit-price management remains fail-closed', () => {
 test('explicit SL modification applies only to broker-bound open legs', () => {
   const actions = buildManagementActions(openGroup(), { type: 'MOVE_SL', stopLoss: 3650 });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p1', symbol: 'XAUUSD', stopLoss: 3650 },
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 3650 },
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 3650 },
+    { type: 'MODIFY_POSITION', legId: 'leg-1', targetIndex: 1, brokerPositionId: 'p1', symbol: 'XAUUSD', stopLoss: 3650 },
+    { type: 'MODIFY_POSITION', legId: 'leg-2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 3650 },
+    { type: 'MODIFY_POSITION', legId: 'leg-3', targetIndex: 3, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 3650 },
   ]);
 });
 
 test('indexed TP modification changes only the intended broker-bound leg', () => {
   const actions = buildManagementActions(openGroup(), { type: 'CHANGE_TP', takeProfit: 3700, targetIndex: 2 });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', brokerPositionId: 'p2', symbol: 'XAUUSD', takeProfit: 3700 },
+    { type: 'MODIFY_POSITION', legId: 'leg-2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', takeProfit: 3700 },
   ]);
 });
 
@@ -87,4 +87,9 @@ test('unindexed TP modification targets all open legs explicitly', () => {
   const actions = buildManagementActions(openGroup(), { type: 'CHANGE_TP', takeProfit: 3700 });
   assert.equal(actions.length, 3);
   assert.ok(actions.every((action) => action.type === 'MODIFY_POSITION' && action.takeProfit === 3700));
+  assert.deepEqual(actions.map(({ legId, targetIndex }) => ({ legId, targetIndex })), [
+    { legId: 'leg-1', targetIndex: 1 },
+    { legId: 'leg-2', targetIndex: 2 },
+    { legId: 'leg-3', targetIndex: 3 },
+  ]);
 });

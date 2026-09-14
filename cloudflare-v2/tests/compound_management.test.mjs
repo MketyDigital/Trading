@@ -71,6 +71,8 @@ test('compound management expands into ordered broker actions on the same open p
   }), [
     {
       type: 'CLOSE_PARTIAL',
+      legId: 'leg-1',
+      targetIndex: 1,
       brokerPositionId: 'position-1',
       symbol: 'BTCUSD',
       fraction: 0.5,
@@ -78,6 +80,8 @@ test('compound management expands into ordered broker actions on the same open p
     },
     {
       type: 'MODIFY_POSITION',
+      legId: 'leg-1',
+      targetIndex: 1,
       brokerPositionId: 'position-1',
       symbol: 'BTCUSD',
       stopLoss: 77000,
