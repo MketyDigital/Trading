@@ -98,14 +98,16 @@ def broker_record(*, command_id, position_id=7001, order=9001, deal=9002, magic=
 
 
 class MT5BridgeReconciliationTests(unittest.TestCase):
-    def test_command_marker_is_deterministic_bounded_and_does_not_truncate_common_prefixes(self):
+    def test_command_marker_is_deterministic_broker_safe_and_does_not_truncate_common_prefixes(self):
         first_id = 'workspace:very-long-common-prefix:destination:account:leg:one'
         second_id = 'workspace:very-long-common-prefix:destination:account:leg:two'
         first = command_marker(first_id)
         self.assertEqual(first, command_marker(first_id))
         self.assertNotEqual(first, command_marker(second_id))
-        self.assertLessEqual(len(first), 31)
-        self.assertTrue(first.startswith('mkety:'))
+        self.assertLessEqual(len(first), 20)
+        self.assertTrue(first.isascii())
+        self.assertTrue(first.isalnum())
+        self.assertTrue(first.startswith('mkety'))
         self.assertNotIn(first_id, first)
 
     def test_exact_marker_and_magic_history_deal_recovers_without_order_send(self):
