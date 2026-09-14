@@ -29,8 +29,12 @@ test('second-pass value evidence is advisory and does not veto a coherent AI tra
 });
 
 test('hard contradiction still blocks an AI trade', () => {
-  const result = validateCanonicalSignalIntent(intent({ side: 'SELL' }), {
-    rawText: 'BUY GOLD entry 2526 SL 2532 TP 2510',
+  const result = validateCanonicalSignalIntent(intent({
+    side: 'SELL',
+    stopLoss: 2532,
+    takeProfits: [2520, 2510],
+  }), {
+    rawText: 'BUY GOLD entry 2526 SL 2532 TP1 2520 TP2 2510',
   });
 
   assert.equal(result.ok, false);
