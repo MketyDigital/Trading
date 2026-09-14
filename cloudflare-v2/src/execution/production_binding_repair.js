@@ -1,6 +1,7 @@
 import { repairExecutionBindings } from './execution_binding_repair.js';
 import { createProductionExecutionDependencies } from './production_execution_deps.js';
 import { defaultDestinationRetrySupabaseFactory } from './destination_retry_production.js';
+import { createProductionTradeStateBinder } from '../state/production_trade_state_binder.js';
 
 export function createProductionBindingRepairRuntime({
   supabaseFactory = defaultDestinationRetrySupabaseFactory,
@@ -12,6 +13,15 @@ export function createProductionBindingRepairRuntime({
     return repairExecutionBindings({
       supabase,
       stateBinder: async (binding) => {
+        if (executionDepsFactory === createProductionExecutionDependencies) {
+          const binder = createProductionTradeStateBinder({
+            env,
+            workspaceId: binding.workspaceId,
+          });
+          await binder(binding);
+          return;
+        }
+
         const deps = await executionDepsFactory({
           env,
           supabase,
