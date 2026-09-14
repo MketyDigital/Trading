@@ -67,14 +67,14 @@ export async function createCTraderRuntime({
     if (!resolved.ok) throw new Error(`cTrader symbol resolution failed: ${resolved.reason}`);
     await marketData.subscribeQuotes([resolved.platformId]);
 
-    let quote = marketData.quoteFor(resolved.platformId);
-    if (!quote?.bid || !quote?.ask) {
-      const spot = await session.waitForEvent((message) =>
-        Number(message?.payloadType) === 2131 &&
-        Number(message?.payload?.symbolId) === Number(resolved.platformId),
-      { timeoutMs: Number(requestTimeoutMs) || 5000 });
-      quote = marketData.handleSpotEvent(spot) || marketData.quoteFor(resolved.platformId);
-    }
+    // BE is a price-sensitive management command. Never authorize it from a
+    // quote cached by an earlier action: subscribe and require a fresh spot
+    // event for this exact symbol, otherwise fail closed as context unavailable.
+    const spot = await session.waitForEvent((message) =>
+      Number(message?.payloadType) === 2131 &&
+      Number(message?.payload?.symbolId) === Number(resolved.platformId),
+    { timeoutMs: Number(requestTimeoutMs) || 5000 });
+    const quote = marketData.handleSpotEvent(spot) || marketData.quoteFor(resolved.platformId);
 
     const side = String(action?.side || '').toUpperCase();
     const marketPrice = side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
@@ -92,7 +92,12 @@ export async function createCTraderRuntime({
     async execute(action) {
       if (!action) throw new TypeError('canonical action is required');
       if (isBreakEvenAction(action)) {
-        const marketPrice = await breakEvenPriceFor(action);
+        let marketPrice = null;
+        try {
+          marketPrice = await breakEvenPriceFor(action);
+        } catch {
+          marketPrice = null;
+        }
         const eligibility = evaluateBreakEvenEligibility({
           side: action.side,
           entryPrice: action.entryPrice,
