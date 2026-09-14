@@ -148,7 +148,8 @@ export class TradeStateStore {
       status,
     };
 
-    if (actionTypeOf(execution) === 'OPEN_POSITION' && !Number.isFinite(Number(group.entryPrice))) {
+    const storedEntryPrice = Number(group.entryPrice);
+    if (actionTypeOf(execution) === 'OPEN_POSITION' && !(Number.isFinite(storedEntryPrice) && storedEntryPrice > 0)) {
       const fillPrice = Number(execution?.fillPrice);
       if (Number.isFinite(fillPrice) && fillPrice > 0) group.entryPrice = fillPrice;
     }
