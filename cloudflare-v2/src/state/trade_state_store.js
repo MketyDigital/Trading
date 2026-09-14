@@ -50,6 +50,29 @@ function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
   return String(currentStatus || 'PLANNED').toUpperCase();
 }
 
+function sanitizedExecutionPatch(currentLeg = {}, execution = {}, nowMs = Date.now()) {
+  const actionType = actionTypeOf(execution);
+  const patch = { ...execution };
+
+  if (['MODIFY_POSITION', 'CLOSE_PARTIAL', 'CLOSE_POSITION', 'CANCEL_PENDING'].includes(actionType)) {
+    delete patch.brokerPositionId;
+    delete patch.brokerOrderId;
+    delete patch.brokerDealId;
+    delete patch.fillPrice;
+    delete patch.executedLots;
+    delete patch.volumeStepLots;
+    delete patch.minimumLots;
+  }
+
+  if (actionType === 'OPEN_POSITION' && String(execution?.status || '').toUpperCase() !== 'FAILED') {
+    patch.openedAt = Number.isFinite(Number(currentLeg?.openedAt)) ? Number(currentLeg.openedAt) : Number(nowMs);
+  }
+  if (actionType === 'CLOSE_POSITION' || actionType === 'CANCEL_PENDING') {
+    patch.closedAt = Number(nowMs);
+  }
+  return patch;
+}
+
 export class TradeStateStore {
   constructor(storage, { persistence = null, workspaceId = null } = {}) {
     if (!storage?.get || !storage?.put || !storage?.list) throw new TypeError('durable storage interface is required');
@@ -116,13 +139,21 @@ export class TradeStateStore {
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
     const lots = nextLegLots(currentLeg, execution);
+    const patch = sanitizedExecutionPatch(currentLeg, execution, nowMs);
     group.legs[index] = {
       ...currentLeg,
-      ...execution,
+      ...patch,
       requestedLots: Number.isFinite(Number(currentLeg?.requestedLots)) ? Number(currentLeg.requestedLots) : Number(currentLeg?.lots),
       ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
       status,
     };
+
+    const storedEntryPrice = Number(group.entryPrice);
+    if (actionTypeOf(execution) === 'OPEN_POSITION' && !(Number.isFinite(storedEntryPrice) && storedEntryPrice > 0)) {
+      const fillPrice = Number(execution?.fillPrice);
+      if (Number.isFinite(fillPrice) && fillPrice > 0) group.entryPrice = fillPrice;
+    }
+
     group.status = aggregateGroupStatus(group.legs, group.status);
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);

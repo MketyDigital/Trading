@@ -80,10 +80,13 @@ test('compound management expands into ordered broker actions on the same open p
     },
     {
       type: 'MODIFY_POSITION',
+      managementType: 'MOVE_SL_TO_BE',
       legId: 'leg-1',
       targetIndex: 1,
       brokerPositionId: 'position-1',
       symbol: 'BTCUSD',
+      side: 'BUY',
+      entryPrice: 77000,
       stopLoss: 77000,
     },
   ]);

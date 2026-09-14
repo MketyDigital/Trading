@@ -24,12 +24,29 @@ def _telegram_event_id(chat_id, message_id):
     return f'telegram:{chat_id}:{message_id}'
 
 
+def _field(value, name):
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
 def _reply_to_message_id(event):
+    message = _field(event, 'message')
+    reply_header = _field(event, 'reply_to')
+    message_reply_header = _field(message, 'reply_to')
+    original_update = _field(event, 'original_update')
+    original_message = _field(original_update, 'message')
+    original_reply_header = _field(original_message, 'reply_to')
     candidates = [
-        getattr(event, 'reply_to_msg_id', None),
-        getattr(getattr(event, 'message', None), 'reply_to_msg_id', None),
-        getattr(getattr(event, 'reply_to', None), 'reply_to_msg_id', None),
-        getattr(getattr(getattr(event, 'message', None), 'reply_to', None), 'reply_to_msg_id', None),
+        _field(event, 'reply_to_msg_id'),
+        _field(message, 'reply_to_msg_id'),
+        _field(reply_header, 'reply_to_msg_id'),
+        _field(message_reply_header, 'reply_to_msg_id'),
+        _field(original_update, 'reply_to_msg_id'),
+        _field(original_message, 'reply_to_msg_id'),
+        _field(original_reply_header, 'reply_to_msg_id'),
     ]
     for value in candidates:
         if value is not None and str(value) != '':
@@ -37,23 +54,53 @@ def _reply_to_message_id(event):
     return None
 
 
-def _topic_id(event):
-    reply_header = getattr(event, 'reply_to', None)
-    if reply_header is None:
-        reply_header = getattr(getattr(event, 'message', None), 'reply_to', None)
-    if reply_header is None or not getattr(reply_header, 'forum_topic', False):
+def _has_reply_hint(event):
+    message = _field(event, 'message')
+    original_update = _field(event, 'original_update')
+    original_message = _field(original_update, 'message')
+    return bool(
+        _field(event, 'is_reply')
+        or _field(event, 'reply_to') is not None
+        or _field(message, 'reply_to') is not None
+        or _field(original_update, 'reply_to') is not None
+        or _field(original_message, 'reply_to') is not None
+    )
+
+
+async def _resolve_reply_to_message_id(event):
+    direct = _reply_to_message_id(event)
+    if direct is not None:
+        return direct
+    if not _has_reply_hint(event):
         return None
-    value = getattr(reply_header, 'reply_to_top_id', None)
+    getter = getattr(event, 'get_reply_message', None)
+    if not callable(getter):
+        return None
+    try:
+        replied = await getter()
+    except Exception:
+        return None
+    value = _field(replied, 'id')
+    return value if value is not None and str(value) != '' else None
+
+
+def _topic_id(event):
+    reply_header = _field(event, 'reply_to')
+    if reply_header is None:
+        reply_header = _field(_field(event, 'message'), 'reply_to')
+    if reply_header is None or not _field(reply_header, 'forum_topic'):
+        return None
+    value = _field(reply_header, 'reply_to_top_id')
     if value is None:
-        value = getattr(reply_header, 'reply_to_msg_id', None)
+        value = _field(reply_header, 'reply_to_msg_id')
     return None if value is None else str(value)
 
 
 def _thread_contract(event, chat_id, message_id):
     reply_to_message_id = _reply_to_message_id(event)
     topic_id = _topic_id(event)
-    edited = getattr(event, 'edit_date', None) is not None or getattr(
-        getattr(event, 'message', None), 'edit_date', None
+    edited = _field(event, 'edit_date') is not None or _field(
+        _field(event, 'message'), 'edit_date'
     ) is not None
 
     return {
@@ -203,6 +250,11 @@ class MtprotoListener:
                 'media': getattr(getattr(event, 'message', None), 'media', None) is not None,
             },
         }
+
+        if payload['thread'].get('reply_to_event_id') is None:
+            reply_to_message_id = await _resolve_reply_to_message_id(event)
+            if reply_to_message_id is not None:
+                payload['thread']['reply_to_event_id'] = _telegram_event_id(chat_id, reply_to_message_id)
 
         self.queue.put_nowait(payload)
         self._last_event_at = utc_now_iso()

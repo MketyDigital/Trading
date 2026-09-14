@@ -100,6 +100,71 @@ function matchedManagementTarget(matches, reason, ambiguousReason) {
   return null;
 }
 
+function managementBrokerIdentity(interpretation = {}) {
+  const management = interpretation?.management || {};
+  const brokerPositionId = management.brokerPositionId ?? management.broker_position_id ?? management.positionId ?? management.position_id;
+  const brokerOrderId = management.brokerOrderId ?? management.broker_order_id ?? management.orderId ?? management.order_id;
+  return {
+    brokerPositionId: brokerPositionId == null || String(brokerPositionId).trim() === '' ? null : String(brokerPositionId).trim(),
+    brokerOrderId: brokerOrderId == null || String(brokerOrderId).trim() === '' ? null : String(brokerOrderId).trim(),
+  };
+}
+
+function brokerIdentityTarget(groups = [], interpretation = {}) {
+  const identity = managementBrokerIdentity(interpretation);
+  if (!identity.brokerPositionId && !identity.brokerOrderId) return null;
+  const matches = groups.filter((group) => (group?.legs || []).some((leg) => {
+    if (identity.brokerPositionId && String(leg?.brokerPositionId ?? '') === identity.brokerPositionId) return true;
+    if (identity.brokerOrderId && String(leg?.brokerOrderId ?? '') === identity.brokerOrderId) return true;
+    return false;
+  }));
+  const target = matchedManagementTarget(matches, 'BROKER_IDENTITY_TARGET', 'AMBIGUOUS_BROKER_IDENTITY_TARGET');
+  return target || { status: 'NEEDS_REVIEW', reason: 'NO_BROKER_IDENTITY_TARGET' };
+}
+
+function telegramMessageIdentity(value) {
+  const match = /^telegram:([^:]+):(\d+)$/.exec(String(value || '').trim());
+  if (!match) return null;
+  const messageId = Number(match[2]);
+  if (!Number.isSafeInteger(messageId) || messageId < 1) return null;
+  return { chatId: match[1], messageId };
+}
+
+function latestTelegramMessageId(cohort = [], chatId, beforeMessageId) {
+  let latest = null;
+  for (const group of cohort) {
+    for (const sourceEventId of group?.sourceEventIds || []) {
+      const identity = telegramMessageIdentity(sourceEventId);
+      if (!identity || identity.chatId !== chatId || identity.messageId >= beforeMessageId) continue;
+      if (latest == null || identity.messageId > latest) latest = identity.messageId;
+    }
+  }
+  return latest;
+}
+
+function sourceMessageContinuityTarget(groups = [], event = {}, { maxMessageGap = 8 } = {}) {
+  const current = telegramMessageIdentity(event?.external_event_id);
+  if (!current) return null;
+
+  const candidates = logicalCohorts(groups)
+    .map((cohort) => {
+      const latestMessageId = latestTelegramMessageId(cohort, current.chatId, current.messageId);
+      return latestMessageId == null ? null : {
+        cohort,
+        latestMessageId,
+        gap: current.messageId - latestMessageId,
+      };
+    })
+    .filter((entry) => entry && entry.gap > 0 && entry.gap <= Number(maxMessageGap))
+    .sort((a, b) => a.gap - b.gap || b.latestMessageId - a.latestMessageId);
+
+  if (candidates.length === 0) return null;
+  const nearestGap = candidates[0].gap;
+  const nearest = candidates.filter((entry) => entry.gap === nearestGap);
+  if (nearest.length !== 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+  return targetForCohort(nearest[0].cohort, 'SOURCE_MESSAGE_CONTINUITY');
+}
+
 function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
@@ -167,7 +232,11 @@ export function correlateTradingEvent({
       const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
       const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
       if (target) return target;
+      return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
     }
+
+    const brokerTarget = brokerIdentityTarget(scoped, interpretation);
+    if (brokerTarget) return brokerTarget;
 
     if (threadId) {
       const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
@@ -182,6 +251,9 @@ export function correlateTradingEvent({
       if (target) return target;
       return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
     }
+
+    const sourceContinuity = sourceMessageContinuityTarget(scoped, event);
+    if (sourceContinuity) return sourceContinuity;
 
     const target = activeLogicalTradeTarget(scoped, {
       nowMs: Number(nowMs),

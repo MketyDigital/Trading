@@ -19,6 +19,15 @@ function compact(object) {
   return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
 }
 
+function persistedEntry(group = {}) {
+  const entry = group.entry && typeof group.entry === 'object' && !Array.isArray(group.entry)
+    ? { ...group.entry }
+    : {};
+  const entryPrice = Number(group.entryPrice);
+  if (Number.isFinite(entryPrice) && entryPrice > 0) entry.executedPrice = entryPrice;
+  return entry;
+}
+
 export function groupToPersistenceRows(group = {}) {
   if (!group?.id) throw new TypeError('group id is required');
   if (!group?.workspaceId) throw new TypeError('workspaceId is required');
@@ -34,7 +43,7 @@ export function groupToPersistenceRows(group = {}) {
     canonical_symbol: String(group.symbol),
     side: String(group.side).toUpperCase(),
     order_type: String(group.orderType).toUpperCase(),
-    entry: group.entry || {},
+    entry: persistedEntry(group),
     stop_loss: group.stopLoss ?? null,
     status: String(group.status || 'PLANNED').toUpperCase(),
     risk_plan: group.riskPlan ?? null,
@@ -83,6 +92,9 @@ export function groupToPersistenceRows(group = {}) {
 export function persistenceRowsToGroup(row = {}) {
   if (!row?.runtime_group_id) throw new TypeError('persisted runtime_group_id is required');
   const persistedLegs = Array.isArray(row.position_legs) ? row.position_legs : [];
+  const recoveredEntryPrice = row.entry?.kind === 'PRICE'
+    ? Number(row.entry.value)
+    : Number(row.entry?.executedPrice);
   return compact({
     id: String(row.runtime_group_id),
     workspaceId: row.workspace_id,
@@ -93,7 +105,7 @@ export function persistenceRowsToGroup(row = {}) {
     side: row.side,
     orderType: row.order_type,
     entry: row.entry || {},
-    entryPrice: row.entry?.kind === 'PRICE' ? row.entry.value : undefined,
+    entryPrice: Number.isFinite(recoveredEntryPrice) && recoveredEntryPrice > 0 ? recoveredEntryPrice : undefined,
     stopLoss: row.stop_loss,
     status: row.status,
     riskPlan: row.risk_plan,

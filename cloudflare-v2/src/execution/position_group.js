@@ -138,10 +138,13 @@ export function buildManagementActions(group, management) {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
     return openLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      managementType: 'MOVE_SL_TO_BE',
       legId: leg.legId,
       targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
+      side: group.side,
+      entryPrice: Number(group.entryPrice),
       stopLoss: Number(group.entryPrice),
     }));
   }
