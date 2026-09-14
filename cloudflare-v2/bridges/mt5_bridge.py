@@ -145,10 +145,15 @@ class MT5Engine:
         tick_size = self._decimal(getattr(symbol_info, 'trade_tick_size', 0) or getattr(symbol_info, 'point', 0))
         if tick_size > 0:
             raw = (raw / tick_size).to_integral_value(rounding=ROUND_HALF_UP) * tick_size
-        digits = int(getattr(symbol_info, 'digits', 0) or 0)
-        if digits >= 0:
-            quantum = Decimal('1').scaleb(-digits)
-            raw = raw.quantize(quantum, rounding=ROUND_HALF_UP)
+        digits_value = getattr(symbol_info, 'digits', None)
+        if digits_value is not None:
+            try:
+                digits = int(digits_value)
+            except (TypeError, ValueError):
+                digits = None
+            if digits is not None and digits >= 0:
+                quantum = Decimal('1').scaleb(-digits)
+                raw = raw.quantize(quantum, rounding=ROUND_HALF_UP)
         return float(raw)
 
     def _filling_candidates(self, symbol_info=None, pending=False):
