@@ -87,10 +87,7 @@ export class TradeStateStore {
     const value = {
       ...group,
       sourceEventIds: [...new Set((group.sourceEventIds || []).map(String))],
-      legs: Array.isArray(group.legs) ? group.legs.map((leg) => ({
-        ...leg,
-        requestedLots: Number.isFinite(Number(leg?.requestedLots)) ? Number(leg.requestedLots) : Number(leg?.lots),
-      })) : [],
+      legs: Array.isArray(group.legs) ? group.legs.map((leg) => ({ ...leg })) : [],
     };
     if (this.persistence) await this.persistence.saveGroup(value);
     await this.storage.put(groupKey(group.id), value);
