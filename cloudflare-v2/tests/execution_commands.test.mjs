@@ -66,6 +66,32 @@ test('cTrader full close retains broker-volume normalization compatibility', () 
   assert.equal(message.payload.volume, 200000);
 });
 
+test('cTrader management commands bound long broker request ids for close BE and cancel', () => {
+  const longId = 'telegram:-1001822170589:25151:account:40eacf2a-5a8a-4648-9b90-55038748d2ed:management:reply:very-long-idempotency-key';
+  const symbol = { protocolLotSize: 10000000, minVolume: 100000, maxVolume: 1000000000, stepVolume: 100000 };
+  const close = buildCTraderManagementCommand({
+    type: 'CLOSE_POSITION', brokerPositionId: 456, lots: 0.05,
+  }, { accountId: 123, clientMsgId: `${longId}:close`, symbol });
+  const be = buildCTraderManagementCommand({
+    type: 'MODIFY_POSITION', brokerPositionId: 456, stopLoss: 2500,
+  }, { accountId: 123, clientMsgId: `${longId}:be`, symbol });
+  const cancel = buildCTraderManagementCommand({
+    type: 'CANCEL_PENDING', brokerOrderId: 789,
+  }, { accountId: 123, clientMsgId: `${longId}:cancel`, symbol });
+
+  for (const message of [close, be, cancel]) {
+    assert.ok(message.clientMsgId.length <= 64, message.clientMsgId);
+  }
+  assert.notEqual(close.clientMsgId, be.clientMsgId);
+  assert.notEqual(be.clientMsgId, cancel.clientMsgId);
+  assert.equal(
+    buildCTraderManagementCommand({ type: 'CLOSE_POSITION', brokerPositionId: 456, lots: 0.05 }, {
+      accountId: 123, clientMsgId: `${longId}:close`, symbol,
+    }).clientMsgId,
+    close.clientMsgId,
+  );
+});
+
 test('partial-close translation never rounds or clamps MT5 volume upward', () => {
   assert.throws(() => buildMT5ManagementCommand({
     type: 'CLOSE_PARTIAL', brokerPositionId: '9001', lots: 0.015,
