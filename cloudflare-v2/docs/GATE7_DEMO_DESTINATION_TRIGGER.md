@@ -20,4 +20,4 @@ Safety contract:
 
 Ordinary edits to this file with any other commit message may run the workflow test job, but both broker lifecycle jobs remain skipped.
 
-Current acceptance trigger: MT5 demo lifecycle on the current synchronized candidate.
+Current acceptance trigger: cTrader demo lifecycle on the current synchronized candidate.
