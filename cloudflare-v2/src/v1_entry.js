@@ -3,6 +3,7 @@ import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { withEnterpriseConnectionEnhancements } from './dashboard_enterprise_enhancements.js';
 import { withRoutingAiCompletion } from './dashboard_routing_ai_completion.js';
+import { withUserAcceptanceControls } from './dashboard_user_acceptance_controls.js';
 import { withReturningOwnerSession } from './dashboard_returning_session.js';
 import { handleV1EventsRequest } from './http/v1_events.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
@@ -161,7 +162,7 @@ export function createTradingV1Entrypoint({
       const url = new URL(request.url);
       if (url.pathname === '/' || url.pathname === '') {
         const branding = await resolveInitialBranding(request, env, publicBrandingHandler);
-        const portal = normalizeEnterprisePortalHtml(withRoutingAiCompletion(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env)))));
+        const portal = normalizeEnterprisePortalHtml(withUserAcceptanceControls(withRoutingAiCompletion(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env))))));
         return htmlResponse(withPublicBrandingBootstrap(withReturningOwnerSession(applyInitialBranding(portal, branding))));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
