@@ -1,7 +1,0 @@
-Gate 7 DEMO lifecycle trigger marker.
-
-Do not place secrets here. After the release is merged and deployed, update this file on main with the exact commit message for the DEMO provider being tested:
-- demo: lifecycle mt5 gate 7
-- demo: lifecycle ctrader gate 7
-
-These lifecycle jobs are DEMO-only and do not change the persisted database LIVE execution switch.
