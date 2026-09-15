@@ -45,7 +45,8 @@ test('MOVE_SL_TO_BE actions carry the semantic metadata required for broker pref
   }]);
 });
 
-test('broker-aware BE no-op is reported as blocked rather than a failed broker command', async () => {
+test('broker-aware BE no-op is blocked before dispatch rather than becoming a broker failure', async () => {
+  let dispatchCalls = 0;
   const result = await executeProductionPlan({
     workspaceId: 'ws1',
     eventId: 'evt1',
@@ -56,9 +57,11 @@ test('broker-aware BE no-op is reported as blocked rather than a failed broker c
     }],
   }, {
     accountLoader: async () => ({ id: 'acct1', workspace_id: 'ws1', environment: 'demo', is_active: true, execution_enabled: true, safety_policy: { enabled: true, killSwitch: false } }),
-    dispatchAction: async () => ({ ok: false, blocked: true, code: 'BREAK_EVEN_NOT_ELIGIBLE_YET' }),
+    riskMaterializer: async () => ({ allowed: false, reason: 'BREAK_EVEN_NOT_ELIGIBLE_YET' }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true }; },
   });
 
+  assert.equal(dispatchCalls, 0);
   assert.equal(result.status, 'BLOCKED');
   assert.equal(result.failed, 0);
   assert.equal(result.accounts[0].status, 'BLOCKED');
