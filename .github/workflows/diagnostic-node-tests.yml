@@ -13,8 +13,13 @@ permissions:
   contents: read
 
 jobs:
-  isolate:
+  shard:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    name: Node shard ${{ matrix.shard }}
     defaults:
       run:
         working-directory: cloudflare-v2
@@ -30,18 +35,22 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Run Node tests one file at a time
+      - name: Run shard
         shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
-          set +e
-          failed=0
-          while IFS= read -r test_file; do
-            echo "Running $test_file"
-            node --test "$test_file"
-            status=$?
-            if [ "$status" -ne 0 ]; then
-              echo "::error file=$test_file,title=Isolated Node test failed::$test_file exited with status $status"
-              failed=1
+          set -euo pipefail
+          mapfile -t tests < <(find tests -maxdepth 1 -name '*.test.mjs' -print | sort)
+          selected=()
+          for i in "${!tests[@]}"; do
+            if (( i % 16 == SHARD )); then
+              selected+=("${tests[$i]}")
             fi
-          done < <(find tests -maxdepth 1 -name '*.test.mjs' -print | sort)
-          exit "$failed"
+          done
+          printf 'Shard %s tests:\n' "$SHARD"
+          printf '  %s\n' "${selected[@]}"
+          if ((${#selected[@]} == 0)); then
+            exit 0
+          fi
+          node --test "${selected[@]}"
