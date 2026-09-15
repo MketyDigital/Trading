@@ -150,26 +150,59 @@ function managementPlan(text) {
   return null;
 }
 
+function parseTpValueList(segment) {
+  let rest = String(segment ?? '').trim();
+  const values = [];
+  while (rest) {
+    const match = rest.match(new RegExp(`^(${SIGNAL_NUMBER_SOURCE})`));
+    if (!match) break;
+    const value = parsedNumber(match[1]);
+    if (value == null) return null;
+    values.push(value);
+    rest = rest.slice(match[0].length).trimStart();
+    if (!rest.startsWith(',')) break;
+    rest = rest.slice(1).trimStart();
+  }
+  return values;
+}
+
 function extractExplicitTps(text) {
-  const labeled = [];
-  const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*[:@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
-  const spacedPattern = new RegExp(`\\bTP\\s+([1-9]\\d?)\\s*[:@-]\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
-  for (const match of text.matchAll(compactPattern)) {
-    const value = parsedNumber(match[2]);
-    if (value == null) return null;
-    labeled.push({ index: Number(match[1]), value });
+  const source = String(text ?? '');
+  const markerPattern = /\b(?:TP([1-9]\d?)\s*[:@-]?|TP\s+([1-9]\d?)\s*[:@-]|TP\b\s*[:@-]?)\s*/gi;
+  const markers = [...source.matchAll(markerPattern)];
+  if (!markers.length) return [];
+
+  const numbered = new Map();
+  const unnumbered = [];
+  let sawNumbered = false;
+  let sawUnnumbered = false;
+
+  for (let i = 0; i < markers.length; i += 1) {
+    const marker = markers[i];
+    const index = marker[1] != null ? Number(marker[1]) : marker[2] != null ? Number(marker[2]) : null;
+    const start = marker.index + marker[0].length;
+    const nextMarkerStart = i + 1 < markers.length ? markers[i + 1].index : source.length;
+    let segment = source.slice(start, nextMarkerStart);
+    const structural = segment.search(/\b(?:SL|ENTRY(?:\s+(?:PRICE|ZONE))?|BUY|SELL|LONG|SHORT)\b/i);
+    if (structural >= 0) segment = segment.slice(0, structural);
+    segment = segment.split('\n')[0];
+    const values = parseTpValueList(segment);
+    if (values == null || values.length === 0) return null;
+
+    if (index != null) {
+      sawNumbered = true;
+      if (values.length !== 1) return null;
+      if (numbered.has(index) && numbered.get(index) !== values[0]) return null;
+      numbered.set(index, values[0]);
+    } else {
+      sawUnnumbered = true;
+      unnumbered.push(...values);
+    }
   }
-  for (const match of text.matchAll(spacedPattern)) {
-    const value = parsedNumber(match[2]);
-    if (value == null) return null;
-    labeled.push({ index: Number(match[1]), value });
-  }
-  if (labeled.length) {
-    const unique = new Map(labeled.map((item) => [item.index, item.value]));
-    return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
-  }
-  const generic = text.match(/\bTP\b\s*[:@-]?\s*(.+)$/i);
-  return generic ? numbers(generic[1]) : [];
+
+  if (sawNumbered && sawUnnumbered) return null;
+  if (sawNumbered) return [...numbered.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+  return unnumbered;
 }
 
 function sideMatch(text) {
