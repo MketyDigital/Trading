@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MUTATION_RULES = [
@@ -41,10 +42,7 @@ function resolveWorkflowPath(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
   if (raw.startsWith('file:')) return fileURLToPath(raw);
-  if (raw.startsWith('/')) return raw;
-  // The workflow contract passes a path relative to this script's directory so
-  // the same command is stable regardless of the GitHub Actions working directory.
-  return fileURLToPath(new URL(raw, import.meta.url));
+  return path.resolve(raw);
 }
 
 function main(argv = process.argv.slice(2)) {
