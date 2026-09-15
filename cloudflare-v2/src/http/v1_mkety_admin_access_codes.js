@@ -60,6 +60,36 @@ function normalizeEntitlements(entitlements = {}) {
   });
 }
 
+function unionStrings(...values) {
+  return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => String(value).trim()).filter(Boolean))];
+}
+
+export function mergeAccessEntitlements(existing = {}, requested = {}) {
+  const current = normalizeTradingEntitlements(existing || {});
+  const next = normalizeTradingEntitlements(requested || {});
+  return normalizeTradingEntitlements({
+    customSubdomain: current.customSubdomain || next.customSubdomain,
+    customHostname: current.customHostname || next.customHostname,
+    tradingExecutionDestination: current.tradingExecutionDestination || next.tradingExecutionDestination,
+    telegramDestination: current.telegramDestination || next.telegramDestination,
+    sourceTypes: unionStrings(current.sourceTypes, next.sourceTypes),
+    destinations: unionStrings(current.destinations, next.destinations),
+    brokerModes: ['demo'],
+    liveExecution: false,
+    maxTeamMembers: Math.max(current.maxTeamMembers || 1, next.maxTeamMembers || 1),
+  });
+}
+
+export function mergeWorkspaceAccessMetadata(existing = {}, patch = {}) {
+  const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+  const accessPatch = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+  const out = { ...base, ...accessPatch };
+  if (Object.prototype.hasOwnProperty.call(accessPatch, 'entitlements')) {
+    out.entitlements = mergeAccessEntitlements(base.entitlements || {}, accessPatch.entitlements || {});
+  }
+  return out;
+}
+
 function safePublicAccessCode(row = {}, plainCode = undefined) {
   const out = {
     id: row.id,
@@ -100,7 +130,8 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
   const plainCode = normalizeTradingAccessCode(input.code || randomCode(randomUUID));
   if (!plainCode) return { ok: false, reason: 'ACCESS_CODE_REQUIRED' };
-  const workspaceId = text(input.workspaceId ?? input.workspace_id) || randomUUID();
+  const suppliedWorkspaceId = text(input.workspaceId ?? input.workspace_id);
+  const workspaceId = suppliedWorkspaceId || randomUUID();
   const expiresAt = text(input.expiresAt ?? input.expires_at) || new Date(new Date(now).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const maxRedemptions = Math.max(1, Number.parseInt(input.maxRedemptions ?? input.max_redemptions ?? 1, 10) || 1);
   const entitlements = normalizeEntitlements(input.entitlements || {});
@@ -108,6 +139,7 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
   return {
     ok: true,
+    reissue: Boolean(suppliedWorkspaceId),
     plainCode,
     workspace: { id: workspaceId, displayName: workspaceName },
     owner: { email: ownerEmail, name: ownerName },
@@ -141,6 +173,13 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
 const ACCESS_CODE_PUBLIC_SELECT = 'id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at';
 
+async function bestEffortRevokeCode(supabase, accessCodeId) {
+  if (!accessCodeId) return;
+  try {
+    await supabase.from('trading_access_codes').update({ status: 'revoked', updated_at: new Date().toISOString() }).eq('id', accessCodeId);
+  } catch {}
+}
+
 export function createMketyAdminAccessCodeStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
@@ -153,26 +192,80 @@ export function createMketyAdminAccessCodeStore(supabase) {
       return data || [];
     },
     async createAccessCode(plan) {
-      const workspaceRow = {
-        id: plan.workspace.id,
-        display_name: plan.workspace.displayName,
-        owner_email: plan.owner.email,
-        trading_access_enabled: true,
-        metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements },
-        updated_at: new Date().toISOString(),
-      };
-      const { error: workspaceError } = await supabase
-        .from('trading_workspace_access')
-        .upsert(workspaceRow, { onConflict: 'id' });
-      if (workspaceError) throw new Error('ACCESS_CODE_WORKSPACE_CREATE_FAILED');
+      if (!plan?.reissue) {
+        const workspaceRow = {
+          id: plan.workspace.id,
+          display_name: plan.workspace.displayName,
+          owner_email: plan.owner.email,
+          trading_access_enabled: true,
+          metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements },
+          updated_at: new Date().toISOString(),
+        };
+        const { error: workspaceError } = await supabase
+          .from('trading_workspace_access')
+          .upsert(workspaceRow, { onConflict: 'id' });
+        if (workspaceError) throw new Error('ACCESS_CODE_WORKSPACE_CREATE_FAILED');
 
-      const { data, error } = await supabase
+        const { data, error } = await supabase
+          .from('trading_access_codes')
+          .insert(plan.record)
+          .select(ACCESS_CODE_PUBLIC_SELECT)
+          .maybeSingle();
+        if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
+        return data;
+      }
+
+      const { data: currentWorkspace, error: workspaceLookupError } = await supabase
+        .from('trading_workspace_access')
+        .select('id,display_name,owner_email,trading_access_enabled,metadata')
+        .eq('id', plan.workspace.id)
+        .maybeSingle();
+      if (workspaceLookupError) throw new Error('ACCESS_CODE_WORKSPACE_LOOKUP_FAILED');
+      if (!currentWorkspace?.id) throw new Error('ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND');
+      const currentOwner = String(currentWorkspace.owner_email || '').trim().toLowerCase();
+      if (currentOwner && currentOwner !== plan.owner.email) throw new Error('ACCESS_CODE_REISSUE_OWNER_MISMATCH');
+
+      const effectiveEntitlements = mergeAccessEntitlements(currentWorkspace.metadata?.entitlements || {}, plan.entitlements);
+      const record = { ...plan.record, entitlements: effectiveEntitlements };
+      const { data: created, error: createError } = await supabase
         .from('trading_access_codes')
-        .insert(plan.record)
+        .insert(record)
         .select(ACCESS_CODE_PUBLIC_SELECT)
         .maybeSingle();
-      if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
-      return data;
+      if (createError || !created?.id) throw new Error('ACCESS_CODE_CREATE_FAILED');
+
+      const { error: revokeError } = await supabase
+        .from('trading_access_codes')
+        .update({ status: 'revoked', updated_at: new Date().toISOString() })
+        .eq('workspace_id', plan.workspace.id)
+        .eq('status', 'active')
+        .neq('id', created.id);
+      if (revokeError) {
+        await bestEffortRevokeCode(supabase, created.id);
+        throw new Error('ACCESS_CODE_ROTATION_REVOKE_FAILED');
+      }
+
+      const workspaceMetadata = mergeWorkspaceAccessMetadata(currentWorkspace.metadata || {}, {
+        accessCodeProvisioned: true,
+        accessCodeId: created.id,
+        entitlements: effectiveEntitlements,
+      });
+      const { error: workspaceUpdateError } = await supabase
+        .from('trading_workspace_access')
+        .update({
+          display_name: currentWorkspace.display_name || plan.workspace.displayName,
+          owner_email: currentOwner || plan.owner.email,
+          trading_access_enabled: currentWorkspace.trading_access_enabled !== false,
+          metadata: workspaceMetadata,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', plan.workspace.id);
+      if (workspaceUpdateError) {
+        await bestEffortRevokeCode(supabase, created.id);
+        throw new Error('ACCESS_CODE_ROTATION_WORKSPACE_UPDATE_FAILED');
+      }
+
+      return { ...created, entitlements: effectiveEntitlements };
     },
     async revokeAccessCode(id) {
       const accessCodeId = text(id);
@@ -224,7 +317,6 @@ async function runtimeControlResponse(runtimeStore) {
     brokerExecutionUpdatedBy: broker?.updatedBy || null,
     liveBrokerExecutionUpdatedAt: live?.updatedAt || null,
     liveBrokerExecutionUpdatedBy: live?.updatedBy || null,
-    // Backward compatibility for clients that previously displayed one timestamp.
     updatedAt: broker?.updatedAt || null,
     updatedBy: broker?.updatedBy || null,
   };
@@ -332,8 +424,10 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     try {
       const row = await accessStore.createAccessCode(plan);
       return json({ ok: true, accessCode: safePublicAccessCode(row, plan.plainCode) }, 201);
-    } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_CREATE_FAILED' }, 503);
+    } catch (error) {
+      const reason = String(error?.message || 'ACCESS_CODE_CREATE_FAILED');
+      const clientErrors = new Set(['ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND', 'ACCESS_CODE_REISSUE_OWNER_MISMATCH']);
+      return json({ ok: false, reason: clientErrors.has(reason) ? reason : 'ACCESS_CODE_CREATE_FAILED' }, clientErrors.has(reason) ? 409 : 503);
     }
   }
 
