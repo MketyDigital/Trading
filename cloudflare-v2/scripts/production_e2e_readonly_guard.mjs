@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MUTATION_RULES = [
   {
@@ -37,6 +37,16 @@ export function findProductionE2EMutations(workflowText = '') {
   return findings;
 }
 
+function resolveWorkflowPath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('file:')) return fileURLToPath(raw);
+  if (raw.startsWith('/')) return raw;
+  // The workflow contract passes a path relative to this script's directory so
+  // the same command is stable regardless of the GitHub Actions working directory.
+  return fileURLToPath(new URL(raw, import.meta.url));
+}
+
 function main(argv = process.argv.slice(2)) {
   const [workflowPath] = argv;
   if (!workflowPath) {
@@ -46,7 +56,7 @@ function main(argv = process.argv.slice(2)) {
 
   let workflow;
   try {
-    workflow = fs.readFileSync(workflowPath, 'utf8');
+    workflow = fs.readFileSync(resolveWorkflowPath(workflowPath), 'utf8');
   } catch (error) {
     console.error(`Unable to read production E2E workflow: ${error?.message || error}`);
     return 2;
