@@ -182,11 +182,12 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
 const ACCESS_CODE_PUBLIC_SELECT = 'id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at';
 
-async function bestEffortRevokeCode(supabase, accessCodeId) {
-  if (!accessCodeId) return;
-  try {
-    await supabase.from('trading_access_codes').update({ status: 'revoked', updated_at: new Date().toISOString() }).eq('id', accessCodeId);
-  } catch {}
+function atomicRotationError(error) {
+  const detail = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  if (detail.includes('ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND')) return 'ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND';
+  if (detail.includes('ACCESS_CODE_REISSUE_OWNER_MISMATCH')) return 'ACCESS_CODE_REISSUE_OWNER_MISMATCH';
+  if (detail.includes('OWNER_EMAIL_REQUIRED')) return 'OWNER_EMAIL_REQUIRED';
+  return 'ACCESS_CODE_ROTATION_FAILED';
 }
 
 export function createMketyAdminAccessCodeStore(supabase) {
@@ -224,57 +225,22 @@ export function createMketyAdminAccessCodeStore(supabase) {
         return data;
       }
 
-      const { data: currentWorkspace, error: workspaceLookupError } = await supabase
-        .from('trading_workspace_access')
-        .select('id,display_name,owner_email,trading_access_enabled,metadata')
-        .eq('id', plan.workspace.id)
-        .maybeSingle();
-      if (workspaceLookupError) throw new Error('ACCESS_CODE_WORKSPACE_LOOKUP_FAILED');
-      if (!currentWorkspace?.id) throw new Error('ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND');
-      const currentOwner = String(currentWorkspace.owner_email || '').trim().toLowerCase();
-      if (currentOwner && currentOwner !== plan.owner.email) throw new Error('ACCESS_CODE_REISSUE_OWNER_MISMATCH');
-
-      const effectiveEntitlements = mergeAccessEntitlements(currentWorkspace.metadata?.entitlements || {}, plan.entitlements);
-      const record = { ...plan.record, entitlements: effectiveEntitlements };
-      const { data: created, error: createError } = await supabase
-        .from('trading_access_codes')
-        .insert(record)
-        .select(ACCESS_CODE_PUBLIC_SELECT)
-        .maybeSingle();
-      if (createError || !created?.id) throw new Error('ACCESS_CODE_CREATE_FAILED');
-
-      const { error: revokeError } = await supabase
-        .from('trading_access_codes')
-        .update({ status: 'revoked', updated_at: new Date().toISOString() })
-        .eq('workspace_id', plan.workspace.id)
-        .eq('status', 'active')
-        .neq('id', created.id);
-      if (revokeError) {
-        await bestEffortRevokeCode(supabase, created.id);
-        throw new Error('ACCESS_CODE_ROTATION_REVOKE_FAILED');
-      }
-
-      const workspaceMetadata = mergeWorkspaceAccessMetadata(currentWorkspace.metadata || {}, {
-        accessCodeProvisioned: true,
-        accessCodeId: created.id,
-        entitlements: effectiveEntitlements,
+      if (typeof supabase.rpc !== 'function') throw new Error('ACCESS_CODE_ROTATION_RPC_UNAVAILABLE');
+      const { data, error } = await supabase.rpc('rotate_trading_access_code', {
+        p_workspace_id: plan.workspace.id,
+        p_owner_email: plan.owner.email,
+        p_workspace_display_name: plan.workspace.displayName,
+        p_owner_name: plan.owner.name,
+        p_code_hash: plan.record.code_hash,
+        p_entitlements: plan.entitlements,
+        p_max_redemptions: plan.maxRedemptions,
+        p_expires_at: plan.expiresAt,
+        p_metadata: plan.metadata,
       });
-      const { error: workspaceUpdateError } = await supabase
-        .from('trading_workspace_access')
-        .update({
-          display_name: currentWorkspace.display_name || plan.workspace.displayName,
-          owner_email: currentOwner || plan.owner.email,
-          trading_access_enabled: currentWorkspace.trading_access_enabled !== false,
-          metadata: workspaceMetadata,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', plan.workspace.id);
-      if (workspaceUpdateError) {
-        await bestEffortRevokeCode(supabase, created.id);
-        throw new Error('ACCESS_CODE_ROTATION_WORKSPACE_UPDATE_FAILED');
-      }
-
-      return { ...created, entitlements: effectiveEntitlements };
+      if (error) throw new Error(atomicRotationError(error));
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created?.id) throw new Error('ACCESS_CODE_ROTATION_FAILED');
+      return created;
     },
     async revokeAccessCode(id) {
       const accessCodeId = text(id);
