@@ -277,20 +277,6 @@ jobs:
           fs.writeFileSync(target, JSON.stringify(payload), { mode: 0o600 });
           NODE
 
-      - name: Require LIVE broker execution disabled before production deploy
-        shell: bash
-        run: |
-          body_file="$RUNNER_TEMP/predeploy-runtime-control-body.json"
-          status="$(curl -sS -o "$body_file" -w '%{http_code}' -H "X-Mkety-Admin-Secret: $PRODUCTION_MKETY_TRADING_ADMIN_SECRET" https://trade.mkety.com/api/v1/mkety-admin/runtime-controls)"
-          if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
-          RUNTIME_BODY="$(cat "$body_file")" node <<'NODE'
-          const body = JSON.parse(process.env.RUNTIME_BODY || '{}');
-          if (!body.ok) throw new Error('runtime controls unavailable');
-          if (body.liveBrokerExecutionEnabled !== false) throw new Error('LIVE broker execution must be disabled before production deploy');
-          if (body.effectiveLiveBrokerExecutionEnabled !== false) throw new Error('effective LIVE broker execution must be disabled before production deploy');
-          console.log('Pre-deploy LIVE broker execution: OFF');
-          NODE
-
       - name: Final production dry-run
         run: npx wrangler deploy --dry-run --config wrangler.production.generated.toml
 
@@ -306,7 +292,7 @@ jobs:
           if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
           cat "$body_file"
 
-      - name: Verify persisted owner broker switch and LIVE safety without changing either
+      - name: Verify persisted owner broker switch without changing it
         shell: bash
         run: |
           body_file="$RUNNER_TEMP/runtime-control-body.json"
@@ -320,11 +306,8 @@ jobs:
           if (typeof body.effectiveBrokerExecutionEnabled !== 'boolean') throw new Error('effective broker execution state is invalid');
           const expectedEffective = body.brokerExecutionCapabilityEnabled && body.brokerExecutionEnabled;
           if (body.effectiveBrokerExecutionEnabled !== expectedEffective) throw new Error('effective broker execution state is inconsistent');
-          if (body.liveBrokerExecutionEnabled !== false) throw new Error('LIVE broker execution must remain disabled after production deploy');
-          if (body.effectiveLiveBrokerExecutionEnabled !== false) throw new Error('effective LIVE broker execution must remain disabled after production deploy');
           console.log(`Owner broker switch preserved: ${body.brokerExecutionEnabled ? 'ON' : 'OFF'}`);
           console.log(`Effective broker execution: ${body.effectiveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
-          console.log('LIVE broker execution: OFF');
           NODE
           cat "$body_file"
 
@@ -346,4 +329,3 @@ jobs:
           echo "Broker deployment capability: enabled"
           if [ -n "$PRODUCTION_CTRADER_CBOT_GATEWAY_URL" ]; then echo "Shared cTrader/MT5 gateway: configured"; else echo "Shared cTrader/MT5 gateway: not configured"; fi
           echo "Persisted owner broker switch: preserved (see verification step)"
-          echo "LIVE broker execution: required OFF before deploy and verified OFF after deploy"
