@@ -73,13 +73,13 @@ export function renderMketyAdminAccessCodesPage() {
     </section>
 
     <section class="card">
-      <h2>Create or reissue access code</h2>
-      <p class="muted">Leave Existing workspace ID blank for a new customer. For a returning owner on a new browser/device, paste their existing workspace ID to issue a replacement one-time code without creating another workspace.</p>
+      <h2>Create or reissue / rotate access code</h2>
+      <p class="muted">Leave Existing workspace ID blank for a new customer. For a returning owner, select Reissue / Rotate access or paste their existing workspace ID. Rotation keeps the workspace and entitlements but invalidates prior active access codes.</p>
       <div class="grid">
         <div class="field"><label for="ownerEmail">Owner email</label><input id="ownerEmail" type="email" /></div>
         <div class="field"><label for="ownerName">Owner name</label><input id="ownerName" /></div>
         <div class="field"><label for="workspaceName">Workspace name</label><input id="workspaceName" /></div>
-        <div class="field"><label for="workspaceId">Existing workspace ID (optional)</label><input id="workspaceId" placeholder="Reuse only for access reissue" /></div>
+        <div class="field"><label for="workspaceId">Existing workspace ID (optional)</label><input id="workspaceId" placeholder="Reuse only to reissue / rotate access" /></div>
         <div class="field"><label for="expiresAt">Code expires at</label><input id="expiresAt" type="datetime-local" /></div>
       </div>
       <div class="checks">
@@ -99,7 +99,7 @@ export function renderMketyAdminAccessCodesPage() {
 
     <section class="card">
       <h2>Issued access codes</h2>
-      <p class="muted">Use Reissue to prepare the form for the same workspace. Plaintext codes are shown only once.</p>
+      <p class="muted">Use Reissue / Rotate access to prepare the same workspace for a replacement one-time code. Plaintext codes are shown only once.</p>
       <table>
         <thead><tr><th>Workspace</th><th>Owner</th><th>Status</th><th>Entitlements</th><th>Expires</th><th>Action</th></tr></thead>
         <tbody id="rows"><tr><td colspan="6" class="muted">Enter the staff secret and refresh.</td></tr></tbody>
@@ -183,7 +183,7 @@ export function renderMketyAdminAccessCodesPage() {
       '<td>' + esc(item.status || '') + '</td>' +
       '<td>' + esc(entitlementSummary(item.entitlements)) + '</td>' +
       '<td>' + esc(item.expiresAt || '') + '</td>' +
-      '<td><div class="toolbar"><button class="secondary reissue" data-id="' + esc(item.id) + '" type="button">Reissue</button>' + (item.status === 'active' ? '<button class="danger revoke" data-id="' + esc(item.id) + '" type="button">Revoke</button>' : '') + '</div></td>' +
+      '<td><div class="toolbar"><button class="secondary reissue" data-id="' + esc(item.id) + '" type="button">Reissue / Rotate access</button>' + (item.status === 'active' ? '<button class="danger revoke" data-id="' + esc(item.id) + '" type="button">Revoke</button>' : '') + '</div></td>' +
     '</tr>').join('') : '<tr><td colspan="6" class="muted">No access codes.</td></tr>';
   }
   async function refresh() {
@@ -212,6 +212,7 @@ export function renderMketyAdminAccessCodesPage() {
     $('workspaceName').value = item.workspaceDisplayName || '';
     $('workspaceId').value = item.workspaceId || '';
     $('expiresAt').value = '';
+    $('createBtn').textContent = 'Reissue / Rotate access';
     applyEntitlements(item.entitlements || {});
     $('plainCode').style.display = 'none';
     window.scrollTo({ top: $('ownerEmail').getBoundingClientRect().top + window.scrollY - 80, behavior: 'smooth' });
@@ -238,6 +239,7 @@ export function renderMketyAdminAccessCodesPage() {
         sourceTypes: ['telegram', 'tradingview'], brokerModes: ['demo'], liveExecution: false, maxTeamMembers: 1
       }
     };
+    if (payload.workspaceId && !confirm('Reissue / rotate access for this workspace? The previous active access code will be invalidated after the replacement is created successfully.')) return;
     try {
       const body = await request(API, { method: 'POST', headers: staffHeaders(true), body: JSON.stringify(payload) });
       $('plainCode').textContent = 'Shown once — copy now: ' + body.accessCode.plainCode;
