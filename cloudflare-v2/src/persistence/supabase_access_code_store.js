@@ -52,12 +52,12 @@ export function createTradingAccessCodeStore(supabase) {
       return { ok: false, status: 403, reason: 'TRADING_OWNER_MEMBERSHIP_REQUIRED' };
     }
 
-    const currentAccessCodeId = String(membership.metadata?.accessCodeId || workspace.metadata?.accessCodeId || '').trim() || null;
+    const currentAccessCodeId = String(workspace.metadata?.accessCodeId || membership.metadata?.accessCodeId || '').trim() || null;
     if (currentAccessCodeId && sessionCodeId !== currentAccessCodeId) {
       return { ok: false, status: 401, reason: 'ACCESS_SESSION_SUPERSEDED' };
     }
 
-    const rawEntitlements = membership.metadata?.entitlements || workspace.metadata?.entitlements || {};
+    const rawEntitlements = workspace.metadata?.entitlements || membership.metadata?.entitlements || {};
     return {
       ok: true,
       codeId: currentAccessCodeId,
