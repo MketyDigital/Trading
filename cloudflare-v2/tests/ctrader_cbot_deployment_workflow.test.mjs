@@ -40,6 +40,19 @@ test('frontend E2E contract retains cTrader and MT5 account setup controls', () 
   assert.match(workflow, /showMt5BridgeBtn/);
 });
 
+test('frontend E2E opens the MT5 Connector panel before asserting rendered download controls', () => {
+  const workflow = read('.github/workflows/production-frontend-e2e.yml');
+  assert.match(workflow, /locator\('#showMt5BridgeBtn'\)\.click\(\)/);
+  assert.match(workflow, /locator\('#createMt5ConnectorBtn'\)\.waitFor\(\{ state: 'visible'/);
+  assert.match(workflow, /getByText\('MketyMT5Connector\.exe', \{ exact: false \}\)\.waitFor/);
+});
+
+test('production gateway verifier actively sends an unauthenticated probe before requiring fail-closed AUTH_REQUIRED', () => {
+  const workflow = read('.github/workflows/production-platform-secret-sync.yml');
+  assert.match(workflow, /ws\.send\(JSON\.stringify\(\{type:'unauthenticated_probe'\}\)\)/);
+  assert.match(workflow, /code!==1008 \|\| why!=='AUTH_REQUIRED'/);
+});
+
 test('gateway production image starts the shared bootstrap so cTrader and MT5 listeners run together', () => {
   const dockerfile = read('ctrader-cbot-gateway/Dockerfile');
   assert.match(dockerfile, /CMD\s*\[\s*"node"\s*,\s*"src\/bootstrap\.js"\s*\]/);
