@@ -13,30 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  discover:
+  isolate:
     runs-on: ubuntu-latest
-    outputs:
-      tests: ${{ steps.tests.outputs.tests }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - id: tests
-        name: Discover Node tests
-        working-directory: cloudflare-v2
-        shell: bash
-        run: |
-          tests="$(find tests -maxdepth 1 -name '*.test.mjs' -print | sort | jq -R -s -c 'split("\n")[:-1]')"
-          echo "tests=$tests" >> "$GITHUB_OUTPUT"
-
-  node-test:
-    needs: discover
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        test: ${{ fromJSON(needs.discover.outputs.tests) }}
-    name: Node test - ${{ matrix.test }}
     defaults:
       run:
         working-directory: cloudflare-v2
@@ -52,5 +30,18 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Run isolated Node test
-        run: node --test "${{ matrix.test }}"
+      - name: Run Node tests one file at a time
+        shell: bash
+        run: |
+          set +e
+          failed=0
+          while IFS= read -r test_file; do
+            echo "Running $test_file"
+            node --test "$test_file"
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::error file=$test_file,title=Isolated Node test failed::$test_file exited with status $status"
+              failed=1
+            fi
+          done < <(find tests -maxdepth 1 -name '*.test.mjs' -print | sort)
+          exit "$failed"
