@@ -17,7 +17,7 @@ import { createTradingAccessCodeStore } from '../src/persistence/supabase_access
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const subject = 'access-code:owner@example.com';
 
-function sessionSupabase(currentAccessCodeId = 'code-new') {
+function sessionSupabase(currentAccessCodeId = 'code-new', membershipAccessCodeId = currentAccessCodeId) {
   return {
     from(table) {
       const filters = {};
@@ -59,7 +59,7 @@ function sessionSupabase(currentAccessCodeId = 'code-new') {
                 trading_role: 'owner',
                 membership_enabled: true,
                 metadata: {
-                  accessCodeId: currentAccessCodeId,
+                  accessCodeId: membershipAccessCodeId,
                   entitlements: {
                     brokerModes: ['demo'],
                     sourceTypes: ['telegram', 'tradingview'],
@@ -162,8 +162,8 @@ test('local bearer and refresh token carry the access-code binding used for rota
   assert.equal(verifiedRefresh.accessCodeId, 'code-new');
 });
 
-test('returning session rejects a superseded access-code binding immediately', async () => {
-  const store = createTradingAccessCodeStore(sessionSupabase('code-new'));
+test('returning session rejects a superseded access-code binding immediately even when membership metadata is stale', async () => {
+  const store = createTradingAccessCodeStore(sessionSupabase('code-new', 'code-old'));
 
   const stale = await store.restoreSession({ workspaceId, subject, accessCodeId: 'code-old' });
   assert.equal(stale.ok, false);
