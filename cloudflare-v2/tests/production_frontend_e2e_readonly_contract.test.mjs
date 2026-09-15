@@ -10,12 +10,16 @@ function workflowText() {
   return fs.readFileSync(workflowPath, 'utf8');
 }
 
-test('production frontend E2E is structurally read-only and uses the dedicated guard', () => {
+test('production frontend E2E is structurally read-only and runs the dedicated guard against the repo-root workflow from cloudflare-v2', () => {
   const yaml = workflowText();
 
   assert.match(
     yaml,
-    /node scripts\/production_e2e_readonly_guard\.mjs\s+[^\n]*\.github\/workflows\/production-frontend-e2e\.yml/,
+    /working-directory:\s*cloudflare-v2[\s\S]*?node scripts\/production_e2e_readonly_guard\.mjs\s+\.\.\/\.github\/workflows\/production-frontend-e2e\.yml/,
+  );
+  assert.doesNotMatch(
+    yaml,
+    /node scripts\/production_e2e_readonly_guard\.mjs\s+\.\.\/\.\.\/\.github\/workflows\/production-frontend-e2e\.yml/,
   );
   assert.doesNotMatch(yaml, /grep\s+-E[q]?\s+['"][^'"\n]*(POST|purge)/i);
   assert.deepEqual(findProductionE2EMutations(yaml), []);

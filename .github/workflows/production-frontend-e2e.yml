@@ -115,7 +115,7 @@ jobs:
 
       - name: Verify production E2E remains read-only
         working-directory: cloudflare-v2
-        run: node scripts/production_e2e_readonly_guard.mjs ../../.github/workflows/production-frontend-e2e.yml
+        run: node scripts/production_e2e_readonly_guard.mjs ../.github/workflows/production-frontend-e2e.yml
 
       - name: Upload frontend display evidence
         if: ${{ always() }}
