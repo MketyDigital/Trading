@@ -43,12 +43,14 @@ test('existing MT5 connector destinations expose token regeneration without recr
   assert.match(mt5, /connectionTokenExpiresAt/);
 });
 
-test('production browser release gate exercises MT5 Connector instead of expecting legacy MT5 Cloud to remain visible', () => {
+test('production browser release gate verifies the shipped MT5 Connector contract without authenticating or clicking setup controls', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-frontend-e2e.yml'), 'utf8');
   assert.match(workflow, /showAdvancedMt5BridgeBtn/);
   assert.match(workflow, /MT5 Connector — Recommended/);
   assert.match(workflow, /createMt5ConnectorBtn/);
-  assert.match(workflow, /MketyMT5Connector\.exe/);
+  assert.ok(workflow.includes('assert.match(shippedScripts, /MketyMT5Connector\\.exe/);'));
   assert.match(workflow, /showMt5CloudBtn[^\n]*isVisible\(\)[^\n]*false/);
   assert.doesNotMatch(workflow, /showMt5CloudBtn[^\n]*isVisible\(\)[^\n]*true/);
+  assert.doesNotMatch(workflow, /showMt5BridgeBtn[^\n]*\.click\(/);
+  assert.doesNotMatch(workflow, /accessCode[^\n]*\.fill\(/);
 });

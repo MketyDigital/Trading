@@ -40,11 +40,13 @@ test('frontend E2E contract retains cTrader and MT5 account setup controls', () 
   assert.match(workflow, /showMt5BridgeBtn/);
 });
 
-test('frontend E2E opens the MT5 Connector panel before asserting rendered download controls', () => {
+test('frontend E2E verifies hidden MT5 controls through the shipped client script without authenticating or clicking them', () => {
   const workflow = read('.github/workflows/production-frontend-e2e.yml');
-  assert.match(workflow, /locator\('#showMt5BridgeBtn'\)\.click\(\)/);
-  assert.match(workflow, /locator\('#createMt5ConnectorBtn'\)\.waitFor\(\{ state: 'visible'/);
-  assert.match(workflow, /getByText\('MketyMT5Connector\.exe', \{ exact: false \}\)\.waitFor/);
+  assert.match(workflow, /locator\('#showMt5BridgeBtn'\)\.isVisible\(\)/);
+  assert.match(workflow, /locator\('script'\)\.allTextContents\(\)/);
+  assert.match(workflow, /MketyMT5Connector\\\.exe/);
+  assert.match(workflow, /createMt5ConnectorBtn/);
+  assert.doesNotMatch(workflow, /locator\('#showMt5BridgeBtn'\)\.click\(\)/);
 });
 
 test('production gateway verifier actively sends an unauthenticated probe before requiring fail-closed AUTH_REQUIRED', () => {

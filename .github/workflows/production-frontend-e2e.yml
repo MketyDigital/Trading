@@ -59,9 +59,8 @@ jobs:
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
             assert.equal(await page.locator('#redeemBtn').isEnabled(), true);
 
-            // Verify critical account-setup controls are shipped without authenticating or
-            // mutating production state. The MT5 download controls are rendered only after
-            // opening their local UI panel; opening that panel performs no server mutation.
+            // Verify critical account-setup controls and their client-side MT5 renderer are
+            // shipped without authenticating or invoking a server-mutating setup action.
             const publicDomText = await page.locator('body').textContent();
             assert.match(publicDomText, /Direct Connection — Recommended/);
             assert.match(publicDomText, /Cloud Auto Trader/);
@@ -69,9 +68,10 @@ jobs:
             assert.ok(await page.locator('#connectCTraderBtn').count() > 0, 'connectCTraderBtn must ship in production DOM');
             assert.ok(await page.locator('#showMt5BridgeBtn').count() > 0, 'showMt5BridgeBtn must ship in production DOM');
             assert.ok(await page.locator('#showAdvancedMt5BridgeBtn').count() > 0, 'showAdvancedMt5BridgeBtn must ship in production DOM');
-            await page.locator('#showMt5BridgeBtn').click();
-            await page.locator('#createMt5ConnectorBtn').waitFor({ state: 'visible', timeout: 15000 });
-            await page.getByText('MketyMT5Connector.exe', { exact: false }).waitFor({ state: 'visible', timeout: 15000 });
+            assert.equal(await page.locator('#showMt5BridgeBtn').isVisible(), false, 'MT5 setup control must remain hidden before workspace authentication');
+            const shippedScripts = (await page.locator('script').allTextContents()).join('\n');
+            assert.match(shippedScripts, /MketyMT5Connector\.exe/);
+            assert.match(shippedScripts, /createMt5ConnectorBtn/);
             assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), false);
 
             await page.screenshot({ path: 'frontend-e2e-artifacts/public-login-desktop.png', fullPage: true });
