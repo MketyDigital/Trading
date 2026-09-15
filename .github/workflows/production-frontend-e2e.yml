@@ -210,12 +210,11 @@ jobs:
         run: |
           status="$(curl -sS -o /tmp/staff.json -w '%{http_code}' "$E2E_BASE_URL/api/v1/mkety-admin/access-codes")"
           test "$status" = "401"
-      - name: Revoke disposable access code
+      - name: Purge disposable production workspace
         if: ${{ always() }}
         shell: bash
         run: |
-          if [ -n "${E2E_ACCESS_CODE:-}" ] && [ -n "${E2E_WORKSPACE_ID:-}" ]; then
-            list="$(curl -fsS "$E2E_BASE_URL/api/v1/mkety-admin/access-codes" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET")" || exit 0
-            id="$(E2E_LIST="$list" node -e "const b=JSON.parse(process.env.E2E_LIST); const x=(b.accessCodes||[]).find(x=>x.workspaceId===process.env.E2E_WORKSPACE_ID); if(x) process.stdout.write(x.id)")"
-            if [ -n "$id" ]; then curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/access-codes/$id/revoke" -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" >/dev/null; fi
+          if [ -n "${E2E_WORKSPACE_ID:-}" ]; then
+            curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/test-workspaces/$E2E_WORKSPACE_ID/purge" \
+              -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" >/dev/null || true
           fi
