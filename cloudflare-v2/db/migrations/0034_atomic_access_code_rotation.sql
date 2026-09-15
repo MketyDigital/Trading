@@ -22,6 +22,11 @@ DECLARE
     v_owner_email TEXT := lower(trim(coalesce(p_owner_email, '')));
     v_now TIMESTAMPTZ := now();
     v_workspace_metadata JSONB;
+    v_existing_entitlements JSONB;
+    v_requested_entitlements JSONB := coalesce(p_entitlements, '{}'::jsonb);
+    v_effective_entitlements JSONB;
+    v_source_types JSONB;
+    v_destinations JSONB;
 BEGIN
     SELECT *
       INTO v_workspace
@@ -41,6 +46,47 @@ BEGIN
     IF v_owner_email = '' THEN
         RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'OWNER_EMAIL_REQUIRED';
     END IF;
+
+    v_existing_entitlements := coalesce(v_workspace.metadata -> 'entitlements', '{}'::jsonb);
+
+    SELECT coalesce(jsonb_agg(value ORDER BY value), '[]'::jsonb)
+      INTO v_source_types
+      FROM (
+        SELECT DISTINCT value
+          FROM jsonb_array_elements_text(coalesce(v_existing_entitlements -> 'sourceTypes', '[]'::jsonb)) AS existing(value)
+        UNION
+        SELECT DISTINCT value
+          FROM jsonb_array_elements_text(coalesce(v_requested_entitlements -> 'sourceTypes', '[]'::jsonb)) AS requested(value)
+      ) merged_sources;
+
+    SELECT coalesce(jsonb_agg(value ORDER BY value), '[]'::jsonb)
+      INTO v_destinations
+      FROM (
+        SELECT DISTINCT value
+          FROM jsonb_array_elements_text(coalesce(v_existing_entitlements -> 'destinations', '[]'::jsonb)) AS existing(value)
+        UNION
+        SELECT DISTINCT value
+          FROM jsonb_array_elements_text(coalesce(v_requested_entitlements -> 'destinations', '[]'::jsonb)) AS requested(value)
+      ) merged_destinations;
+
+    v_effective_entitlements := v_existing_entitlements || v_requested_entitlements || jsonb_build_object(
+        'customSubdomain', coalesce((v_existing_entitlements ->> 'customSubdomain')::boolean, false)
+            OR coalesce((v_requested_entitlements ->> 'customSubdomain')::boolean, false),
+        'customHostname', coalesce((v_existing_entitlements ->> 'customHostname')::boolean, false)
+            OR coalesce((v_requested_entitlements ->> 'customHostname')::boolean, false),
+        'tradingExecutionDestination', coalesce((v_existing_entitlements ->> 'tradingExecutionDestination')::boolean, false)
+            OR coalesce((v_requested_entitlements ->> 'tradingExecutionDestination')::boolean, false),
+        'telegramDestination', coalesce((v_existing_entitlements ->> 'telegramDestination')::boolean, false)
+            OR coalesce((v_requested_entitlements ->> 'telegramDestination')::boolean, false),
+        'sourceTypes', v_source_types,
+        'destinations', v_destinations,
+        'brokerModes', jsonb_build_array('demo'),
+        'liveExecution', false,
+        'maxTeamMembers', greatest(
+            coalesce((v_existing_entitlements ->> 'maxTeamMembers')::integer, 1),
+            coalesce((v_requested_entitlements ->> 'maxTeamMembers')::integer, 1)
+        )
+    );
 
     INSERT INTO public.trading_access_codes (
         code_hash,
@@ -67,7 +113,7 @@ BEGIN
         coalesce(nullif(v_workspace.owner_email, ''), v_owner_email),
         p_owner_name,
         'owner',
-        coalesce(p_entitlements, '{}'::jsonb),
+        v_effective_entitlements,
         greatest(coalesce(p_max_redemptions, 1), 1),
         0,
         p_expires_at,
@@ -87,7 +133,7 @@ BEGIN
         || jsonb_build_object(
             'accessCodeProvisioned', true,
             'accessCodeId', v_created.id,
-            'entitlements', coalesce(p_entitlements, '{}'::jsonb)
+            'entitlements', v_effective_entitlements
         );
 
     UPDATE public.trading_workspace_access
