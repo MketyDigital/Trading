@@ -107,6 +107,35 @@ function matchedManagementTarget(matches, reason, ambiguousReason) {
   return null;
 }
 
+function telegramMessageCoordinate(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(telegram:.+):(\d+)$/);
+  if (!match) return null;
+  const sequence = Number(match[2]);
+  return Number.isSafeInteger(sequence) ? { channel: match[1], sequence } : null;
+}
+
+function sourceMessageContinuityTarget(groups = [], event = {}) {
+  const current = telegramMessageCoordinate(event?.external_event_id);
+  if (!current) return null;
+
+  const cohorts = logicalCohorts(groups);
+  const adjacent = cohorts.filter((cohort) => cohort.some((group) =>
+    (group?.sourceEventIds || []).some((sourceEventId) => {
+      const coordinate = telegramMessageCoordinate(sourceEventId);
+      return coordinate?.channel === current.channel && coordinate.sequence === current.sequence - 1;
+    })
+  ));
+
+  if (adjacent.length === 1) {
+    return targetForCohort(adjacent[0], 'SOURCE_MESSAGE_CONTINUITY');
+  }
+  if (adjacent.length > 1) {
+    return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+  }
+  return null;
+}
+
 function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
@@ -192,6 +221,9 @@ export function correlateTradingEvent({
       if (target) return target;
       return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
     }
+
+    const continuityTarget = sourceMessageContinuityTarget(scoped, event);
+    if (continuityTarget) return continuityTarget;
 
     const target = activeLogicalTradeTarget(scoped, {
       nowMs: Number(nowMs),
