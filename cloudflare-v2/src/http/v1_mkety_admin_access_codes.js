@@ -90,6 +90,15 @@ export function mergeWorkspaceAccessMetadata(existing = {}, patch = {}) {
   return out;
 }
 
+export function isSyntheticTestWorkspaceOwnerEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  return /^frontend-e2e-[0-9]+@example\.test$/.test(email)
+    || /^connection-readiness-[0-9]+@example\.test$/.test(email)
+    || /^gateway-config-probe-[0-9]+@example\.test$/.test(email)
+    || email === 'diag-redemption@example.test'
+    || email === 'e2e-owner@starpips.test';
+}
+
 function safePublicAccessCode(row = {}, plainCode = undefined) {
   const out = {
     id: row.id,
@@ -279,11 +288,41 @@ export function createMketyAdminAccessCodeStore(supabase) {
       if (error || !data) throw new Error('ACCESS_CODE_REVOKE_FAILED');
       return data;
     },
+    async purgeSyntheticWorkspace(id) {
+      const workspaceId = text(id);
+      if (!workspaceId) throw new Error('WORKSPACE_ID_REQUIRED');
+      const { data: workspace, error: lookupError } = await supabase
+        .from('trading_workspace_access')
+        .select('id,display_name,owner_email')
+        .eq('id', workspaceId)
+        .maybeSingle();
+      if (lookupError) throw new Error('SYNTHETIC_WORKSPACE_LOOKUP_FAILED');
+      if (!workspace?.id) return { id: workspaceId, deleted: false, missing: true };
+      if (!isSyntheticTestWorkspaceOwnerEmail(workspace.owner_email)) throw new Error('SYNTHETIC_WORKSPACE_PROTECTED');
+
+      const { error: accountDeleteError } = await supabase
+        .from('trade_accounts')
+        .delete()
+        .eq('workspace_id', workspaceId);
+      if (accountDeleteError) throw new Error('SYNTHETIC_WORKSPACE_ACCOUNT_DELETE_FAILED');
+
+      const { error: workspaceDeleteError } = await supabase
+        .from('trading_workspace_access')
+        .delete()
+        .eq('id', workspaceId);
+      if (workspaceDeleteError) throw new Error('SYNTHETIC_WORKSPACE_DELETE_FAILED');
+      return { id: workspaceId, deleted: true, ownerEmail: workspace.owner_email };
+    },
   };
 }
 
 function revokeIdFromPath(pathname) {
   const match = String(pathname || '').match(/^\/api\/v1\/mkety-admin\/access-codes\/([^/]+)\/revoke$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function purgeWorkspaceIdFromPath(pathname) {
+  const match = String(pathname || '').match(/^\/api\/v1\/mkety-admin\/test-workspaces\/([^/]+)\/purge$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -388,6 +427,20 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
       accessStore = createMketyAdminAccessCodeStore(await supabaseFactory(env));
     } catch {
       return json({ ok: false, reason: 'MKETY_ADMIN_ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
+    }
+  }
+
+  const purgeWorkspaceId = purgeWorkspaceIdFromPath(url.pathname);
+  if (purgeWorkspaceId) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (typeof accessStore.purgeSyntheticWorkspace !== 'function') return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_UNAVAILABLE' }, 503);
+    try {
+      const result = await accessStore.purgeSyntheticWorkspace(purgeWorkspaceId);
+      return json({ ok: true, workspace: result });
+    } catch (error) {
+      const reason = String(error?.message || 'SYNTHETIC_WORKSPACE_PURGE_FAILED');
+      if (reason === 'SYNTHETIC_WORKSPACE_PROTECTED') return json({ ok: false, reason }, 403);
+      return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_FAILED' }, 503);
     }
   }
 
