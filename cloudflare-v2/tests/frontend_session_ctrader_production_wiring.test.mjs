@@ -51,11 +51,17 @@ test('production broker verification remains fail closed and never enables live 
   assert.doesNotMatch(workflow, /liveBrokerExecutionEnabled\s*[:=]\s*true/i);
 });
 
-test('authenticated production connection gate explicitly verifies cTrader Direct and MT5 readiness', () => {
+test('production connection readiness is read-only, verifies health/runtime safety, and cannot create fixtures', () => {
   const workflow = read('.github/workflows/production-connection-readiness.yml');
-  assert.match(workflow, /\/api\/v1\/admin\/connections/);
-  assert.match(workflow, /readiness\?\.ctrader\?\.configured/);
-  assert.match(workflow, /CTRADER_DIRECT_READINESS=PASS/);
-  assert.match(workflow, /MT5_CONNECTOR_BASE_READINESS=PASS/);
-  assert.match(workflow, /liveExecution:\s*false/);
+
+  assert.match(workflow, /\/api\/v1\/health/);
+  assert.match(workflow, /\/api\/v1\/mkety-admin\/runtime-controls/);
+  assert.match(workflow, /liveBrokerExecutionEnabled/);
+  assert.match(workflow, /effectiveLiveBrokerExecutionEnabled/);
+  assert.match(workflow, /LIVE_EXECUTION=DISABLED/);
+  assert.doesNotMatch(workflow, /-X\s+POST/i);
+  assert.doesNotMatch(workflow, /example\.test/i);
+  assert.doesNotMatch(workflow, /access\/redeem/i);
+  assert.doesNotMatch(workflow, /access-codes\/\$id\/revoke/i);
+  assert.doesNotMatch(workflow, /Create disposable production access code/i);
 });
