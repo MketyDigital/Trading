@@ -26,7 +26,7 @@ test('staff-secret protected purge route delegates only through the synthetic pu
     },
   };
   const response = await handleMketyAdminAccessCodesRequest(
-    new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes/test-workspaces/11111111-1111-4111-8111-111111111111/purge', {
+    new Request('https://trade.mkety.com/api/v1/mkety-admin/test-workspaces/11111111-1111-4111-8111-111111111111/purge', {
       method: 'POST',
       headers: { 'X-Mkety-Admin-Secret': 'secret' },
     }),
@@ -42,7 +42,7 @@ test('staff-secret protected purge route delegates only through the synthetic pu
 
 test('purge route remains private', async () => {
   const response = await handleMketyAdminAccessCodesRequest(
-    new Request('https://trade.mkety.com/api/v1/mkety-admin/access-codes/test-workspaces/11111111-1111-4111-8111-111111111111/purge', { method: 'POST' }),
+    new Request('https://trade.mkety.com/api/v1/mkety-admin/test-workspaces/11111111-1111-4111-8111-111111111111/purge', { method: 'POST' }),
     { MKETY_TRADING_ADMIN_SECRET: 'secret' },
     { store: { purgeSyntheticWorkspace: async () => ({ deleted: true }) } },
   );
