@@ -10,6 +10,8 @@ test('Mkety staff access-code page is separate, secret-safe, and supports create
   assert.match(html, /Mkety Staff Trading Admin/);
   assert.match(html, /\/api\/v1\/mkety-admin\/access-codes/);
   assert.match(html, /Create access code/);
+  assert.match(html, /Reissue \/ Rotate access/);
+  assert.match(html, /invalidates prior active access codes/i);
   assert.match(html, /Revoke/);
   assert.match(html, /shown once/i);
 
