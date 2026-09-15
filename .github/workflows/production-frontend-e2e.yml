@@ -100,7 +100,7 @@ jobs:
       - name: Verify production E2E remains read-only
         shell: bash
         run: |
-          if grep -Eq 'Create disposable production access code|/purge|method:[[:space:]]*["'"']POST|curl .* -X POST' .github/workflows/production-frontend-e2e.yml; then
+          if grep -Eq 'Create disposable production access code|/purge|curl .* -X POST|method:.*POST' .github/workflows/production-frontend-e2e.yml; then
             echo "Production frontend E2E contains a mutating production action."
             exit 1
           fi
