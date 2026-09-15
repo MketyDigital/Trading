@@ -326,6 +326,15 @@ async function runAccountPlan({
         snapshot,
       });
       safeMark(latencyTrace, 'BROKER_ACK');
+      if (result?.blocked === true) {
+        outcomes.push({
+          status: 'BLOCKED',
+          legId: executableAction?.legId ?? null,
+          idempotencyKey: executableAction?.idempotencyKey ?? null,
+          reason: result?.code || result?.reason || 'BROKER_ACTION_BLOCKED',
+        });
+        continue;
+      }
       if (result?.ok === false || result?.success === false) {
         await bindOpenFailure({
           stateBinder, workspaceId, eventId, accountId: requestedAccountId,
