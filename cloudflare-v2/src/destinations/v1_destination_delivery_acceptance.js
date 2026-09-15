@@ -96,16 +96,27 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
     const destination = routedByChatId.get(text(sendInput.chatId));
     let replyToMessageId = null;
     if (parentExternalEventId && destination) {
-      replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
+      try {
+        replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
+      } catch {
+        return { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
+      }
       if (!replyToMessageId) {
         return { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
       }
     }
     const result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
     if (result?.ok && destination && currentExternalEventId && result.messageId != null && supabase?.from) {
-      await recordMessageMapping(supabase, workspaceId, destination, currentExternalEventId, result.messageId);
+      try {
+        await recordMessageMapping(supabase, workspaceId, destination, currentExternalEventId, result.messageId);
+      } catch {
+        // The Telegram message is already accepted by Telegram. Never convert a
+        // mapping-journal failure into a send failure because a retry could create
+        // a duplicate post. A future reply will fail closed if this mapping is absent.
+        return { ...result, threadMappingPersisted: false };
+      }
     }
-    return result;
+    return { ...result, ...(result?.ok ? { threadMappingPersisted: true } : {}) };
   };
 
   return runV1DestinationDeliveryStage(input, {
