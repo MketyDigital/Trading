@@ -96,7 +96,7 @@ function managementPlan(text) {
 
   const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
   const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
-    || new RegExp(`\\bMOVE\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)\\b(?:\\s+TO)?\\s+(?:BE|BREAK\\s+EVEN|BREAKEVEN)\\b`).test(upper)
+    || new RegExp(`\bMOVE\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\s+(?:SL|STOP)\b(?:\s+TO)?\s+(?:BE|BREAK\s+EVEN|BREAKEVEN)\b`).test(upper)
     || /\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
     || /\bMAKE\s+SURE\s+(?:(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+)?BE\b/.test(upper);
 
@@ -118,7 +118,7 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
 
-  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const moveSlPattern = new RegExp(`\b(?:MOVE|TRAIL)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\s+(?:SL|STOP)(?:\s+TO)?\s*[:=@-]?\s*(${SIGNAL_NUMBER_SOURCE})\b`, 'i');
   const moveSl = text.match(moveSlPattern);
   if (moveSl) {
     const stopLoss = parsedNumber(moveSl[1]);
@@ -126,7 +126,7 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL', stopLoss });
   }
 
-  const changeTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET)\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const changeTpPattern = new RegExp(`\b(?:CHANGE|NEW|MOVE|SET)\s+TP\s*([1-9]\d?)?(?:\s+TO)?\s*[:=@-]?\s*(${SIGNAL_NUMBER_SOURCE})\b`, 'i');
   const changeTp = text.match(changeTpPattern);
   if (changeTp) {
     const takeProfit = parsedNumber(changeTp[2]);
@@ -142,7 +142,7 @@ function managementPlan(text) {
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
   }
-  if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
+  if (new RegExp(`\b(?:CANCEL|DELETE)\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\s+PENDING\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
   }
   if (/\bCLOSE\s+ALL\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
@@ -178,8 +178,8 @@ function tpSegmentValues(segment) {
 
 function extractExplicitTps(text) {
   const labeled = [];
-  const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*[:@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
-  const spacedPattern = new RegExp(`\\bTP\\s+([1-9]\\d?)\\s*[:@-]\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  const compactPattern = new RegExp(`\bTP([1-9]\d?)\s*[:@-]?\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  const spacedPattern = new RegExp(`\bTP\s+([1-9]\d?)\s*[:@-]\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
   for (const match of text.matchAll(compactPattern)) {
     const value = parsedNumber(match[2]);
     if (value == null) return null;
@@ -191,7 +191,11 @@ function extractExplicitTps(text) {
     labeled.push({ index: Number(match[1]), value });
   }
   if (labeled.length) {
-    const unique = new Map(labeled.map((item) => [item.index, item.value]));
+    const unique = new Map();
+    for (const item of labeled) {
+      if (unique.has(item.index) && unique.get(item.index) !== item.value) return null;
+      unique.set(item.index, item.value);
+    }
     return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
   }
 
@@ -279,7 +283,7 @@ function extractSymbolToken(text, sideInfo) {
 }
 
 function extractEntry(text, symbolToken) {
-  const explicitPattern = new RegExp(`\\bENTRY(?:\\s+(?:PRICE|ZONE))?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})(?:\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE}))?`, 'i');
+  const explicitPattern = new RegExp(`\bENTRY(?:\s+(?:PRICE|ZONE))?\s*[:=@-]?\s*(${SIGNAL_NUMBER_SOURCE})(?:\s*[-–—]\s*(${SIGNAL_NUMBER_SOURCE}))?`, 'i');
   const explicit = text.match(explicitPattern);
   if (explicit) {
     const a = parsedNumber(explicit[1]);
@@ -298,7 +302,7 @@ function extractEntry(text, symbolToken) {
     .replace(/[@():=]+/g, ' ')
     .trim();
 
-  const rangePattern = new RegExp(`(${SIGNAL_NUMBER_SOURCE})\\s*[-–—]\\s*(${SIGNAL_NUMBER_SOURCE})`);
+  const rangePattern = new RegExp(`(${SIGNAL_NUMBER_SOURCE})\s*[-–—]\s*(${SIGNAL_NUMBER_SOURCE})`);
   const range = head.match(rangePattern);
   if (range) {
     const a = parsedNumber(range[1]);
@@ -343,7 +347,7 @@ export function buildMachinePlan(event = {}) {
   if (hasAmbiguousCommaNumber(text)) return { status: 'NEEDS_INTERPRETATION' };
 
   const symbol = normalizeDetectedSymbol(symbolToken);
-  const stopLossPattern = new RegExp(`\\bSL\\s*[:@=-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'i');
+  const stopLossPattern = new RegExp(`\bSL\s*[:@=-]?\s*(${SIGNAL_NUMBER_SOURCE})`, 'i');
   const stopLossMatch = text.match(stopLossPattern);
   const stopLoss = stopLossMatch ? parsedNumber(stopLossMatch[1]) : null;
   if (stopLossMatch && stopLoss == null) return { status: 'NEEDS_INTERPRETATION' };
