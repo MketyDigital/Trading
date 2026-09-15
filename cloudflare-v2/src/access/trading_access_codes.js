@@ -168,6 +168,11 @@ export function classifyTradingAccessCodeUse(record, ownerEmail, now = new Date(
   };
 }
 
+function optionalAccessCodeId(payload = {}) {
+  const value = String(payload.accessCodeId ?? payload.access_code_id ?? '').trim();
+  return value || null;
+}
+
 export async function createLocalTradingBearer(payload = {}, secret, nowSec = Math.floor(Date.now() / 1000)) {
   if (!secret) throw new Error('TRADING_ACCESS_CODE_SESSION_SECRET_REQUIRED');
   const workspaceId = String(payload.workspaceId ?? '').trim();
@@ -186,6 +191,8 @@ export async function createLocalTradingBearer(payload = {}, secret, nowSec = Ma
     iat: Number(nowSec),
     exp: Number(nowSec) + Math.max(60, Number(payload.ttlSec ?? 900) || 900),
   };
+  const accessCodeId = optionalAccessCodeId(payload);
+  if (accessCodeId) claims.access_code_id = accessCodeId;
   return createSignedToken(header, claims, secret);
 }
 
@@ -219,6 +226,7 @@ export async function verifyLocalTradingBearer(token, secret, {
     subject: String(claims.sub),
     workspaceId: String(claims.workspace_id),
     access: String(claims.access),
+    accessCodeId: claims.access_code_id ? String(claims.access_code_id) : null,
   };
 }
 
@@ -229,18 +237,21 @@ export async function createTradingRefreshToken(payload = {}, secret, nowSec = M
   if (!workspaceId) throw new Error('WORKSPACE_REQUIRED');
   if (!subject) throw new Error('SUBJECT_REQUIRED');
   const ttlSec = Math.max(3600, Number(payload.ttlSec ?? 30 * 24 * 60 * 60) || 30 * 24 * 60 * 60);
+  const claims = {
+    iss: 'mkety-trading-refresh',
+    aud: 'mkety-trading-browser',
+    product: 'trading',
+    workspace_id: workspaceId,
+    sub: subject,
+    access: 'owner',
+    iat: Number(nowSec),
+    exp: Number(nowSec) + ttlSec,
+  };
+  const accessCodeId = optionalAccessCodeId(payload);
+  if (accessCodeId) claims.access_code_id = accessCodeId;
   return createSignedToken(
     { alg: 'HS256', typ: 'JWT', kid: 'trading-refresh-v1' },
-    {
-      iss: 'mkety-trading-refresh',
-      aud: 'mkety-trading-browser',
-      product: 'trading',
-      workspace_id: workspaceId,
-      sub: subject,
-      access: 'owner',
-      iat: Number(nowSec),
-      exp: Number(nowSec) + ttlSec,
-    },
+    claims,
     secret,
   );
 }
@@ -259,6 +270,7 @@ export async function verifyTradingRefreshToken(token, secret, { nowSec = Math.f
     ok: true,
     subject: String(claims.sub),
     workspaceId: String(claims.workspace_id),
+    accessCodeId: claims.access_code_id ? String(claims.access_code_id) : null,
     claims,
   };
 }
