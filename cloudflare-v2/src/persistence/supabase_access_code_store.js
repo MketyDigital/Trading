@@ -8,13 +8,18 @@ function requireSupabase(supabase) {
   if (!supabase?.from) throw new Error('SUPABASE_CLIENT_REQUIRED');
 }
 
-function safeMetadata(record = {}, payload = {}, entitlements = record.entitlements || {}) {
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function safeMetadata(record = {}, payload = {}, entitlements = record.entitlements || {}, existing = {}) {
   return {
+    ...object(existing),
     accessCodeId: record.id,
     accessCodeRedeemed: true,
     accessCodeOnboarding: true,
     accessCodeProvisioned: true,
-    requestedSubdomain: payload.requestedSubdomain || null,
+    requestedSubdomain: payload.requestedSubdomain || object(existing).requestedSubdomain || null,
     entitlements,
   };
 }
@@ -22,9 +27,10 @@ function safeMetadata(record = {}, payload = {}, entitlements = record.entitleme
 export function createTradingAccessCodeStore(supabase) {
   requireSupabase(supabase);
 
-  async function restoreSession({ workspaceId, subject } = {}) {
+  async function restoreSession({ workspaceId, subject, accessCodeId } = {}) {
     const wid = String(workspaceId || '').trim();
     const sub = String(subject || '').trim();
+    const sessionCodeId = String(accessCodeId || '').trim() || null;
     if (!wid || !sub) return { ok: false, status: 401, reason: 'RETURNING_SESSION_INVALID' };
 
     const { data: workspace, error: workspaceError } = await supabase
@@ -46,9 +52,15 @@ export function createTradingAccessCodeStore(supabase) {
       return { ok: false, status: 403, reason: 'TRADING_OWNER_MEMBERSHIP_REQUIRED' };
     }
 
+    const currentAccessCodeId = String(membership.metadata?.accessCodeId || workspace.metadata?.accessCodeId || '').trim() || null;
+    if (currentAccessCodeId && sessionCodeId !== currentAccessCodeId) {
+      return { ok: false, status: 401, reason: 'ACCESS_SESSION_SUPERSEDED' };
+    }
+
     const rawEntitlements = membership.metadata?.entitlements || workspace.metadata?.entitlements || {};
     return {
       ok: true,
+      codeId: currentAccessCodeId,
       workspace: {
         id: workspace.id,
         name: workspace.display_name || null,
@@ -81,6 +93,7 @@ export function createTradingAccessCodeStore(supabase) {
         const restored = await restoreSession({
           workspaceId: plan.workspace.id,
           subject: plan.membership.subject,
+          accessCodeId: plan.codeId,
         });
         return restored.ok ? { ...restored, mode: 'access_code_login' } : restored;
       }
@@ -88,6 +101,13 @@ export function createTradingAccessCodeStore(supabase) {
       if (payload.requestedSubdomain && !plan.entitlements.customSubdomain) {
         return { ok: false, status: 403, reason: 'CUSTOM_SUBDOMAIN_ENTITLEMENT_REQUIRED' };
       }
+
+      const { data: existingWorkspace, error: existingWorkspaceError } = await supabase
+        .from('trading_workspace_access')
+        .select('id,display_name,owner_email,trading_access_enabled,metadata')
+        .eq('id', plan.workspace.id)
+        .maybeSingle();
+      if (existingWorkspaceError) return { ok: false, status: 503, reason: 'ACCESS_CODE_WORKSPACE_LOOKUP_FAILED' };
 
       const nextRedeemedCount = Number(record.redeemed_count || 0) + 1;
       const effectiveOwnerEmail = String(record.owner_email || payload.ownerEmail || '').trim().toLowerCase();
@@ -109,10 +129,10 @@ export function createTradingAccessCodeStore(supabase) {
 
       const workspaceRow = {
         id: plan.workspace.id,
-        display_name: payload.workspaceName || record.workspace_display_name || plan.workspace.name,
-        owner_email: effectiveOwnerEmail,
-        trading_access_enabled: true,
-        metadata: safeMetadata(record, payload, plan.entitlements),
+        display_name: existingWorkspace?.display_name || payload.workspaceName || record.workspace_display_name || plan.workspace.name,
+        owner_email: existingWorkspace?.owner_email || effectiveOwnerEmail,
+        trading_access_enabled: existingWorkspace?.trading_access_enabled !== false,
+        metadata: safeMetadata(record, payload, plan.entitlements, existingWorkspace?.metadata),
         updated_at: new Date(payload.now || Date.now()).toISOString(),
       };
 
@@ -126,12 +146,20 @@ export function createTradingAccessCodeStore(supabase) {
         return { ok: false, status: 503, reason: 'ACCESS_CODE_WORKSPACE_UPSERT_FAILED' };
       }
 
+      const { data: existingMembership, error: existingMembershipError } = await supabase
+        .from('trading_workspace_memberships')
+        .select('id,metadata')
+        .eq('workspace_id', workspace.id)
+        .eq('zitadel_subject', plan.membership.subject)
+        .maybeSingle();
+      if (existingMembershipError) return { ok: false, status: 503, reason: 'ACCESS_CODE_MEMBERSHIP_LOOKUP_FAILED' };
+
       const membershipRow = {
         workspace_id: workspace.id,
         zitadel_subject: plan.membership.subject,
         trading_role: 'owner',
         membership_enabled: true,
-        metadata: safeMetadata(record, payload, plan.entitlements),
+        metadata: safeMetadata(record, payload, plan.entitlements, existingMembership?.metadata),
         updated_at: new Date(payload.now || Date.now()).toISOString(),
       };
 
@@ -161,6 +189,7 @@ export function createTradingAccessCodeStore(supabase) {
 
       return {
         ...plan,
+        codeId: record.id,
         mode: 'access_code_onboarding',
         workspace: {
           id: workspace.id,
