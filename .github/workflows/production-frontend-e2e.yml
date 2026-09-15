@@ -58,6 +58,15 @@ jobs:
             await page.locator('#accessCode').waitFor({ state: 'visible' });
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
             assert.equal(await page.locator('#redeemBtn').isEnabled(), true);
+
+            // Verify critical account-setup controls are present in the shipped DOM without
+            // authenticating or mutating production state. They remain hidden pre-auth.
+            const publicDomText = await page.locator('body').innerText();
+            assert.match(publicDomText, /Direct Connection — Recommended/);
+            assert.match(publicDomText, /Cloud Auto Trader/);
+            assert.ok(await page.locator('#connectCTraderBtn').count() > 0, 'connectCTraderBtn must ship in production DOM');
+            assert.ok(await page.locator('#showMt5BridgeBtn').count() > 0, 'showMt5BridgeBtn must ship in production DOM');
+
             await page.screenshot({ path: 'frontend-e2e-artifacts/public-login-desktop.png', fullPage: true });
 
             await page.setViewportSize({ width: 390, height: 844 });
