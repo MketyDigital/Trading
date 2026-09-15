@@ -15,7 +15,7 @@ test('production frontend E2E is structurally read-only and uses the dedicated g
 
   assert.match(
     yaml,
-    /node scripts\/production_e2e_readonly_guard\.mjs \.\.\/\.github\/workflows\/production-frontend-e2e\.yml/,
+    /node scripts\/production_e2e_readonly_guard\.mjs\s+[^\n]*\.github\/workflows\/production-frontend-e2e\.yml/,
   );
   assert.doesNotMatch(yaml, /grep\s+-E[q]?\s+['"][^'"\n]*(POST|purge)/i);
   assert.deepEqual(findProductionE2EMutations(yaml), []);
