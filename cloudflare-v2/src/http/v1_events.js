@@ -10,10 +10,8 @@ import { createProviderCircuitBreaker } from '../resilience/provider_circuit_bre
 import { decryptSecret } from '../security/secret_box.js';
 import { normalizeDestinationCredentialPlaintext } from '../destinations/destination_credentials_compat.js';
 import { createTelegramDestinationAiFormatter } from '../destinations/telegram_ai_formatter.js';
-import {
-  createV1DestinationDeliveryStore,
-  runV1DestinationDeliveryStage,
-} from '../destinations/v1_destination_delivery_stage.js';
+import { createV1DestinationDeliveryStore } from '../destinations/v1_destination_delivery_stage.js';
+import { runV1DestinationDeliveryAcceptanceStage } from '../destinations/v1_destination_delivery_acceptance.js';
 
 const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
 
@@ -83,7 +81,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   tradingAccessControlResolver,
   brokerExecutionControlResolver,
   destinationStoreFactory = createV1DestinationDeliveryStore,
-  destinationStageFn = runV1DestinationDeliveryStage,
+  destinationStageFn = runV1DestinationDeliveryAcceptanceStage,
   orchestrateDuplicates = false,
 } = {}) {
   if (request.method !== 'POST') {
@@ -164,6 +162,7 @@ export async function handleV1EventsRequest(request, env = {}, {
               env,
             }, {
               destinationStore,
+              supabase,
               decryptCredentials: decryptDestinationCredentialsCompat,
               aiFormatterFactory,
               aiCircuitBreaker,
