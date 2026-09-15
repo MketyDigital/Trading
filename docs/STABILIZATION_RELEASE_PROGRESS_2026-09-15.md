@@ -45,19 +45,21 @@ Do not skip directly to DEMO.
 
 - PR: #89 `Stabilize fast follow-ups, TP parsing, replies, and MT5 Wine support`
 - Branch: `fix/tp-fast-followup-replies-wine-20260915`
-- Head at this ledger update: `6fc5b1d4432dfc00ba9d81caa6a5ab4e83ee817b`
+- Last fully-green checkpoint before diagnostic-workflow removal: `7a627635db5cd23fe01137abc8b2d9454998f04d`
+- Diagnostic workflow removal commit: `fa4f9b9d7fdbd376a9a02c8e6c9d54d713d28595`
 - Base: `main`
-- PR remains draft/open and mergeable.
+- PR remains draft/open and mergeable until the post-ledger final CI is green.
 
 ## Progress against the initial plan
 
-### A. Pin/reproduce current state — COMPLETE for current iteration
+### A. Pin/reproduce current state — COMPLETE
 
-- Current PR #89 head re-read after each material change.
-- Original hidden CI failure was recovered through a dedicated diagnostic workflow artifact rather than guessing.
+- PR #89 head is re-read after each material change.
+- Original hidden CI failure was recovered through a dedicated diagnostic workflow artifact rather than guessed.
 - Root cause of the earlier diagnostic discrepancy was a stale synthetic PR merge ref; refreshed PR merge refs were verified afterward.
+- The final diagnostic workflow is now removed because ordinary CI independently passed on the same branch head.
 
-### B. Atomic access rotation + Admin UI — IMPLEMENTED, verification still part of final CI
+### B. Atomic access rotation + Admin UI — IMPLEMENTED
 
 Implemented on #89:
 
@@ -65,116 +67,93 @@ Implemented on #89:
 - worker reissue path delegates to `rotate_trading_access_code` RPC.
 - database RPC locks workspace row, validates workspace/owner, merges additive entitlements, forces `brokerModes=['demo']` and `liveExecution=false`, creates replacement, revokes predecessor active codes, merges workspace access metadata, and commits transactionally.
 - RPC execution is restricted to `service_role`.
-- migration `trading_0034_atomic_access_code_rotation` was applied successfully to production Supabase project `vdblajgxrfndjesoyayy`.
-- production function existence was re-queried after migration.
-- admin UI now explicitly says `Reissue / Rotate access` and makes clear that prior active access codes are revoked on successful rotation.
-- refresh-session restoration compares token `access_code_id` against the current workspace/membership access identity and rejects stale sessions with `ACCESS_SESSION_SUPERSEDED`.
-- privileged local-bearer authorization also reloads current workspace/membership and rejects superseded local bearers.
+- migration `trading_0034_atomic_access_code_rotation` was applied successfully to production Supabase project `vdblajgxrfndjesoyayy` and function existence was re-queried.
+- admin UI explicitly says `Reissue / Rotate access` and explains prior active codes are revoked only on successful rotation.
+- refresh-session restoration rejects stale access-code identities with `ACCESS_SESSION_SUPERSEDED`.
+- privileged local-bearer authorization reloads current workspace/membership and rejects superseded local bearers.
 
-Still required before marking release complete:
+Remaining proof is final CI on the actual final SHA and non-destructive production behavior verification after deployment.
 
-- final full CI on the final release SHA;
-- production behavior verification after deployment without mutating legitimate access state merely for testing.
+### C. Eliminate production-test pollution — COMPLETE IN CODE; POST-DEPLOY SMOKE STILL REQUIRED
 
-### C. Eliminate production-test pollution — IMPLEMENTED in release workflow, final CI/deploy verification pending
-
-- `.github/workflows/production-frontend-e2e.yml` has been converted to a read-only production browser smoke.
+- `.github/workflows/production-frontend-e2e.yml` is read-only.
 - it no longer creates/redeems/revokes/purges disposable production access fixtures.
 - `cloudflare-v2/scripts/production_e2e_readonly_guard.mjs` structurally refuses known production mutation patterns.
 - production smoke checks public login DOM, account setup controls, staff admin page presence, production health, and staff API authorization boundary without authenticating or writing production data.
+- current production scan found zero test/e2e/synthetic/fixture/playwright markers across workspaces, sources, destinations, templates, and accounts.
 
-Production inventory re-check so far:
-
-- canonical Starpips workspace remains present.
-- canonical Mkay workspace remains present.
-- no additional trading-workspace rows were found in the workspace audit at this point.
-- Starpips latest access code is active and predecessor is revoked.
-- Mkay expired code belongs to a legitimate workspace and must not be deleted merely because it is expired.
-
-Still required:
-
-- complete orphan/dependency/read-only audit across memberships, codes, redemptions, sources, routes, destinations, templates, accounts, position state and test-pattern owners.
-
-### D. Recent PR reconciliation — IN PROGRESS, targeted only
+### D. Recent PR reconciliation — COMPLETE, TARGETED ONLY
 
 PR #87:
 
-- already merged to `main`; do not re-import.
+- already merged to `main`; not re-imported.
 - #89 inherits its Telegram verbatim + durable close baseline.
 
 PR #88:
 
-- no wholesale merge.
-- #89 already contains newer fast-completion/correlator and TP parsing work.
-- added isolated regression coverage for two exact #88 safety cases not explicitly represented by #89 tests:
-  - grouped prices inside one comma-separated TP list;
-  - conflicting duplicate numbered TP indexes must fail closed.
+- not merged wholesale.
+- #89 contains newer fast-completion/correlator and TP parsing work.
+- isolated regressions were added for grouped prices inside one comma-separated TP list and conflicting duplicate numbered TP indexes failing closed.
 
 PR #86:
 
-- no wholesale merge.
-- #89 already contains MTProto wrapped-reply recovery, BE safety, durable close/opening-history preservation and selected management continuity behavior.
-- explicit broker position/order identity correlation was added to #89 under regression coverage.
-- added isolated regression coverage for #86 risk-reduction availability invariants:
-  - close does not depend on unavailable dynamic exposure context;
-  - risk-increasing OPEN still fails closed when required exposure is unavailable;
-  - MT5 BE uses fresh broker market context without requiring dynamic exposure service.
+- not merged wholesale.
+- #89 contains MTProto wrapped-reply recovery, BE safety, durable close/opening-history preservation and management continuity behavior.
+- explicit broker position/order identity correlation is covered.
+- isolated regressions prove risk-reducing close/BE paths do not depend on unavailable dynamic exposure while risk-increasing OPEN still fails closed when required exposure is unavailable.
 
-Still required:
+### E. Exact CI root cause — COMPLETE
 
-- finish semantic comparison of #86 changed files and prove no still-correct behavior is absent;
-- final targeted check that #88 is fully superseded by current #89 behavior.
-
-### E. Exact CI root cause — COMPLETE for the previously hidden failure
-
-A dedicated diagnostic workflow captured Node test output as an artifact. The failure was traced to the synthetic PR merge ref containing the old sequential reissue code while the real branch head already contained the new RPC path. A subsequent branch update regenerated the PR merge ref and the refreshed merge commit was verified to contain the RPC implementation.
+The diagnostic workflow captured Node test output as an artifact. The failure was traced to the synthetic PR merge ref containing old sequential reissue code while the real branch head already contained the new RPC path. A subsequent branch update regenerated the PR merge ref and ordinary CI passed on the refreshed branch.
 
 Do not remove safety behavior to satisfy CI.
 
-### F. Full CI — PENDING on the current/final head
+### F. Full CI — GREEN ON LAST CHECKPOINT; FINAL POST-LEDGER RUN REQUIRED
 
-Previous intermediate head `9f92a0b38d3590bb2ec4919c046b3d5d27be495b` was verified green for:
+Checkpoint `7a627635db5cd23fe01137abc8b2d9454998f04d` passed:
 
 - Trading V1 CI
 - cTrader cBot CI
 - PR89 Node Test Diagnostic
 
-Additional regression coverage and workflow changes have been added since then. Therefore that earlier green run is **not** final release evidence.
+That checkpoint includes the ported #86/#88 safety regressions plus the fresh-open `openedAt` durability regression. The temporary diagnostic workflow has since been removed, which changed the SHA. Therefore one final ordinary CI pass is required on the post-ledger head before merge.
 
-Required:
+### G. Final production re-audit — COMPLETE FOR PRE-MERGE STATE
 
-- run/follow all release-gating CI on the final head;
-- inspect any failure exactly;
-- remove the temporary diagnostic workflow only after the ordinary CI path gives sufficient evidence, then re-run final CI if its removal changes the head.
+Production authority was re-queried read-only.
 
-### G. Final production re-audit — IN PROGRESS
+Important schema correction:
 
-Already re-queried:
+- trading-domain FKs point to `trading_workspace_access`, **not** the legacy `workspaces` table.
+- an intermediate audit against `workspaces` therefore produced false orphan signals; no mutation was performed.
+- re-auditing against the actual FK authority shows zero orphan workspace/account/group/leg references.
+
+Verified production state:
 
 - runtime controls: `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`.
-- atomic RPC exists in production.
-- canonical workspace audit currently returns only Starpips and Mkay.
-- access-code audit shows current Starpips code active and predecessor revoked; Mkay legitimate expired code remains.
-- foreign-key relationships for trading workspace/access domain were inspected before any cleanup.
+- exactly two legitimate trading workspaces exist in `trading_workspace_access`: Starpips Forex and Mkay.
+- both memberships resolve to legitimate workspaces and are enabled owners.
+- all access-code redemptions resolve to legitimate access codes and workspaces.
+- Starpips branding/metadata is preserved.
+- one active MTProto source exists for Starpips; current stored health is `DISABLED`, so post-deploy source/connector health must be rechecked before DEMO.
+- two active broker destinations exist and both report `HEALTHY`.
+- two active source->broker routes exist: cTrader and MT5; every route resolves to its source/destination/workspace.
+- cTrader DEMO account is active, execution-enabled, environment=`demo`, live execution disabled.
+- MT5 DEMO account is active, execution-enabled, environment=`demo`, server=`OctaFX-Demo`, live execution disabled.
+- cTrader LIVE account remains active as a configured account but `execution_enabled=false` and `live_execution_enabled=false`.
+- position integrity: 43 groups, zero orphan workspace references, zero orphan account references.
+- leg integrity: 53 legs, zero orphan workspace references, zero orphan group references.
+- known test-marker scan returned zero across workspaces, sources, destinations, templates, and accounts.
 
-Still required:
+Historical durable rows are not rewritten merely to make old data look newer. Fresh post-deploy DEMO evidence remains authoritative for the corrected fast-correlation/open/close behavior.
 
-- memberships/orphan check;
-- access-code redemption/orphan check;
-- sources/routes/destinations/templates linkage;
-- broker accounts and environment flags;
-- position groups/legs integrity;
-- source/destination test-pattern residue;
-- branding/workspace metadata preservation;
-- final LIVE=false proof immediately before DEMO.
-
-### H. Deploy/preflight — PENDING
+### H. Deploy/preflight — PENDING FINAL CI + MERGE
 
 Rules:
 
 - production deploy only from merged/reviewed `main` through `.github/workflows/production-cloudflare-deploy.yml`.
 - deployment observes persisted runtime controls but does not become an autonomous LIVE switch.
-- after deploy, verify the actual deployed release revision/equivalent deployment evidence, production health, runtime controls, DEMO/LIVE account flags, route/source authority, and connector/gateway health.
+- after deploy, verify the actual deployed release revision/equivalent deployment evidence, production health, runtime controls, DEMO/LIVE account flags, route/source authority, source/connector/gateway health, and read-only frontend smoke.
 
 Only after this gate is green may the operator be asked to send the fresh DEMO signal.
 
@@ -182,7 +161,7 @@ Only after this gate is green may the operator be asked to send the fresh DEMO s
 
 Operator will send the real DEMO source events. Assistant will observe/inspect production evidence from the system side.
 
-Required evidence remains the full AGENTS.md matrix, including:
+Required evidence remains the full `AGENTS.md` matrix, including:
 
 - normal Telegram Bot API source;
 - MTProto source;
@@ -204,13 +183,12 @@ Do not state `DEMO preflight is green. Send the test signal now.` until CI, depl
 
 ## Current next steps
 
-1. Run/follow CI for head `6fc5b1d4432dfc00ba9d81caa6a5ab4e83ee817b` and inspect the two newly ported #86/#88 regression suites.
-2. Finish semantic PR #86/#88 comparison; do not import whole files unless a concrete missing behavior is proven.
-3. Complete read-only production dependency/orphan audit and current DEMO/LIVE account audit.
-4. Reconcile final branch with all approved specs and `AGENTS.md` feature-by-feature.
-5. Remove temporary diagnostic workflow when no longer needed, then run final CI on the actual final SHA.
-6. Mark PR ready/merge only after final review and green gates.
-7. Allow production deploy from merged `main`; verify production health/revision/runtime/account/source/route/connector state.
-8. When every preflight gate is green and LIVE is still false, request the operator DEMO signal with the exact approved sentence.
-9. Observe the full DEMO lifecycle and query durable/broker/destination evidence after each step.
-10. Re-query LIVE state after DEMO. Any later LIVE test requires a separate explicit user authorization; it must never be enabled automatically.
+1. Run/follow ordinary CI on the post-ledger branch SHA; inspect any failure exactly.
+2. Mark PR #89 ready only if that final CI is green and the PR head has not moved unexpectedly.
+3. Merge #89 to `main` using an expected-head SHA guard.
+4. Verify the existing production Cloudflare deployment workflow is the one triggered from `main` and follow its result; do not expose or replace secrets.
+5. Verify deployed revision/equivalent evidence, `/health`, persisted runtime controls, DEMO/LIVE account flags, routes, source/connector/gateway state, and read-only frontend smoke.
+6. Re-query `live_broker_execution_enabled` immediately before DEMO; it must still be false.
+7. Only when Gate H is green, ask the operator for the fresh DEMO signal using the approved sentence.
+8. Observe the full DEMO lifecycle and query durable/broker/destination evidence after each step.
+9. Re-query LIVE state after DEMO. Any later LIVE test requires separate explicit user authorization and must never be enabled automatically.
