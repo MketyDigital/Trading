@@ -61,11 +61,11 @@ jobs:
 
             // Verify critical account-setup controls are present in the shipped DOM without
             // authenticating or mutating production state. They remain hidden pre-auth.
-            const publicDomText = await page.locator('body').innerText();
+            const publicDomText = await page.locator('body').textContent();
             assert.match(publicDomText, /Direct Connection — Recommended/);
             assert.match(publicDomText, /Cloud Auto Trader/);
             assert.match(publicDomText, /MT5 Connector — Recommended/);
-            assert.match(publicDomText, /MketyMT5Connector\.exe/);
+            assert.ok((await page.getByText('MketyMT5Connector.exe', { exact: false }).count()) > 0, 'MketyMT5Connector.exe must ship in production DOM');
             assert.ok(await page.locator('#connectCTraderBtn').count() > 0, 'connectCTraderBtn must ship in production DOM');
             assert.ok(await page.locator('#showMt5BridgeBtn').count() > 0, 'showMt5BridgeBtn must ship in production DOM');
             assert.ok(await page.locator('#showAdvancedMt5BridgeBtn').count() > 0, 'showAdvancedMt5BridgeBtn must ship in production DOM');
