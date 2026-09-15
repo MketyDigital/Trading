@@ -1,0 +1,56 @@
+name: Diagnostic Node Tests
+
+on:
+  push:
+    branches:
+      - fix/frontend-readonly-shipped-contract-20260915
+    paths:
+      - 'cloudflare-v2/tests/**'
+      - '.github/workflows/diagnostic-node-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      tests: ${{ steps.tests.outputs.tests }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - id: tests
+        name: Discover Node tests
+        working-directory: cloudflare-v2
+        shell: bash
+        run: |
+          tests="$(find tests -maxdepth 1 -name '*.test.mjs' -print | sort | jq -R -s -c 'split("\n")[:-1]')"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+
+  node-test:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJSON(needs.discover.outputs.tests) }}
+    name: Node test - ${{ matrix.test }}
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run isolated Node test
+        run: node --test "${{ matrix.test }}"
