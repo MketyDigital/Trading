@@ -64,8 +64,13 @@ jobs:
             const publicDomText = await page.locator('body').innerText();
             assert.match(publicDomText, /Direct Connection — Recommended/);
             assert.match(publicDomText, /Cloud Auto Trader/);
+            assert.match(publicDomText, /MT5 Connector — Recommended/);
+            assert.match(publicDomText, /MketyMT5Connector\.exe/);
             assert.ok(await page.locator('#connectCTraderBtn').count() > 0, 'connectCTraderBtn must ship in production DOM');
             assert.ok(await page.locator('#showMt5BridgeBtn').count() > 0, 'showMt5BridgeBtn must ship in production DOM');
+            assert.ok(await page.locator('#showAdvancedMt5BridgeBtn').count() > 0, 'showAdvancedMt5BridgeBtn must ship in production DOM');
+            assert.ok(await page.locator('#createMt5ConnectorBtn').count() > 0, 'createMt5ConnectorBtn must ship in production DOM');
+            assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), false);
 
             await page.screenshot({ path: 'frontend-e2e-artifacts/public-login-desktop.png', fullPage: true });
 
