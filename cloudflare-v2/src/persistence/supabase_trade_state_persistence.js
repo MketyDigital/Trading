@@ -15,6 +15,18 @@ function millis(value) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function nullableFiniteNumber(value) {
+  if (value == null) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function hydratedNullableNumber(value) {
+  if (value == null) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
 function compact(object) {
   return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
 }
@@ -57,8 +69,8 @@ export function groupToPersistenceRows(group = {}) {
       runtime_leg_id: String(leg.legId),
       target_index: Number(leg.targetIndex),
       lots: currentLots,
-      requested_lots: Number.isFinite(Number(leg.requestedLots)) ? Number(leg.requestedLots) : undefined,
-      executed_lots: Number.isFinite(Number(leg.executedLots)) ? Number(leg.executedLots) : undefined,
+      requested_lots: nullableFiniteNumber(leg.requestedLots),
+      executed_lots: nullableFiniteNumber(leg.executedLots),
       remaining_lots: currentLots,
       stop_loss: leg.stopLoss ?? null,
       take_profit: leg.takeProfit ?? null,
@@ -66,9 +78,9 @@ export function groupToPersistenceRows(group = {}) {
       broker_position_id: nonEmpty(leg.brokerPositionId),
       broker_order_id: nonEmpty(leg.brokerOrderId),
       broker_deal_id: nonEmpty(leg.brokerDealId),
-      fill_price: Number.isFinite(Number(leg.fillPrice)) ? Number(leg.fillPrice) : undefined,
-      volume_step_lots: Number.isFinite(Number(leg.volumeStepLots)) ? Number(leg.volumeStepLots) : undefined,
-      minimum_lots: Number.isFinite(Number(leg.minimumLots)) ? Number(leg.minimumLots) : undefined,
+      fill_price: nullableFiniteNumber(leg.fillPrice),
+      volume_step_lots: nullableFiniteNumber(leg.volumeStepLots),
+      minimum_lots: nullableFiniteNumber(leg.minimumLots),
       action_type: nonEmpty(leg.actionType),
       failure_code: nonEmpty(leg.failureCode),
       opened_at: iso(leg.openedAt),
@@ -109,17 +121,17 @@ export function persistenceRowsToGroup(row = {}) {
       legId: String(leg.runtime_leg_id),
       targetIndex: Number(leg.target_index),
       lots: Number(leg.remaining_lots ?? leg.lots),
-      requestedLots: leg.requested_lots == null ? undefined : Number(leg.requested_lots),
-      executedLots: leg.executed_lots == null ? undefined : Number(leg.executed_lots),
+      requestedLots: hydratedNullableNumber(leg.requested_lots),
+      executedLots: hydratedNullableNumber(leg.executed_lots),
       stopLoss: leg.stop_loss,
       takeProfit: leg.take_profit,
       status: leg.status,
       brokerPositionId: leg.broker_position_id,
       brokerOrderId: leg.broker_order_id,
       brokerDealId: leg.broker_deal_id,
-      fillPrice: leg.fill_price == null ? undefined : Number(leg.fill_price),
-      volumeStepLots: leg.volume_step_lots == null ? undefined : Number(leg.volume_step_lots),
-      minimumLots: leg.minimum_lots == null ? undefined : Number(leg.minimum_lots),
+      fillPrice: hydratedNullableNumber(leg.fill_price),
+      volumeStepLots: hydratedNullableNumber(leg.volume_step_lots),
+      minimumLots: hydratedNullableNumber(leg.minimum_lots),
       actionType: leg.action_type,
       failureCode: leg.failure_code,
       openedAt: millis(leg.opened_at),
