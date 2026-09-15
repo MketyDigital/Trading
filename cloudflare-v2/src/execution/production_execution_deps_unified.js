@@ -5,6 +5,7 @@ import { createContextualDeliveryStore } from './destination_retry_composition.j
 import { executeMt5ConnectorAction } from '../adapters/mt5_connector_executor_v2.js';
 import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from './account_symbol_catalog.js';
 import { validateProductionRiskAction } from './production_risk_authority.js';
+import { evaluateBreakEvenEligibility, isBreakEvenAction } from './break_even_safety.js';
 
 function text(value) { return String(value ?? '').trim(); }
 function workspaceOf(account = {}) { return text(account.workspace_id ?? account.workspaceId); }
@@ -133,6 +134,16 @@ function currentMarketPrice(action, tick = {}) {
   return undefined;
 }
 
+function breakEvenTriggerPrice(action, tick = {}) {
+  const side = text(action?.side).toUpperCase();
+  const preferred = side === 'BUY' ? tick.bid : side === 'SELL' ? tick.ask : null;
+  for (const value of [preferred, tick.last]) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return undefined;
+}
+
 function instrumentForRisk(resolved, contextSymbol = {}) {
   const symbol = { ...resolved, ...contextSymbol };
   return {
@@ -189,6 +200,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     brokerAccount: context.account || {},
     instrument: instrumentForRisk(resolved, context.symbol || {}),
     currentMarketPrice: currentMarketPrice(action, context.tick || {}),
+    breakEvenMarketPrice: breakEvenTriggerPrice(action, context.tick || {}),
   };
 }
 
@@ -254,7 +266,27 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     assertBoundConnectorAccount(account, workspaceId);
     const action = input.action;
     if (!action || typeof action !== 'object') throw new TypeError('canonical action is required');
-    const exposure = await loadExposure(account, action);
+    const exposure = isManagementAction(action)
+      ? { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }
+      : await loadExposure(account, action);
+
+    if (isBreakEvenAction(action)) {
+      const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
+      const context = await loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn });
+      const eligibility = evaluateBreakEvenEligibility({
+        side: action.side,
+        entryPrice: action.entryPrice,
+        marketPrice: context.breakEvenMarketPrice,
+      });
+      if (!eligibility.allowed) {
+        return {
+          allowed: false,
+          reason: eligibility.reason,
+          policyRequest: { symbol: action.symbol, actionKind: 'REDUCE_RISK' },
+        };
+      }
+    }
+
     const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
     if (!riskSized || text(action.type).toUpperCase() !== 'OPEN_POSITION') {
       const result = validateProductionRiskAction({ account, action, brokerAccount: {}, instrument: {}, exposure });
@@ -299,7 +331,6 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       expectedEnvironment: text(account.environment),
       symbolCatalog: symbols.catalog,
       symbolAliases: symbols.aliases,
-      // Compatibility aliases keep injected tests/adapters simple while the executor uses explicit names above.
       catalog: symbols.catalog,
       aliases: symbols.aliases,
       deliveryStore,
