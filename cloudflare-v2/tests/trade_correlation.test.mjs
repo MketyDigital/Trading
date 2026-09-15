@@ -108,7 +108,7 @@ test('thread id can target management when reply id is unavailable', () => {
   assert.equal(result.reason, 'THREAD_TARGET');
 });
 
-test('does not correlate opposite-side or expired trades to a new full signal', () => {
+test('does not correlate opposite-side or fast trades older than 30 minutes to a new full signal', () => {
   const opposite = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '104', thread: {} },
     interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'SELL', fastEntry: false, incomplete: false } },
@@ -119,7 +119,7 @@ test('does not correlate opposite-side or expired trades to a new full signal', 
   const expired = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '105', thread: {} },
     interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false } },
-    activeGroups: [group({ updatedAt: now - 15 * 60 * 1000 })], nowMs: now, correlationWindowMs: 120000,
+    activeGroups: [group({ createdAt: now - 31 * 60 * 1000, updatedAt: now - 31 * 60 * 1000 })], nowMs: now, correlationWindowMs: 120000,
   });
   assert.equal(expired.status, 'NEW_GROUP');
 });

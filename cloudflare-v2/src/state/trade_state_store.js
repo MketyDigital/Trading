@@ -50,9 +50,33 @@ function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
   return String(currentStatus || 'PLANNED').toUpperCase();
 }
 
-function executionPatch(execution = {}) {
+function executionPatch(currentLeg = {}, execution = {}, nowMs = Date.now()) {
+  const actionType = actionTypeOf(execution);
   const patch = { ...execution };
-  if (patch.fillPrice == null || patch.fillPrice === '') delete patch.fillPrice;
+
+  if (['MODIFY_POSITION', 'CLOSE_PARTIAL', 'CLOSE_POSITION', 'CANCEL_PENDING'].includes(actionType)) {
+    for (const key of [
+      'brokerPositionId',
+      'brokerOrderId',
+      'brokerDealId',
+      'fillPrice',
+      'executedLots',
+      'volumeStepLots',
+      'minimumLots',
+    ]) {
+      delete patch[key];
+    }
+  } else if (patch.fillPrice == null || patch.fillPrice === '') {
+    delete patch.fillPrice;
+  }
+
+  if (actionType === 'OPEN_POSITION' && String(execution?.status || '').trim().toUpperCase() !== 'FAILED') {
+    patch.openedAt = Number.isFinite(Number(currentLeg?.openedAt)) ? Number(currentLeg.openedAt) : Number(nowMs);
+  }
+  if (actionType === 'CLOSE_POSITION' || actionType === 'CANCEL_PENDING') {
+    patch.closedAt = Number(nowMs);
+  }
+
   return patch;
 }
 
@@ -122,15 +146,21 @@ export class TradeStateStore {
     const currentLeg = group.legs[index];
     const status = executionStatus(currentLeg, execution);
     const lots = nextLegLots(currentLeg, execution);
-    const patch = executionPatch(execution);
+    const patch = executionPatch(currentLeg, execution, nowMs);
     group.legs[index] = {
       ...currentLeg,
       ...patch,
       requestedLots: Number.isFinite(Number(currentLeg?.requestedLots)) ? Number(currentLeg.requestedLots) : Number(currentLeg?.lots),
       ...(Number.isFinite(lots) && lots >= 0 ? { lots } : {}),
-      ...(status === 'CLOSED' || status === 'CANCELLED' ? { closedAt: Number(nowMs) } : {}),
       status,
     };
+
+    const storedEntryPrice = Number(group.entryPrice);
+    if (actionTypeOf(execution) === 'OPEN_POSITION' && !(Number.isFinite(storedEntryPrice) && storedEntryPrice > 0)) {
+      const fillPrice = Number(execution?.fillPrice);
+      if (Number.isFinite(fillPrice) && fillPrice > 0) group.entryPrice = fillPrice;
+    }
+
     group.status = aggregateGroupStatus(group.legs, group.status);
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);

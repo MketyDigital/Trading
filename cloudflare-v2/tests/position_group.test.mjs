@@ -46,8 +46,8 @@ test('generates break-even changes only for remaining open legs and retains symb
   };
   const actions = buildManagementActions(group, { type: 'MOVE_SL_TO_BE' });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 2526 },
-    { type: 'MODIFY_POSITION', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 2526 }
+    { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', side: undefined, entryPrice: 2526, stopLoss: 2526 },
+    { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', side: undefined, entryPrice: 2526, stopLoss: 2526 }
   ]);
 });
 

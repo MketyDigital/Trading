@@ -150,6 +150,32 @@ function managementPlan(text) {
   return null;
 }
 
+function tpSegmentValues(segment) {
+  const source = String(segment ?? '').trim().replace(/^[,;|]+|[,;|]+$/g, '').trim();
+  if (!source) return [];
+
+  const whole = parsedNumber(source);
+  if (whole != null) return [whole];
+
+  const matcher = new RegExp(SIGNAL_NUMBER_SOURCE, 'g');
+  const matches = [...source.matchAll(matcher)];
+  if (!matches.length) return null;
+
+  const values = [];
+  let cursor = 0;
+  for (const match of matches) {
+    const separator = source.slice(cursor, match.index);
+    if (separator && !/^[\s,;|/]+$/.test(separator)) return null;
+    const value = parsedNumber(match[0]);
+    if (value == null) return null;
+    values.push(value);
+    cursor = Number(match.index) + match[0].length;
+  }
+  const trailing = source.slice(cursor);
+  if (trailing && !/^[\s,;|/]+$/.test(trailing)) return null;
+  return values;
+}
+
 function extractExplicitTps(text) {
   const labeled = [];
   const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*[:@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
@@ -165,11 +191,30 @@ function extractExplicitTps(text) {
     labeled.push({ index: Number(match[1]), value });
   }
   if (labeled.length) {
-    const unique = new Map(labeled.map((item) => [item.index, item.value]));
+    const unique = new Map();
+    for (const item of labeled) {
+      if (unique.has(item.index) && unique.get(item.index) !== item.value) return null;
+      unique.set(item.index, item.value);
+    }
     return [...unique.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
   }
-  const generic = text.match(/\bTP\b\s*[:@-]?\s*(.+)$/i);
-  return generic ? numbers(generic[1]) : [];
+
+  const marker = /\bTP\b\s*[:@-]?\s*/gi;
+  const markers = [...text.matchAll(marker)];
+  if (!markers.length) return [];
+
+  const values = [];
+  for (let i = 0; i < markers.length; i += 1) {
+    const start = Number(markers[i].index) + markers[i][0].length;
+    const end = i + 1 < markers.length ? Number(markers[i + 1].index) : text.length;
+    let segment = text.slice(start, end);
+    const nextField = segment.search(/\b(?:SL|ENTRY(?:\s+(?:PRICE|ZONE))?|BUY|SELL|LONG|SHORT)\b/i);
+    if (nextField >= 0) segment = segment.slice(0, nextField);
+    const parsed = tpSegmentValues(segment);
+    if (parsed == null) return null;
+    values.push(...parsed);
+  }
+  return values;
 }
 
 function sideMatch(text) {

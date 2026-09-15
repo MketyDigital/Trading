@@ -21,10 +21,9 @@ function assertCommonLifecycleSafety(block, marker, provider) {
   assert.match(block, /needs:\s*test/);
   assert.match(block, /environment:\s*staging/);
   assert.match(block, /github\.event_name == 'push'/);
-  assert.match(block, /github\.ref == 'refs\/heads\/design\/enterprise-trading-event-core'/);
+  assert.match(block, /github\.ref == 'refs\/heads\/main'/);
   assert.match(block, new RegExp(`github\\.event\\.head_commit\\.message == '${marker}'`));
   assert.match(block, /github\.event_name == 'workflow_dispatch'/);
-  assert.match(block, /github\.ref == 'refs\/heads\/main'/);
   assert.match(block, new RegExp(`github\\.event\\.inputs\\.provider == '${provider}'`));
   assert.match(block, new RegExp(`github\\.event\\.inputs\\.confirmation == '${marker}'`));
   assert.match(block, /SUPABASE_URL:\s*\$\{\{\s*secrets\.SUPABASE_URL\s*\}\}/);
@@ -34,10 +33,11 @@ function assertCommonLifecycleSafety(block, marker, provider) {
   assert.doesNotMatch(block, /\bwrangler\b|CLOUDFLARE_|allowLiveTrading:\s*true/i);
 }
 
-test('Gate 7 workflow exposes a protected current-main manual dispatch contract', async () => {
+test('Gate 7 workflow exposes protected current-main push and manual dispatch contracts', async () => {
   const workflow = await readWorkflow();
   const header = workflow.slice(0, workflow.indexOf('jobs:'));
-  assert.match(header, /cloudflare-v2\/docs\/GATE7_DEMO_DESTINATION_TRIGGER\.md/);
+  assert.match(header, /branches:\s*\n\s*- main/);
+  assert.match(header, /\.github\/gate7-demo-trigger\.txt/);
   assert.match(header, /workflow_dispatch:/);
   assert.match(header, /provider:/);
   assert.match(header, /type:\s*choice/);

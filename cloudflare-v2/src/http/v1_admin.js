@@ -153,6 +153,10 @@ async function enforceDestinationEntitlement(request, authorization, destination
   return null;
 }
 
+function isLocalAccessCodeAuth(auth = {}) {
+  return auth?.header?.kid === 'trading-access-code-v1' || auth?.claims?.iss === 'mkety-trading-access-code';
+}
+
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
   authenticateFn = authenticateTradingAccessBearer,
@@ -215,6 +219,15 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   if (!membership?.enabled || String(membership.workspaceId) !== String(workspace.id) || String(membership.subject) !== String(auth.subject)) {
     return { ok: false, status: 403, reason: 'TRADING_MEMBERSHIP_DISABLED_OR_MISSING' };
   }
+
+  if (isLocalAccessCodeAuth(auth)) {
+    const currentAccessCodeId = String(workspace.metadata?.accessCodeId || membership.metadata?.accessCodeId || '').trim() || null;
+    const assertedAccessCodeId = String(auth.accessCodeId || auth.claims?.access_code_id || '').trim() || null;
+    if (currentAccessCodeId && assertedAccessCodeId !== currentAccessCodeId) {
+      return { ok: false, status: 401, reason: 'ACCESS_SESSION_SUPERSEDED' };
+    }
+  }
+
   return { ok: true, workspace, auth, membership };
 }
 

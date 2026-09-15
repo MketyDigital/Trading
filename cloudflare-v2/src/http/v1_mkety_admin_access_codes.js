@@ -60,6 +60,45 @@ function normalizeEntitlements(entitlements = {}) {
   });
 }
 
+function unionStrings(...values) {
+  return [...new Set(values.flatMap((value) => Array.isArray(value) ? value : []).map((value) => String(value).trim()).filter(Boolean))];
+}
+
+export function mergeAccessEntitlements(existing = {}, requested = {}) {
+  const current = normalizeTradingEntitlements(existing || {});
+  const next = normalizeTradingEntitlements(requested || {});
+  return normalizeTradingEntitlements({
+    customSubdomain: current.customSubdomain || next.customSubdomain,
+    customHostname: current.customHostname || next.customHostname,
+    tradingExecutionDestination: current.tradingExecutionDestination || next.tradingExecutionDestination,
+    telegramDestination: current.telegramDestination || next.telegramDestination,
+    sourceTypes: unionStrings(current.sourceTypes, next.sourceTypes),
+    destinations: unionStrings(current.destinations, next.destinations),
+    brokerModes: ['demo'],
+    liveExecution: false,
+    maxTeamMembers: Math.max(current.maxTeamMembers || 1, next.maxTeamMembers || 1),
+  });
+}
+
+export function mergeWorkspaceAccessMetadata(existing = {}, patch = {}) {
+  const base = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+  const accessPatch = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+  const out = { ...base, ...accessPatch };
+  if (Object.prototype.hasOwnProperty.call(accessPatch, 'entitlements')) {
+    out.entitlements = mergeAccessEntitlements(base.entitlements || {}, accessPatch.entitlements || {});
+  }
+  return out;
+}
+
+export function isSyntheticTestWorkspaceOwnerEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  return /^frontend-e2e-[0-9]+@example\.test$/.test(email)
+    || /^connection-readiness-[0-9]+@example\.test$/.test(email)
+    || /^gateway-config-probe-[0-9]+@example\.test$/.test(email)
+    || email === 'diag-redemption@example.test'
+    || email === 'e2e-owner@starpips.test';
+}
+
 function safePublicAccessCode(row = {}, plainCode = undefined) {
   const out = {
     id: row.id,
@@ -100,7 +139,8 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
   const plainCode = normalizeTradingAccessCode(input.code || randomCode(randomUUID));
   if (!plainCode) return { ok: false, reason: 'ACCESS_CODE_REQUIRED' };
-  const workspaceId = text(input.workspaceId ?? input.workspace_id) || randomUUID();
+  const suppliedWorkspaceId = text(input.workspaceId ?? input.workspace_id);
+  const workspaceId = suppliedWorkspaceId || randomUUID();
   const expiresAt = text(input.expiresAt ?? input.expires_at) || new Date(new Date(now).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const maxRedemptions = Math.max(1, Number.parseInt(input.maxRedemptions ?? input.max_redemptions ?? 1, 10) || 1);
   const entitlements = normalizeEntitlements(input.entitlements || {});
@@ -108,6 +148,7 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
   return {
     ok: true,
+    reissue: Boolean(suppliedWorkspaceId),
     plainCode,
     workspace: { id: workspaceId, displayName: workspaceName },
     owner: { email: ownerEmail, name: ownerName },
@@ -141,6 +182,14 @@ export async function createMketyAdminAccessCodePlan(input = {}, {
 
 const ACCESS_CODE_PUBLIC_SELECT = 'id,workspace_id,workspace_display_name,owner_email,owner_name,status,max_redemptions,redeemed_count,expires_at,entitlements,metadata,created_at,updated_at';
 
+function atomicRotationError(error) {
+  const detail = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  if (detail.includes('ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND')) return 'ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND';
+  if (detail.includes('ACCESS_CODE_REISSUE_OWNER_MISMATCH')) return 'ACCESS_CODE_REISSUE_OWNER_MISMATCH';
+  if (detail.includes('OWNER_EMAIL_REQUIRED')) return 'OWNER_EMAIL_REQUIRED';
+  return 'ACCESS_CODE_ROTATION_FAILED';
+}
+
 export function createMketyAdminAccessCodeStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
@@ -153,26 +202,45 @@ export function createMketyAdminAccessCodeStore(supabase) {
       return data || [];
     },
     async createAccessCode(plan) {
-      const workspaceRow = {
-        id: plan.workspace.id,
-        display_name: plan.workspace.displayName,
-        owner_email: plan.owner.email,
-        trading_access_enabled: true,
-        metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements },
-        updated_at: new Date().toISOString(),
-      };
-      const { error: workspaceError } = await supabase
-        .from('trading_workspace_access')
-        .upsert(workspaceRow, { onConflict: 'id' });
-      if (workspaceError) throw new Error('ACCESS_CODE_WORKSPACE_CREATE_FAILED');
+      if (!plan?.reissue) {
+        const workspaceRow = {
+          id: plan.workspace.id,
+          display_name: plan.workspace.displayName,
+          owner_email: plan.owner.email,
+          trading_access_enabled: true,
+          metadata: { accessCodeProvisioned: true, entitlements: plan.entitlements },
+          updated_at: new Date().toISOString(),
+        };
+        const { error: workspaceError } = await supabase
+          .from('trading_workspace_access')
+          .upsert(workspaceRow, { onConflict: 'id' });
+        if (workspaceError) throw new Error('ACCESS_CODE_WORKSPACE_CREATE_FAILED');
 
-      const { data, error } = await supabase
-        .from('trading_access_codes')
-        .insert(plan.record)
-        .select(ACCESS_CODE_PUBLIC_SELECT)
-        .maybeSingle();
-      if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
-      return data;
+        const { data, error } = await supabase
+          .from('trading_access_codes')
+          .insert(plan.record)
+          .select(ACCESS_CODE_PUBLIC_SELECT)
+          .maybeSingle();
+        if (error || !data) throw new Error('ACCESS_CODE_CREATE_FAILED');
+        return data;
+      }
+
+      if (typeof supabase.rpc !== 'function') throw new Error('ACCESS_CODE_ROTATION_RPC_UNAVAILABLE');
+      const { data, error } = await supabase.rpc('rotate_trading_access_code', {
+        p_workspace_id: plan.workspace.id,
+        p_owner_email: plan.owner.email,
+        p_workspace_display_name: plan.workspace.displayName,
+        p_owner_name: plan.owner.name,
+        p_code_hash: plan.record.code_hash,
+        p_entitlements: plan.entitlements,
+        p_max_redemptions: plan.maxRedemptions,
+        p_expires_at: plan.expiresAt,
+        p_metadata: plan.metadata,
+      });
+      if (error) throw new Error(atomicRotationError(error));
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created?.id) throw new Error('ACCESS_CODE_ROTATION_FAILED');
+      return created;
     },
     async revokeAccessCode(id) {
       const accessCodeId = text(id);
@@ -186,11 +254,41 @@ export function createMketyAdminAccessCodeStore(supabase) {
       if (error || !data) throw new Error('ACCESS_CODE_REVOKE_FAILED');
       return data;
     },
+    async purgeSyntheticWorkspace(id) {
+      const workspaceId = text(id);
+      if (!workspaceId) throw new Error('WORKSPACE_ID_REQUIRED');
+      const { data: workspace, error: lookupError } = await supabase
+        .from('trading_workspace_access')
+        .select('id,display_name,owner_email')
+        .eq('id', workspaceId)
+        .maybeSingle();
+      if (lookupError) throw new Error('SYNTHETIC_WORKSPACE_LOOKUP_FAILED');
+      if (!workspace?.id) return { id: workspaceId, deleted: false, missing: true };
+      if (!isSyntheticTestWorkspaceOwnerEmail(workspace.owner_email)) throw new Error('SYNTHETIC_WORKSPACE_PROTECTED');
+
+      const { error: accountDeleteError } = await supabase
+        .from('trade_accounts')
+        .delete()
+        .eq('workspace_id', workspaceId);
+      if (accountDeleteError) throw new Error('SYNTHETIC_WORKSPACE_ACCOUNT_DELETE_FAILED');
+
+      const { error: workspaceDeleteError } = await supabase
+        .from('trading_workspace_access')
+        .delete()
+        .eq('id', workspaceId);
+      if (workspaceDeleteError) throw new Error('SYNTHETIC_WORKSPACE_DELETE_FAILED');
+      return { id: workspaceId, deleted: true, ownerEmail: workspace.owner_email };
+    },
   };
 }
 
 function revokeIdFromPath(pathname) {
   const match = String(pathname || '').match(/^\/api\/v1\/mkety-admin\/access-codes\/([^/]+)\/revoke$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function purgeWorkspaceIdFromPath(pathname) {
+  const match = String(pathname || '').match(/^\/api\/v1\/mkety-admin\/test-workspaces\/([^/]+)\/purge$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -224,7 +322,6 @@ async function runtimeControlResponse(runtimeStore) {
     brokerExecutionUpdatedBy: broker?.updatedBy || null,
     liveBrokerExecutionUpdatedAt: live?.updatedAt || null,
     liveBrokerExecutionUpdatedBy: live?.updatedBy || null,
-    // Backward compatibility for clients that previously displayed one timestamp.
     updatedAt: broker?.updatedAt || null,
     updatedBy: broker?.updatedBy || null,
   };
@@ -299,6 +396,20 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     }
   }
 
+  const purgeWorkspaceId = purgeWorkspaceIdFromPath(url.pathname);
+  if (purgeWorkspaceId) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (typeof accessStore.purgeSyntheticWorkspace !== 'function') return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_UNAVAILABLE' }, 503);
+    try {
+      const result = await accessStore.purgeSyntheticWorkspace(purgeWorkspaceId);
+      return json({ ok: true, workspace: result });
+    } catch (error) {
+      const reason = String(error?.message || 'SYNTHETIC_WORKSPACE_PURGE_FAILED');
+      if (reason === 'SYNTHETIC_WORKSPACE_PROTECTED') return json({ ok: false, reason }, 403);
+      return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_FAILED' }, 503);
+    }
+  }
+
   const revokeId = revokeIdFromPath(url.pathname);
   if (revokeId) {
     if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
@@ -332,8 +443,10 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     try {
       const row = await accessStore.createAccessCode(plan);
       return json({ ok: true, accessCode: safePublicAccessCode(row, plan.plainCode) }, 201);
-    } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_CREATE_FAILED' }, 503);
+    } catch (error) {
+      const reason = String(error?.message || 'ACCESS_CODE_CREATE_FAILED');
+      const clientErrors = new Set(['ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND', 'ACCESS_CODE_REISSUE_OWNER_MISMATCH']);
+      return json({ ok: false, reason: clientErrors.has(reason) ? reason : 'ACCESS_CODE_CREATE_FAILED' }, clientErrors.has(reason) ? 409 : 503);
     }
   }
 

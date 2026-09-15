@@ -16,6 +16,13 @@ function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
   });
 }
 
+function fastCompletionEligibleGroups(groups, nowMs, windowMs) {
+  return (groups || []).filter((group) => {
+    const originatedAt = Number(group.createdAt ?? group.updatedAt ?? 0);
+    return originatedAt > 0 && Number(nowMs) - originatedAt <= Number(windowMs);
+  });
+}
+
 function isDuplicateSourceEvent(groups, event) {
   const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
   if (!externalEventId) return false;
@@ -100,6 +107,57 @@ function matchedManagementTarget(matches, reason, ambiguousReason) {
   return null;
 }
 
+function managementBrokerIdentity(interpretation = {}) {
+  const management = interpretation?.management || {};
+  const brokerPositionId = management.brokerPositionId ?? management.broker_position_id ?? management.positionId ?? management.position_id;
+  const brokerOrderId = management.brokerOrderId ?? management.broker_order_id ?? management.orderId ?? management.order_id;
+  return {
+    brokerPositionId: brokerPositionId == null || String(brokerPositionId).trim() === '' ? null : String(brokerPositionId).trim(),
+    brokerOrderId: brokerOrderId == null || String(brokerOrderId).trim() === '' ? null : String(brokerOrderId).trim(),
+  };
+}
+
+function brokerIdentityTarget(groups = [], interpretation = {}) {
+  const identity = managementBrokerIdentity(interpretation);
+  if (!identity.brokerPositionId && !identity.brokerOrderId) return null;
+  const matches = groups.filter((group) => (group?.legs || []).some((leg) => {
+    if (identity.brokerPositionId && String(leg?.brokerPositionId ?? '') === identity.brokerPositionId) return true;
+    if (identity.brokerOrderId && String(leg?.brokerOrderId ?? '') === identity.brokerOrderId) return true;
+    return false;
+  }));
+  const target = matchedManagementTarget(matches, 'BROKER_IDENTITY_TARGET', 'AMBIGUOUS_BROKER_IDENTITY_TARGET');
+  return target || { status: 'NEEDS_REVIEW', reason: 'NO_BROKER_IDENTITY_TARGET' };
+}
+
+function telegramMessageCoordinate(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(telegram:.+):(\d+)$/);
+  if (!match) return null;
+  const sequence = Number(match[2]);
+  return Number.isSafeInteger(sequence) ? { channel: match[1], sequence } : null;
+}
+
+function sourceMessageContinuityTarget(groups = [], event = {}) {
+  const current = telegramMessageCoordinate(event?.external_event_id);
+  if (!current) return null;
+
+  const cohorts = logicalCohorts(groups);
+  const adjacent = cohorts.filter((cohort) => cohort.some((group) =>
+    (group?.sourceEventIds || []).some((sourceEventId) => {
+      const coordinate = telegramMessageCoordinate(sourceEventId);
+      return coordinate?.channel === current.channel && coordinate.sequence === current.sequence - 1;
+    })
+  ));
+
+  if (adjacent.length === 1) {
+    return targetForCohort(adjacent[0], 'SOURCE_MESSAGE_CONTINUITY');
+  }
+  if (adjacent.length > 1) {
+    return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
+  }
+  return null;
+}
+
 function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
@@ -152,6 +210,7 @@ export function correlateTradingEvent({
   activeGroups = [],
   nowMs = Date.now(),
   correlationWindowMs = 120000,
+  fastCompletionWindowMs = 30 * 60 * 1000,
 } = {}) {
   const scoped = scopedGroups(activeGroups, event);
   if (isDuplicateSourceEvent(scoped, event)) {
@@ -167,12 +226,17 @@ export function correlateTradingEvent({
       const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
       const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
       if (target) return target;
+      return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
     }
+
+    const brokerTarget = brokerIdentityTarget(scoped, interpretation);
+    if (brokerTarget) return brokerTarget;
 
     if (threadId) {
       const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
       const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
       if (target) return target;
+      return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
     }
 
     const symbol = managementSymbol(interpretation);
@@ -183,6 +247,9 @@ export function correlateTradingEvent({
       return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
     }
 
+    const continuityTarget = sourceMessageContinuityTarget(scoped, event);
+    if (continuityTarget) return continuityTarget;
+
     const target = activeLogicalTradeTarget(scoped, {
       nowMs: Number(nowMs),
       windowMs: Number(correlationWindowMs),
@@ -192,21 +259,24 @@ export function correlateTradingEvent({
   }
 
   if (replyId) {
-    const replyMatches = recent.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
-    if (replyMatches.length === 1) return { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: replyMatches[0].id };
-    if (replyMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_REPLY_TARGET' };
+    const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
+    const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
+    if (target) return target;
+    return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
   }
 
   if (threadId) {
-    const threadMatches = recent.filter((group) => group.threadId != null && String(group.threadId) === threadId);
-    if (threadMatches.length === 1) return { status: 'MATCHED', reason: 'THREAD_TARGET', groupId: threadMatches[0].id };
-    if (threadMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_THREAD_TARGET' };
+    const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
+    const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
+    if (target) return target;
+    return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
   }
 
   if (interpretation.status === 'READY' && interpretation.intent) {
     const symbol = String(interpretation.intent.symbol?.canonical ?? '');
     const side = String(interpretation.intent.side ?? '');
-    const fastCompletionMatches = recent.filter((group) =>
+    const fastEligible = fastCompletionEligibleGroups(scoped, Number(nowMs), Number(fastCompletionWindowMs));
+    const fastCompletionMatches = fastEligible.filter((group) =>
       group.incomplete === true &&
       String(group.symbol ?? '') === symbol &&
       String(group.side ?? '') === side
