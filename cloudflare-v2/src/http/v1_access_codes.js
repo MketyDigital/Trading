@@ -46,10 +46,12 @@ async function createStore(env, supabaseFactory, storeFactory) {
 }
 
 async function issueSession(result, env, nowSec, mode, { includeRefreshCookie = false } = {}) {
+  const accessCodeId = String(result.codeId || result.membership?.metadata?.accessCodeId || '').trim() || null;
   const bearer = await createLocalTradingBearer({
     subject: result.membership.subject,
     workspaceId: result.workspace.id,
     access: 'owner',
+    accessCodeId,
   }, env.TRADING_ACCESS_CODE_SESSION_SECRET, nowSec);
 
   const headers = {};
@@ -57,6 +59,7 @@ async function issueSession(result, env, nowSec, mode, { includeRefreshCookie = 
     const refreshToken = await createTradingRefreshToken({
       subject: result.membership.subject,
       workspaceId: result.workspace.id,
+      accessCodeId,
     }, env.TRADING_ACCESS_CODE_SESSION_SECRET, nowSec);
     headers['Set-Cookie'] = tradingRefreshCookie(refreshToken);
   }
@@ -111,7 +114,11 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
     let result;
     try {
-      result = await store.restoreSession({ workspaceId: verified.workspaceId, subject: verified.subject });
+      result = await store.restoreSession({
+        workspaceId: verified.workspaceId,
+        subject: verified.subject,
+        accessCodeId: verified.accessCodeId,
+      });
     } catch {
       return json({ ok: false, reason: 'RETURNING_SESSION_LOOKUP_FAILED' }, 503);
     }
