@@ -16,6 +16,13 @@ function activeRecentGroups(activeGroups, event, nowMs, windowMs) {
   });
 }
 
+function fastCompletionEligibleGroups(groups, nowMs, windowMs) {
+  return (groups || []).filter((group) => {
+    const originatedAt = Number(group.createdAt ?? group.updatedAt ?? 0);
+    return originatedAt > 0 && Number(nowMs) - originatedAt <= Number(windowMs);
+  });
+}
+
 function isDuplicateSourceEvent(groups, event) {
   const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
   if (!externalEventId) return false;
@@ -152,6 +159,7 @@ export function correlateTradingEvent({
   activeGroups = [],
   nowMs = Date.now(),
   correlationWindowMs = 120000,
+  fastCompletionWindowMs = 30 * 60 * 1000,
 } = {}) {
   const scoped = scopedGroups(activeGroups, event);
   if (isDuplicateSourceEvent(scoped, event)) {
@@ -167,12 +175,14 @@ export function correlateTradingEvent({
       const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
       const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
       if (target) return target;
+      return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
     }
 
     if (threadId) {
       const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
       const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
       if (target) return target;
+      return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
     }
 
     const symbol = managementSymbol(interpretation);
@@ -192,21 +202,24 @@ export function correlateTradingEvent({
   }
 
   if (replyId) {
-    const replyMatches = recent.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
-    if (replyMatches.length === 1) return { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: replyMatches[0].id };
-    if (replyMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_REPLY_TARGET' };
+    const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
+    const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
+    if (target) return target;
+    return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
   }
 
   if (threadId) {
-    const threadMatches = recent.filter((group) => group.threadId != null && String(group.threadId) === threadId);
-    if (threadMatches.length === 1) return { status: 'MATCHED', reason: 'THREAD_TARGET', groupId: threadMatches[0].id };
-    if (threadMatches.length > 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_THREAD_TARGET' };
+    const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
+    const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
+    if (target) return target;
+    return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
   }
 
   if (interpretation.status === 'READY' && interpretation.intent) {
     const symbol = String(interpretation.intent.symbol?.canonical ?? '');
     const side = String(interpretation.intent.side ?? '');
-    const fastCompletionMatches = recent.filter((group) =>
+    const fastEligible = fastCompletionEligibleGroups(scoped, Number(nowMs), Number(fastCompletionWindowMs));
+    const fastCompletionMatches = fastEligible.filter((group) =>
       group.incomplete === true &&
       String(group.symbol ?? '') === symbol &&
       String(group.side ?? '') === side
