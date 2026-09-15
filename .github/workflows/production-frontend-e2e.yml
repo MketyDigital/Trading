@@ -1,5 +1,6 @@
 name: Production Frontend E2E
-# Release gate: exercise the deployed customer portal in a real browser after production deploys.
+# Release gate: read-only browser smoke against the deployed production portal.
+# This workflow must never create, redeem, rotate, revoke, or purge production fixtures.
 
 on:
   workflow_dispatch:
@@ -22,55 +23,18 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
-    env:
-      MKETY_TRADING_ADMIN_SECRET: ${{ secrets.MKETY_TRADING_ADMIN_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-      - name: Create disposable production access code
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$MKETY_TRADING_ADMIN_SECRET"
-          email="frontend-e2e-${GITHUB_RUN_ID}@example.test"
-          body="$(E2E_EMAIL="$email" node - <<'NODE'
-          process.stdout.write(JSON.stringify({
-            ownerEmail: process.env.E2E_EMAIL,
-            ownerName: 'Frontend E2E',
-            workspaceName: 'Frontend E2E Workspace',
-            maxRedemptions: 1,
-            entitlements: {
-              customSubdomain: false,
-              customHostname: false,
-              tradingExecutionDestination: true,
-              telegramDestination: true,
-              sourceTypes: ['tradingview_webhook','custom_signed_api','external_mtproto'],
-              destinations: ['audit_only','telegram','internal_webhook','broker_account']
-            },
-            metadata: { purpose: 'production-frontend-e2e', githubRunId: process.env.GITHUB_RUN_ID }
-          }))
-          NODE
-          )"
-          response="$(curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/access-codes" \
-            -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" \
-            -H 'Content-Type: application/json' \
-            --data "$body")"
-          E2E_RESPONSE="$response" node - <<'NODE' >> "$GITHUB_ENV"
-          const b = JSON.parse(process.env.E2E_RESPONSE || '{}');
-          if (!b.ok || !b.accessCode?.plainCode || !b.accessCode?.workspaceId) throw new Error('fixture creation failed');
-          console.log(`E2E_ACCESS_CODE=${b.accessCode.plainCode}`);
-          console.log(`E2E_WORKSPACE_ID=${b.accessCode.workspaceId}`);
-          NODE
-          echo "E2E_EMAIL=$email" >> "$GITHUB_ENV"
-          code="$(E2E_RESPONSE="$response" node -e "const b=JSON.parse(process.env.E2E_RESPONSE);process.stdout.write(b.accessCode.plainCode)")"
-          echo "::add-mask::$code"
-      - name: Exercise real customer frontend in Chromium
+
+      - name: Exercise public production frontend read-only
         shell: bash
         run: |
           mkdir -p frontend-e2e-artifacts
@@ -94,110 +58,54 @@ jobs:
             await page.locator('#accessCode').waitFor({ state: 'visible' });
             assert.equal(await page.locator('#workspaceShell').isVisible(), false);
             assert.equal(await page.locator('#redeemBtn').isEnabled(), true);
-
-            await page.locator('#accessCode').fill(process.env.E2E_ACCESS_CODE);
-            await page.locator('#ownerEmail').fill(process.env.E2E_EMAIL);
-            await page.locator('#ownerName').fill('Frontend E2E');
-            await page.locator('#workspaceName').fill('Frontend E2E Workspace');
-            await page.locator('#redeemBtn').click();
-            await page.locator('#workspaceShell').waitFor({ state: 'visible', timeout: 15000 });
-            await page.getByText('Workspace loaded successfully.').waitFor({ state: 'visible', timeout: 15000 });
-            assert.equal(await page.locator('#authCard').isVisible(), false);
-            assert.match(await page.locator('#workspaceTitle').innerText(), /Frontend E2E Workspace/);
-
-            const runtimeSummary = await page.locator('#runtimeSummary').innerText();
-            const launchStatus = await page.locator('#launchStatus').innerText();
-            console.log('CUSTOMER_RUNTIME_SUMMARY=' + JSON.stringify(runtimeSummary));
-            console.log('CUSTOMER_LAUNCH_STATUS=' + JSON.stringify(launchStatus));
-
-            const visibleTabs = [
-              ['Overview', '#view-overview'],
-              ['Connections', '#view-connections'],
-              ['Routing', '#view-routing'],
-              ['AI', '#view-ai'],
-              ['Branding', '#view-branding'],
-              ['Operations', '#view-operations'],
-              ['Team', '#view-team'],
-            ];
-            for (const [label, selector] of visibleTabs) {
-              await page.getByRole('button', { name: label, exact: true }).click();
-              assert.equal(await page.locator(selector).isVisible(), true, `${label} view must be visible`);
-            }
-
-            await page.getByRole('button', { name: 'Connections', exact: true }).click();
-            await page.getByText('Trading account connections', { exact: true }).waitFor({ state: 'visible' });
-            await page.getByText('Manage signal inputs', { exact: true }).waitFor({ state: 'visible' });
-            assert.equal(await page.locator('#unifiedConnectionsPanel').isVisible(), true);
-            assert.equal(await page.locator('#connectCTraderBtn').isVisible(), true);
-            assert.equal(await page.locator('#showMt5BridgeBtn').isVisible(), true);
-            assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), false);
-            await page.locator('#showAdvancedMt5BridgeBtn').waitFor({ state: 'visible', timeout: 5000 });
-            assert.equal(await page.locator('#showAdvancedMt5BridgeBtn').isVisible(), true);
-            assert.equal(await page.locator('#unifiedSourceManager').isVisible(), true);
-            await page.getByText('Direct Connection — Recommended', { exact: false }).waitFor({ state: 'visible' });
-            await page.getByText('Cloud Auto Trader', { exact: false }).waitFor({ state: 'visible' });
-            await page.getByText('MT5 Connector — Recommended', { exact: false }).waitFor({ state: 'visible' });
-            assert.equal(await page.getByText('Direct Connection — Recommended', { exact: false }).isVisible(), true);
-            assert.equal(await page.getByText('Cloud Auto Trader', { exact: false }).isVisible(), true);
-            assert.equal(await page.getByText('MT5 Connector — Recommended', { exact: false }).isVisible(), true);
-            await page.locator('#showMt5BridgeBtn').click();
-            await page.locator('#createMt5ConnectorBtn').waitFor({ state: 'visible', timeout: 5000 });
-            assert.equal(await page.locator('#createMt5ConnectorBtn').isVisible(), true);
-            await page.getByText('MketyMT5Connector.exe', { exact: false }).waitFor({ state: 'visible', timeout: 5000 });
-            assert.equal(await page.getByText('MketyMT5Connector.exe', { exact: false }).first().isVisible(), true);
-            assert.match(await page.locator('#mt5ConnectionForm').innerText(), /outbound encrypted WebSocket/i);
-
-            await page.getByRole('button', { name: 'Routing', exact: true }).click();
-            assert.equal(await page.locator('#destinationType option[value="telegram"]').evaluate(option => option.hidden), false);
-            assert.equal(await page.locator('#destinationType option[value="broker_account"]').evaluate(option => option.hidden), false);
-            await page.locator('#destinationType').selectOption('audit_only');
-            await page.locator('#destinationName').fill('E2E Audit Destination');
-            await page.locator('#createDestinationBtn').click();
-            await page.getByText('E2E Audit Destination').waitFor({ state: 'visible', timeout: 15000 });
-
-            await page.locator('#templateName').fill('E2E Clean Template');
-            await page.locator('#formattingMode').selectOption('clean');
-            await page.locator('#templateBrand').fill('E2E');
-            await page.locator('#createTemplateBtn').click();
-            await page.locator('#templateList').getByText('E2E Clean Template', { exact: true }).waitFor({ state: 'visible', timeout: 15000 });
-
-            await page.getByRole('button', { name: 'Branding', exact: true }).click();
-            assert.equal(await page.locator('[data-entitlement="customHostname"]').isVisible(), false);
-            assert.equal(await page.locator('#saveBrandingBtn').isVisible(), true);
-
-            await page.getByRole('button', { name: 'Overview', exact: true }).click();
-            await page.screenshot({ path: 'frontend-e2e-artifacts/customer-workspace-desktop.png', fullPage: true });
+            await page.screenshot({ path: 'frontend-e2e-artifacts/public-login-desktop.png', fullPage: true });
 
             await page.setViewportSize({ width: 390, height: 844 });
-            await page.getByRole('button', { name: 'Connections', exact: true }).click();
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
             assert.ok(overflow <= 1, `mobile page must not horizontally overflow; overflow=${overflow}`);
-            await page.screenshot({ path: 'frontend-e2e-artifacts/customer-workspace-mobile.png', fullPage: true });
+            await page.screenshot({ path: 'frontend-e2e-artifacts/public-login-mobile.png', fullPage: true });
 
             await page.setViewportSize({ width: 1440, height: 1100 });
-            await page.reload({ waitUntil: 'domcontentloaded' });
-            await page.locator('#workspaceShell').waitFor({ state: 'visible', timeout: 15000 });
-            await page.getByText('Workspace loaded successfully.').waitFor({ state: 'visible', timeout: 15000 });
-            assert.equal(await page.locator('#authCard').isVisible(), false);
-            console.log('RETURNING_SESSION_RESTORED=true');
+            await page.goto(process.env.E2E_BASE_URL + '/mkety-admin/access-codes', { waitUntil: 'domcontentloaded' });
+            assert.match(await page.title(), /Mkety Staff Trading Admin/i);
+            await page.locator('#staffSecret').waitFor({ state: 'visible' });
+            assert.equal(await page.locator('#createBtn').isVisible(), true);
+            assert.match(await page.locator('body').innerText(), /Reissue\s*\/\s*Rotate access/i);
+            await page.screenshot({ path: 'frontend-e2e-artifacts/staff-admin-readonly.png', fullPage: true });
 
-            await page.locator('#logoutBtn').click();
-            await page.locator('#accessCode').waitFor({ state: 'visible', timeout: 15000 });
-            assert.equal(await page.locator('#workspaceShell').isVisible(), false);
-            await page.reload({ waitUntil: 'domcontentloaded' });
-            await page.locator('#accessCode').waitFor({ state: 'visible', timeout: 15000 });
-            await page.waitForTimeout(1000);
-            assert.equal(await page.locator('#workspaceShell').isVisible(), false, 'server logout must prevent refresh-session restoration');
-            console.log('LOGOUT_CLEARED_SESSION=true');
-
-            const unexpectedHttpErrors = httpErrors.filter(({ status, url }) => !(status === 401 && url.endsWith('/api/v1/access/session')));
+            const unexpectedHttpErrors = httpErrors.filter(({ status, url }) =>
+              !((status === 401 || status === 403) && url.includes('/api/'))
+            );
             assert.deepEqual(unexpectedHttpErrors, [], 'unexpected HTTP errors: ' + JSON.stringify(unexpectedHttpErrors));
-            const expected401ConsoleMessage = 'Failed to load resource: the server responded with a status of 401 ()';
-            const unexpectedConsoleErrors = consoleErrors.filter(message => message !== expected401ConsoleMessage);
+            const expectedAuthConsole = /Failed to load resource: the server responded with a status of (401|403)/;
+            const unexpectedConsoleErrors = consoleErrors.filter(message => !expectedAuthConsole.test(message));
             assert.deepEqual(unexpectedConsoleErrors, [], 'browser console/page errors: ' + unexpectedConsoleErrors.join(' | '));
             await browser.close();
           })().catch(err => { console.error(err); process.exit(1); });
           NODE
+
+      - name: Verify production health read-only
+        shell: bash
+        run: |
+          status="$(curl -sS -o /tmp/health.json -w '%{http_code}' "$E2E_BASE_URL/api/v1/health")"
+          test "$status" = "200"
+          cat /tmp/health.json
+
+      - name: Verify staff API is not public
+        shell: bash
+        run: |
+          status="$(curl -sS -o /tmp/staff.json -w '%{http_code}' "$E2E_BASE_URL/api/v1/mkety-admin/access-codes")"
+          test "$status" = "401"
+
+      - name: Verify production E2E remains read-only
+        shell: bash
+        run: |
+          if grep -Eq 'Create disposable production access code|/purge|method:[[:space:]]*["'"']POST|curl .* -X POST' .github/workflows/production-frontend-e2e.yml; then
+            echo "Production frontend E2E contains a mutating production action."
+            exit 1
+          fi
+          echo "Production frontend E2E is read-only."
+
       - name: Upload frontend display evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -206,15 +114,3 @@ jobs:
           path: frontend-e2e-artifacts/
           if-no-files-found: ignore
           retention-days: 7
-      - name: Verify staff API is not public
-        run: |
-          status="$(curl -sS -o /tmp/staff.json -w '%{http_code}' "$E2E_BASE_URL/api/v1/mkety-admin/access-codes")"
-          test "$status" = "401"
-      - name: Purge disposable production workspace
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          if [ -n "${E2E_WORKSPACE_ID:-}" ]; then
-            curl -fsS -X POST "$E2E_BASE_URL/api/v1/mkety-admin/test-workspaces/$E2E_WORKSPACE_ID/purge" \
-              -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET" >/dev/null || true
-          fi
