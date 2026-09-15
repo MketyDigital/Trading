@@ -221,7 +221,7 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   }
 
   if (isLocalAccessCodeAuth(auth)) {
-    const currentAccessCodeId = String(membership.metadata?.accessCodeId || workspace.metadata?.accessCodeId || '').trim() || null;
+    const currentAccessCodeId = String(workspace.metadata?.accessCodeId || membership.metadata?.accessCodeId || '').trim() || null;
     const assertedAccessCodeId = String(auth.accessCodeId || auth.claims?.access_code_id || '').trim() || null;
     if (currentAccessCodeId && assertedAccessCodeId !== currentAccessCodeId) {
       return { ok: false, status: 401, reason: 'ACCESS_SESSION_SUPERSEDED' };
