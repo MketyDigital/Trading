@@ -107,6 +107,28 @@ function matchedManagementTarget(matches, reason, ambiguousReason) {
   return null;
 }
 
+function managementBrokerIdentity(interpretation = {}) {
+  const management = interpretation?.management || {};
+  const brokerPositionId = management.brokerPositionId ?? management.broker_position_id ?? management.positionId ?? management.position_id;
+  const brokerOrderId = management.brokerOrderId ?? management.broker_order_id ?? management.orderId ?? management.order_id;
+  return {
+    brokerPositionId: brokerPositionId == null || String(brokerPositionId).trim() === '' ? null : String(brokerPositionId).trim(),
+    brokerOrderId: brokerOrderId == null || String(brokerOrderId).trim() === '' ? null : String(brokerOrderId).trim(),
+  };
+}
+
+function brokerIdentityTarget(groups = [], interpretation = {}) {
+  const identity = managementBrokerIdentity(interpretation);
+  if (!identity.brokerPositionId && !identity.brokerOrderId) return null;
+  const matches = groups.filter((group) => (group?.legs || []).some((leg) => {
+    if (identity.brokerPositionId && String(leg?.brokerPositionId ?? '') === identity.brokerPositionId) return true;
+    if (identity.brokerOrderId && String(leg?.brokerOrderId ?? '') === identity.brokerOrderId) return true;
+    return false;
+  }));
+  const target = matchedManagementTarget(matches, 'BROKER_IDENTITY_TARGET', 'AMBIGUOUS_BROKER_IDENTITY_TARGET');
+  return target || { status: 'NEEDS_REVIEW', reason: 'NO_BROKER_IDENTITY_TARGET' };
+}
+
 function telegramMessageCoordinate(value) {
   const raw = String(value || '').trim();
   const match = raw.match(/^(telegram:.+):(\d+)$/);
@@ -206,6 +228,9 @@ export function correlateTradingEvent({
       if (target) return target;
       return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
     }
+
+    const brokerTarget = brokerIdentityTarget(scoped, interpretation);
+    if (brokerTarget) return brokerTarget;
 
     if (threadId) {
       const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
