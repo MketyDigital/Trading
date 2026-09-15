@@ -179,7 +179,7 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
       if (['/api/v1/access/redeem', '/api/v1/access/session', '/api/v1/access/logout'].includes(url.pathname)) return accessCodeRedeemHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
-      if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
+      if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname.startsWith('/api/v1/mkety-admin/test-workspaces/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
       if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
