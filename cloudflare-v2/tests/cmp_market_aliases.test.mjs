@@ -41,6 +41,11 @@ test('separator-delimited presentation footer is removed from deterministic CMP 
   assert.equal(normalizeCurrentMarketAliases('BUY XAUUSD (CMP)\n\n~~~\nStarpips Forex'), 'BUY XAUUSD ( NOW )');
 });
 
+test('messages without current-market aliases are left byte-for-byte unchanged by CMP normalization', () => {
+  const raw = 'BUY XAUUSD 4300\nSL 4290\nTP 4310\n~~~\nStarpips Forex';
+  assert.equal(normalizeCurrentMarketAliases(raw), raw);
+});
+
 test('hedged commentary containing current-market wording still fails closed', async () => {
   const result = await interpretTradingEvent({ text: 'Maybe BUY XAUUSD at current market price later' }, {
     aiRouter: { async processSignal() { return { success: false, error: 'test' }; } },
