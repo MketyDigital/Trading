@@ -2,8 +2,8 @@ export function withReturningOwnerSession(html) {
   const script = `<script>(function(){
 var nativeFetch=window.fetch.bind(window);
 var refreshInFlight=null;
-function clearLocalSession(){
-  if(typeof window.mketyTradingSessionClear==='function')window.mketyTradingSessionClear();
+function clearLocalSession(skipPortalClear){
+  if(!skipPortalClear&&typeof window.mketyTradingSessionClear==='function')window.mketyTradingSessionClear();
   sessionStorage.removeItem('mketyTradingWorkspace');sessionStorage.removeItem('mketyTradingBearer');sessionStorage.removeItem('mketyTradingEntitlements');sessionStorage.removeItem('mketyTradingWorkspaceName');sessionStorage.removeItem('mketyTradingContext');localStorage.removeItem('mketyTradingWorkspace');localStorage.removeItem('mketyTradingWorkspaceId');
 }
 function showAccessNotice(reason){
@@ -28,7 +28,7 @@ window.fetch=async function(input,init){
   if(response.status!==401||!body||body.reason!=='TOKEN_EXPIRED')return response;
   var renewed=await renewReturningOwner();if(!renewed)return response;var headers=new Headers((init&&init.headers)||(typeof input!=='string'&&input.headers)||{});headers.set('Authorization','Bearer '+renewed.bearer);headers.set('X-Mkety-Workspace-Id',String(renewed.workspace.id));return nativeFetch(input,Object.assign({},init||{},{headers:headers}));
 };
-async function logoutReturningOwner(ev){var target=ev.target&&ev.target.closest?ev.target.closest('#portalLogout,#logoutBtn'):null;if(!target)return;ev.preventDefault();ev.stopImmediatePropagation();try{await nativeFetch('/api/v1/access/logout',{method:'POST',credentials:'include'});}catch(_){}clearLocalSession();location.reload()}
+async function logoutReturningOwner(ev){var target=ev.target&&ev.target.closest?ev.target.closest('#portalLogout,#logoutBtn'):null;if(!target)return;ev.preventDefault();ev.stopImmediatePropagation();try{await nativeFetch('/api/v1/access/logout',{method:'POST',credentials:'include'});}catch(_){}if(typeof window.mketyTradingSessionClear==='function')window.mketyTradingSessionClear();clearLocalSession(true);location.reload()}
 document.addEventListener('click',logoutReturningOwner,true);
 })();</script>`;
 
