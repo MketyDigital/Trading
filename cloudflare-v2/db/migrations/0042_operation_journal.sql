@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.operation_journal (
   trading_event_id UUID REFERENCES public.trading_events(id) ON DELETE SET NULL,
   source_connection_id UUID REFERENCES public.source_connections(id) ON DELETE SET NULL,
   source_feed_id UUID REFERENCES public.source_feeds(id) ON DELETE SET NULL,
-  route_id UUID REFERENCES public.signal_routes(id) ON DELETE SET NULL,
+  route_id UUID REFERENCES public.source_destination_routes(id) ON DELETE SET NULL,
   destination_id UUID REFERENCES public.trading_destinations(id) ON DELETE SET NULL,
   trade_account_id UUID REFERENCES public.trade_accounts(id) ON DELETE SET NULL,
   ai_provider_id UUID REFERENCES public.ai_providers(id) ON DELETE SET NULL,
