@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.source_feeds (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (workspace_id, source_connection_id, provider_feed_id),
     UNIQUE (workspace_id, id),
+    UNIQUE (workspace_id, id, source_connection_id),
     CONSTRAINT source_feeds_workspace_source_fk
         FOREIGN KEY (workspace_id, source_connection_id)
         REFERENCES public.source_connections(workspace_id, id)
@@ -27,11 +28,16 @@ ALTER TABLE public.source_destination_routes
 
 ALTER TABLE public.source_destination_routes
     DROP CONSTRAINT IF EXISTS source_destination_routes_workspace_source_feed_fk;
-
 ALTER TABLE public.source_destination_routes
-    ADD CONSTRAINT source_destination_routes_workspace_source_feed_fk
-        FOREIGN KEY (workspace_id, source_feed_id)
-        REFERENCES public.source_feeds(workspace_id, id)
+    DROP CONSTRAINT IF EXISTS source_destination_routes_workspace_feed_source_fk;
+
+-- A feed-scoped route must reference a feed belonging to the exact source
+-- connection on that route. This prevents a caller from pairing a feed from
+-- another connection in the same workspace with an otherwise valid route.
+ALTER TABLE public.source_destination_routes
+    ADD CONSTRAINT source_destination_routes_workspace_feed_source_fk
+        FOREIGN KEY (workspace_id, source_feed_id, source_connection_id)
+        REFERENCES public.source_feeds(workspace_id, id, source_connection_id)
         ON DELETE CASCADE;
 
 -- The original connection-level uniqueness prevented the same destination from
