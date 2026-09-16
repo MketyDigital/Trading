@@ -1,5 +1,89 @@
 # Current Development Handoff
 
+Read root `AGENTS.md` first. The newest verified production authority is immediately below. The complete previous handoff is preserved verbatim afterward as historical evidence.
+
+## Current production authority — 2026-09-16
+
+Latest production `main` commit:
+
+- `a3571eddf251ed974369021d97414e177d6280f1`
+- merged PR `#98` — simplified logical multi-feed routing and restored Telegram `Forward as-is (original)`
+
+Production verification on this exact commit is green:
+
+- Trading V1 CI `#2818` — success
+- Production Cloudflare Deploy `#87` — success
+- Production Frontend E2E `#92` — success
+- Production Connection Readiness `#50` — success
+- Production Platform Configuration Verification `#49` — success
+- GitHub CodeQL — success for JavaScript/TypeScript, Python, C# and Actions
+
+The deploy workflow completed its production health probe and verified the persisted owner broker switch without changing it. Platform configuration verification confirmed required Worker broker bindings by name, shared gateway configuration, public gateway health and both broker WebSocket routes.
+
+### Current post-deploy safety authority
+
+Fresh post-deploy Supabase audit:
+
+- `trading_access_enabled = true`
+- `broker_execution_enabled = true`
+- `live_broker_execution_enabled = false`
+- Mkay — `brokerModes=["demo"]`, `liveExecution=false`
+- Starpips Forex — `brokerModes=["demo"]`, `liveExecution=false`
+- cTrader LIVE account `48681337` — `execution_enabled=false`, `live_execution_enabled=false`
+
+No LIVE switch was enabled by PR #98. Passing CI/deployment/DEMO does not itself authorize LIVE.
+
+### Current logical route authority
+
+Routing is resolved independently for every persisted **source connection → destination** pair.
+
+- `All channels from this source` means that destination accepts every authorized child feed, subject to all normal filters/account/runtime gates.
+- Selective mode means only the checked child feeds may reach that destination.
+- If selective rows exist for a destination, an unchecked feed cannot fall back to a legacy/default row for that same destination.
+- Selective routing for destination A does not suppress an unrelated default/all-channels route to destination B.
+- Destination delivery and broker planning both consume `cloudflare-v2/src/routes/logical_route_scope.js`; presentation routing and broker authority must not diverge.
+
+Existing logical subgroups carry exact underlying `routeIds` when edited. The reconcile API uses those IDs to preserve specialized sibling route groups, reject stale edits, reject overlapping-feed ownership, prevent a new selective route from silently coexisting with/stealing authority from an existing default route, and validate target collisions when moving a route.
+
+Blank Allowed Symbols + blank Blocked Symbols means no route-level symbol narrowing. Route filters can only narrow; authoritative destination account catalogs, aliases, risk/environment/account/runtime/LIVE gates remain final authority.
+
+### Telegram destination formatting
+
+Ready-made modes remain:
+
+- `none` — **Forward as-is (original)**
+- `clean` — **Clean original**
+- `template` — **Structured template**
+- `ai_then_fallback` — **AI presentation + safe fallback**
+
+A valid destination-level mode overrides the attached template mode. `inherit`, invalid or absent override leaves the saved template behavior in force. Forward as-is keeps the original stored source text and native Telegram entities where available, without AI/cleanup/reconstruction/branding. Formatting edits do not rotate the saved bot credential, recreate the Telegram endpoint or alter canonical broker execution.
+
+Detailed current operator semantics and the post-deploy checklist are in `docs/PR98_PRODUCTION_ACCEPTANCE_ADDENDUM.md`.
+
+### Remaining real DEMO acceptance
+
+Production CI/deployment gates are green, but real end-to-end acceptance still requires controlled DEMO evidence for:
+
+1. normal Telegram Bot source allowlist and child-feed creation;
+2. selected feed A/B isolation plus proof that an unselected feed skips the same selective destination;
+3. proof that an unrelated all-channels destination remains independent;
+4. reusable Telegram destination bot serving multiple endpoints;
+5. `Forward as-is` exact-text delivery;
+6. cTrader DEMO broker execution;
+7. MT5 DEMO broker execution with the intended connector online;
+8. replay/idempotency with no duplicate broker open;
+9. management/reply/follow-up correlation to the original durable position group;
+10. connector disconnect/reconnect recovery;
+11. final fresh zero-LIVE audit.
+
+Do not declare LIVE readiness from production gates alone.
+
+---
+
+## Complete previous handoff — preserved verbatim
+
+# Current Development Handoff
+
 Read root `AGENTS.md` first. This file records the newest verified release state. Exact older handoff history remains preserved under `docs/archive/` and in dated design/runbook documents.
 
 ## Active release candidate — PR #98, 2026-09-16
