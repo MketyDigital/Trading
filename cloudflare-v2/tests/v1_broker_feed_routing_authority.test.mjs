@@ -82,7 +82,7 @@ test('broker planning uses feed-specific routes instead of legacy parent routes 
 
   const deps = await createV1SimulationDependencies({
     env: env(), supabase, sourceId: 'source-1', event: telegramEvent,
-    interpretation: { status: 'READY', intent: { canonicalSymbol: 'XAUUSD' } },
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' } } },
   });
 
   const routed = await deps.accountProvider();
@@ -105,7 +105,7 @@ test('broker planning applies feed route canonical-symbol filters before account
 
   const deps = await createV1SimulationDependencies({
     env: env(), supabase, sourceId: 'source-1', event: telegramEvent,
-    interpretation: { status: 'READY', intent: { canonicalSymbol: 'DERIV:VOLATILITY_75' } },
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'DERIV:VOLATILITY_75' } } },
   });
 
   const routed = await deps.accountProvider();
