@@ -76,6 +76,9 @@ function withManagementSymbol(text, management) {
 
 function informationalManagementPlan(text) {
   const upper = text.toUpperCase();
+  if (/^\s*STOPPED\s+(?:OUT\s+)?AT\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)\b/.test(upper)) {
+    return { status: 'NEEDS_INTERPRETATION', reason: 'INFORMATIONAL_MANAGEMENT' };
+  }
   if (/^\s*(?:HOLD|KEEP\s+RUNNING)\s*[!.]*\s*$/.test(upper)) {
     return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'HOLD_POSITION' } };
   }
