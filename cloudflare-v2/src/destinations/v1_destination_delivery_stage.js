@@ -1,5 +1,7 @@
 import { decryptSecret } from '../security/secret_box.js';
+import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
 import { formatTelegramDestinationMessage } from './formatting.js';
+import { evaluateRouteFilters } from './route_filters.js';
 import { renderTelegramDestination } from './telegram_presentation.js';
 import { sendTelegramDestination } from './telegram_destination.js';
 
@@ -219,20 +221,43 @@ export function createV1DestinationDeliveryStore(supabase) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   return {
-    async listRoutedDestinations(workspaceId, sourceId) {
+    async listRoutedDestinations(workspaceId, sourceId, { providerFeedId = null } = {}) {
       const workspace = text(workspaceId);
       const source = text(sourceId);
-      const { data: routes, error: routesError } = await supabase
+      const { data: allRoutes, error: routesError } = await supabase
         .from('source_destination_routes')
-        .select('destination_id,priority')
+        .select('destination_id,priority,source_feed_id,filters')
         .eq('workspace_id', workspace)
         .eq('source_connection_id', source)
         .eq('is_active', true)
         .order('priority', { ascending: true });
       if (routesError) throw new Error('DESTINATION_ROUTE_LIST_FAILED');
-      if (!routes?.length) return [];
 
-      const orderedIds = routes.map((row) => text(row.destination_id)).filter(Boolean);
+      let feedId = null;
+      const requestedFeed = text(providerFeedId);
+      if (requestedFeed) {
+        const { data: feed, error: feedError } = await supabase
+          .from('source_feeds')
+          .select('id')
+          .eq('workspace_id', workspace)
+          .eq('source_connection_id', source)
+          .eq('provider_feed_id', requestedFeed)
+          .eq('is_active', true)
+          .maybeSingle();
+        if (feedError) throw new Error('SOURCE_FEED_LOOKUP_FAILED');
+        feedId = text(feed?.id) || null;
+      }
+
+      const routes = Array.isArray(allRoutes) ? allRoutes : [];
+      const feedRoutes = feedId
+        ? routes.filter((row) => text(row.source_feed_id) === feedId)
+        : [];
+      const selectedRoutes = feedRoutes.length
+        ? feedRoutes
+        : routes.filter((row) => !text(row.source_feed_id));
+      if (!selectedRoutes.length) return [];
+
+      const orderedIds = selectedRoutes.map((row) => text(row.destination_id)).filter(Boolean);
       if (!orderedIds.length) return [];
       const { data: destinations, error: destinationError } = await supabase
         .from('trading_destinations')
@@ -243,6 +268,7 @@ export function createV1DestinationDeliveryStore(supabase) {
       if (destinationError) throw new Error('DESTINATION_LIST_FAILED');
 
       const destinationRows = new Map((destinations || []).map((row) => [text(row.id), row]));
+      const routeRows = new Map(selectedRoutes.map((row) => [text(row.destination_id), row]));
       const templateIds = [...new Set((destinations || []).map((row) => text(row.template_id)).filter(Boolean))];
       let templates = [];
       if (templateIds.length) {
@@ -259,7 +285,15 @@ export function createV1DestinationDeliveryStore(supabase) {
       return orderedIds
         .map((id) => destinationRows.get(id))
         .filter(Boolean)
-        .map((row) => ({ ...row, template: templateRows.get(text(row.template_id)) || null }));
+        .map((row) => {
+          const route = routeRows.get(text(row.id)) || {};
+          return {
+            ...row,
+            template: templateRows.get(text(row.template_id)) || null,
+            route_filters: safeObject(route.filters),
+            source_feed_id: text(route.source_feed_id) || null,
+          };
+        });
     },
 
     async recordDestinationOutcome(workspaceId, id, outcome = {}) {
@@ -525,7 +559,9 @@ export async function runV1DestinationDeliveryStage({
 
   let destinations;
   try {
-    destinations = await destinationStore.listRoutedDestinations(trustedWorkspaceId, trustedSourceId);
+    destinations = await destinationStore.listRoutedDestinations(trustedWorkspaceId, trustedSourceId, {
+      providerFeedId: providerFeedIdFromEvent(event),
+    });
   } catch {
     return { status: 'BLOCKED', succeeded: 0, routed: 0, failed: 0, rejected: 0, blocked: 0, outcomes: [], errorCode: 'DESTINATION_ROUTE_LIST_FAILED' };
   }
@@ -533,6 +569,9 @@ export async function runV1DestinationDeliveryStage({
 
   const outcomes = [];
   for (const destination of destinations) {
+    const filterDecision = evaluateRouteFilters(destination.route_filters ?? destination.routeFilters ?? {}, interpretation, destination);
+    if (!filterDecision.allowed) continue;
+
     let outcome;
     try {
       outcome = await deliverOne({
