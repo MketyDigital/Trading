@@ -1,7 +1,7 @@
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { canUseDestinationType, isAccessCodeProvisionedWorkspace } from '../security/trading_entitlements.js';
-import { groupLogicalRoutes, planLogicalRouteReconcile } from '../routes/logical_route_admin.js';
+import { groupLogicalRoutes, inspectLogicalRouteEdit, planLogicalRouteReconcile } from '../routes/logical_route_admin.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -58,6 +58,20 @@ function normalizeFilters(value) {
 
 function permission(authorization, name) {
   return hasTradingPermission(authorization?.membership?.role, name);
+}
+
+function arrayOfIds(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map(text).filter(Boolean))];
+}
+
+function sameStringSet(left = [], right = []) {
+  const a = [...new Set(left.map(text).filter(Boolean))].sort();
+  const b = [...new Set(right.map(text).filter(Boolean))].sort();
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameFilters(left, right) {
+  return JSON.stringify(normalizeFilters(left)) === JSON.stringify(normalizeFilters(right));
 }
 
 async function listLogicalRoutes(supabase, workspaceId) {
@@ -120,15 +134,19 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   const destinationId = text(body.destinationId ?? body.destination_id);
   const previousSourceConnectionId = text(body.previousSourceConnectionId ?? body.previous_source_connection_id) || sourceConnectionId;
   const previousDestinationId = text(body.previousDestinationId ?? body.previous_destination_id) || destinationId;
+  const previousRouteIds = arrayOfIds(body.previousRouteIds ?? body.previous_route_ids);
   const moving = previousSourceConnectionId !== sourceConnectionId || previousDestinationId !== destinationId;
   const mode = text(body.mode).toLowerCase();
   if (!sourceConnectionId) return json({ ok: false, reason: 'SOURCE_CONNECTION_REQUIRED' }, 400);
   if (!destinationId) return json({ ok: false, reason: 'DESTINATION_REQUIRED' }, 400);
   if (!['all', 'selective'].includes(mode)) return json({ ok: false, reason: 'ROUTE_MODE_INVALID' }, 400);
 
-  const selectedFeedIds = [...new Set((Array.isArray(body.selectedFeedIds) ? body.selectedFeedIds : []).map(text).filter(Boolean))];
+  const selectedFeedIds = arrayOfIds(body.selectedFeedIds);
   if (mode === 'selective' && selectedFeedIds.length === 0) {
     return json({ ok: false, reason: 'ROUTE_FEEDS_REQUIRED' }, 400);
+  }
+  if (mode === 'all' && selectedFeedIds.length) {
+    return json({ ok: false, reason: 'ROUTE_ALL_CHANNELS_AMBIGUOUS' }, 400);
   }
 
   let filters;
@@ -142,12 +160,42 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_AUTHORITY_LOOKUP_FAILED' }, 503); }
   if (!authority.ok) return json({ ok: false, reason: authority.reason }, authority.status);
 
-  let existingRows;
-  try { existingRows = await readRoutePair(supabase, workspaceId, previousSourceConnectionId, previousDestinationId); }
+  let previousPairRows;
+  try { previousPairRows = await readRoutePair(supabase, workspaceId, previousSourceConnectionId, previousDestinationId); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
 
+  const scope = inspectLogicalRouteEdit({
+    pairRows: previousPairRows,
+    previousRouteIds,
+    selectedFeedIds,
+    mode,
+  });
+
+  if (previousRouteIds.length && scope.missingPreviousRouteIds.length) {
+    return json({ ok: false, reason: 'LOGICAL_ROUTE_STALE_EDIT', missingRouteIds: scope.missingPreviousRouteIds }, 409);
+  }
+  if (previousRouteIds.length && !scope.editingRows.length) {
+    return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
+  }
+
+  if (!previousRouteIds.length && !moving) {
+    if (mode === 'all' && previousPairRows.length) {
+      return json({ ok: false, reason: 'LOGICAL_ROUTE_TARGET_EXISTS_EDIT_INSTEAD' }, 409);
+    }
+    if (mode === 'selective' && scope.siblingDefaultRouteIds.length) {
+      return json({ ok: false, reason: 'LOGICAL_ROUTE_DEFAULT_EXISTS_EDIT_INSTEAD' }, 409);
+    }
+  }
+
+  if (mode === 'selective' && scope.overlappingFeedRouteIds.length) {
+    return json({ ok: false, reason: 'LOGICAL_ROUTE_FEED_CONFLICT', conflictingRouteIds: scope.overlappingFeedRouteIds }, 409);
+  }
+  if (mode === 'all' && scope.activeSiblingSelectiveRouteIds.length) {
+    return json({ ok: false, reason: 'LOGICAL_ROUTE_ALL_CHANNELS_CONFLICT', conflictingRouteIds: scope.activeSiblingSelectiveRouteIds }, 409);
+  }
+
   if (moving) {
-    if (!existingRows.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
+    if (!scope.editingRows.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
     let targetRows;
     try { targetRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId); }
     catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
@@ -159,7 +207,7 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   let plan;
   try {
     plan = planLogicalRouteReconcile({
-      existingRows,
+      existingRows: scope.editingRows,
       sourceConnectionId,
       destinationId,
       mode,
@@ -175,9 +223,10 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
     return json({ ok: false, reason: text(error?.message) || 'LOGICAL_ROUTE_INVALID' }, 400);
   }
 
-  // Fail-closed ordering: remove stale/broad rows first, then update reusable rows,
-  // then add new selected rows. A partial failure can narrow authority but cannot
-  // silently broaden it; retrying the same request is idempotent and heals state.
+  // Fail-closed ordering: remove stale/broad rows from THIS logical group first,
+  // then update reusable rows, then add new selected rows. Sibling logical groups
+  // are never included in the change set. A partial failure can narrow authority
+  // but cannot silently broaden it; retrying the same request is idempotent.
   if (plan.deleteIds.length) {
     const { error } = await supabase.from('source_destination_routes').delete()
       .eq('workspace_id', workspaceId).in('id', plan.deleteIds);
@@ -209,7 +258,15 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   let logicalRoutes;
   try { logicalRoutes = await listLogicalRoutes(supabase, workspaceId); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_LIST_FAILED' }, 503); }
-  const logicalRoute = logicalRoutes.find((item) => item.sourceConnectionId === sourceConnectionId && item.destinationId === destinationId) || null;
+  const logicalRoute = logicalRoutes.find((item) =>
+    item.sourceConnectionId === sourceConnectionId
+    && item.destinationId === destinationId
+    && item.mode === mode
+    && item.routeName === (text(body.routeName ?? body.route_name) || null)
+    && Number(item.priority) === priority
+    && item.enabled === (body.enabled !== false)
+    && sameFilters(item.filters, filters)
+    && (mode === 'all' || sameStringSet(item.selectedFeedIds, selectedFeedIds))) || null;
   return json({ ok: true, workspaceId, logicalRoute });
 }
 
