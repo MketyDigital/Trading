@@ -18,9 +18,12 @@ function stripSeparatorDelimitedPresentationFooter(value) {
 }
 
 export function normalizeCurrentMarketAliases(value) {
-  let text = stripSeparatorDelimitedPresentationFooter(value);
-  for (const pattern of CURRENT_MARKET_PATTERNS) text = text.replace(pattern, ' NOW ');
-  return text.replace(/[ \t]+/g, ' ').trim();
+  const original = String(value ?? '');
+  let normalized = original;
+  for (const pattern of CURRENT_MARKET_PATTERNS) normalized = normalized.replace(pattern, ' NOW ');
+  if (normalized === original) return original;
+  normalized = stripSeparatorDelimitedPresentationFooter(normalized);
+  return normalized.replace(/[ \t]+/g, ' ').trim();
 }
 
 export const currentMarketAliases = Object.freeze([
