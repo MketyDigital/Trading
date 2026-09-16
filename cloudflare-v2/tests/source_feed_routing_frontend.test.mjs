@@ -7,7 +7,7 @@ test('granular routing console exposes simple multi-feed logical routes and reus
   const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
   assert.match(html, /granularRoutingPanel/);
   assert.match(html, /All channels from this source/i);
-  assert.match(html, /Select the exact channels\/feeds allowed to reach this destination/i);
+  assert.match(html, /select the exact channels\/feeds allowed to reach (?:this|a) destination/i);
   assert.match(html, /granularRouteFeeds/);
   assert.match(html, /logical-routes\/reconcile/);
   assert.match(html, /Leave both symbol filters blank to allow every symbol this destination account can actually trade/i);
