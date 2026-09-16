@@ -30,6 +30,12 @@ test('editing a logical route preserves and submits the exact underlying route i
   assert.match(html, /previousRouteIds:state\.editingRouteOriginal&&state\.editingRouteOriginal\.routeIds\|\|\[\]/);
 });
 
+test('stored all-channels rows suppressed by selective authority are labeled clearly', () => {
+  const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
+  assert.match(html, /suppressedBySelectiveRoutes/);
+  assert.match(html, /suppressed by selective routes/i);
+});
+
 test('destination formatting UI exposes all four ready-made modes in plain language', () => {
   const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
   assert.match(html, /Forward as-is \(original\)/i);
