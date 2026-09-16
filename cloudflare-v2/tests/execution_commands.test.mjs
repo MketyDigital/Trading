@@ -40,6 +40,48 @@ test('translates canonical BE modification into MT5 bridge command', () => {
   });
 });
 
+test('translates explicit protection removal for MT5 using zero-value clear semantics', () => {
+  assert.deepEqual(buildMT5ManagementCommand({
+    type: 'MODIFY_POSITION', brokerPositionId: '9001', clearStopLoss: true,
+  }, { digits: 2, tickSize: 0.01 }), {
+    action: 'MODIFY_POSITION', positionId: '9001', stopLoss: 0,
+  });
+  assert.deepEqual(buildMT5ManagementCommand({
+    type: 'MODIFY_POSITION', brokerPositionId: '9001', clearTakeProfit: true,
+  }, { digits: 2, tickSize: 0.01 }), {
+    action: 'MODIFY_POSITION', positionId: '9001', takeProfit: 0,
+  });
+});
+
+test('translates explicit protection removal for cTrader as an amend request with zero clear value', () => {
+  const sl = buildCTraderManagementCommand({
+    type: 'MODIFY_POSITION', brokerPositionId: 456, clearStopLoss: true,
+  }, { accountId: 123, clientMsgId: 'm-clear-sl', symbol: {} });
+  assert.equal(sl.payloadType, 2110);
+  assert.equal(sl.payload.positionId, 456);
+  assert.equal(sl.payload.stopLoss, 0);
+  assert.equal('takeProfit' in sl.payload, false);
+
+  const tp = buildCTraderManagementCommand({
+    type: 'MODIFY_POSITION', brokerPositionId: 456, clearTakeProfit: true,
+  }, { accountId: 123, clientMsgId: 'm-clear-tp', symbol: {} });
+  assert.equal(tp.payloadType, 2110);
+  assert.equal(tp.payload.positionId, 456);
+  assert.equal(tp.payload.takeProfit, 0);
+  assert.equal('stopLoss' in tp.payload, false);
+});
+
+test('builds cTrader close/partial-close and cancel-pending requests', () => {
+  assert.deepEqual(buildClosePositionMessage({ clientMsgId: 'm2', accountId: 123, positionId: 456, protocolVolume: 500000 }), {
+    clientMsgId: 'm2', payloadType: 2111,
+    payload: { ctidTraderAccountId: 123, positionId: 456, volume: 500000 },
+  });
+  assert.deepEqual(buildCancelOrderMessage({ clientMsgId: 'm3', accountId: 123, orderId: 789 }), {
+    clientMsgId: 'm3', payloadType: 2108,
+    payload: { ctidTraderAccountId: 123, orderId: 789 },
+  });
+});
+
 test('translates canonical cTrader partial close using raw protocol-cent symbol economics', () => {
   const message = buildCTraderManagementCommand({
     type: 'CLOSE_PARTIAL', brokerPositionId: 456, lots: 0.05,
