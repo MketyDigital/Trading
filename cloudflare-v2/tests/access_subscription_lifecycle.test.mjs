@@ -63,9 +63,8 @@ test('subscription lifecycle migration locks on revoke and unlocks the same work
   const sql = await readFile(new URL('../db/migrations/0037_subscription_access_lifecycle.sql', import.meta.url), 'utf8');
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.revoke_trading_workspace_access/i);
   assert.match(sql, /trading_access_enabled\s*=\s*false/i);
-  assert.match(sql, /membership_enabled\s*=\s*false/i);
   assert.match(sql, /CREATE OR REPLACE FUNCTION public\.rotate_trading_access_code/i);
   assert.match(sql, /trading_access_enabled\s*=\s*true/i);
-  assert.match(sql, /membership_enabled\s*=\s*true/i);
+  assert.doesNotMatch(sql, /UPDATE\s+public\.trading_workspace_memberships[\s\S]*membership_enabled\s*=/i);
   assert.match(sql, /liveExecution[^\n]*false/i);
 });
