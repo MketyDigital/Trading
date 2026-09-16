@@ -3,7 +3,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|UPDATE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|UPDATE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|REMOVE|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
 const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?(?:\s+INDEX)?$/i;
 const DERIV_SYNTHETIC_SYMBOL_SOURCE = String.raw`(?:Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)`;
 const DERIV_SYNTHETIC_SYMBOL = new RegExp(`^${DERIV_SYNTHETIC_SYMBOL_SOURCE}$`, 'i');
@@ -95,6 +95,17 @@ function managementPlan(text) {
     return { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
   }
 
+  const removeSl = /\b(?:REMOVE|DELETE|CANCEL)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}\s+(?:SL|STOP)\b/i.test(text)
+    || /\b(?:REMOVE|DELETE|CANCEL)\s+(?:SL|STOP)\b/i.test(text);
+  if (removeSl) return withManagementSymbol(text, { type: 'REMOVE_SL' });
+
+  const removeTp = text.match(/\b(?:REMOVE|DELETE|CANCEL)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}\s+TP\s*([1-9]\d?)?\b/i)
+    || text.match(/\b(?:REMOVE|DELETE|CANCEL)\s+TP\s*([1-9]\d?)?\b/i);
+  if (removeTp) {
+    const targetIndex = removeTp[1] ? Number(removeTp[1]) : null;
+    return withManagementSymbol(text, { type: 'REMOVE_TP', ...(targetIndex ? { targetIndex } : {}) });
+  }
+
   const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
   const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
     || new RegExp(`\\bMOVE\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)\\b(?:\\s+TO)?\\s+(?:BE|BREAK\\s+EVEN|BREAKEVEN)\\b`).test(upper)
@@ -148,12 +159,18 @@ function managementPlan(text) {
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
   }
-  const closePercent = upper.match(/\bCLOSE\s+(\d{1,3}(?:\.\d+)?)\s*%\b/);
+  const closePercent = upper.match(/\bCLOSE\s+(\d{1,3}(?:\.\d+)?)\s*%/)
+    || upper.match(/(\d{1,3}(?:\.\d+)?)\s*%\s+CLOSE\b/);
   if (closePercent) {
     const percent = Number(closePercent[1]);
     if (percent > 0 && percent < 100) {
       return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: percent / 100 });
     }
+  }
+  const closeLots = text.match(new RegExp(`\\bCLOSE\\s+(${SIGNAL_NUMBER_SOURCE})(?!\\s*%)`, 'i'));
+  if (closeLots) {
+    const lots = parsedNumber(closeLots[1]);
+    if (lots != null && lots > 0) return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', lots });
   }
   if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
