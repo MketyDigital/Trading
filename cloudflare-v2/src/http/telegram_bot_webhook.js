@@ -94,6 +94,10 @@ function nativeEventFromUpdate(update, extracted, nowMs) {
   if (!body.trim()) return { ok: true, ignored: true, reason: 'TELEGRAM_BOT_EMPTY_MESSAGE' };
 
   const replyTo = text(message?.reply_to_message?.message_id);
+  const isEdit = kind === 'edited_message' || kind === 'edited_channel_post';
+  const thread = {};
+  if (replyTo) thread.reply_to_message_id = replyTo;
+  if (isEdit) thread.edited_event_id = messageId;
   const entities = telegramEntities(message);
   return {
     ok: true,
@@ -103,7 +107,7 @@ function nativeEventFromUpdate(update, extracted, nowMs) {
       occurred_at: occurredAt(message, nowMs),
       text: body,
       structured_payload: {},
-      thread: replyTo ? { reply_to_message_id: replyTo } : {},
+      thread,
       metadata: {
         telegram_update_id: update?.update_id ?? null,
         telegram_update_kind: kind,
