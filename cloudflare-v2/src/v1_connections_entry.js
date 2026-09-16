@@ -4,6 +4,7 @@ import { withSimplifiedAccountControls } from './dashboard_simplified_account_co
 import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { withMt5ConnectorConnections } from './dashboard_mt5_connector_connections.js';
 import { withTelegramBotSource } from './dashboard_telegram_bot_source.js';
+import { withGranularRoutingConsole } from './dashboard_granular_routing.js';
 import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections_account_controls.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleV1AdminMt5ConnectorRequest } from './http/v1_admin_mt5_connector.js';
@@ -28,7 +29,7 @@ async function enhancePortalResponse(response) {
   const html = await response.text();
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
-  return new Response(withTelegramBotSource(withMt5ConnectorConnections(withCTraderCbotConnections(withSimplifiedAccountControls(withUnifiedTradingConnections(html))))), {
+  return new Response(withGranularRoutingConsole(withTelegramBotSource(withMt5ConnectorConnections(withCTraderCbotConnections(withSimplifiedAccountControls(withUnifiedTradingConnections(html)))))), {
     status: response.status,
     statusText: response.statusText,
     headers,
