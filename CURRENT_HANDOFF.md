@@ -2,7 +2,76 @@
 
 Read root `AGENTS.md` for the architectural and security boundaries. This file records the newest verified production state and supersedes older dated baseline sections when they conflict.
 
-## Current state — production infrastructure healthy
+## Current implementation handoff — 2026-09-16
+
+The active development stream is on isolated branch:
+
+- `feat/source-feeds-telegram-endpoints-mt5-multi-instance`
+
+This branch is **not production, is not deployed, and its migrations have not been applied to Supabase**. `main` remains the production authority until this branch passes full review/CI and is merged through the normal deployment flow.
+
+Approved design:
+
+- `docs/superpowers/specs/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance-design.md`
+
+Implementation plan/checklist:
+
+- `docs/superpowers/plans/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance.md`
+
+### What this branch is adding
+
+1. **Independent source feeds under one Telegram connection.** `source_connections` remains the transport/credential boundary. A single external/hosted MTProto userbot or normal Telegram Bot API connection may authorize many Telegram chats; each selected chat becomes a `source_feeds` child identity and can route independently.
+2. **Backward-compatible routing.** A feed with active feed-specific routes uses those routes. A feed with no explicit feed routes falls back to the existing connection-level routes. Existing routes are not deleted or rewritten.
+3. **Canonical-symbol route filters.** Initial allow/block lists only narrow destination fanout. Malformed broker filters fail closed. Broker-native symbol/account compatibility remains authoritative.
+4. **Reusable Telegram destination bot credentials.** One encrypted Telegram Bot API credential can back multiple destination channel endpoints. Legacy Telegram destinations that store their own encrypted token remain supported.
+5. **Normal Telegram Bot source onboarding fix.** The frontend already had conditional Bot Token fields, but the generic source admin onboarding map lacked `telegram_bot_api -> telegram_bot`; this branch closes that backend contract and materializes configured allowed chats into source feeds.
+6. **Deterministic multi-terminal MT5 connector instances.** One Windows VPS can run several MT5 terminal installations/accounts simultaneously. Each terminal gets one connector process with explicit `--terminal`, separate `--config`, and separate `--ledger`. Omitting new flags preserves the old single-terminal behavior.
+7. **Additive portal UI.** A granular routing panel lists parent source connections and child feeds, supports “All feeds/default” versus a specific feed, supports canonical symbol allow/block fields, and supports one saved Telegram delivery bot creating many Telegram destination channel endpoints.
+
+### Staged additive migrations
+
+- `cloudflare-v2/db/migrations/0035_source_feeds_and_route_scope.sql`
+- `cloudflare-v2/db/migrations/0036_reusable_destination_connections.sql`
+
+Do not apply these until CI/schema review is green. Migration 0035 includes a composite workspace+feed+source FK so a feed-scoped route cannot reference a feed belonging to another source connection. Migration 0036 keeps legacy `credential_ciphertext` while adding an optional reusable credential connection reference.
+
+### New/modified implementation areas
+
+- `cloudflare-v2/src/sources/source_feed_store.js`
+- `cloudflare-v2/src/http/v1_admin_sources.js`
+- `cloudflare-v2/src/http/v1_admin_destinations.js`
+- `cloudflare-v2/src/http/v1_admin_destination_connections.js`
+- `cloudflare-v2/src/http/v1_admin.js`
+- `cloudflare-v2/src/destinations/route_filters.js`
+- `cloudflare-v2/src/destinations/v1_destination_delivery_stage.js`
+- `cloudflare-v2/src/dashboard_granular_routing.js`
+- `cloudflare-v2/src/v1_connections_entry.js`
+- `mt5-connector/mkety_mt5_connector.py`
+- `mt5-connector/README.md`
+
+Focused tests were added for source-feed persistence, feed-scoped admin routes, route-filter fail-closed behavior, reusable Telegram destination credentials, granular routing frontend contracts, and multi-instance MT5 isolation. **Do not call them green until GitHub CI has actually run on the current branch head.**
+
+### Safety posture carried into this work
+
+The latest production audit before this implementation showed LIVE still disabled globally and per LIVE account while DEMO execution capability was available. This branch does not change any runtime control, account execution flag, workspace LIVE entitlement, broker password, or production secret. Re-query all of them again immediately before any post-deploy broker test.
+
+The latest real test evidence before this branch also showed Telegram ingress/cTrader activity working while the Octa MT5 connector was offline because the user’s laptop/MT5 terminal was off. That observation was correct; it was not treated as a code defect. Deriv synthetic instruments should not be expected to execute on the Octa MT5 test account; destination/feed/symbol routing must prevent inappropriate fanout.
+
+### Immediate next steps
+
+1. Update the MT5 acceptance runbook and operator/customer manual for multi-terminal instances, child source feeds, selective routes, and reusable Telegram destination bot credentials.
+2. Open a PR from the feature branch so branch CI executes all existing and new coverage.
+3. Root-cause any failing existing test before changing behavior; do not remove working functionality just to make CI pass.
+4. Query current Supabase schema/constraint names and dry-verify migrations 0035/0036 before any application.
+5. Only after branch CI/review is green: apply additive migrations in the approved deployment sequence, merge/deploy through reviewed `main`, and re-run production readiness checks.
+6. Before controlled DEMO execution: freshly verify `live_broker_execution_enabled=false`, workspace `liveExecution=false`, all LIVE account execution flags off, and intended DEMO account flags only.
+7. Re-run source-feed routing, normal Telegram Bot source, shared Telegram destination bot, cTrader DEMO, MT5 DEMO, replay/idempotency, management/reply, reconnect, and final zero-LIVE-action acceptance.
+
+---
+
+## Historical handoff retained below — production infrastructure healthy
+
+The following section is preserved as historical release evidence. Where it conflicts with the 2026-09-16 current section, fresh code/current production queries and the section above take precedence.
 
 The DB-first connectivity release from PR #36 is launched, and the remaining external broker-gateway blocker was fixed on 2026-09-12 by PR #38.
 
