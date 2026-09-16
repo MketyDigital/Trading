@@ -57,7 +57,7 @@ test('skip policy remains strict unless the matching per-field switch is enabled
   assert.equal(result.reason, 'INVALID_STOP_LOSS_GEOMETRY');
 });
 
-test('invalid or missing entry semantics are never made skippable by protection policy', () => {
+test('market protection without a deterministic numeric reference is left for broker-aware validation', () => {
   const result = applyProtectionValidationPolicy(sellAction({ entry: { kind: 'MARKET' } }), {
     invalidProtectionPolicy: 'skip_invalid',
     allowInvalidStopLossSkip: true,
@@ -66,4 +66,18 @@ test('invalid or missing entry semantics are never made skippable by protection 
   assert.equal(result.allowed, true);
   assert.equal(result.action.entry.kind, 'MARKET');
   assert.equal(result.skipped.length, 0);
+});
+
+test('open actions with no SL or TP remain untouched even when legacy action shape omits side and entry', () => {
+  const action = {
+    type: 'OPEN_POSITION',
+    symbol: 'XAUUSD',
+    lots: 0.01,
+    legId: 'legacy-leg',
+    idempotencyKey: 'legacy-open',
+  };
+  const result = applyProtectionValidationPolicy(action, {});
+  assert.equal(result.allowed, true);
+  assert.deepEqual(result.action, action);
+  assert.deepEqual(result.skipped, []);
 });
