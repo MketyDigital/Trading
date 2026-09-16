@@ -14,10 +14,11 @@ const aliases = [
   'BUY XAUUSD AT MARKET',
   'SELL GOLD CURRENT MARKET',
   'BUY XAUUSD MKT PRICE',
+  'BUY XAUUSD (CMP)\n\n~~~\nStarpips Forex',
 ];
 
 for (const text of aliases) {
-  test(`current-market alias is deterministic: ${text}`, async () => {
+  test(`current-market alias is deterministic: ${text.replace(/\n/g, ' / ')}`, async () => {
     let aiCalled = false;
     const result = await interpretTradingEvent({ text }, {
       aiRouter: { async processSignal() { aiCalled = true; throw new Error('AI should not be called'); } },
@@ -32,8 +33,12 @@ for (const text of aliases) {
   });
 }
 
-test('CMP punctuation normalizes to NOW without changing unrelated text', () => {
+test('CMP punctuation normalizes to NOW without changing unrelated command text', () => {
   assert.equal(normalizeCurrentMarketAliases('BUY XAUUSD (C.M.P.)'), 'BUY XAUUSD ( NOW )');
+});
+
+test('separator-delimited presentation footer is removed from deterministic CMP parsing', () => {
+  assert.equal(normalizeCurrentMarketAliases('BUY XAUUSD (CMP)\n\n~~~\nStarpips Forex'), 'BUY XAUUSD ( NOW )');
 });
 
 test('hedged commentary containing current-market wording still fails closed', async () => {
