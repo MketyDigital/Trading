@@ -1,5 +1,5 @@
 import { runV1DestinationDeliveryStage } from './v1_destination_delivery_stage.js';
-import { sendTelegramDestination } from './telegram_destination.js';
+import { sendTelegramDestination, editTelegramDestination } from './telegram_destination.js';
 
 const READY_MADE_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
 
@@ -30,6 +30,20 @@ function replyExternalEventId(event = {}) {
   const replyMessageId = text(event?.thread?.reply_to_message_id ?? event?.thread?.replyToMessageId);
   const chatId = text(event?.metadata?.native_identity?.chat_id ?? event?.metadata?.nativeIdentity?.chatId);
   return replyMessageId && chatId ? `telegram:${chatId}:${replyMessageId}` : null;
+}
+
+function editedExternalEventId(event = {}) {
+  const direct = text(event?.thread?.edited_event_id ?? event?.thread?.editedEventId);
+  const chatId = text(event?.metadata?.native_identity?.chat_id ?? event?.metadata?.nativeIdentity?.chatId);
+  if (direct) {
+    if (direct.startsWith('telegram:')) return direct;
+    if (chatId && /^-?\d+$/.test(direct)) return `telegram:${chatId}:${direct}`;
+    return direct;
+  }
+  const kind = text(event?.metadata?.telegram_update_kind ?? event?.metadata?.telegramUpdateKind).toLowerCase();
+  if (kind !== 'edited_message' && kind !== 'edited_channel_post') return null;
+  const current = text(event?.external_event_id ?? event?.externalEventId);
+  return current || null;
 }
 
 async function findTradingEventId(supabase, workspaceId, externalEventId) {
@@ -76,6 +90,7 @@ async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination,
     sourceExternalEventId: String(externalEventId),
     httpStatus: Number(result?.status || 0),
     ...(result?.messageId != null ? { messageId: Number(result.messageId) } : {}),
+    ...(result?.edited === true ? { edited: true } : {}),
     ...(result?.providerCode != null ? { providerCode: result.providerCode } : {}),
     ...(text(result?.providerDescription) ? { providerDescription: text(result.providerDescription).slice(0, 300) } : {}),
     ...(result?.retryAfter != null ? { retryAfter: Number(result.retryAfter) } : {}),
@@ -113,6 +128,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
   const workspaceId = text(input.workspaceId);
   const routedByChatId = new Map();
   const parentExternalEventId = replyExternalEventId(input.event);
+  const sourceEditedExternalEventId = editedExternalEventId(input.event);
   const currentExternalEventId = text(input?.event?.external_event_id ?? input?.event?.externalEventId);
 
   const wrappedStore = baseStore ? {
@@ -128,31 +144,47 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
   } : baseStore;
 
   const baseSendTelegram = deps.sendTelegram || sendTelegramDestination;
+  const baseEditTelegram = deps.editTelegram || editTelegramDestination;
   const threadedSendTelegram = async (sendInput = {}) => {
     const destination = routedByChatId.get(text(sendInput.chatId));
     let result;
     let replyToMessageId = null;
-    if (parentExternalEventId && destination) {
+
+    if (sourceEditedExternalEventId && destination) {
+      let mappedMessageId = null;
       try {
-        replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
+        mappedMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, sourceEditedExternalEventId);
       } catch {
-        result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
+        result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_LOOKUP_FAILED' };
       }
-      if (!result && !replyToMessageId) {
-        result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
+      if (!result && !mappedMessageId) {
+        result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_UNRESOLVED' };
       }
-    }
-    if (!result) {
-      result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
+      if (!result) {
+        result = await baseEditTelegram({ ...sendInput, messageId: mappedMessageId });
+      }
+    } else {
+      if (parentExternalEventId && destination) {
+        try {
+          replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
+        } catch {
+          result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
+        }
+        if (!result && !replyToMessageId) {
+          result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
+        }
+      }
+      if (!result) {
+        result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
+      }
     }
 
     if (destination && currentExternalEventId && supabase?.from) {
       try {
         await recordTelegramDeliveryOutcome(supabase, workspaceId, destination, currentExternalEventId, result);
       } catch {
-        // Never turn a completed Telegram send into a retryable send failure solely
-        // because journaling failed; that could duplicate a message. Surface journal
-        // health on the result and let Operations/Admin diagnostics repair visibility.
+        // Never turn a completed Telegram send/edit into a retryable transport failure solely
+        // because journaling failed; that could duplicate a destination message or broker action.
         return {
           ...result,
           deliveryJournalPersisted: false,
@@ -176,6 +208,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
 
 export const telegramThreading = {
   replyExternalEventId,
+  editedExternalEventId,
   resolveReplyMessageId,
   recordMessageMapping,
   recordTelegramDeliveryOutcome,
