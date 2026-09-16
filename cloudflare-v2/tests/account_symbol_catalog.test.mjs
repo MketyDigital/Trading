@@ -49,6 +49,40 @@ test('canonical Deriv synthetic symbols resolve against raw platform catalog nam
   }
 });
 
+test('instrument eligibility is account-catalog driven rather than platform-name driven', () => {
+  const canonical = 'DERIV:VOLATILITY_75';
+
+  // A Deriv MT5 terminal may expose this exact broker symbol.
+  const derivMt5Catalog = [
+    { platformSymbol: 'Volatility 75 Index', tradable: true },
+  ];
+
+  // A cTrader account may expose a differently named representation of the
+  // same canonical instrument. Resolution depends only on advertised account
+  // capabilities, not on a hard-coded MT5/cTrader instrument universe.
+  const derivCTraderCatalog = [
+    { platformSymbol: 'V75', canonical, tradable: true },
+  ];
+
+  // An MT5 account at another broker that does not advertise V75 must fail
+  // closed; its platform being MT5 does not grant or deny the instrument.
+  const unsupportedMt5Catalog = [
+    { platformSymbol: 'XAUUSD', tradable: true },
+    { platformSymbol: 'EURUSD', tradable: true },
+  ];
+
+  const mt5 = resolveAccountSymbol(canonical, derivMt5Catalog, {});
+  const ctrader = resolveAccountSymbol(canonical, derivCTraderCatalog, {});
+  const unsupported = resolveAccountSymbol(canonical, unsupportedMt5Catalog, {});
+
+  assert.equal(mt5.ok, true);
+  assert.equal(mt5.platformSymbol, 'Volatility 75 Index');
+  assert.equal(ctrader.ok, true);
+  assert.equal(ctrader.platformSymbol, 'V75');
+  assert.equal(unsupported.ok, false);
+  assert.equal(unsupported.reason, 'SYMBOL_NOT_FOUND');
+});
+
 test('canonical Deriv synthetic catalog matching stays precise between 1s and non-1s variants', () => {
   const catalogWithBoth = [
     { platformSymbol: 'Volatility 75 Index', tradable: true },
