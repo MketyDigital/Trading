@@ -89,7 +89,7 @@ test('cascade preserves failed sibling diagnostic and successful provider diagno
   assert.equal(result.diagnostics[1].httpStatus, 200);
 });
 
-test('provider timeout is normalized as retryable timeout diagnostic', async () => {
+test('provider timeout is normalized as retryable timeout diagnostic without inventing HTTP status zero', async () => {
   const router = new UniversalAIRouter([provider()], {
     fetchFn: async (_url, options) => await new Promise((_resolve, reject) => {
       options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
@@ -104,4 +104,5 @@ test('provider timeout is normalized as retryable timeout diagnostic', async () 
   assert.equal(result.diagnostics[0].providerCode, 'AI_TIMEOUT');
   assert.equal(result.diagnostics[0].retryable, true);
   assert.equal(Number.isFinite(result.diagnostics[0].latencyMs), true);
+  assert.equal(Object.hasOwn(result.diagnostics[0], 'httpStatus'), false);
 });
