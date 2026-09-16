@@ -4,9 +4,11 @@ import { withSimplifiedAccountControls } from './dashboard_simplified_account_co
 import { withCTraderCbotConnections } from './dashboard_ctrader_cbot_connections.js';
 import { withMt5ConnectorConnections } from './dashboard_mt5_connector_connections.js';
 import { withTelegramBotSource } from './dashboard_telegram_bot_source.js';
+import { withGranularRoutingConsole } from './dashboard_granular_routing.js';
 import { handleV1AdminConnectionsRequest } from './http/v1_admin_connections_account_controls.js';
 import { handleV1AdminCTraderCbotRequest } from './http/v1_admin_ctrader_cbot.js';
 import { handleV1AdminMt5ConnectorRequest } from './http/v1_admin_mt5_connector.js';
+import { handleV1AdminEditInPlaceRequest, isEditInPlaceAdminRequest } from './http/v1_admin_edit_in_place.js';
 import { handleCTraderOAuthPublicCallback } from './http/ctrader_oauth_callback.js';
 import { handleCTraderOAuthRelayAuthorize } from './http/ctrader_oauth_relay.js';
 import { handleExternalMtprotoEndpointRequest } from './http/external_mtproto_endpoint.js';
@@ -28,7 +30,7 @@ async function enhancePortalResponse(response) {
   const html = await response.text();
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
-  return new Response(withTelegramBotSource(withMt5ConnectorConnections(withCTraderCbotConnections(withSimplifiedAccountControls(withUnifiedTradingConnections(html))))), {
+  return new Response(withGranularRoutingConsole(withTelegramBotSource(withMt5ConnectorConnections(withCTraderCbotConnections(withSimplifiedAccountControls(withUnifiedTradingConnections(html)))))), {
     status: response.status,
     statusText: response.statusText,
     headers,
@@ -40,6 +42,7 @@ export function createTradingConnectionsEntrypoint({
   connectionsHandler = handleV1AdminConnectionsRequest,
   ctraderCbotHandler = handleV1AdminCTraderCbotRequest,
   mt5ConnectorHandler = handleV1AdminMt5ConnectorRequest,
+  editInPlaceHandler = handleV1AdminEditInPlaceRequest,
   ctraderCallbackHandler = handleCTraderOAuthPublicCallback,
   ctraderRelayAuthorizeHandler = handleCTraderOAuthRelayAuthorize,
   externalMtprotoHandler = handleExternalMtprotoEndpointRequest,
@@ -78,6 +81,11 @@ export function createTradingConnectionsEntrypoint({
       if (url.pathname === '/api/v1/admin/connections' || url.pathname.startsWith('/api/v1/admin/connections/')) {
         if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
         return connectionsHandler(request, env, { ctx });
+      }
+
+      if (isEditInPlaceAdminRequest(request)) {
+        if (!isTradingAccessEnabled(env)) return tradingAccessDisabledResponse();
+        return editInPlaceHandler(request, env, { ctx });
       }
 
       if (url.pathname === '/api/v1/admin/sources' || /^\/api\/v1\/admin\/sources\/[^/]+\/(?:enable|disable|credentials)$/.test(url.pathname)) {

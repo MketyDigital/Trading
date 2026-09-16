@@ -3,7 +3,7 @@ import { encryptSecret } from '../security/secret_box.js';
 
 const DESTINATION_SELECT = [
   'id', 'workspace_id', 'destination_type', 'display_name', 'destination_ref', 'template_id',
-  'credential_ciphertext', 'settings', 'is_active', 'health_status', 'last_delivery_at', 'last_error_code',
+  'credential_ciphertext', 'credential_connection_id', 'settings', 'is_active', 'health_status', 'last_delivery_at', 'last_error_code',
   'created_at', 'updated_at',
 ].join(',');
 
@@ -13,7 +13,7 @@ const TEMPLATE_SELECT = [
 ].join(',');
 
 const ROUTE_SELECT = [
-  'id', 'workspace_id', 'source_connection_id', 'destination_id', 'route_name', 'priority', 'is_active',
+  'id', 'workspace_id', 'source_connection_id', 'source_feed_id', 'destination_id', 'route_name', 'priority', 'is_active',
   'filters', 'created_at', 'updated_at',
 ].join(',');
 
@@ -51,6 +51,7 @@ function safeObject(value) {
 }
 
 function publicDestination(row = {}) {
+  const credentialConnectionId = row.credential_connection_id ?? row.credentialConnectionId ?? null;
   return {
     id: row.id,
     workspaceId: row.workspace_id ?? row.workspaceId,
@@ -58,12 +59,13 @@ function publicDestination(row = {}) {
     displayName: row.display_name ?? row.displayName,
     destinationRef: row.destination_ref ?? row.destinationRef ?? null,
     templateId: row.template_id ?? row.templateId ?? null,
+    credentialConnectionId,
     settings: safeObject(row.settings),
     enabled: Boolean(row.is_active ?? row.enabled),
     healthStatus: row.health_status ?? row.healthStatus ?? null,
     lastDeliveryAt: row.last_delivery_at ?? row.lastDeliveryAt ?? null,
     lastErrorCode: row.last_error_code ?? row.lastErrorCode ?? null,
-    credentialConfigured: Boolean(row.credential_ciphertext ?? row.credentialCiphertext ?? row.credentialConfigured),
+    credentialConfigured: Boolean(row.credential_ciphertext ?? row.credentialCiphertext ?? credentialConnectionId ?? row.credentialConfigured),
     createdAt: row.created_at ?? row.createdAt ?? null,
     updatedAt: row.updated_at ?? row.updatedAt ?? null,
   };
@@ -94,6 +96,7 @@ function publicRoute(row = {}) {
     id: row.id,
     workspaceId: row.workspace_id ?? row.workspaceId,
     sourceConnectionId: row.source_connection_id ?? row.sourceConnectionId,
+    sourceFeedId: row.source_feed_id ?? row.sourceFeedId ?? null,
     destinationId: row.destination_id ?? row.destinationId,
     routeName: row.route_name ?? row.routeName ?? null,
     priority: Number(row.priority ?? 100),
@@ -107,9 +110,12 @@ function publicRoute(row = {}) {
 function parseDestinationInput(body = {}) {
   const destinationType = text(body.destinationType ?? body.destination_type);
   const displayName = text(body.displayName ?? body.display_name);
+  const credentialConnectionId = text(body.credentialConnectionId ?? body.credential_connection_id);
   if (!destinationType || !DESTINATION_TYPES.has(destinationType)) return { ok: false, reason: 'DESTINATION_TYPE_UNSUPPORTED' };
   if (!displayName) return { ok: false, reason: 'DESTINATION_NAME_REQUIRED' };
   if (destinationType !== 'audit_only' && !text(body.destinationRef ?? body.destination_ref)) return { ok: false, reason: 'DESTINATION_REF_REQUIRED' };
+  if (credentialConnectionId && destinationType !== 'telegram') return { ok: false, reason: 'DESTINATION_CONNECTION_PROVIDER_MISMATCH' };
+  if (credentialConnectionId && body.credentials != null) return { ok: false, reason: 'DESTINATION_CREDENTIAL_AUTHORITY_AMBIGUOUS' };
   return {
     ok: true,
     input: {
@@ -117,6 +123,7 @@ function parseDestinationInput(body = {}) {
       displayName,
       destinationRef: text(body.destinationRef ?? body.destination_ref),
       templateId: text(body.templateId ?? body.template_id),
+      credentialConnectionId,
       settings: safeObject(body.settings),
     },
     credentials: body.credentials,
@@ -132,6 +139,7 @@ function parseDestinationUpdateInput(body = {}) {
       displayName,
       destinationRef: text(body.destinationRef ?? body.destination_ref),
       templateId: text(body.templateId ?? body.template_id),
+      credentialConnectionId: text(body.credentialConnectionId ?? body.credential_connection_id),
       settings: safeObject(body.settings),
     },
   };
@@ -162,21 +170,52 @@ function parseTemplateInput(body = {}) {
   };
 }
 
+function normalizeCanonicalSymbolList(value) {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  if (!Array.isArray(value)) return { ok: false };
+  return {
+    ok: true,
+    value: [...new Set(value.map((item) => String(item ?? '').trim().toUpperCase()).filter(Boolean))],
+  };
+}
+
+function parseRouteFilters(value) {
+  if (value === undefined || value === null) return { ok: true, filters: {} };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, reason: 'ROUTE_FILTERS_INVALID' };
+  const filters = { ...value };
+  const allowed = normalizeCanonicalSymbolList(value.allowedCanonicalSymbols ?? value.allowed_canonical_symbols);
+  const blocked = normalizeCanonicalSymbolList(value.blockedCanonicalSymbols ?? value.blocked_canonical_symbols);
+  if (!allowed.ok || !blocked.ok) return { ok: false, reason: 'ROUTE_FILTERS_INVALID' };
+  if (allowed.value !== undefined) {
+    filters.allowedCanonicalSymbols = allowed.value;
+    delete filters.allowed_canonical_symbols;
+  }
+  if (blocked.value !== undefined) {
+    filters.blockedCanonicalSymbols = blocked.value;
+    delete filters.blocked_canonical_symbols;
+  }
+  return { ok: true, filters };
+}
+
 function parseRouteInput(body = {}) {
   const sourceConnectionId = text(body.sourceConnectionId ?? body.source_connection_id);
+  const sourceFeedId = text(body.sourceFeedId ?? body.source_feed_id);
   const destinationId = text(body.destinationId ?? body.destination_id);
   const priority = Number(body.priority ?? 100);
   if (!sourceConnectionId) return { ok: false, reason: 'SOURCE_CONNECTION_REQUIRED' };
   if (!destinationId) return { ok: false, reason: 'DESTINATION_REQUIRED' };
   if (!Number.isFinite(priority)) return { ok: false, reason: 'ROUTE_PRIORITY_INVALID' };
+  const parsedFilters = parseRouteFilters(body.filters);
+  if (!parsedFilters.ok) return parsedFilters;
   return {
     ok: true,
     input: {
       sourceConnectionId,
+      sourceFeedId,
       destinationId,
       routeName: text(body.routeName ?? body.route_name),
       priority,
-      filters: safeObject(body.filters),
+      filters: parsedFilters.filters,
     },
   };
 }
@@ -225,6 +264,7 @@ export function createAdminDestinationStore(supabase) {
         destination_ref: input.destinationRef,
         template_id: input.templateId || null,
         credential_ciphertext: credentialCiphertext,
+        credential_connection_id: input.credentialConnectionId || null,
         settings: input.settings || {},
         is_active: false,
         health_status: 'DISABLED',
@@ -238,6 +278,7 @@ export function createAdminDestinationStore(supabase) {
         display_name: input.displayName,
         destination_ref: input.destinationRef,
         template_id: input.templateId || null,
+        credential_connection_id: input.credentialConnectionId || null,
         settings: input.settings || {},
       };
       const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
@@ -251,7 +292,7 @@ export function createAdminDestinationStore(supabase) {
       return data || null;
     },
     async replaceDestinationCredentials(workspaceId, id, credentialCiphertext) {
-      const patch = { credential_ciphertext: credentialCiphertext, health_status: 'PENDING' };
+      const patch = { credential_ciphertext: credentialCiphertext, credential_connection_id: null, health_status: 'PENDING' };
       const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
       if (error) throw new Error('DESTINATION_CREDENTIALS_UPDATE_FAILED');
       return data || null;
@@ -312,6 +353,7 @@ export function createAdminDestinationStore(supabase) {
       const row = {
         workspace_id: String(workspaceId),
         source_connection_id: input.sourceConnectionId,
+        source_feed_id: input.sourceFeedId || null,
         destination_id: input.destinationId,
         route_name: input.routeName,
         priority: input.priority ?? 100,

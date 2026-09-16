@@ -1,6 +1,6 @@
 # Mkety Trading — Operator & Customer Connection Manual
 
-**Updated:** 2026-09-12  
+**Updated:** 2026-09-16  
 **Portal:** `https://trade.mkety.com`  
 **cTrader WebSocket:** `wss://cbot.mkety.com:25345/v1/cbot`  
 **MT5 WebSocket:** `wss://cbot.mkety.com:25345/v1/mt5`
@@ -22,17 +22,18 @@ A connected broker account is not automatically allowed to trade. New accounts s
 Broker execution requires all relevant gates to pass, including:
 
 - authorized source and workspace;
-- explicit persisted source → broker-account route;
+- explicit persisted source/feed → broker-account route;
 - same-workspace account binding;
 - connected provider and verified broker identity;
 - Active ON;
 - Execution ON;
 - Kill switch OFF;
+- route/instrument policy;
 - symbol, lot/risk and environment policy;
 - deployment broker capability; and
 - persisted Mkety owner/master broker switch.
 
-Deployment, pairing, sync or gateway connectivity must not mutate the owner/master broker switch. Preserve its current persisted value during rollout.
+Deployment, pairing, sync, adding a source feed, adding a route, or gateway connectivity must not mutate the owner/master broker switch or enable LIVE execution.
 
 ## 3. cTrader connection modes
 
@@ -59,7 +60,7 @@ Customer flow:
 5. Keep the default gateway, paste the token and start the cBot.
 6. Return to Mkety and click **Sync cBot identity**.
 7. Confirm the real account number, broker and Demo/Live environment.
-8. Configure explicit route and risk controls.
+8. Configure explicit feed/default routes and risk controls.
 9. Open account safety gates only for an approved acceptance/live phase.
 
 The token binds the cBot session to one authoritative Mkety account row. The gateway verifies the session/account identity; the Worker still decides whether any command is allowed to reach it.
@@ -70,11 +71,12 @@ The recommended MetaTrader 5 route is **MT5 Connector — Recommended**. It runs
 
 Customer requirements:
 
-- Windows computer with MetaTrader 5 installed;
+- Windows computer or Windows VPS with MetaTrader 5 installed;
+- one running terminal process for each account that must remain connected simultaneously;
 - MT5 logged into the intended broker account;
 - Mkety MT5 Connector running while the account should remain connected.
 
-The customer does **not** expose an inbound port, configure a public HTTPS bridge URL, or need a customer VPS for the recommended connector mode.
+The customer does **not** expose an inbound port or configure a public HTTPS bridge URL for the recommended connector mode.
 
 ### MT5 first-run flow
 
@@ -94,10 +96,34 @@ wss://cbot.mkety.com:25345/v1/mt5
 
 10. Return to Mkety and click **Sync MT5 identity**.
 11. Confirm actual account number, broker/server and Demo/Live state.
-12. Configure the explicit source → account route, symbol aliases if needed and risk controls.
+12. Configure the explicit source feed/default route, symbol aliases/filters if needed and risk controls.
 13. Open account execution gates only for the approved acceptance/live phase.
 
-The normal customer does not paste a WebSocket URL. Operator/testing flags such as `--token`, `--gateway`, `--config` and `--reset` exist for controlled use.
+### Several MT5 brokers/accounts on one Windows VPS
+
+One running MT5 terminal process has one active logged-in account identity at a time. To keep Octa, FBS and Deriv MT5 accounts connected simultaneously on one VPS, run separate terminal installations/directories/processes and one Mkety connector process per terminal/account.
+
+Example:
+
+```text
+C:\MT5\Octa\terminal64.exe
+C:\MT5\FBS\terminal64.exe
+C:\MT5\Deriv\terminal64.exe
+```
+
+Use the same `MketyMT5Connector.exe` binary, but isolate every instance:
+
+```powershell
+MketyMT5Connector.exe --terminal "C:\MT5\Octa\terminal64.exe" --config "C:\Mkety\Octa\connector.json" --ledger "C:\Mkety\Octa\ledger.sqlite" --token "<OCTA_PAIR_TOKEN>"
+
+MketyMT5Connector.exe --terminal "C:\MT5\FBS\terminal64.exe" --config "C:\Mkety\FBS\connector.json" --ledger "C:\Mkety\FBS\ledger.sqlite" --token "<FBS_PAIR_TOKEN>"
+
+MketyMT5Connector.exe --terminal "C:\MT5\Deriv\terminal64.exe" --config "C:\Mkety\Deriv\connector.json" --ledger "C:\Mkety\Deriv\ledger.sqlite" --token "<DERIV_PAIR_TOKEN>"
+```
+
+After first pairing, the instance uses the reconnect credential in its own config and no longer needs `--token`. `--terminal` binds that process to the exact terminal installation. `--ledger` prevents replay state from being shared between accounts. Omitting these flags preserves the existing single-terminal behavior.
+
+Windows/Windows VPS is the primary supported multi-terminal deployment. Linux + Wine remains experimental until independently accepted.
 
 ## 5. MT5 pairing and reconnect credential boundary
 
@@ -114,6 +140,8 @@ After successful MT5 identity sync, Mkety retires the original pairing token fro
 The connector reads the real terminal identity from `MetaTrader5.account_info()` and symbol metadata from `MetaTrader5.symbols_get()`.
 
 Mkety persists the account-specific symbol catalog and resolves each canonical signal symbol against that catalog before execution. Exact/normalized names and explicit aliases are supported; ambiguous matches fail closed rather than guessing.
+
+A route may additionally narrow a destination with canonical-symbol allow/block lists. For example, an Octa MT5 route can permit `XAUUSD` while a Deriv cTrader route receives supported synthetic indices. Route filters never force an unsupported symbol onto a broker; the actual account symbol catalog remains final authority.
 
 The outbound connector reuses Mkety's MT5 execution/reconciliation engine for market and pending orders, SL/TP, modify, partial/full close, pending cancellation, `order_check`, filling-mode fallback and uncertain-outcome reconciliation.
 
@@ -140,11 +168,50 @@ Worker-facing control routes are authenticated with server-side control credenti
 
 The gateway is deployed separately from the Cloudflare Worker through the repository's Coolify deployment path. A successful Worker deployment does not by itself prove gateway health.
 
-The 2026-09-12 production cutover verified the current Coolify `main` deployment, repeated `/health`, and both public WebSocket routes. Each route upgrades correctly and unauthenticated sessions fail closed with `1008 AUTH_REQUIRED`.
+Before broker-side acceptance, verify authenticated demo connectivity and identity sync with the real demo connector/client.
 
-Before broker-side acceptance, still verify authenticated demo connectivity and identity sync with a real demo connector/client.
+## 9. Telegram source connection vs independently routable feeds
 
-## 9. Telegram/MTProto modes and external-VM boundary
+Mkety separates the **transport connection** from the **Telegram chat/feed** that supplied an event.
+
+A source connection represents the credential/session/runtime boundary. Examples:
+
+- one external MTProto userbot/session;
+- one Mkety-hosted MTProto userbot/session;
+- one normal Telegram Bot API bot/webhook.
+
+That one connection may authorize two or many Telegram chats/channels. Every selected/allowed Telegram chat is represented as an independently routable source feed underneath the parent connection.
+
+Example:
+
+```text
+External userbot connection
+  -> Gold Signals feed
+  -> Synthetic Signals feed
+  -> Forex Signals feed
+  -> News feed
+```
+
+The user does **not** need another source connection merely because another Telegram channel is selected. Another source connection is needed only when a genuinely separate Telegram transport/session/credential boundary is desired.
+
+If an external VM itself aggregates multiple Telegram user sessions internally, that implementation is outside Mkety's authority boundary. Mkety only authenticates the configured source transport, enforces persisted allowed-chat policy, resolves the incoming native chat ID to the appropriate source feed and applies that feed's route policy.
+
+A source-feed row never grants authorization by itself. The parent source connection's persisted allowed-chat policy is still checked first.
+
+## 10. Normal Telegram Bot API source
+
+A normal Telegram bot source uses one BotFather token/webhook connection and may receive from multiple allowed groups/channels where Telegram permits that bot to receive updates.
+
+During source creation, Mkety exposes:
+
+- **Bot token** — stored encrypted on the source connection;
+- **Allowed chat / channel IDs** — materialized as independent source feeds.
+
+One webhook remains connection-scoped. Users should not create another Telegram bot merely to make another allowed source chat independently routable.
+
+Normal messages, channel posts, edits and reply/follow-up context use the same canonical pipeline and persisted routing model.
+
+## 11. Telegram/MTProto modes and external-VM boundary
 
 ### Hosted MTProto
 
@@ -154,36 +221,97 @@ Before broker-side acceptance, still verify authenticated demo connectivity and 
 
 An external MTProto VM is **not Mkety infrastructure** and must not be treated as a production-readiness dependency. It is a transport adapter only.
 
-The external VM should know as little as possible. Its complete Mkety-side contract is:
+Its complete Mkety-side contract is:
 
 1. receive a Telegram message with its own Telegram client/session;
 2. POST the message/payload to the single opaque Mkety ingress endpoint supplied to it.
 
-It must not be responsible for Mkety workspace selection, source configuration, allowed-chat policy, DB lookup, routing, broker selection, risk, account state or execution decisions. Those remain inside the Mkety Worker / Mkety-owned Cloudflare runtime.
+It must not be responsible for Mkety workspace selection, allowed-chat authority, route selection, broker selection, risk, account state or execution decisions. Those remain inside Mkety.
 
-The existing source-specific endpoint supports this model. The external sender may be given one complete opaque URL containing the server-side source credential and can simply POST to it; it does not need separate Mkety configuration knowledge.
+Local chat filtering on an external transport may reduce noise but never grants server authorization.
 
 ### Shared collector — optional Mkety-owned ingress capability
 
-Mkety also supports the shared collector endpoint family:
+Mkety also supports shared collector ingress for Mkety-owned collector topology. It is not required for an unrelated external VM merely to forward payloads.
+
+When shared collector mode is intentionally used, Mkety's database remains authoritative for active external MTProto sources and allowed Telegram chat scope.
+
+## 12. Telegram destination bot reuse
+
+Mkety separates a reusable Telegram **delivery bot credential** from individual destination **channel endpoints**.
+
+One BotFather bot token may be saved once and reused for multiple channels where that bot is an admin.
+
+Example:
 
 ```text
-POST /api/v1/external/mtproto/collect/<opaque-token>
+Starpips Delivery Bot
+  -> VIP Gold
+  -> Free Signals
+  -> Synthetic Signals
 ```
 
-or the equivalent bearer-token form for Mkety-controlled components.
+Each destination endpoint has its own:
 
-`trading_ingress_collectors` and shared collector routing are an **internal Mkety capability** for a Mkety-owned collector/ingress topology. They are not a requirement for an unrelated external VM merely to forward payloads.
+- display name;
+- Telegram chat/channel ID;
+- enabled state;
+- formatting/template assignment;
+- route membership;
+- delivery/audit evidence.
 
-When shared collector mode is intentionally used, Mkety's database remains authoritative for active `external_mtproto` sources and allowed Telegram chat scope. An unselected visible chat is accepted/ignored; a selected chat is delivered only to matching authorized source rows.
+The encrypted bot token is stored once on the reusable credential connection. Public/admin read responses never return the token or ciphertext.
 
-Production having zero `trading_ingress_collectors` rows is valid unless a separately approved Mkety-owned collector topology needs one.
+Legacy Telegram destinations that already store their own encrypted token remain supported. Users only need a different BotFather bot when they want a genuinely separate bot identity or Telegram permission boundary, not merely another destination channel.
 
-### Legacy signed-source compatibility
+## 13. Source-feed routing semantics
 
-One-runtime-per-source signed ingress remains available for compatibility. Local chat filtering on a transport may reduce noise but never grants server authorization.
+Routes are persisted and workspace-scoped.
 
-## 10. Telegram event identity and replay safety
+A route may target:
+
+- **All feeds / default** for a parent source connection; or
+- one specific child source feed.
+
+Compatibility rule:
+
+1. authenticate/authorize the source connection and native Telegram chat;
+2. resolve the child source feed;
+3. if that feed has active feed-specific routes, use only those routes;
+4. otherwise use the existing connection-level/default routes;
+5. apply route filters;
+6. independently fan out to Telegram/broker/webhook/audit destinations.
+
+This allows one userbot to behave like:
+
+```text
+Gold feed
+  -> Octa MT5
+  -> Deriv cTrader
+  -> VIP Gold Telegram
+
+Synthetic feed
+  -> Deriv cTrader only
+  -> Synthetic Telegram
+
+News feed
+  -> Telegram only
+```
+
+Adding a route to one feed does not authorize or reroute the other feeds.
+
+### Canonical-symbol route filters
+
+The initial route filter surface supports:
+
+- allowed canonical symbols;
+- blocked canonical symbols.
+
+Blocked wins. Malformed broker filters fail closed. A missing/empty filter preserves existing behavior.
+
+Filters are intended to **narrow** a route, not to replace broker account compatibility or risk checks.
+
+## 14. Telegram event identity and replay safety
 
 Telegram native event identity is preserved in canonical form:
 
@@ -191,9 +319,11 @@ Telegram native event identity is preserved in canonical form:
 telegram:<accountScope>:<chatId>:<messageId>
 ```
 
+The native chat ID is also the logical provider feed identity used for source-feed resolution after source authorization.
+
 Replays through hosted or external transports converge through persistent workspace-scoped idempotency after authentication. A duplicate must not create a second interpretation, route delivery or broker order.
 
-## 11. Account activation controls
+## 15. Account activation controls
 
 Protected account controls include:
 
@@ -205,102 +335,113 @@ POST /api/v1/admin/accounts/:id/kill-switch
 
 Active OFF also forces execution OFF. Execution controls account broker permission. Kill switch ON blocks account execution.
 
-Effective broker execution additionally requires both the deployment broker capability and persisted Mkety owner/master broker switch.
+Effective broker execution additionally requires both the deployment broker capability and persisted Mkety owner/master broker switch. LIVE additionally requires the independently persisted LIVE gates/entitlements; routing changes never enable them.
 
-## 12. Sources, destinations and routing
-
-Supported source foundations include TradingView webhook, custom signed API, hosted MTProto, external MTProto, MT5/cTrader broker-source foundations and internal integrations.
-
-Destinations include Telegram, explicit broker account, internal API/webhook and audit-only flows.
-
-Routes are persisted and workspace-scoped. A broker account is never selected merely because it exists in the workspace; an explicit source → account destination route is required.
-
-## 13. Canonical signal and AI boundary
+## 16. Canonical signal and AI boundary
 
 The Worker owns the trusted canonical trading meaning: symbol, side, order type, entries, SL, TPs, management actions, risk/volume semantics and route context.
 
 AI may assist with presentation/formatting and bounded interpretation where configured. It is not allowed to silently choose a different broker account/route or override symbol, side, entry, SL/TP or risk authority.
 
-## 14. Risk and fail-closed behavior
+## 17. Risk and fail-closed behavior
 
 Risk/account policy can include kill switch, allowed symbols, max lots per trade, max risk percent, max daily/open risk, fixed/risk-based sizing and broker-context validation.
 
 Dynamic validation may use equity/balance, price/entry/stop, tick size/value, broker min/max/step volume and targets.
 
-Healthy connectivity does not imply a trade should execute. Invalid symbol mapping, ambiguous catalog match, risk rejection, environment mismatch, inactive account, disabled execution, kill switch ON, missing route, offline provider or blocked global gate must fail closed.
+Healthy connectivity does not imply a trade should execute. Invalid source-feed routing, malformed broker route filters, invalid symbol mapping, ambiguous catalog match, risk rejection, environment mismatch, inactive account, disabled execution, kill switch ON, missing route, offline provider or blocked global/LIVE gate must fail closed.
 
-## 15. Normal customer onboarding
+## 18. Normal customer onboarding
 
 1. Customer receives/uses the appropriate Mkety workspace entitlement.
 2. Customer signs in to `trade.mkety.com`.
-3. Configure signal source(s).
-4. Connect broker account(s) using recommended cTrader/MT5 flow.
-5. Sync and verify real broker identity/environment.
-6. Configure destinations and explicit routes.
-7. Configure risk/account policy and symbol aliases where required.
-8. Verify non-live/demo connectivity and behavior.
-9. Operator reviews actual source/account/route/risk state.
-10. Open account gates only for the approved phase.
-11. Global broker execution is changed only through a separately reviewed decision; deployment itself must not alter it.
+3. Configure Telegram/source connection(s).
+4. Select/verify each allowed Telegram source chat/feed under its parent connection.
+5. Connect broker account(s) using recommended cTrader/MT5 flow.
+6. Sync and verify real broker identity/environment.
+7. Save Telegram destination bot credential once if Telegram delivery is needed, then add any required destination channel endpoints.
+8. Configure default or feed-specific routes and optional canonical-symbol filters.
+9. Configure risk/account policy and symbol aliases where required.
+10. Verify non-live/demo connectivity and behavior.
+11. Operator reviews actual source/feed/account/route/risk state.
+12. Open account gates only for the approved phase.
+13. Global/LIVE broker execution is changed only through a separately reviewed decision; deployment itself must not alter it.
 
-## 16. Troubleshooting
+## 19. Troubleshooting
 
 ### MT5 connector will not pair
 
-Confirm the token is current/unmodified, MT5 is running, the connector can reach `wss://cbot.mkety.com:25345/v1/mt5`, and no stale/reset local pairing is interfering.
+Confirm the token is current/unmodified, the exact MT5 terminal is running, the connector can reach `wss://cbot.mkety.com:25345/v1/mt5`, and no stale/reset local pairing is interfering.
+
+### Several MT5 accounts on one VPS keep attaching to the wrong terminal
+
+Run separate terminal installations/processes and pass each connector its exact `--terminal` path. Give every connector a unique `--config` and `--ledger`. Do not share one terminal process by switching its login while simultaneous accounts are expected online.
 
 ### MT5 sync fails
 
 Confirm the connector remains online, the actual account/server is complete, requested Demo/Live matches the terminal and the server can reach the gateway control API.
 
-### cTrader sync fails
-
-Confirm the cBot is running on the intended account, the token is current, gateway is `/v1/cbot`, and the actual account/environment matches the Mkety pairing.
-
 ### Connected but no broker order
 
-Check the explicit route, provider state, Active, Execution, Kill switch, environment, symbol catalog/aliases, risk policy, account role and both global broker gates. Do not bypass a failed safety gate to make a test pass.
+Check the exact source feed/default route, route symbol filters, provider state, Active, Execution, Kill switch, environment, symbol catalog/aliases, risk policy, account role and all global/LIVE broker gates. Do not bypass a failed safety gate to make a test pass.
+
+### Deriv synthetic signal tries to reach Octa/FBS MT5
+
+Correct the feed route and/or canonical-symbol filter. Do not invent a symbol alias to force an unsupported instrument through an incompatible broker account.
+
+### One userbot has several selected channels but they all go to the same destination
+
+Create feed-specific routes for the chats that need different behavior. Connection-level/default routes are intentionally inherited only when a feed has no explicit feed-specific route.
+
+### Normal Telegram bot source shows no token field
+
+The `Telegram Bot API (normal bot)` source flow must show **Bot token** and **Allowed chat / channel IDs**. Missing fields indicate a frontend/integration regression, not a requirement to place the token somewhere else manually.
+
+### Telegram destination seems to require one bot per channel
+
+Save one reusable Telegram delivery bot credential, add the bot as admin to the intended channels, then create separate channel endpoints using the same saved bot. Create another BotFather bot only for a distinct bot identity/permission boundary.
 
 ### External MTProto VM sends payload but nothing routes
 
-First confirm the external sender is POSTing to the exact opaque Mkety endpoint supplied to it and that the payload reaches Mkety. Do not add Mkety routing/source/broker logic to the external VM to compensate.
+First confirm the sender POSTs to the exact opaque Mkety endpoint. Then diagnose authorization, allowed chat, child feed resolution, replay/idempotency and routing inside Mkety. Do not add Mkety broker/routing authority to the external VM.
 
-Then diagnose authorization, source/chat selection, replay/idempotency and routing **inside Mkety**. If shared collector mode is intentionally in use, verify the matching active `external_mtproto` source/chat policy in the database. Unselected chats are intentionally accepted/ignored.
-
-## 17. Deployment and rollback order
+## 20. Deployment and rollback order
 
 Production-safe rollout order:
 
-1. Verify all branch CI and security checks green.
-2. Recheck production DB/current safety state and preserve owner/master broker switch.
-3. Apply only reviewed Trading migrations.
-4. Merge the verified PR.
-5. Deploy/verify the Cloudflare Worker and runtime controls.
-6. Publish connector releases from verified `main` builds when required.
-7. Deploy the shared cTrader/MT5 gateway separately and prove its health.
-8. If an external transport VM is used, give it only the opaque ingress endpoint needed to POST payloads; do not make it a Mkety configuration authority.
-9. Create/rotate a shared collector credential only if a separately approved Mkety-owned collector topology actually uses shared collector mode.
-10. Demo-connect MT5 and sync its real symbol catalog.
-11. Re-sync/demo-connect cTrader identity/catalog as needed.
-12. Run controlled source → parse → route → risk/symbol → demo broker acceptance.
-13. Keep account execution disabled unless the specific acceptance/live phase separately authorizes it.
+1. Verify all branch CI/security checks green.
+2. Recheck production DB/current safety state and preserve owner/master/LIVE broker switches.
+3. Dry-verify only reviewed additive migrations against the current production schema/constraint names.
+4. Apply reviewed Trading migrations in the approved sequence.
+5. Merge the verified PR.
+6. Deploy/verify the Cloudflare Worker and runtime controls.
+7. Publish connector releases from verified `main` builds when required.
+8. Deploy/verify the shared broker gateway separately when gateway code changed.
+9. Demo-connect/sync MT5/cTrader identities and symbol catalogs.
+10. Test one parent source with multiple child feeds and prove independent routing/default fallback.
+11. Test one reusable Telegram destination bot against multiple channel endpoints.
+12. Run controlled source → parse → feed route → route filter → risk/symbol → demo broker acceptance.
+13. Re-run replay, reply-management, reconnect and recovery acceptance.
+14. Finish with fresh proof that LIVE stayed disabled and no unintended LIVE action occurred.
 
-Rollback should reverse the changed component without changing unrelated runtime safety controls. If gateway acceptance fails, roll back the gateway independently of the Worker. If a Mkety-owned collector acceptance fails, revoke/rotate that collector token without changing unrelated external sender architecture or hosted MTProto. If Worker acceptance fails, roll back the Worker using the reviewed deployment rollback path while preserving the persisted owner/master broker switch.
+Rollback should reverse only the changed component while preserving unrelated runtime safety controls and durable broker truth. Never resend a broker action merely to repair state.
 
-## 18. What Mkety hosts vs customer/external systems run
+## 21. What Mkety hosts vs customer/external systems run
 
 For cTrader Cloud Auto Trader, Mkety hosts Worker/database/gateway/control services; the customer runs the cBot in cTrader Cloud. No customer VPS is required.
 
-For recommended MT5 Connector, Mkety hosts Worker/database/gateway/control services; the customer runs MT5 plus `MketyMT5Connector.exe` on Windows. No inbound customer public URL is required.
+For recommended MT5 Connector, Mkety hosts Worker/database/gateway/control services; the customer runs one or more MT5 terminal processes plus one matching `MketyMT5Connector.exe` process per simultaneous account on Windows/Windows VPS. No inbound customer public URL is required.
 
 For legacy MT5 HTTP bridge, the customer/operator additionally maintains the public HTTPS bridge ingress.
 
-For an external MTProto VM, that external machine owns only its Telegram client/session and outbound POST transport. Mkety owns all Mkety-side authentication/authorization, source/chat selection, workspace binding, canonical processing, routing, risk and execution authority. The external VM is not a Mkety service and is not a condition for Mkety infrastructure readiness.
+For an external MTProto VM, that external machine owns only its Telegram client/session and outbound POST transport. Mkety owns all Mkety-side authentication/authorization, allowed-chat/feed selection, workspace binding, canonical processing, routing, risk and execution authority.
 
-For a Mkety-owned shared collector topology, Mkety may additionally provision the collector credential and shared ingress component internally.
+For a normal Telegram Bot API source, Telegram hosts the Bot API; Mkety stores the bot credential encrypted, manages the source webhook, enforces allowed chats and independently routes each authorized chat/feed.
 
-## 19. Core operating principle
+## 22. Core operating principle
 
-**Connected** and **allowed to trade** are deliberately separate states.
+**Connected**, **selected as a route destination**, and **allowed to trade** are deliberately separate states.
 
-Mkety first proves the source/broker connection and real identity, then routing and risk are configured, and only then are execution gates intentionally opened through a separately reviewed acceptance decision. This separation is a core safety property of the platform.
+Likewise, a Telegram **connection** and a Telegram **source feed** are deliberately separate concepts. One connection may expose many independently routable chats, and one Telegram delivery bot credential may serve many independently routable destination channels.
+
+Mkety first proves the source/broker connection and real identity, then feed routing and risk are configured, and only then are execution gates intentionally opened through a separately reviewed acceptance decision. This separation is a core safety property of the platform.

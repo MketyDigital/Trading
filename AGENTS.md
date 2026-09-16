@@ -502,3 +502,104 @@ A trading change is not done merely because code compiles or a unit test passes.
 - automated tests and CI are green;
 - relevant real DEMO acceptance rows pass after deployment;
 - final safety check proves LIVE remained off.
+
+---
+
+## 19. Current implementation stream — 2026-09-16 source feeds, reusable Telegram bot endpoints, multi-instance MT5
+
+Status: **implementation in progress on isolated feature branch; not deployed; migrations not applied to production; CI not yet accepted.**
+
+Branch:
+
+- `feat/source-feeds-telegram-endpoints-mt5-multi-instance`
+
+Approved design/spec:
+
+- `docs/superpowers/specs/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance-design.md`
+
+Implementation plan/progress checklist:
+
+- `docs/superpowers/plans/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance.md`
+
+### 19.1 Approved routing semantics
+
+`source_connections` remains the transport/credential boundary. A Telegram connection may authorize two or many chats/channels. Each persisted allowed chat is materialized as an independent `source_feeds` row and may have its own route set.
+
+A user therefore needs another source connection only when they actually need another independent transport/session. An external MTProto VM may internally aggregate however it wants; Mkety does not depend on that internal topology. Mkety authenticates the persisted source connection, re-checks its allowed-chat policy, resolves the incoming Telegram native chat ID to a child feed, and applies the feed's persisted route policy.
+
+Feed-specific active routes override the connection-level/default routes **for that feed only**. If a feed has no explicit feed-specific route, existing connection-level routes remain the compatibility fallback. Existing route rows are not deleted or rewritten.
+
+First route-filter surface is canonical-symbol allow/block lists. Malformed broker filters fail closed; blocked wins; filtering is additive to broker symbol/account compatibility and never replaces broker-side symbol validation.
+
+### 19.2 Telegram Bot API source
+
+The UI already contained a conditional Bot Token input, but the generic admin source-onboarding map did not include `telegram_bot_api -> telegram_bot` encrypted credentials. This branch adds that missing backend contract and materializes the configured allowed chat IDs into source feeds after source creation.
+
+One normal Telegram bot/webhook connection can therefore authorize many chats while each chat is independently routable. Telegram's webhook remains connection-scoped; users are not expected to create one bot per source channel.
+
+### 19.3 Reusable Telegram destination credentials
+
+New additive `trading_destination_connections` persistence stores a Telegram Bot API credential once per workspace. `trading_destinations.credential_connection_id` may reference that shared credential while retaining the legacy destination-local `credential_ciphertext` path.
+
+One saved delivery bot can therefore be admin in many destination channels. Each destination keeps its own chat/channel ID, display name, template, enable state, route membership and delivery evidence while resolving the same encrypted bot token internally. Public APIs never return the token/ciphertext.
+
+### 19.4 MT5 multi-terminal Windows VPS model
+
+One connector process controls exactly one active MT5 terminal/account identity. For simultaneous Octa/FBS/Deriv MT5 accounts on one Windows VPS, run separate terminal installations/directories/processes and one Mkety connector instance per terminal/account.
+
+This branch adds:
+
+- `--terminal <terminal64.exe path>` -> deterministic `MetaTrader5.initialize(path=...)`;
+- `--ledger <sqlite path>` -> isolated replay state;
+- existing `--config <path>` -> isolated pairing/reconnect identity;
+- omitting the new flags preserves the historical single-terminal auto-discovery/default-ledger behavior.
+
+Windows/Windows VPS is the primary supported multi-terminal target. Wine/Linux remains experimental until independently accepted.
+
+### 19.5 Additive migrations currently staged only on branch
+
+- `0035_source_feeds_and_route_scope.sql`
+- `0036_reusable_destination_connections.sql`
+
+Do **not** apply these to production until branch CI, schema compatibility review, and migration dry verification are green. Both migrations are intended to preserve existing rows and behavior.
+
+### 19.6 Implemented branch modules/tests so far
+
+Implemented or modified:
+
+- `cloudflare-v2/src/sources/source_feed_store.js`
+- `cloudflare-v2/src/http/v1_admin_sources.js`
+- `cloudflare-v2/src/http/v1_admin_destinations.js`
+- `cloudflare-v2/src/http/v1_admin_destination_connections.js`
+- `cloudflare-v2/src/http/v1_admin.js`
+- `cloudflare-v2/src/destinations/route_filters.js`
+- `cloudflare-v2/src/destinations/v1_destination_delivery_stage.js`
+- `cloudflare-v2/src/dashboard_granular_routing.js`
+- `cloudflare-v2/src/v1_connections_entry.js`
+- `mt5-connector/mkety_mt5_connector.py`
+- `mt5-connector/README.md`
+
+New focused coverage includes source-feed store/admin route contracts, route filters, reusable Telegram destination credentials, granular-routing frontend contracts and MT5 multi-instance isolation.
+
+### 19.7 Safety and compatibility requirements for this branch
+
+- no LIVE flag/entitlement may be changed by these features;
+- legacy connection-level routes remain functional when no feed-specific override exists;
+- legacy Telegram destinations containing their own encrypted bot token remain functional;
+- source authorization remains based on the persisted source connection allowlist; a `source_feeds` row never grants source authorization by itself;
+- feed routes are constrained to their exact workspace + parent source connection;
+- Telegram source/destination secrets remain encrypted and absent from public DTOs;
+- route filtering must happen before broker fanout and may only narrow, never broaden, execution;
+- existing exact-forward, template, AI-fallback, reply correlation, lifecycle/idempotency, broker normalization and durable-state behavior must remain intact;
+- main/production stays untouched until verification succeeds.
+
+### 19.8 Next steps from this handoff
+
+1. Update the customer/operator manual and MT5 acceptance runbook with the new source-feed/reusable-bot/multi-terminal flow.
+2. Open a PR from the feature branch and run full repository CI.
+3. Treat any failing existing test as a compatibility signal; root-cause before changing working behavior.
+4. Verify migrations against the current Supabase schema/constraint names before applying anything.
+5. Apply migrations only after review/CI, then deploy through normal reviewed `main` production flow.
+6. Re-query LIVE controls/account flags immediately before post-deploy DEMO testing.
+7. Re-run Telegram source/feed routing, Telegram shared destination bot, cTrader DEMO, MT5 DEMO, replay, management and reconnect acceptance.
+8. Final acceptance must again prove zero unintended LIVE actions and `live_broker_execution_enabled=false`.

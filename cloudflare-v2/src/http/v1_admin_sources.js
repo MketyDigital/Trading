@@ -6,6 +6,7 @@ import {
 } from '../security/connection_credentials.js';
 import { encryptSecret } from '../security/secret_box.js';
 import { tradingViewTransportReadiness } from '../security/tradingview_transport.js';
+import { createSourceFeedStore } from '../sources/source_feed_store.js';
 
 const SOURCE_SELECT = [
   'id', 'workspace_id', 'source_type', 'source_instance_id', 'display_name', 'is_active',
@@ -17,6 +18,7 @@ const SOURCE_SELECT = [
 const SOURCE_CREDENTIAL_KIND_BY_PROVIDER = Object.freeze({
   cloudflare_container_mtproto: 'mtproto',
   cloudflare_do_mtproto: 'mtproto',
+  telegram_bot_api: 'telegram_bot',
   mt5_source_bridge: 'mt5',
   ctrader_source: 'ctrader',
 });
@@ -232,6 +234,16 @@ function sourceCreationInput(body) {
   };
 }
 
+function configuredTelegramFeedIds(providerType, config = {}) {
+  const provider = String(providerType ?? '').trim();
+  if (!['external_mtproto', 'cloudflare_container_mtproto', 'cloudflare_do_mtproto', 'telegram_bot_api'].includes(provider)) {
+    return [];
+  }
+  const raw = config.allowed_chat_ids ?? config.chat_ids ?? [];
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((value) => String(value ?? '').trim()).filter(Boolean))];
+}
+
 function randomIngressSecret() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -251,6 +263,7 @@ function canonicalTradingOrigin(env = {}) {
 
 export function createAdminSourceStore(supabase, env = {}) {
   if (!supabase?.from) throw new TypeError('Supabase client is required');
+  const feedStore = createSourceFeedStore(supabase);
 
   return {
     async listSources(workspaceId) {
@@ -323,6 +336,15 @@ export function createAdminSourceStore(supabase, env = {}) {
       return normalizeSource(data);
     },
 
+    async syncSourceFeeds(workspaceId, sourceId, providerType, config = {}) {
+      const ids = configuredTelegramFeedIds(providerType, config);
+      return ids.length ? feedStore.upsertAllowedFeeds(workspaceId, sourceId, ids) : [];
+    },
+
+    async listSourceFeeds(workspaceId, sourceId) {
+      return feedStore.listFeeds(workspaceId, sourceId);
+    },
+
     async replaceSourceCredentials(workspaceId, sourceId, providerSecretCiphertext) {
       if (!workspaceId || !sourceId || !providerSecretCiphertext) {
         throw new Error('SOURCE_CREDENTIAL_REPLACE_FAILED');
@@ -383,6 +405,11 @@ export function createAdminSourceStore(supabase, env = {}) {
   };
 }
 
+async function syncCreatedSourceFeeds(sourceStore, workspaceId, source, parsedInput) {
+  if (typeof sourceStore?.syncSourceFeeds !== 'function' || !source?.id) return [];
+  return sourceStore.syncSourceFeeds(workspaceId, source.id, parsedInput.providerType, parsedInput.config || {});
+}
+
 export async function handleAuthorizedV1AdminSourcesRequest(request, authorization, {
   sourceStore,
   env = {},
@@ -438,6 +465,7 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
           const input = { ...parsed.input, providerSecretCiphertext };
           const source = await sourceStore.createSource(workspaceId, input, providerSecretCiphertext);
           if (!source) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+          await syncCreatedSourceFeeds(sourceStore, workspaceId, source, parsed.input);
           return json({ ok: true, workspaceId, source: publicSource({ ...source, credentialConfigured: true }) }, 201);
         } catch {
           return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
@@ -469,6 +497,7 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
         };
         const source = await sourceStore.createSource(workspaceId, input, null);
         if (!source) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+        await syncCreatedSourceFeeds(sourceStore, workspaceId, source, parsed.input);
         const safeSource = publicSource({
           ...source,
           publicSourceHandle: source.publicSourceHandle ?? publicSourceHandle,
@@ -510,6 +539,26 @@ export async function handleAuthorizedV1AdminSourcesRequest(request, authorizati
       return json({ ok: true, workspaceId, source: publicSource(source) });
     } catch {
       return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'feeds') {
+    if (request.method !== 'GET') {
+      return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET' });
+    }
+    if (!can(authorization, 'sources.read')) {
+      return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    }
+    if (typeof sourceStore.listSourceFeeds !== 'function') {
+      return json({ ok: false, reason: 'SOURCE_FEED_STORE_UNAVAILABLE' }, 503);
+    }
+    try {
+      const source = await sourceStore.getSource(workspaceId, sourceId);
+      if (!source) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
+      const feeds = await sourceStore.listSourceFeeds(workspaceId, sourceId);
+      return json({ ok: true, workspaceId, sourceId, feeds });
+    } catch {
+      return json({ ok: false, reason: 'SOURCE_FEED_LIST_FAILED' }, 503);
     }
   }
 
