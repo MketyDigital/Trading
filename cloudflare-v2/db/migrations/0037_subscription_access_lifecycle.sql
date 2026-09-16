@@ -8,7 +8,7 @@ CREATE OR REPLACE FUNCTION public.sync_trading_workspace_access_code_status()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
     v_now TIMESTAMPTZ := now();
@@ -59,7 +59,7 @@ CREATE OR REPLACE FUNCTION public.rotate_trading_access_code(
 RETURNS public.trading_access_codes
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
     v_workspace public.trading_workspace_access%ROWTYPE;
