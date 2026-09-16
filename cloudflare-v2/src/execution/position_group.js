@@ -179,6 +179,7 @@ export function buildManagementActions(group, management) {
   if (management?.type === 'REMOVE_SL') {
     return openLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      managementType: 'REMOVE_SL',
       legId: leg.legId,
       targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
@@ -193,6 +194,7 @@ export function buildManagementActions(group, management) {
       : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
     return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
+      managementType: 'REMOVE_TP',
       legId: leg.legId,
       targetIndex: leg.targetIndex,
       brokerPositionId: leg.brokerPositionId,
