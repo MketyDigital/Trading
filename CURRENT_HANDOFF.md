@@ -1,5 +1,79 @@
 # Current Development Handoff
 
+Read root `AGENTS.md` first. This top section is the newest continuation authority. Older handoff content is preserved afterward as historical evidence and must not override the current branch/main facts below.
+
+## Current production + continuation authority — 2026-09-16
+
+### Production main
+
+At the start of the current continuation audit, actual production `main` was:
+
+- `98bb917d562a40e212a51bd6eba726ff2d212fbc`
+- merged PR `#100` — `Stabilize CMP and Telegram diagnostics`
+
+The older PR #98 production-head text preserved later in this file is stale. Always re-query current `main` and deployment state before production acceptance.
+
+### Active continuation
+
+- branch: `fix/ai-operations-observability-continuation`
+- draft PR: `#101` — `Stabilize deterministic revisions, protection policy, and Telegram lineage`
+- latest verified code head before documentation commits: `1c268972bc47595b08669a6e65b7d7e1606fe950`
+- Trading V1 CI `#2901` — success across Worker/trading-core, MT5 bridge and MTProto
+- LIVE has not been enabled by this continuation; branch work is not production authority until reviewed/merged/deployed and re-accepted.
+
+### Verified continuation behavior
+
+The continuation branch now verifies:
+
+- explicit incomplete signals do not require AI merely because optional SL/TP is missing;
+- prose/conditional/contradictory ambiguity remains guarded/fail-closed;
+- invalid SL/TP is a validation-policy concern, with strict `reject_trade` as backward-compatible default and explicit opt-in `skip_invalid` for allowed optional protection fields;
+- Telegram edits are append-only source revisions of one logical message/trade, not new opens;
+- exact revision replay remains no-resend/idempotent; changed revisions receive distinct broker idempotency keys;
+- edited SL/TP can become management against the same durable group; semantic edit handling cannot create `OPEN_POSITION`;
+- replies remain strongest correlation, and guarded no-reply context behavior remains intact;
+- Telegram destination replies/edits preserve mapped destination lineage across `none`, `clean`, `template`, and `ai_then_fallback`; missing edit mapping never falls back to duplicate standalone send;
+- missing broker fill remains absent rather than becoming `0`, and full close state preserves original opening identity/fill while recording closed state/time;
+- first-class DB-authoritative AI adapters now cover OpenAI, Azure OpenAI, Gemini, Vertex AI, Cloudflare AI and AWS Bedrock;
+- Cloudflare account ID no longer falls back to provider-specific runtime env config;
+- new AI credentials are encrypted; provider-specific public config is whitelisted;
+- AI attempts now return normalized sanitized diagnostics without raw provider bodies or credentials;
+- workspace-scoped provider health testing persists only sanitized latest-health evidence via migrations `0040` and `0041`;
+- nullable provider HTTP status stays absent rather than becoming `0`.
+
+Detailed evidence is in `docs/DETERMINISTIC_REVISION_PROTECTION_HANDOFF_2026-09-16.md` and root `AGENTS.md` section 21.
+
+### Next active scope
+
+Next is the normalized Operations evidence layer and customer/admin observability.
+
+Non-negotiable architecture:
+
+- `destination_deliveries` remains destination retry/outbox authority;
+- trading events/revisions remain source/idempotency authority;
+- position groups/legs and broker reconciliation remain execution-state authority;
+- the normalized operation journal is evidence only and must never authorize a resend/retry;
+- customer Operations is workspace-scoped and infrastructure-neutral;
+- Mkety Admin may expose richer normalized internal context but never plaintext credentials;
+- broker success + persistence failure remains repair-only/no-resend;
+- continue TDD and exact-head CI;
+- no LIVE changes during this stream.
+
+### Remaining acceptance before any LIVE discussion
+
+1. finish normalized Operations journal and customer/admin views;
+2. full exact-head CI and frontend/non-regression suites;
+3. re-query production runtime controls/accounts/sources/routes/destinations before any real broker test;
+4. controlled real DEMO source/feed/reply/edit/context/Telegram destination/cTrader/MT5/replay/reconnect acceptance;
+5. final fresh zero-LIVE audit;
+6. only reviewed/merged `main` may deploy through the production workflow.
+
+---
+
+## Historical handoff content — preserved verbatim from the previous CURRENT_HANDOFF
+
+# Current Development Handoff
+
 Read root `AGENTS.md` first. The newest verified production authority is immediately below. The complete previous handoff is preserved verbatim afterward as historical evidence.
 
 ## Current production authority — 2026-09-16
