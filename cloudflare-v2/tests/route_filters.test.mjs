@@ -4,8 +4,8 @@ import { evaluateRouteFilters } from '../src/destinations/route_filters.js';
 
 const broker = { destination_type: 'broker_account' };
 const telegram = { destination_type: 'telegram' };
-const xau = { intent: { canonicalSymbol: 'XAUUSD' } };
-const v75 = { intent: { canonical_symbol: 'DERIV:VOLATILITY_75' } };
+const xau = { intent: { symbol: { canonical: 'XAUUSD' } } };
+const v75 = { intent: { symbol: { canonical: 'DERIV:VOLATILITY_75' } } };
 
 test('empty route filters preserve existing behavior', () => {
   assert.deepEqual(evaluateRouteFilters({}, xau, broker), { allowed: true, reason: null });

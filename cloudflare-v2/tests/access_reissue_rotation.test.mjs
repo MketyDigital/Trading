@@ -73,6 +73,19 @@ function sessionSupabase(currentAccessCodeId = 'code-new', membershipAccessCodeI
               error: null,
             };
           }
+          if (table === 'trading_access_codes') {
+            assert.equal(filters.id, currentAccessCodeId);
+            return {
+              data: {
+                id: currentAccessCodeId,
+                workspace_id: workspaceId,
+                product: 'trading',
+                status: 'active',
+                expires_at: '2099-01-01T00:00:00.000Z',
+              },
+              error: null,
+            };
+          }
           throw new Error(`unexpected table ${table}`);
         },
       };

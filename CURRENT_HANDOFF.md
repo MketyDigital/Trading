@@ -1,194 +1,137 @@
 # Current Development Handoff
 
-Read root `AGENTS.md` for the architectural and security boundaries. This file records the newest verified production state and supersedes older dated baseline sections when they conflict.
+Read root `AGENTS.md` first. This file records the newest implementation/release state and supersedes older handoffs when they conflict. Exact pre-update handoff history is preserved at `docs/archive/2026-09-16-pre-subscription-CURRENT_HANDOFF.md`.
 
-## Current implementation handoff — 2026-09-16
+## Active implementation — 2026-09-16
 
-The active development stream is on isolated branch:
+Active branch / PR:
 
-- `feat/source-feeds-telegram-endpoints-mt5-multi-instance`
+- branch: `fix/frontend-access-lifecycle-red`
+- PR: `#96` — real-user frontend visibility + persistent workspace subscription lifecycle
+- branch is **not production until merged to `main` and production deployment completes**
 
-This branch is **not production, is not deployed, and its migrations have not been applied to Supabase**. `main` remains the production authority until this branch passes full review/CI and is merged through the normal deployment flow.
+### Scope
 
-Approved design:
+1. Make the normal Telegram Bot API source controls visible in the actual composed customer Connections page, including Bot token and allowed chat/channel IDs.
+2. Treat each customer as one persistent Trading workspace. Access-code reissue/renewal rotates access on the same workspace rather than creating duplicate workspaces.
+3. Revocation acts as a workspace subscription lock while preserving memberships, accounts, sources, routes, destinations, templates, settings, branding and audit history.
+4. Returning browser sessions are bound to the current access-code ID. Revoked, expired or superseded access is rejected server-side.
+5. Staff UI is workspace-centric: historical access-code rows remain in the database but do not appear as duplicate customer workspaces.
+6. Visible Sign out must call `/api/v1/access/logout` before local browser session cleanup/reload.
+7. Stabilization remains DEMO-only. This stream never authorizes LIVE.
 
-- `docs/superpowers/specs/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance-design.md`
+### Current implementation files
 
-Implementation plan/checklist:
+- `cloudflare-v2/db/migrations/0037_subscription_access_lifecycle.sql`
+- `cloudflare-v2/src/access/trading_access_codes.js`
+- `cloudflare-v2/src/persistence/supabase_access_code_store.js`
+- `cloudflare-v2/src/dashboard_returning_session.js`
+- `cloudflare-v2/src/dashboard_mkety_admin_access_codes.js`
+- `cloudflare-v2/src/dashboard_telegram_bot_source.js`
+- `cloudflare-v2/scripts/test_ci_diagnostic.mjs`
+- `cloudflare-v2/tests/access_subscription_lifecycle.test.mjs`
+- `cloudflare-v2/tests/access_reissue_rotation.test.mjs`
+- `cloudflare-v2/tests/frontend_real_user_visibility.test.mjs`
+- `cloudflare-v2/docs/TRADING_ACCESS_CODE_ONBOARDING.md`
 
-- `docs/superpowers/plans/2026-09-16-source-feeds-telegram-endpoints-mt5-multi-instance.md`
+### Compatibility/debugging findings resolved on this branch
 
-### What this branch is adding
+A first implementation unintentionally changed unrelated Mkety staff-admin API contracts. Existing Worker tests correctly caught the regression. The admin handler was restored to the proven API behavior rather than changing tests around the breakage.
 
-1. **Independent source feeds under one Telegram connection.** `source_connections` remains the transport/credential boundary. A single external/hosted MTProto userbot or normal Telegram Bot API connection may authorize many Telegram chats; each selected chat becomes a `source_feeds` child identity and can route independently.
-2. **Backward-compatible routing.** A feed with active feed-specific routes uses those routes. A feed with no explicit feed routes falls back to the existing connection-level routes. Existing routes are not deleted or rewritten.
-3. **Canonical-symbol route filters.** Initial allow/block lists only narrow destination fanout. Malformed broker filters fail closed. Broker-native symbol/account compatibility remains authoritative.
-4. **Reusable Telegram destination bot credentials.** One encrypted Telegram Bot API credential can back multiple destination channel endpoints. Legacy Telegram destinations that store their own encrypted token remain supported.
-5. **Normal Telegram Bot source onboarding fix.** The frontend already had conditional Bot Token fields, but the generic source admin onboarding map lacked `telegram_bot_api -> telegram_bot`; this branch closes that backend contract and materializes configured allowed chats into source feeds.
-6. **Deterministic multi-terminal MT5 connector instances.** One Windows VPS can run several MT5 terminal installations/accounts simultaneously. Each terminal gets one connector process with explicit `--terminal`, separate `--config`, and separate `--ledger`. Omitting new flags preserves the old single-terminal behavior.
-7. **Additive portal UI.** A granular routing panel lists parent source connections and child feeds, supports “All feeds/default” versus a specific feed, supports canonical symbol allow/block fields, and supports one saved Telegram delivery bot creating many Telegram destination channel endpoints.
+The last remaining Worker failure was isolated to the visible Sign out regression contract. Root cause: local session cleanup had moved behind a helper, so the composed-page contract no longer proved the server logout -> portal-session clear -> reload sequence. The production code was fixed explicitly rather than weakening the test.
 
-### Staged additive migrations
+Trading V1 CI run `2755` on commit `16cb5f0039844ee4ea0c58d97bacd7a53e05d1a1` completed successfully: Worker/trading-core, pure MT5 bridge and pure MTProto tests all passed. Later documentation/security-hardening commits must receive a fresh green run before merge.
 
-- `cloudflare-v2/db/migrations/0035_source_feeds_and_route_scope.sql`
-- `cloudflare-v2/db/migrations/0036_reusable_destination_connections.sql`
+### Migration 0037
 
-Do not apply these until CI/schema review is green. Migration 0035 includes a composite workspace+feed+source FK so a feed-scoped route cannot reference a feed belonging to another source connection. Migration 0036 keeps legacy `credential_ciphertext` while adding an optional reusable credential connection reference.
+`0037_subscription_access_lifecycle.sql` is additive to the existing access-code model and replaces the existing rotation function introduced by migration 0034.
 
-### New/modified implementation areas
+It:
 
-- `cloudflare-v2/src/sources/source_feed_store.js`
-- `cloudflare-v2/src/http/v1_admin_sources.js`
-- `cloudflare-v2/src/http/v1_admin_destinations.js`
-- `cloudflare-v2/src/http/v1_admin_destination_connections.js`
-- `cloudflare-v2/src/http/v1_admin.js`
-- `cloudflare-v2/src/destinations/route_filters.js`
-- `cloudflare-v2/src/destinations/v1_destination_delivery_stage.js`
-- `cloudflare-v2/src/dashboard_granular_routing.js`
-- `cloudflare-v2/src/v1_connections_entry.js`
-- `mt5-connector/mkety_mt5_connector.py`
-- `mt5-connector/README.md`
+- adds `sync_trading_workspace_access_code_status()` trigger behavior so revoking the currently referenced Trading access code disables that workspace's `trading_access_enabled` state;
+- preserves membership enable/disable state;
+- keeps all workspace configuration rows in place;
+- rotates/reissues a replacement code on the SAME workspace;
+- revokes previous active codes inside the same database transaction;
+- restores the subscription-locked workspace on reissue;
+- preserves/merges existing entitlements but forces `brokerModes=["demo"]` and `liveExecution=false`;
+- uses `SECURITY DEFINER` with empty `search_path` and schema-qualified database objects;
+- does not provide any path that enables LIVE execution.
 
-Focused tests were added for source-feed persistence, feed-scoped admin routes, route-filter fail-closed behavior, reusable Telegram destination credentials, granular routing frontend contracts, and multi-instance MT5 isolation. **Do not call them green until GitHub CI has actually run on the current branch head.**
+Do not claim this migration is applied until a production migration query proves it.
 
-### Safety posture carried into this work
+### Fresh production safety audit before migration
 
-The latest production audit before this implementation showed LIVE still disabled globally and per LIVE account while DEMO execution capability was available. This branch does not change any runtime control, account execution flag, workspace LIVE entitlement, broker password, or production secret. Re-query all of them again immediately before any post-deploy broker test.
+On 2026-09-16 the live database was queried directly before any 0037 application.
 
-The latest real test evidence before this branch also showed Telegram ingress/cTrader activity working while the Octa MT5 connector was offline because the user’s laptop/MT5 terminal was off. That observation was correct; it was not treated as a code defect. Deriv synthetic instruments should not be expected to execute on the Octa MT5 test account; destination/feed/symbol routing must prevent inappropriate fanout.
+Verified runtime controls:
 
-### Immediate next steps
+- `trading_access_enabled = true`
+- `broker_execution_enabled = true`
+- `live_broker_execution_enabled = false`
 
-1. Update the MT5 acceptance runbook and operator/customer manual for multi-terminal instances, child source feeds, selective routes, and reusable Telegram destination bot credentials.
-2. Open a PR from the feature branch so branch CI executes all existing and new coverage.
-3. Root-cause any failing existing test before changing behavior; do not remove working functionality just to make CI pass.
-4. Query current Supabase schema/constraint names and dry-verify migrations 0035/0036 before any application.
-5. Only after branch CI/review is green: apply additive migrations in the approved deployment sequence, merge/deploy through reviewed `main`, and re-run production readiness checks.
-6. Before controlled DEMO execution: freshly verify `live_broker_execution_enabled=false`, workspace `liveExecution=false`, all LIVE account execution flags off, and intended DEMO account flags only.
-7. Re-run source-feed routing, normal Telegram Bot source, shared Telegram destination bot, cTrader DEMO, MT5 DEMO, replay/idempotency, management/reply, reconnect, and final zero-LIVE-action acceptance.
+Verified current workspaces:
 
----
+- `Mkay` — `brokerModes=["demo"]`, `liveExecution=false`
+- `Starpips Forex` — `brokerModes=["demo"]`, `liveExecution=false`
 
-## Historical handoff retained below — production infrastructure healthy
+Verified LIVE guard account:
 
-The following section is preserved as historical release evidence. Where it conflicts with the 2026-09-16 current section, fresh code/current production queries and the section above take precedence.
+- cTrader LIVE account UUID `4dbe17df-40b0-412a-88de-9bbc562969c7`
+- `environment=live`
+- `execution_enabled=false`
+- `live_execution_enabled=false`
 
-The DB-first connectivity release from PR #36 is launched, and the remaining external broker-gateway blocker was fixed on 2026-09-12 by PR #38.
+Production already contains `public.rotate_trading_access_code(...)`. `public.sync_trading_workspace_access_code_status()` was not present before 0037, confirming the new migration has not yet been applied at this handoff point.
 
-Key release commits:
+### Supabase compatibility review
 
-- PR #36 merge: `23369f9d14afb4daa153f90832ef3cbb2be9652e`
-- production frontend follow-up: `96db5ff65fb252b9324a29a741085fce5f140dd8`
-- PR #38 gateway bootstrap fix: `6ef2b6f55c01d7c1cb62a9f921267282f67b9b2f`
+Current Supabase guidance was checked during review. In particular, security-definer functions should use a pinned empty `search_path` with schema-qualified objects. Migration 0037 was hardened to follow that pattern before production application.
 
-Production migrations applied and verified:
+No service-role or other secret is exposed to the browser. Subscription status revalidation remains server-side and fail-closed for access-code-bound sessions.
 
-- `trading_0027_external_mtproto_collectors`
-- `trading_0028_mt5_connector_provider_mode`
+### Documentation state
 
-The released system includes DB-authoritative source/account configuration, broker symbol catalogs with fail-closed resolution, cTrader cBot catalog sync, outbound paired MT5 Connector, hosted/external MTProto ingress, and the legacy MT5 HTTP bridge as advanced compatibility.
+Current lifecycle/operator contract is documented in:
 
-## Production browser / Worker state
+- `cloudflare-v2/docs/TRADING_ACCESS_CODE_ONBOARDING.md`
+- root `AGENTS.md`
+- this handoff
 
-The real Chromium production gate is green. It verifies access-code sign-in, workspace loading, major portal views, cTrader/MT5 controls, stable MT5 EXE download, disposable destination/template mutations, desktop/mobile rendering, session restoration/logout, staff-API protection and absence of unexpected browser/HTTP errors.
+Exact previous root documents are preserved under `docs/archive/` so historical source-feed/multi-terminal and older production evidence remains available without masquerading as the active workstream.
 
-The Cloudflare Worker remains the sole trading/orchestration authority. Caller-supplied workspace/account/provider/credential/destination/broker/role/routing/execution hints are never authority.
-
-## Runtime controls — preserve owner state
-
-Deployment never rewrites the persisted Mkety owner broker switch. Current verified production state remains:
-
-- deployment broker capability: **ON**
-- persisted owner broker switch: **ON**
-- effective broker execution: **ON** at the global-control layer
-- persisted switch timestamp: `2026-09-11T13:24:57.011+00:00`
-
-This state was intentionally preserved. Account/source/route/risk/symbol/kill-switch gates remain independently authoritative.
-
-Current production trading-account inventory after probe cleanup:
-
-- one existing cTrader cBot test row, label `main test`;
-- provider mode `ctrader_cbot`;
-- broker identity still `pending:*`;
-- account row remains active as previously configured;
-- `execution_enabled = false`;
-- account kill switch remains true;
-- no real production broker identity is synchronized.
-
-No current admin/runtime setting was rewritten during this release.
-
-## Shared cTrader / MT5 gateway — production healthy
-
-The existing Coolify application `Cbot Tcp gateway` was discovered through the production Coolify API credentials stored in GitHub, force-redeployed from current `main`, and verified publicly.
-
-The first clean redeploy proved the deployment path but reproduced MT5 HTTP 502. Root cause was then isolated in the production Docker image: `ctrader-cbot-gateway/Dockerfile` launched `src/server.js` directly, so only the cTrader listener started even though the repository bootstrap and Caddy topology supported MT5.
-
-PR #38 changed the production image entrypoint to `src/bootstrap.js` and added a regression test requiring the shared bootstrap. The test was observed RED on the old Dockerfile and GREEN after the fix. Trading V1 CI and cTrader cBot CI were both green before merge.
-
-Post-merge Coolify cutover evidence:
-
-- deployed repository: `MketyDigital/Trading`
-- deployed branch: `main`
-- deployed commit observed by Coolify: `6ef2b6f55c01d7c1cb62a9f921267282f67b9b2f`
-- Compose: `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`
-- Coolify deployment result: `finished`
-- public `/health`: five consecutive successful responses from `mkety-ctrader-cbot-gateway`
-- `wss://cbot.mkety.com:25345/v1/cbot`: WebSocket upgrade succeeded; unauthenticated session failed closed with `1008 AUTH_REQUIRED`
-- `wss://cbot.mkety.com:25345/v1/mt5`: WebSocket upgrade succeeded; unauthenticated session failed closed with `1008 AUTH_REQUIRED`
-
-The earlier MT5 502 / stale-listener blocker is resolved. Temporary Coolify discovery/cutover workflows were removed after verification.
-
-### Worker gateway credential state
-
-Production Worker pairing creation has already proved that usable gateway signing/control configuration exists in the deployed Cloudflare state. GitHub production override inputs for those Worker values were previously absent, so future secret synchronization remains deployment-hardening work, not a current production-connectivity blocker. Do not expose or copy signing/control secrets through logs or chat merely to make the environments look symmetrical.
-
-## MTProto production boundary — external VM is transport-only
-
-The external MTProto VM is **not Mkety infrastructure** and must not be treated as a production-readiness dependency. It is a dumb outbound sender only.
-
-Its contract is intentionally narrow:
-
-1. receive Telegram messages using its own Telegram client/session;
-2. POST the message/payload to the single opaque Mkety ingestion endpoint it has been given;
-3. know nothing about Mkety workspaces, allowed chats, sources, collectors, routes, brokers, risk, account state or execution policy.
-
-All authority remains inside Mkety. The Worker / Mkety-owned Cloudflare runtime resolves the authenticated ingress, source/chat authorization, DB selection, canonical event identity, replay protection, parsing, routing, risk and execution gates.
-
-The existing source-specific external endpoint already supports this boundary because the external sender can be given one complete opaque URL and simply POST to it. Shared collector infrastructure (`trading_ingress_collectors` and `/api/v1/external/mtproto/collect...`) remains an internal Mkety capability for Mkety-owned collector/ingress topology; it is **not required merely to make an unrelated external VM production-ready**.
-
-Production currently has zero `trading_ingress_collectors` rows. That is valid and is not a blocker. Do not manufacture a collector token or require changes on an external VM unless a separately approved Mkety-owned collector topology actually needs one.
-
-Hosted MTProto (`cloudflare-v2/containers/mtproto-listener`) remains separate and Mkety-owned.
-
-## Verification evidence
-
-Current production/release evidence includes:
-
-- Trading V1 Worker/trading-core, MT5 bridge and MTProto suites: green;
-- cTrader Worker/gateway tests: green;
-- actual cTrader `.algo` build: green;
-- Coolify/portable deployment-stack validation: green;
-- Windows MT5 Connector regression/build/checksum/release: green;
-- production DB migrations 0027/0028 applied and verified;
-- Cloudflare Worker/container deployment and health gates: green;
-- real production Chromium E2E: green after the gateway fix;
-- external Coolify gateway redeployed from current `main`: green;
-- repeated public gateway health: green;
-- public cTrader WebSocket route: green and fail-closed;
-- public MT5 WebSocket route: green and fail-closed;
-- temporary probe accounts removed and disposable access codes revoked;
-- temporary deployment/diagnostic workflows removed from `main`.
-
-## What is still intentionally unproven
-
-Infrastructure is production-ready, but there is no real/demo broker account connected in the current production workspace. Therefore a true broker-side acceptance cannot be fabricated.
-
-The next acceptance work requires actual connector clients/accounts, not more infrastructure changes:
-
-1. connect an approved demo MT5 terminal with `MketyMT5Connector.exe` and sync its real identity/symbol catalog;
-2. connect/sync an approved demo cTrader account/cBot if cBot acceptance is required;
-3. exercise a controlled source → canonical parse → persisted route → risk/symbol gates → demo broker execution/reconciliation flow;
-4. keep the existing account execution state and kill switch unchanged unless that specific demo acceptance explicitly authorizes a temporary change;
-5. introduce no real-money broker account until demo acceptance is complete.
-
-Do not treat the globally enabled broker capability as sufficient authority to execute a trade. Final source, route, account, execution, kill-switch, risk and symbol checks remain mandatory.
+## Earlier source-feed / Telegram endpoint / multi-MT5 stream
+
+The preceding 2026-09-16 stream designed and implemented child Telegram `source_feeds`, feed-scoped routing, canonical-symbol route filters, reusable Telegram destination-bot credentials, normal Telegram Bot API source credential mapping, and deterministic multi-terminal MT5 connector flags (`--terminal`, `--config`, `--ledger`). Its exact prior handoff and AGENTS state are preserved in the archive files above.
+
+Those features remain non-regression requirements. In particular:
+
+- source connection is the transport/session boundary;
+- allowed Telegram chats may become independently routable child feeds;
+- feed-specific routes narrow that feed only, with legacy connection-route fallback where designed;
+- one saved Telegram delivery bot may back many destination channel endpoints;
+- simultaneous Octa/FBS/Deriv MT5 accounts on one Windows VPS require separate MT5 terminal processes and separate connector instance state;
+- selective routing/filtering may only narrow execution and may never bypass broker symbol/risk/account authority.
+
+## Immediate completion sequence
+
+1. Require fresh green CI on the latest branch head after migration hardening/docs updates.
+2. Review the final PR diff for unrelated feature removal or changed safety authority.
+3. Apply migration 0037 through the normal Supabase migration path only after green review.
+4. Re-query the trigger/function definition and LIVE safety rows immediately after migration.
+5. Merge reviewed PR #96 to `main` and let the normal production deployment workflow deploy it.
+6. Verify the production customer page, Telegram Bot source fields, returning-session restore, visible logout, revocation lock and same-workspace reissue against safe/non-LIVE test data.
+7. Re-query final runtime/workspace/LIVE-account safety state. Passing these checks does not authorize LIVE.
+
+## Completion definition
+
+Do not call this stream complete merely because the branch unit tests pass. Completion requires:
+
+- latest branch CI green;
+- migration 0037 applied and verified;
+- reviewed merge to `main`;
+- production deployment green;
+- production frontend/session lifecycle verification green;
+- no configuration loss on the tested workspace lifecycle;
+- no regression to source routing/destination/broker safety behavior;
+- final proof that global LIVE is OFF, workspace `liveExecution=false`, and all LIVE account execution flags remain OFF.

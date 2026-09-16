@@ -3,6 +3,7 @@ import { hasTradingPermission } from '../security/trading_permissions.js';
 import { canUseSourceProvider } from '../security/trading_entitlements.js';
 import { encryptConnectionCredentials, decryptConnectionCredentials, validateConnectionCredentials } from '../security/connection_credentials.js';
 import { encryptSecret, decryptSecret } from '../security/secret_box.js';
+import { createSourceFeedStore } from '../sources/source_feed_store.js';
 
 const BOT_PROVIDER = 'telegram_bot_api';
 const BOT_FAMILY = 'telegram';
@@ -86,6 +87,7 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
   decryptCredentials = decryptConnectionCredentials,
   encryptIngressSecret = encryptSecret,
   decryptIngressSecret = decryptSecret,
+  sourceFeedStoreFactory = createSourceFeedStore,
   generateHandle = () => randomHex(18),
   generateWebhookSecret = () => randomHex(24),
 } = {}) {
@@ -158,6 +160,22 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
     };
     const { data, error } = await supabase.from('source_connections').insert(row).select(SOURCE_SELECT).maybeSingle();
     if (error || !data) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+    try {
+      const feedStore = sourceFeedStoreFactory(supabase);
+      await feedStore.upsertAllowedFeeds(workspaceId, data.id, chatIds);
+    } catch {
+      try {
+        await supabase
+          .from('source_connections')
+          .delete()
+          .eq('workspace_id', workspaceId)
+          .eq('id', data.id);
+      } catch {
+        // The source remains disabled, so a failed compensating delete cannot
+        // make it operational. Surface the feed failure and let operators repair.
+      }
+      return json({ ok: false, reason: 'SOURCE_FEED_UPSERT_FAILED' }, 503);
+    }
     return json({ ok: true, workspaceId, source: safeSource(data) }, 201);
   }
 

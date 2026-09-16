@@ -50,6 +50,10 @@ function safeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
+}
+
 function publicDestination(row = {}) {
   const credentialConnectionId = row.credential_connection_id ?? row.credentialConnectionId ?? null;
   return {
@@ -133,16 +137,16 @@ function parseDestinationInput(body = {}) {
 function parseDestinationUpdateInput(body = {}) {
   const displayName = text(body.displayName ?? body.display_name);
   if (!displayName) return { ok: false, reason: 'DESTINATION_NAME_REQUIRED' };
-  return {
-    ok: true,
-    input: {
-      displayName,
-      destinationRef: text(body.destinationRef ?? body.destination_ref),
-      templateId: text(body.templateId ?? body.template_id),
-      credentialConnectionId: text(body.credentialConnectionId ?? body.credential_connection_id),
-      settings: safeObject(body.settings),
-    },
+  const input = {
+    displayName,
+    destinationRef: text(body.destinationRef ?? body.destination_ref),
+    templateId: text(body.templateId ?? body.template_id),
+    settings: safeObject(body.settings),
   };
+  if (hasOwn(body, 'credentialConnectionId') || hasOwn(body, 'credential_connection_id')) {
+    input.credentialConnectionId = text(body.credentialConnectionId ?? body.credential_connection_id);
+  }
+  return { ok: true, input };
 }
 
 function parseTemplateInput(body = {}) {
@@ -278,9 +282,9 @@ export function createAdminDestinationStore(supabase) {
         display_name: input.displayName,
         destination_ref: input.destinationRef,
         template_id: input.templateId || null,
-        credential_connection_id: input.credentialConnectionId || null,
         settings: input.settings || {},
       };
+      if (hasOwn(input, 'credentialConnectionId')) patch.credential_connection_id = input.credentialConnectionId || null;
       const { data, error } = await supabase.from('trading_destinations').update(patch).eq('workspace_id', String(workspaceId)).eq('id', String(id)).select(DESTINATION_SELECT).maybeSingle();
       if (error) throw new Error('DESTINATION_UPDATE_FAILED');
       return data || null;

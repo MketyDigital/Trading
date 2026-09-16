@@ -8,8 +8,12 @@ function destinationType(destination = {}) {
 
 function canonicalSymbol(interpretation = {}) {
   const intent = interpretation?.intent && typeof interpretation.intent === 'object' ? interpretation.intent : {};
+  const symbol = intent?.symbol && typeof intent.symbol === 'object' ? intent.symbol : {};
   return text(
-    intent.canonicalSymbol
+    symbol.canonical
+    ?? symbol.canonicalSymbol
+    ?? symbol.canonical_symbol
+    ?? intent.canonicalSymbol
     ?? intent.canonical_symbol
     ?? intent.symbolCanonical
     ?? intent.symbol_canonical
