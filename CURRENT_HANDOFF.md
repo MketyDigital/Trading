@@ -1,137 +1,136 @@
 # Current Development Handoff
 
-Read root `AGENTS.md` first. This file records the newest implementation/release state and supersedes older handoffs when they conflict. Exact pre-update handoff history is preserved at `docs/archive/2026-09-16-pre-subscription-CURRENT_HANDOFF.md`.
+Read root `AGENTS.md` first. This file records the newest verified release state. Exact older handoff history remains preserved under `docs/archive/` and in dated design/runbook documents.
 
-## Active implementation — 2026-09-16
+## Production state — 2026-09-16
 
-Active branch / PR:
+Latest production `main` commit:
 
-- branch: `fix/frontend-access-lifecycle-red`
-- PR: `#96` — real-user frontend visibility + persistent workspace subscription lifecycle
-- branch is **not production until merged to `main` and production deployment completes**
+- `cf1f0220c781248b64413f6a66162f682fbd5f96`
+- merged PR `#96` — DEMO-safe frontend, subscription lifecycle and feed-scoped routing authority
 
-### Scope
+Post-merge production verification is green on that exact commit:
 
-1. Make the normal Telegram Bot API source controls visible in the actual composed customer Connections page, including Bot token and allowed chat/channel IDs.
-2. Treat each customer as one persistent Trading workspace. Access-code reissue/renewal rotates access on the same workspace rather than creating duplicate workspaces.
-3. Revocation acts as a workspace subscription lock while preserving memberships, accounts, sources, routes, destinations, templates, settings, branding and audit history.
-4. Returning browser sessions are bound to the current access-code ID. Revoked, expired or superseded access is rejected server-side.
-5. Staff UI is workspace-centric: historical access-code rows remain in the database but do not appear as duplicate customer workspaces.
-6. Visible Sign out must call `/api/v1/access/logout` before local browser session cleanup/reload.
-7. Stabilization remains DEMO-only. This stream never authorizes LIVE.
+- Trading V1 CI `#2777` — success
+- Production Cloudflare Deploy `#85` — success
+- Production Frontend E2E `#90` — success
+- Production Connection Readiness `#48` — success
+- Production Platform Configuration Verification `#47` — success
+- GitHub code scanning — success
 
-### Current implementation files
+Supabase migrations applied and verified in production:
 
-- `cloudflare-v2/db/migrations/0037_subscription_access_lifecycle.sql`
-- `cloudflare-v2/src/access/trading_access_codes.js`
-- `cloudflare-v2/src/persistence/supabase_access_code_store.js`
-- `cloudflare-v2/src/dashboard_returning_session.js`
-- `cloudflare-v2/src/dashboard_mkety_admin_access_codes.js`
-- `cloudflare-v2/src/dashboard_telegram_bot_source.js`
-- `cloudflare-v2/scripts/test_ci_diagnostic.mjs`
-- `cloudflare-v2/tests/access_subscription_lifecycle.test.mjs`
-- `cloudflare-v2/tests/access_reissue_rotation.test.mjs`
-- `cloudflare-v2/tests/frontend_real_user_visibility.test.mjs`
-- `cloudflare-v2/docs/TRADING_ACCESS_CODE_ONBOARDING.md`
+- `0035_source_feeds_and_route_scope`
+- `0036_reusable_destination_connections`
+- `0037_subscription_access_lifecycle`
+- `0038_backfill_telegram_source_feeds`
 
-### Compatibility/debugging findings resolved on this branch
+### Current safety authority
 
-A first implementation unintentionally changed unrelated Mkety staff-admin API contracts. Existing Worker tests correctly caught the regression. The admin handler was restored to the proven API behavior rather than changing tests around the breakage.
-
-The last remaining Worker failure was isolated to the visible Sign out regression contract. Root cause: local session cleanup had moved behind a helper, so the composed-page contract no longer proved the server logout -> portal-session clear -> reload sequence. The production code was fixed explicitly rather than weakening the test.
-
-Trading V1 CI run `2755` on commit `16cb5f0039844ee4ea0c58d97bacd7a53e05d1a1` completed successfully: Worker/trading-core, pure MT5 bridge and pure MTProto tests all passed. Later documentation/security-hardening commits must receive a fresh green run before merge.
-
-### Migration 0037
-
-`0037_subscription_access_lifecycle.sql` is additive to the existing access-code model and replaces the existing rotation function introduced by migration 0034.
-
-It:
-
-- adds `sync_trading_workspace_access_code_status()` trigger behavior so revoking the currently referenced Trading access code disables that workspace's `trading_access_enabled` state;
-- preserves membership enable/disable state;
-- keeps all workspace configuration rows in place;
-- rotates/reissues a replacement code on the SAME workspace;
-- revokes previous active codes inside the same database transaction;
-- restores the subscription-locked workspace on reissue;
-- preserves/merges existing entitlements but forces `brokerModes=["demo"]` and `liveExecution=false`;
-- uses `SECURITY DEFINER` with empty `search_path` and schema-qualified database objects;
-- does not provide any path that enables LIVE execution.
-
-Do not claim this migration is applied until a production migration query proves it.
-
-### Fresh production safety audit before migration
-
-On 2026-09-16 the live database was queried directly before any 0037 application.
-
-Verified runtime controls:
+Latest verified runtime controls:
 
 - `trading_access_enabled = true`
 - `broker_execution_enabled = true`
 - `live_broker_execution_enabled = false`
 
-Verified current workspaces:
+Latest verified workspace entitlements:
 
 - `Mkay` — `brokerModes=["demo"]`, `liveExecution=false`
 - `Starpips Forex` — `brokerModes=["demo"]`, `liveExecution=false`
 
-Verified LIVE guard account:
+Latest verified LIVE guard account:
 
-- cTrader LIVE account UUID `4dbe17df-40b0-412a-88de-9bbc562969c7`
-- `environment=live`
+- cTrader LIVE UUID `4dbe17df-40b0-412a-88de-9bbc562969c7`
 - `execution_enabled=false`
 - `live_execution_enabled=false`
 
-Production already contains `public.rotate_trading_access_code(...)`. `public.sync_trading_workspace_access_code_status()` was not present before 0037, confirming the new migration has not yet been applied at this handoff point.
+Do not enable or mutate LIVE during DEMO acceptance. Passing DEMO acceptance does not itself authorize LIVE.
 
-### Supabase compatibility review
+## Source-feed and routing authority
 
-Current Supabase guidance was checked during review. In particular, security-definer functions should use a pinned empty `search_path` with schema-qualified objects. Migration 0037 was hardened to follow that pattern before production application.
+`source_connections` remains the physical transport/session boundary. Telegram chats/channels authorized under one source connection are materialized as independently routable `source_feeds`.
 
-No service-role or other secret is exposed to the browser. Subscription status revalidation remains server-side and fail-closed for access-code-bound sessions.
+Starpips external MTProto source `48860770-4b2c-4b13-b49f-7d998f9d7ed5` now has three active child feeds matching its persisted allowlist:
 
-### Documentation state
+- `-1003902892609`
+- `-1001822170589`
+- `-1004387586337`
 
-Current lifecycle/operator contract is documented in:
+Broker planning now enforces feed-scoped routing authority, not merely destination presentation. If an incoming feed has active feed-specific routes, those routes replace the legacy parent/default route set for that feed. If it has no active feed-specific routes, the designed legacy connection-route fallback remains.
 
-- `cloudflare-v2/docs/TRADING_ACCESS_CODE_ONBOARDING.md`
-- root `AGENTS.md`
-- this handoff
+Canonical-symbol route filters narrow broker fanout before accounts enter planning. Filters never bypass account symbol compatibility, risk controls, runtime controls or LIVE gates.
 
-Exact previous root documents are preserved under `docs/archive/` so historical source-feed/multi-terminal and older production evidence remains available without masquerading as the active workstream.
+## Capability-driven broker execution — non-regression invariant
 
-## Earlier source-feed / Telegram endpoint / multi-MT5 stream
+Instrument eligibility is **account-capability driven, not platform-name or broker-name driven**.
 
-The preceding 2026-09-16 stream designed and implemented child Telegram `source_feeds`, feed-scoped routing, canonical-symbol route filters, reusable Telegram destination-bot credentials, normal Telegram Bot API source credential mapping, and deterministic multi-terminal MT5 connector flags (`--terminal`, `--config`, `--ledger`). Its exact prior handoff and AGENTS state are preserved in the archive files above.
+A platform label such as `mt5` or `ctrader` does not define the instrument universe. A broker brand such as Deriv, Octa or FBS does not receive a hard-coded allow/deny list in Mkety execution authority.
 
-Those features remain non-regression requirements. In particular:
+For every routed broker account Mkety must:
 
-- source connection is the transport/session boundary;
-- allowed Telegram chats may become independently routable child feeds;
-- feed-specific routes narrow that feed only, with legacy connection-route fallback where designed;
-- one saved Telegram delivery bot may back many destination channel endpoints;
-- simultaneous Octa/FBS/Deriv MT5 accounts on one Windows VPS require separate MT5 terminal processes and separate connector instance state;
-- selective routing/filtering may only narrow execution and may never bypass broker symbol/risk/account authority.
+1. load the account's authoritative persisted/reported symbol catalog;
+2. resolve the canonical requested instrument against that catalog and configured aliases;
+3. require the resolved symbol to be advertised/tradable by that account;
+4. apply account lot/volume/tick/digits/filling/risk constraints;
+5. apply persisted route/account/runtime/LIVE authority;
+6. execute only if every gate passes.
 
-## Immediate completion sequence
+Therefore:
 
-1. Require fresh green CI on the latest branch head after migration hardening/docs updates.
-2. Review the final PR diff for unrelated feature removal or changed safety authority.
-3. Apply migration 0037 through the normal Supabase migration path only after green review.
-4. Re-query the trigger/function definition and LIVE safety rows immediately after migration.
-5. Merge reviewed PR #96 to `main` and let the normal production deployment workflow deploy it.
-6. Verify the production customer page, Telegram Bot source fields, returning-session restore, visible logout, revocation lock and same-workspace reissue against safe/non-LIVE test data.
-7. Re-query final runtime/workspace/LIVE-account safety state. Passing these checks does not authorize LIVE.
+- a connected **Deriv MT5** account whose terminal catalog advertises `Volatility 75 Index` / an equivalent V75 broker symbol may execute canonical `DERIV:VOLATILITY_75` when routed and otherwise authorized;
+- a connected cTrader account advertising the same canonical product under its own broker symbol may also execute it;
+- an Octa/FBS/other MT5 account that does not advertise that instrument must fail closed;
+- the rejection in the last case is because of the account catalog, **not because the platform is MT5**.
 
-## Completion definition
+A focused regression is being added on branch `test/capability-driven-cross-platform-symbols` to freeze this invariant across MT5/cTrader and future adapters.
 
-Do not call this stream complete merely because the branch unit tests pass. Completion requires:
+## Telegram Bot source and reusable destination bot
 
-- latest branch CI green;
-- migration 0037 applied and verified;
-- reviewed merge to `main`;
-- production deployment green;
-- production frontend/session lifecycle verification green;
-- no configuration loss on the tested workspace lifecycle;
-- no regression to source routing/destination/broker safety behavior;
-- final proof that global LIVE is OFF, workspace `liveExecution=false`, and all LIVE account execution flags remain OFF.
+Normal Telegram Bot API source controls are visible in the real Connections UI, including Bot token and allowed chat/channel IDs. Creating a Bot source materializes those chats as child feeds. If feed materialization fails after source insertion, the disabled partial source is compensated/removed before the API returns failure.
+
+One reusable encrypted Telegram destination bot credential may back many independently configured destination chat/channel endpoints. Ordinary destination edits must preserve the shared credential unless the caller explicitly clears or replaces it.
+
+## MT5 multi-terminal model
+
+One running MT5 terminal process has one active account identity at a time. For simultaneous Octa + FBS + Deriv accounts on one Windows VPS, run separate terminal installations/processes and one Mkety connector process per terminal/account.
+
+The connector supports explicit per-instance:
+
+- `--terminal`
+- `--config`
+- `--ledger`
+
+The same connector binary may be reused; per-account terminal/catalog state remains authoritative.
+
+## Access/subscription lifecycle
+
+Each customer keeps one persistent Trading workspace. Access-code reissue/renewal rotates access on the same workspace rather than creating duplicate customer workspaces. Revocation/expiry locks subscription access while preserving accounts, sources, routes, destinations, templates, settings, memberships, branding and audit history.
+
+`rotate_trading_access_code` and `sync_trading_workspace_access_code_status` are SECURITY DEFINER functions with pinned empty search paths; execute privilege is restricted to `postgres`/`service_role`.
+
+## Remaining DEMO acceptance
+
+Production deployment gates are green, but release acceptance still requires controlled DEMO evidence through the real pipeline:
+
+1. normal Telegram Bot source UI/token/allowlist and child-feed creation;
+2. source-feed A/B isolation and default-route fallback behavior;
+3. reusable Telegram destination bot to multiple endpoints;
+4. supported-symbol broker routing based on each account's catalog;
+5. cTrader DEMO execution;
+6. MT5 DEMO execution with the connector online;
+7. replay/idempotency — no duplicate broker open;
+8. management/reply/follow-up correlation to the original durable position group;
+9. connector disconnect/reconnect recovery;
+10. final zero-LIVE audit.
+
+For the currently connected Octa MT5 DEMO account, use a symbol its catalog actually supports (for example XAUUSD if present). When a Deriv MT5 DEMO account is connected and reports Derived/Volatility symbols, those instruments should be tested there as normal capability-driven broker destinations.
+
+## Completion rule
+
+Do not declare LIVE readiness from CI/deployment alone. DEMO acceptance needs broker evidence plus a fresh final verification that:
+
+- global `live_broker_execution_enabled=false`;
+- workspace `liveExecution=false`;
+- every LIVE account has `execution_enabled=false` and `live_execution_enabled=false`.
+
+Only after separate explicit authorization should any controlled LIVE-enablement work be considered.
