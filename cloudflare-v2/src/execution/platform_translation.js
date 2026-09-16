@@ -92,8 +92,8 @@ export function buildMT5ManagementCommand(action, symbol = {}) {
     return {
       action: 'MODIFY_POSITION',
       positionId: String(action.brokerPositionId),
-      ...(action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
-      ...(action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
+      ...(action.clearStopLoss === true ? { stopLoss: 0 } : action.stopLoss != null ? { stopLoss: normalizePrice(action.stopLoss, priceOptions) } : {}),
+      ...(action.clearTakeProfit === true ? { takeProfit: 0 } : action.takeProfit != null ? { takeProfit: normalizePrice(action.takeProfit, priceOptions) } : {}),
     };
   }
 
@@ -130,8 +130,8 @@ export function buildCTraderManagementCommand(action, { accountId, clientMsgId, 
       clientMsgId: boundedClientMsgId,
       accountId,
       positionId: action.brokerPositionId,
-      stopLoss: action.stopLoss,
-      takeProfit: action.takeProfit,
+      ...(action.clearStopLoss === true ? { stopLoss: 0 } : action.stopLoss != null ? { stopLoss: action.stopLoss } : {}),
+      ...(action.clearTakeProfit === true ? { takeProfit: 0 } : action.takeProfit != null ? { takeProfit: action.takeProfit } : {}),
     });
   }
 
