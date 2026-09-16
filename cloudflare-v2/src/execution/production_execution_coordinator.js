@@ -5,6 +5,12 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function safeMark(latencyTrace, name) {
   try {
     latencyTrace?.mark?.(name);
@@ -82,8 +88,8 @@ function safeBrokerOutcome(action = {}, result = {}, skippedProtections = []) {
   if (result?.brokerPositionId != null) outcome.brokerPositionId = String(result.brokerPositionId);
   if (result?.brokerOrderId != null) outcome.brokerOrderId = String(result.brokerOrderId);
   if (result?.brokerDealId != null) outcome.brokerDealId = String(result.brokerDealId);
-  const fillPrice = Number(result?.fillPrice);
-  if (Number.isFinite(fillPrice)) outcome.fillPrice = fillPrice;
+  const fillPrice = optionalFiniteNumber(result?.fillPrice);
+  if (fillPrice != null) outcome.fillPrice = fillPrice;
   for (const key of ['executedLots', 'volumeStepLots', 'minimumLots']) {
     const value = Number(result?.[key]);
     if (Number.isFinite(value) && value > 0) outcome[key] = value;
@@ -95,7 +101,7 @@ function hasBindableBrokerResult(result = {}) {
   return result?.brokerPositionId != null ||
     result?.brokerOrderId != null ||
     result?.brokerDealId != null ||
-    Number.isFinite(Number(result?.fillPrice));
+    optionalFiniteNumber(result?.fillPrice) != null;
 }
 
 function blockedAccount(accountId, reason, extra = {}) {
@@ -382,7 +388,7 @@ async function runAccountPlan({
           brokerPositionId,
           brokerOrderId,
           brokerDealId: result?.brokerDealId ?? null,
-          fillPrice: Number.isFinite(Number(result?.fillPrice)) ? Number(result.fillPrice) : null,
+          fillPrice: optionalFiniteNumber(result?.fillPrice),
           executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
           volumeStepLots: Number.isFinite(Number(result?.volumeStepLots)) ? Number(result.volumeStepLots) : null,
           minimumLots: Number.isFinite(Number(result?.minimumLots)) ? Number(result.minimumLots) : null,
