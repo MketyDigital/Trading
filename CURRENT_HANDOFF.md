@@ -1,6 +1,6 @@
 # Current Development Handoff
 
-Read root `AGENTS.md` first. This file records the newest verified release state. Exact older handoff history remains preserved below, under `docs/archive/`, and in dated design/runbook documents.
+Read root `AGENTS.md` first. The newest verified production authority is immediately below. The complete previous handoff is preserved verbatim afterward as historical evidence.
 
 ## Current production authority — 2026-09-16
 
@@ -80,15 +80,17 @@ Do not declare LIVE readiness from production gates alone.
 
 ---
 
-## Historical PR #98 release-candidate handoff — preserved
+## Complete previous handoff — preserved verbatim
 
-The section below is retained as release-history evidence. Current production authority is the section above.
+# Current Development Handoff
 
-### Active release candidate — PR #98, 2026-09-16
+Read root `AGENTS.md` first. This file records the newest verified release state. Exact older handoff history remains preserved under `docs/archive/` and in dated design/runbook documents.
+
+## Active release candidate — PR #98, 2026-09-16
 
 Branch: `feat/multiselect-routes-forward-as-is`
 
-Latest verified implementation checkpoint before the original documentation commit:
+Latest verified implementation checkpoint before this documentation commit:
 
 - `977dfaac78ad534ba41c92897ab224ca38c1c37b`
 - Trading V1 CI `#2809` — success
@@ -96,11 +98,11 @@ Latest verified implementation checkpoint before the original documentation comm
 - pure MT5 bridge tests — success
 - pure MTProto Python tests — success
 
-The final PR head later advanced through additional conflict/isolation regressions and was verified green at `dfa28f724fa77375255f317db11ffa61ada9f6be` before squash merge to production commit `a3571eddf251ed974369021d97414e177d6280f1`.
+This branch is **not production authority until merged and deployed**. Production remains the `main` state documented below.
 
-#### Logical multi-feed routing
+### Logical multi-feed routing
 
-The Connections portal edits routing as a logical source → destination relationship rather than exposing one raw route row per Telegram feed.
+The Connections portal now edits routing as a logical source → destination relationship rather than exposing one raw route row per Telegram feed.
 
 For one source connection and one destination, the operator explicitly chooses either:
 
@@ -111,15 +113,17 @@ Selective authority is strict **for that source → destination pair**. Once sel
 
 Destination delivery and broker-account planning use the same shared resolver in `cloudflare-v2/src/routes/logical_route_scope.js`; UI routing and broker routing must not diverge.
 
-Existing routes use the same editor as new routes. Compatible feed-scoped rows are presented as one multi-select logical route and existing route row IDs are reused where possible. Specialized sibling groups with different persisted settings remain independently editable through exact route IDs.
+Existing routes use the same editor as new routes. Compatible feed-scoped rows are presented as one multi-select logical route and existing route row IDs are reused where possible. Moving an existing logical route to another source/destination reuses its rows after validating the target and rejects a target collision instead of leaving a duplicate old route behind.
 
-#### Symbol filters
+Historical rows with incompatible settings are not silently normalized merely by viewing them. They remain flagged as mixed legacy state and require an explicit operator confirmation before a save normalizes their common settings.
+
+### Symbol filters
 
 Blank Allowed Symbols + blank Blocked Symbols means **no route-level narrowing**. The destination account's authoritative symbol catalog, aliases, risk limits, environment, runtime gates and broker capabilities remain final authority.
 
 Allowed/blocked canonical-symbol filters may only narrow a destination. They cannot make an unsupported symbol tradable. Instrument eligibility remains capability-driven rather than hard-coded by MT5/cTrader or broker brand.
 
-#### Telegram destination formatting
+### Telegram destination formatting
 
 The portal exposes four ready-made modes:
 
@@ -132,14 +136,21 @@ A valid destination-level formatting selection overrides an attached template's 
 
 `Forward as-is` still uses the mature delivery path: the original source text is sent as stored and native Telegram entities are retained when available. It does not alter broker execution semantics.
 
----
+### Non-regression scope frozen by this branch
 
-## Earlier production baseline — preserved historical evidence
+The implementation intentionally leaves the established execution/management engine in place. Full branch CI remains the release gate for signal execution, fast/follow-up handling, reply/thread correlation, management actions, replay/idempotency, reconciliation, independent destination fanout, cTrader, MT5, MTProto and capability-driven symbols.
 
-Before PR #98, the production baseline recorded here was:
+LIVE remains outside this change. Do not mutate global LIVE, workspace `liveExecution`, or LIVE-account execution flags while finishing this release.
+
+## Production state — 2026-09-16
+
+Latest production `main` commit:
 
 - `cf1f0220c781248b64413f6a66162f682fbd5f96`
 - merged PR `#96` — DEMO-safe frontend, subscription lifecycle and feed-scoped routing authority
+
+Post-merge production verification is green on that exact commit:
+
 - Trading V1 CI `#2777` — success
 - Production Cloudflare Deploy `#85` — success
 - Production Frontend E2E `#90` — success
@@ -147,26 +158,47 @@ Before PR #98, the production baseline recorded here was:
 - Production Platform Configuration Verification `#47` — success
 - GitHub code scanning — success
 
-Supabase migrations already applied and verified in production before PR #98:
+Supabase migrations applied and verified in production:
 
 - `0035_source_feeds_and_route_scope`
 - `0036_reusable_destination_connections`
 - `0037_subscription_access_lifecycle`
 - `0038_backfill_telegram_source_feeds`
 
-PR #98 introduced no database migration.
+### Current safety authority
 
-## Source-feed and routing background
+Latest verified runtime controls:
+
+- `trading_access_enabled = true`
+- `broker_execution_enabled = true`
+- `live_broker_execution_enabled = false`
+
+Latest verified workspace entitlements:
+
+- `Mkay` — `brokerModes=["demo"]`, `liveExecution=false`
+- `Starpips Forex` — `brokerModes=["demo"]`, `liveExecution=false`
+
+Latest verified LIVE guard account:
+
+- cTrader LIVE UUID `4dbe17df-40b0-412a-88de-9bbc562969c7`
+- `execution_enabled=false`
+- `live_execution_enabled=false`
+
+Do not enable or mutate LIVE during DEMO acceptance. Passing DEMO acceptance does not itself authorize LIVE.
+
+## Source-feed and routing authority
 
 `source_connections` remains the physical transport/session boundary. Telegram chats/channels authorized under one source connection are materialized as independently routable `source_feeds`.
 
-Starpips external MTProto source `48860770-4b2c-4b13-b49f-7d998f9d7ed5` historically has three active child feeds matching its persisted allowlist:
+Starpips external MTProto source `48860770-4b2c-4b13-b49f-7d998f9d7ed5` now has three active child feeds matching its persisted allowlist:
 
 - `-1003902892609`
 - `-1001822170589`
 - `-1004387586337`
 
-Re-query current source/feed state before testing; copied IDs are historical aids, not permanent authority.
+Broker planning now enforces feed-scoped routing authority, not merely destination presentation. If an incoming feed has active feed-specific routes, those routes replace the legacy parent/default route set for that feed. If it has no active feed-specific routes, the designed legacy connection-route fallback remains.
+
+Canonical-symbol route filters narrow broker fanout before accounts enter planning. Filters never bypass account symbol compatibility, risk controls, runtime controls or LIVE gates.
 
 ## Capability-driven broker execution — non-regression invariant
 
@@ -183,13 +215,20 @@ For every routed broker account Mkety must:
 5. apply persisted route/account/runtime/LIVE authority;
 6. execute only if every gate passes.
 
-Therefore a connected Deriv MT5 or cTrader account may execute a Derived/Volatility product only when its own catalog advertises a compatible symbol and every other authority gate passes. An Octa/FBS/other account that does not advertise that instrument fails closed because of account capability, not because its platform is MT5.
+Therefore:
+
+- a connected **Deriv MT5** account whose terminal catalog advertises `Volatility 75 Index` / an equivalent V75 broker symbol may execute canonical `DERIV:VOLATILITY_75` when routed and otherwise authorized;
+- a connected cTrader account advertising the same canonical product under its own broker symbol may also execute it;
+- an Octa/FBS/other MT5 account that does not advertise that instrument must fail closed;
+- the rejection in the last case is because of the account catalog, **not because the platform is MT5**.
+
+A focused regression is being added on branch `test/capability-driven-cross-platform-symbols` to freeze this invariant across MT5/cTrader and future adapters.
 
 ## Telegram Bot source and reusable destination bot
 
-Normal Telegram Bot API source controls are visible in the Connections UI, including Bot token and allowed chat/channel IDs. Creating a Bot source materializes those chats as child feeds. Source authorization still comes from the persisted parent source connection allowlist.
+Normal Telegram Bot API source controls are visible in the real Connections UI, including Bot token and allowed chat/channel IDs. Creating a Bot source materializes those chats as child feeds. If feed materialization fails after source insertion, the disabled partial source is compensated/removed before the API returns failure.
 
-One reusable encrypted Telegram destination bot credential may back many independently configured destination chat/channel endpoints. Ordinary endpoint edits must preserve the shared credential unless the caller explicitly clears or replaces it.
+One reusable encrypted Telegram destination bot credential may back many independently configured destination chat/channel endpoints. Ordinary destination edits must preserve the shared credential unless the caller explicitly clears or replaces it.
 
 ## MT5 multi-terminal model
 
@@ -208,6 +247,23 @@ The same connector binary may be reused; per-account terminal/catalog state rema
 Each customer keeps one persistent Trading workspace. Access-code reissue/renewal rotates access on the same workspace rather than creating duplicate customer workspaces. Revocation/expiry locks subscription access while preserving accounts, sources, routes, destinations, templates, settings, memberships, branding and audit history.
 
 `rotate_trading_access_code` and `sync_trading_workspace_access_code_status` are SECURITY DEFINER functions with pinned empty search paths; execute privilege is restricted to `postgres`/`service_role`.
+
+## Remaining DEMO acceptance
+
+Production deployment gates are green, but release acceptance still requires controlled DEMO evidence through the real pipeline:
+
+1. normal Telegram Bot source UI/token/allowlist and child-feed creation;
+2. source-feed A/B isolation and default-route fallback behavior;
+3. reusable Telegram destination bot to multiple endpoints;
+4. supported-symbol broker routing based on each account's catalog;
+5. cTrader DEMO execution;
+6. MT5 DEMO execution with the connector online;
+7. replay/idempotency — no duplicate broker open;
+8. management/reply/follow-up correlation to the original durable position group;
+9. connector disconnect/reconnect recovery;
+10. final zero-LIVE audit.
+
+For the currently connected Octa MT5 DEMO account, use a symbol its catalog actually supports (for example XAUUSD if present). When a Deriv MT5 DEMO account is connected and reports Derived/Volatility symbols, those instruments should be tested there as normal capability-driven broker destinations.
 
 ## Completion rule
 
