@@ -18,7 +18,7 @@ test('normal Telegram Bot API source visibly owns one encrypted bot token and ma
   const html = withTelegramBotSource('<html><body><select id="sourceProvider"></select><div id="enterpriseSourceExtras"></div></body></html>');
   assert.match(html, /Telegram Bot API \(normal bot\)/);
   assert.match(html, /Bot token/);
-  assert.match(html, /type=\\"password\\"/);
+  assert.match(html, /type="password"/);
   assert.match(html, /Allowed chat \/ channel IDs/);
   assert.match(html, /credentials:\{botToken:token\}/);
 });
