@@ -47,6 +47,143 @@ export class UniversalAIRouter {
         try { this.circuitBreaker.recordSuccess(key); } catch {}
     }
 
+    providerIdentity(provider = {}) {
+        return {
+            providerId: String(provider?.id ?? '').trim() || null,
+            providerType: String(provider?.provider_name ?? '').trim().toLowerCase() || null,
+            model: String(provider?.model_name ?? '').trim() || null,
+        };
+    }
+
+    sanitizeProviderMessage(message, provider = {}) {
+        let value = String(message ?? '').replace(/\s+/g, ' ').trim();
+        if (!value) return null;
+
+        const secrets = [
+            provider?.resolved_api_key,
+            provider?.api_key,
+            provider?.api_key_encrypted,
+            provider?.api_key_ciphertext,
+        ].filter((secret) => typeof secret === 'string' && secret.length >= 4);
+        for (const secret of secrets) {
+            value = value.split(secret).join('[REDACTED]');
+        }
+
+        value = value
+            .replace(/Bearer\s+[A-Za-z0-9._~+\-/=]+/gi, 'Bearer [REDACTED]')
+            .replace(/(api[_ -]?key\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+            .replace(/(secret(?:_access)?_?key\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+
+        return value.slice(0, 240);
+    }
+
+    providerFailure(message, {
+        httpStatus = null,
+        providerCode = null,
+        retryable = false,
+        errorClass = 'PROVIDER',
+        sanitizedMessage = null,
+    } = {}) {
+        const error = new Error(message || sanitizedMessage || 'AI provider request failed');
+        error.httpStatus = Number.isFinite(Number(httpStatus)) ? Number(httpStatus) : null;
+        error.providerCode = providerCode ? String(providerCode) : null;
+        error.retryable = Boolean(retryable);
+        error.errorClass = String(errorClass || 'PROVIDER');
+        error.sanitizedMessage = sanitizedMessage ? String(sanitizedMessage) : null;
+        return error;
+    }
+
+    httpErrorClass(status) {
+        const value = Number(status);
+        if (value === 401 || value === 403) return 'AUTH';
+        if (value === 408) return 'TIMEOUT';
+        if (value === 429) return 'RATE_LIMIT';
+        if (value >= 500) return 'UPSTREAM';
+        if (value >= 400) return 'REQUEST';
+        return 'PROVIDER';
+    }
+
+    httpRetryable(status) {
+        const value = Number(status);
+        return value === 408 || value === 409 || value === 425 || value === 429 || value >= 500;
+    }
+
+    async responseFailure(res, provider, label) {
+        const httpStatus = Number(res?.status);
+        let raw = '';
+        try { raw = await res.text(); } catch {}
+
+        let payload = null;
+        try { payload = raw ? JSON.parse(raw) : null; } catch {}
+        const candidate = payload?.error && typeof payload.error === 'object'
+            ? payload.error
+            : Array.isArray(payload?.errors) && payload.errors[0] && typeof payload.errors[0] === 'object'
+                ? payload.errors[0]
+                : payload && typeof payload === 'object'
+                    ? payload
+                    : null;
+        const providerCode = candidate?.code ?? candidate?.type ?? payload?.code ?? null;
+        const extractedMessage = candidate?.message
+            ?? candidate?.description
+            ?? payload?.message
+            ?? `${label} request failed`;
+        const sanitizedMessage = this.sanitizeProviderMessage(extractedMessage, provider)
+            || `${label} request failed`;
+
+        return this.providerFailure(`${label} HTTP ${Number.isFinite(httpStatus) ? httpStatus : 'error'}`, {
+            httpStatus: Number.isFinite(httpStatus) ? httpStatus : null,
+            providerCode: providerCode || (Number.isFinite(httpStatus) ? `HTTP_${httpStatus}` : 'AI_PROVIDER_HTTP_ERROR'),
+            retryable: Number.isFinite(httpStatus) ? this.httpRetryable(httpStatus) : true,
+            errorClass: Number.isFinite(httpStatus) ? this.httpErrorClass(httpStatus) : 'NETWORK',
+            sanitizedMessage,
+        });
+    }
+
+    normalizeFailure(err, provider, latencyMs, overrides = {}) {
+        const message = this.sanitizeProviderMessage(
+            overrides.sanitizedMessage ?? err?.sanitizedMessage ?? err?.message ?? 'AI provider request failed',
+            provider,
+        ) || 'AI provider request failed';
+        const httpStatus = overrides.httpStatus ?? err?.httpStatus ?? null;
+        const providerCode = overrides.providerCode ?? err?.providerCode ?? null;
+        let errorClass = overrides.errorClass ?? err?.errorClass ?? null;
+        let retryable = overrides.retryable ?? err?.retryable;
+
+        if (!errorClass) {
+            if (Number.isFinite(Number(httpStatus))) errorClass = this.httpErrorClass(httpStatus);
+            else if (err?.name === 'TypeError') errorClass = 'NETWORK';
+            else if (/credential|api key/i.test(message)) errorClass = 'CREDENTIAL';
+            else if (/missing|not configured|invalid/i.test(message)) errorClass = 'CONFIG';
+            else errorClass = 'PROVIDER';
+        }
+        if (retryable == null) {
+            if (Number.isFinite(Number(httpStatus))) retryable = this.httpRetryable(httpStatus);
+            else retryable = errorClass === 'NETWORK' || errorClass === 'TIMEOUT';
+        }
+
+        return {
+            ...this.providerIdentity(provider),
+            outcome: 'FAILED',
+            latencyMs: Math.max(0, Number(latencyMs) || 0),
+            ...(Number.isFinite(Number(httpStatus)) ? { httpStatus: Number(httpStatus) } : {}),
+            ...(providerCode ? { providerCode: String(providerCode) } : {}),
+            retryable: Boolean(retryable),
+            errorClass: String(errorClass),
+            sanitizedMessage: message,
+        };
+    }
+
+    successDiagnostic(provider, result, latencyMs) {
+        return {
+            ...this.providerIdentity(provider),
+            outcome: 'SUCCESS',
+            latencyMs: Math.max(0, Number(latencyMs) || 0),
+            ...(Number.isFinite(Number(result?.httpStatus)) ? { httpStatus: Number(result.httpStatus) } : {}),
+            ...(result?.providerCode ? { providerCode: String(result.providerCode) } : {}),
+            retryable: false,
+        };
+    }
+
     async resolveCredential(provider) {
         if (this.credentialResolver) {
             const resolved = await this.credentialResolver(provider);
@@ -56,8 +193,9 @@ export class UniversalAIRouter {
     }
 
     async processSignal(rawText, systemPrompt, { timeoutMs = 12000, purpose = 'ai' } = {}) {
+        const diagnostics = [];
         if (!this.providers.length) {
-            return { success: false, error: 'No AI providers configured in database.' };
+            return { success: false, error: 'No AI providers configured in database.', diagnostics };
         }
 
         let attempted = 0;
@@ -68,44 +206,80 @@ export class UniversalAIRouter {
             const circuitKey = this.circuitKey(provider, purpose);
             if (!this.canAttemptCircuit(circuitKey)) {
                 blocked += 1;
+                diagnostics.push({
+                    ...this.providerIdentity(provider),
+                    outcome: 'BLOCKED',
+                    latencyMs: 0,
+                    providerCode: 'AI_CIRCUIT_OPEN',
+                    retryable: true,
+                    errorClass: 'CIRCUIT',
+                    sanitizedMessage: 'AI provider circuit is open.',
+                });
                 continue;
             }
 
             let apiKey;
+            const credentialStarted = Date.now();
             try {
                 apiKey = await this.resolveCredential(provider);
-            } catch {
+            } catch (err) {
                 attempted += 1;
                 this.recordCircuitFailure(circuitKey);
+                diagnostics.push(this.normalizeFailure(err, provider, Date.now() - credentialStarted, {
+                    providerCode: 'AI_CREDENTIAL_RESOLUTION_FAILED',
+                    retryable: false,
+                    errorClass: 'CREDENTIAL',
+                    sanitizedMessage: 'AI provider credential could not be resolved.',
+                }));
                 console.warn('AI provider credential resolution failed');
                 continue;
             }
-            if (!apiKey && !provider?.uses_binding) continue;
+            if (!apiKey && !provider?.uses_binding) {
+                attempted += 1;
+                diagnostics.push(this.normalizeFailure(new Error('AI provider credential missing'), provider, Date.now() - credentialStarted, {
+                    providerCode: 'AI_CREDENTIAL_MISSING',
+                    retryable: false,
+                    errorClass: 'CREDENTIAL',
+                    sanitizedMessage: 'AI provider credential is not configured.',
+                }));
+                continue;
+            }
 
             attempted += 1;
             const resolvedProvider = { ...provider, resolved_api_key: apiKey };
+            const started = Date.now();
             try {
                 const result = await this.callProviderWithTimeout(resolvedProvider, rawText, systemPrompt, timeoutMs);
+                const latencyMs = Date.now() - started;
                 if (result?.success && result.text) {
+                    diagnostics.push(this.successDiagnostic(provider, result, latencyMs));
                     this.recordCircuitSuccess(circuitKey);
                     return {
                         success: true,
                         text: this.cleanOutput(result.text),
                         provider: provider.provider_name,
                         model: provider.model_name,
+                        diagnostics,
                     };
                 }
+                diagnostics.push(this.normalizeFailure(new Error('AI provider returned no usable text'), resolvedProvider, latencyMs, {
+                    providerCode: 'AI_EMPTY_RESPONSE',
+                    retryable: false,
+                    errorClass: 'EMPTY_RESPONSE',
+                    sanitizedMessage: 'AI provider returned no usable output.',
+                }));
                 this.recordCircuitFailure(circuitKey);
-            } catch {
+            } catch (err) {
+                diagnostics.push(this.normalizeFailure(err, resolvedProvider, Date.now() - started));
                 this.recordCircuitFailure(circuitKey);
                 console.warn('AI provider request failed');
             }
         }
 
         if (attempted === 0 && blocked > 0) {
-            return { success: false, error: 'AI_CIRCUIT_OPEN' };
+            return { success: false, error: 'AI_CIRCUIT_OPEN', diagnostics };
         }
-        return { success: false, error: 'All AI providers failed in cascade.' };
+        return { success: false, error: 'All AI providers failed in cascade.', diagnostics };
     }
 
     async callProviderWithTimeout(provider, rawText, systemPrompt, timeoutMs = 12000) {
@@ -114,7 +288,14 @@ export class UniversalAIRouter {
         try {
             return await this.executeProviderCall(provider, rawText, systemPrompt, controller.signal);
         } catch (err) {
-            if (err?.name === 'AbortError') throw new Error(`Timeout after ${timeoutMs}ms`);
+            if (err?.name === 'AbortError') {
+                throw this.providerFailure('AI provider request timed out', {
+                    providerCode: 'AI_TIMEOUT',
+                    retryable: true,
+                    errorClass: 'TIMEOUT',
+                    sanitizedMessage: `AI provider request timed out after ${timeoutMs}ms.`,
+                });
+            }
             throw err;
         } finally {
             clearTimeout(timeoutId);
@@ -123,7 +304,12 @@ export class UniversalAIRouter {
 
     requireModel(provider) {
         const model = String(provider?.model_name ?? '').trim();
-        if (!model) throw new Error('AI_MODEL_NOT_CONFIGURED');
+        if (!model) throw this.providerFailure('AI model not configured', {
+            providerCode: 'AI_MODEL_NOT_CONFIGURED',
+            retryable: false,
+            errorClass: 'CONFIG',
+            sanitizedMessage: 'AI provider model is not configured.',
+        });
         return model;
     }
 
@@ -147,7 +333,9 @@ export class UniversalAIRouter {
     async callGemini(provider, rawText, systemPrompt, signal) {
         const model = this.requireModel(provider);
         const key = provider.resolved_api_key;
-        if (!key) throw new Error('Gemini credential missing');
+        if (!key) throw this.providerFailure('Gemini credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'Gemini credential is not configured.',
+        });
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
         const payload = {
             contents: [{ parts: [{ text: `${systemPrompt}\n\nInput Signal:\n${rawText}` }] }],
@@ -162,10 +350,10 @@ export class UniversalAIRouter {
             body: JSON.stringify(payload),
             signal,
         });
-        if (!res.ok) throw new Error(`Gemini API HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Gemini API');
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     responseText(data = {}) {
@@ -183,7 +371,9 @@ export class UniversalAIRouter {
 
     async callOpenAIResponses(provider, rawText, systemPrompt, signal) {
         const key = provider.resolved_api_key;
-        if (!key) throw new Error('OpenAI credential missing');
+        if (!key) throw this.providerFailure('OpenAI credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'OpenAI credential is not configured.',
+        });
         let baseUrl = provider.base_url || 'https://api.openai.com/v1';
         if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
         const model = this.requireModel(provider);
@@ -201,17 +391,21 @@ export class UniversalAIRouter {
             }),
             signal,
         });
-        if (!res.ok) throw new Error(`OpenAI API HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'OpenAI API');
         const data = await res.json();
         const text = this.responseText(data);
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     async callAzureOpenAIResponses(provider, rawText, systemPrompt, signal) {
         const key = provider.resolved_api_key;
-        if (!key) throw new Error('Azure OpenAI credential missing');
+        if (!key) throw this.providerFailure('Azure OpenAI credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'Azure OpenAI credential is not configured.',
+        });
         let baseUrl = String(provider.base_url || '').trim();
-        if (!baseUrl) throw new Error('Azure OpenAI endpoint missing');
+        if (!baseUrl) throw this.providerFailure('Azure OpenAI endpoint missing', {
+            providerCode: 'AI_ENDPOINT_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Azure OpenAI endpoint is not configured.',
+        });
         if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
         const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
@@ -225,20 +419,26 @@ export class UniversalAIRouter {
             }),
             signal,
         });
-        if (!res.ok) throw new Error(`Azure OpenAI HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Azure OpenAI');
         const data = await res.json();
         const text = this.responseText(data);
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     async callVertexAI(provider, rawText, systemPrompt, signal) {
         const key = provider.resolved_api_key;
-        if (!key) throw new Error('Vertex AI OAuth credential missing');
+        if (!key) throw this.providerFailure('Vertex AI OAuth credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'Vertex AI OAuth credential is not configured.',
+        });
         const config = this.providerConfig(provider);
         const projectId = String(config.project_id ?? config.projectId ?? '').trim();
         const location = String(config.location ?? '').trim();
-        if (!projectId) throw new Error('Vertex AI project id missing');
-        if (!location) throw new Error('Vertex AI location missing');
+        if (!projectId) throw this.providerFailure('Vertex AI project id missing', {
+            providerCode: 'AI_PROJECT_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Vertex AI project is not configured.',
+        });
+        if (!location) throw this.providerFailure('Vertex AI location missing', {
+            providerCode: 'AI_LOCATION_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Vertex AI location is not configured.',
+        });
         const model = this.requireModel(provider);
         const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
         const payload = {
@@ -254,15 +454,17 @@ export class UniversalAIRouter {
             body: JSON.stringify(payload),
             signal,
         });
-        if (!res.ok) throw new Error(`Vertex AI HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Vertex AI');
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     async callOpenAICompatible(provider, rawText, systemPrompt, signal) {
         const key = provider.resolved_api_key;
-        if (!key) throw new Error(`${provider.provider_name} credential missing`);
+        if (!key) throw this.providerFailure(`${provider.provider_name} credential missing`, {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'AI provider credential is not configured.',
+        });
         let baseUrl = provider.base_url || 'https://api.openai.com/v1';
         if (!baseUrl.endsWith('/chat/completions')) {
             baseUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
@@ -285,17 +487,21 @@ export class UniversalAIRouter {
             }),
             signal,
         });
-        if (!res.ok) throw new Error(`${provider.provider_name} API HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, String(provider.provider_name || 'AI provider'));
         const data = await res.json();
         const text = data.choices?.[0]?.message?.content || '';
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     async callCloudflareAI(provider, rawText, systemPrompt, signal) {
         const accountId = String(provider.account_id ?? this.providerConfig(provider).account_id ?? '').trim();
         const key = provider.resolved_api_key;
-        if (!accountId) throw new Error('Cloudflare account id missing');
-        if (!key) throw new Error('Cloudflare AI credential missing');
+        if (!accountId) throw this.providerFailure('Cloudflare account id missing', {
+            providerCode: 'AI_ACCOUNT_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Cloudflare AI account ID is not configured.',
+        });
+        if (!key) throw this.providerFailure('Cloudflare AI credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'Cloudflare AI credential is not configured.',
+        });
         const model = this.requireModel(provider);
         const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
         const res = await this.fetchFn(url, {
@@ -312,10 +518,10 @@ export class UniversalAIRouter {
             }),
             signal,
         });
-        if (!res.ok) throw new Error(`Workers AI HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Workers AI');
         const data = await res.json();
         const text = data.result?.response || '';
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     utf8(value) {
@@ -344,18 +550,24 @@ export class UniversalAIRouter {
     async callBedrock(provider, rawText, systemPrompt, signal) {
         const config = this.providerConfig(provider);
         const region = String(config.region ?? '').trim();
-        if (!region) throw new Error('Bedrock region missing');
+        if (!region) throw this.providerFailure('Bedrock region missing', {
+            providerCode: 'AI_REGION_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'AWS Bedrock region is not configured.',
+        });
         const model = this.requireModel(provider);
         let credential;
         try {
             credential = JSON.parse(String(provider.resolved_api_key || ''));
         } catch {
-            throw new Error('Bedrock credential invalid');
+            throw this.providerFailure('Bedrock credential invalid', {
+                providerCode: 'AI_CREDENTIAL_INVALID', errorClass: 'CREDENTIAL', sanitizedMessage: 'AWS Bedrock credential is invalid.',
+            });
         }
         const accessKeyId = String(credential?.accessKeyId ?? credential?.access_key_id ?? '').trim();
         const secretAccessKey = String(credential?.secretAccessKey ?? credential?.secret_access_key ?? '').trim();
         const sessionToken = String(credential?.sessionToken ?? credential?.session_token ?? '').trim();
-        if (!accessKeyId || !secretAccessKey) throw new Error('Bedrock credential invalid');
+        if (!accessKeyId || !secretAccessKey) throw this.providerFailure('Bedrock credential invalid', {
+            providerCode: 'AI_CREDENTIAL_INVALID', errorClass: 'CREDENTIAL', sanitizedMessage: 'AWS Bedrock credential is invalid.',
+        });
 
         const host = `bedrock-runtime.${region}.amazonaws.com`;
         const canonicalUri = `/model/${model}/converse`;
@@ -388,10 +600,10 @@ export class UniversalAIRouter {
         if (sessionToken) headers['x-amz-security-token'] = sessionToken;
 
         const res = await this.fetchFn(url, { method: 'POST', headers, body: payload, signal });
-        if (!res.ok) throw new Error(`Bedrock HTTP ${res.status}: ${await res.text()}`);
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Bedrock');
         const data = await res.json();
         const text = data.output?.message?.content?.[0]?.text || '';
-        return { success: Boolean(text), text };
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
     cleanOutput(text) {
