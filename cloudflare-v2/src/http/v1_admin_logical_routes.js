@@ -100,6 +100,17 @@ async function validateAuthorityObjects(supabase, authorization, sourceConnectio
   return { ok: true };
 }
 
+async function readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId) {
+  const { data, error } = await supabase.from('source_destination_routes')
+    .select('id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters')
+    .eq('workspace_id', workspaceId)
+    .eq('source_connection_id', sourceConnectionId)
+    .eq('destination_id', destinationId)
+    .order('priority', { ascending: true });
+  if (error) throw new Error('LOGICAL_ROUTE_READ_FAILED');
+  return data || [];
+}
+
 async function reconcileLogicalRoute(request, authorization, supabase) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
@@ -107,6 +118,9 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
 
   const sourceConnectionId = text(body.sourceConnectionId ?? body.source_connection_id);
   const destinationId = text(body.destinationId ?? body.destination_id);
+  const previousSourceConnectionId = text(body.previousSourceConnectionId ?? body.previous_source_connection_id) || sourceConnectionId;
+  const previousDestinationId = text(body.previousDestinationId ?? body.previous_destination_id) || destinationId;
+  const moving = previousSourceConnectionId !== sourceConnectionId || previousDestinationId !== destinationId;
   const mode = text(body.mode).toLowerCase();
   if (!sourceConnectionId) return json({ ok: false, reason: 'SOURCE_CONNECTION_REQUIRED' }, 400);
   if (!destinationId) return json({ ok: false, reason: 'DESTINATION_REQUIRED' }, 400);
@@ -128,18 +142,26 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_AUTHORITY_LOOKUP_FAILED' }, 503); }
   if (!authority.ok) return json({ ok: false, reason: authority.reason }, authority.status);
 
-  const { data: existingRows, error: readError } = await supabase.from('source_destination_routes')
-    .select('id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters')
-    .eq('workspace_id', workspaceId)
-    .eq('source_connection_id', sourceConnectionId)
-    .eq('destination_id', destinationId)
-    .order('priority', { ascending: true });
-  if (readError) return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503);
+  let existingRows;
+  try { existingRows = await readRoutePair(supabase, workspaceId, previousSourceConnectionId, previousDestinationId); }
+  catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
+
+  if (moving) {
+    if (!existingRows.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
+    let targetRows;
+    try { targetRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId); }
+    catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
+    if (targetRows.length) {
+      return json({ ok: false, reason: 'LOGICAL_ROUTE_TARGET_EXISTS' }, 409);
+    }
+  }
 
   let plan;
   try {
     plan = planLogicalRouteReconcile({
-      existingRows: existingRows || [],
+      existingRows,
+      sourceConnectionId,
+      destinationId,
       mode,
       selectedFeedIds,
       settings: {
@@ -173,8 +195,8 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   for (const item of plan.inserts) {
     const { error } = await supabase.from('source_destination_routes').insert({
       workspace_id: workspaceId,
-      source_connection_id: sourceConnectionId,
-      destination_id: destinationId,
+      source_connection_id: item.source_connection_id || sourceConnectionId,
+      destination_id: item.destination_id || destinationId,
       source_feed_id: item.source_feed_id,
       route_name: item.route_name,
       priority: item.priority,
