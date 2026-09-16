@@ -5,6 +5,8 @@ import { normalizeCurrentMarketAliases } from '../normalization/current_market_a
 import { recoverKnownNaturalLanguageSignal, recoverMaterialSignalFallback } from './relaxed_signal_recovery.js';
 
 const INTERPRETER_PROMPT = `Return JSON only. Classify the trading message into one of: NEW_SIGNAL, MANAGEMENT, NON_ACTIONABLE. For NEW_SIGNAL use fields: side BUY|SELL, symbol, order_type MARKET|LIMIT|STOP|STOP_LIMIT, entry (number, {min,max}, or null for current market), stop_loss (number|null), take_profits (number array), fast_entry (boolean). Never invent missing numeric prices. If uncertain return {"event_type":"NON_ACTIONABLE"}.`;
+const NATURAL_LANGUAGE_RECOVERY_MARKER = /\b(?:AROUND|NEAR|ABOUT|PROTECT|PROTECTION|RISK|OBJECTIVE|OBJECTIVES|AIM|AIMS|TARGET|TARGETS|SETUP|LOOKS?|GOOD|HERE|UNDER|ABOVE|BELOW|THEN|LET\s+IT\s+RUN)\b/i;
+const EXPLICIT_SIGNAL_STRUCTURE = /\b(?:ENTRY(?:\s+(?:PRICE|ZONE))?|SL|S\s*\/\s*L|STOP\s+LOSS|TP(?:[1-9]\d*)?|T\s*\/\s*P|TAKE\s+PROFIT|MARKET|NOW|CMP|CURRENT\s+(?:MARKET|MKT|PRICE))\b/i;
 
 function parseJson(text) {
   const cleaned = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -78,6 +80,14 @@ function deterministicFallback(event, reason, detail = null) {
   };
 }
 
+function trustIncompleteMachinePlan(text, intent = {}) {
+  if (intent.fastEntry) return true;
+  const source = String(text ?? '');
+  if (NATURAL_LANGUAGE_RECOVERY_MARKER.test(source)) return false;
+  if (EXPLICIT_SIGNAL_STRUCTURE.test(source)) return true;
+  return intent?.entry?.kind === 'PRICE' || intent?.entry?.kind === 'RANGE';
+}
+
 export async function interpretTradingEvent(event = {}, {
   aiRouter,
   aiRouterFactory,
@@ -96,9 +106,12 @@ export async function interpretTradingEvent(event = {}, {
     if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
       const recovered = recoverKnownNaturalLanguageSignal(deterministicText);
       if (recovered) return { status: 'READY', source: 'deterministic_relaxed', intent: recovered };
+      if (trustIncompleteMachinePlan(deterministicText, deterministic.intent)) {
+        return { ...deterministic, source: 'deterministic' };
+      }
+    } else {
       return { ...deterministic, source: 'deterministic' };
     }
-    return { ...deterministic, source: 'deterministic' };
   }
 
   const relaxedIntent = recoverKnownNaturalLanguageSignal(deterministicText);
