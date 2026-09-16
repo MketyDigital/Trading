@@ -24,6 +24,12 @@ test('route editor visibly explains strict selective behavior', () => {
   assert.match(html, /Existing routes use this same editor/i);
 });
 
+test('editing a logical route preserves and submits the exact underlying route ids', () => {
+  const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
+  assert.match(html, /routeIds:r\.routeIds\|\|\[\]/);
+  assert.match(html, /previousRouteIds:state\.editingRouteOriginal&&state\.editingRouteOriginal\.routeIds\|\|\[\]/);
+});
+
 test('destination formatting UI exposes all four ready-made modes in plain language', () => {
   const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
   assert.match(html, /Forward as-is \(original\)/i);
