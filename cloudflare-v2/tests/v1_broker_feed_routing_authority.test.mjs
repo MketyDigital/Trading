@@ -21,7 +21,7 @@ function account(id, platform = 'ctrader') {
     lot_sizing_type: 'fixed',
     lot_value: 0.01,
     is_active: true,
-    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD' }] },
+    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD' }, { platformSymbol: 'Volatility 75 Index', canonicalSymbol: 'DERIV:VOLATILITY_75' }] },
   };
 }
 
@@ -66,7 +66,7 @@ const telegramEvent = {
   metadata: { native_identity: { chat_id: '-100200' } },
 };
 
-test('broker planning uses feed-specific routes instead of legacy parent routes when the incoming Telegram chat has scoped routes', async () => {
+test('feed-selective routing for one destination does not suppress an unrelated all-channels destination', async () => {
   const supabase = supabaseFor({
     routes: [
       { destination_id: 'dest-default', priority: 1, source_feed_id: null, filters: {} },
@@ -86,7 +86,31 @@ test('broker planning uses feed-specific routes instead of legacy parent routes 
   });
 
   const routed = await deps.accountProvider();
-  assert.deepEqual(routed.map((row) => row.id), ['acct-feed']);
+  assert.deepEqual(routed.map((row) => row.id), ['acct-default', 'acct-feed']);
+});
+
+test('unselected feed cannot inherit legacy default for the same selective destination', async () => {
+  const supabase = supabaseFor({
+    routes: [
+      { destination_id: 'dest-selective', priority: 1, source_feed_id: null, filters: {} },
+      { destination_id: 'dest-selective', priority: 2, source_feed_id: 'feed-2', filters: {} },
+      { destination_id: 'dest-other', priority: 3, source_feed_id: null, filters: {} },
+    ],
+    feed: { id: 'feed-1' },
+    destinations: [
+      { id: 'dest-selective', destination_ref: 'acct-selective', destination_type: 'broker_account', is_active: true },
+      { id: 'dest-other', destination_ref: 'acct-other', destination_type: 'broker_account', is_active: true },
+    ],
+    accounts: [account('acct-selective', 'mt5'), account('acct-other')],
+  });
+
+  const deps = await createV1SimulationDependencies({
+    env: env(), supabase, sourceId: 'source-1', event: telegramEvent,
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' } } },
+  });
+
+  const routed = await deps.accountProvider();
+  assert.deepEqual(routed.map((row) => row.id), ['acct-other']);
 });
 
 test('broker planning applies feed route canonical-symbol filters before accounts enter planning', async () => {

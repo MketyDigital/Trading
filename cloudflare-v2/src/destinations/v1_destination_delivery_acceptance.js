@@ -1,7 +1,28 @@
 import { runV1DestinationDeliveryStage } from './v1_destination_delivery_stage.js';
 import { sendTelegramDestination } from './telegram_destination.js';
 
+const READY_MADE_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
+
 function text(value) { return String(value ?? '').trim(); }
+
+function safeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function withDestinationFormattingMode(row = {}) {
+  const settings = safeObject(row.settings);
+  const requested = text(settings.formattingMode ?? settings.formatting_mode).toLowerCase();
+  if (READY_MADE_FORMAT_MODES.has(requested)) {
+    const template = { ...safeObject(row.template), formatting_mode: requested, formattingMode: requested };
+    if (requested === 'none' || requested === 'clean') {
+      template.parse_mode = 'plain';
+      template.parseMode = 'plain';
+    }
+    return { ...row, template };
+  }
+  if (row.template) return row;
+  return { ...row, template: { formatting_mode: 'none', parse_mode: 'plain' } };
+}
 
 function replyExternalEventId(event = {}) {
   const direct = text(event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId);
@@ -85,8 +106,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
       return (rows || []).map((row) => {
         if (String(row?.destination_type ?? row?.destinationType ?? '').toLowerCase() !== 'telegram') return row;
         routedByChatId.set(text(row.destination_ref ?? row.destinationRef), row);
-        if (row.template) return row;
-        return { ...row, template: { formatting_mode: 'none', parse_mode: 'plain' } };
+        return withDestinationFormattingMode(row);
       });
     },
   } : baseStore;

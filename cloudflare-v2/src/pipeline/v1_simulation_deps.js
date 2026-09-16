@@ -5,6 +5,7 @@ import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
 import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
 import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
 import { evaluateRouteFilters } from '../destinations/route_filters.js';
+import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -148,9 +149,6 @@ async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountC
       if (!Array.isArray(hydrated?.catalog) || hydrated.catalog.length === 0) return account;
       return await persistAccountCatalog(supabase, account, hydrated);
     } catch {
-      // Keep the account in the routing set. The existing destination-symbol gate
-      // will fail this destination closed without preventing other routed brokers
-      // from being evaluated.
       return account;
     }
   }));
@@ -207,12 +205,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     feedId = text(feed?.id) || null;
   }
 
-  const feedRoutes = feedId
-    ? routes.filter((row) => text(row.source_feed_id) === feedId)
-    : [];
-  const selectedRoutes = feedRoutes.length
-    ? feedRoutes
-    : routes.filter((row) => !text(row.source_feed_id));
+  const selectedRoutes = selectAuthorizedRoutesForFeed(routes, feedId);
   if (!selectedRoutes.length) return [];
 
   const destinationIds = selectedRoutes.map((row) => text(row.destination_id)).filter(Boolean);

@@ -1,5 +1,6 @@
 import { decryptSecret } from '../security/secret_box.js';
 import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
+import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
 import { formatTelegramDestinationMessage } from './formatting.js';
 import { evaluateRouteFilters } from './route_filters.js';
 import { renderTelegramDestination } from './telegram_presentation.js';
@@ -16,6 +17,7 @@ const TEMPLATE_SELECT = [
 ].join(',');
 
 const WEBHOOK_MODES = new Set(['mkety_signed', 'raw_text', 'raw_json']);
+const TELEGRAM_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
 
 function text(value) {
   return String(value ?? '').trim();
@@ -249,12 +251,7 @@ export function createV1DestinationDeliveryStore(supabase) {
       }
 
       const routes = Array.isArray(allRoutes) ? allRoutes : [];
-      const feedRoutes = feedId
-        ? routes.filter((row) => text(row.source_feed_id) === feedId)
-        : [];
-      const selectedRoutes = feedRoutes.length
-        ? feedRoutes
-        : routes.filter((row) => !text(row.source_feed_id));
+      const selectedRoutes = selectAuthorizedRoutesForFeed(routes, feedId);
       if (!selectedRoutes.length) return [];
 
       const orderedIds = selectedRoutes.map((row) => text(row.destination_id)).filter(Boolean);
@@ -383,7 +380,11 @@ function cleanRawFallback(event, template, deps) {
 
 async function formatTelegramForDelivery({ destination, event, interpretation }, deps) {
   const template = safeObject(destination.template);
-  const mode = text(template.formatting_mode ?? template.formattingMode) || 'template';
+  const settings = safeObject(destination.settings);
+  const requestedMode = text(settings.formattingMode ?? settings.formatting_mode).toLowerCase();
+  const mode = TELEGRAM_FORMAT_MODES.has(requestedMode)
+    ? requestedMode
+    : (text(template.formatting_mode ?? template.formattingMode) || 'template');
 
   if (mode !== 'ai_then_fallback') {
     const formatted = deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
@@ -393,8 +394,6 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
     return formatted;
   }
 
-  // Ambiguous/non-canonical signals are still useful to Telegram humans. Never let
-  // presentation AI invent trade semantics when canonical intent is unavailable.
   if (!interpretation?.intent && interpretation?.status !== 'MANAGEMENT' && !interpretation?.management) {
     const raw = cleanRawFallback(event, template, deps);
     return { ok: Boolean(text(raw.text)), ...raw, fallbackReason: 'CANONICAL_INTENT_UNAVAILABLE' };

@@ -2,6 +2,62 @@
 
 Read root `AGENTS.md` first. This file records the newest verified release state. Exact older handoff history remains preserved under `docs/archive/` and in dated design/runbook documents.
 
+## Active release candidate — PR #98, 2026-09-16
+
+Branch: `feat/multiselect-routes-forward-as-is`
+
+Latest verified implementation checkpoint before this documentation commit:
+
+- `977dfaac78ad534ba41c92897ab224ca38c1c37b`
+- Trading V1 CI `#2809` — success
+- Worker/trading-core tests — success
+- pure MT5 bridge tests — success
+- pure MTProto Python tests — success
+
+This branch is **not production authority until merged and deployed**. Production remains the `main` state documented below.
+
+### Logical multi-feed routing
+
+The Connections portal now edits routing as a logical source → destination relationship rather than exposing one raw route row per Telegram feed.
+
+For one source connection and one destination, the operator explicitly chooses either:
+
+- **All channels from this source** — connection-wide/default behavior; or
+- **Selective channels/feeds** — one or more checked child feeds only.
+
+Selective authority is strict **for that source → destination pair**. Once selective rows exist for a destination, an unchecked feed cannot inherit a legacy/default row to that same destination. Unrelated destinations remain independent, so one destination may be selective while another remains all-channels.
+
+Destination delivery and broker-account planning use the same shared resolver in `cloudflare-v2/src/routes/logical_route_scope.js`; UI routing and broker routing must not diverge.
+
+Existing routes use the same editor as new routes. Compatible feed-scoped rows are presented as one multi-select logical route and existing route row IDs are reused where possible. Moving an existing logical route to another source/destination reuses its rows after validating the target and rejects a target collision instead of leaving a duplicate old route behind.
+
+Historical rows with incompatible settings are not silently normalized merely by viewing them. They remain flagged as mixed legacy state and require an explicit operator confirmation before a save normalizes their common settings.
+
+### Symbol filters
+
+Blank Allowed Symbols + blank Blocked Symbols means **no route-level narrowing**. The destination account's authoritative symbol catalog, aliases, risk limits, environment, runtime gates and broker capabilities remain final authority.
+
+Allowed/blocked canonical-symbol filters may only narrow a destination. They cannot make an unsupported symbol tradable. Instrument eligibility remains capability-driven rather than hard-coded by MT5/cTrader or broker brand.
+
+### Telegram destination formatting
+
+The portal exposes four ready-made modes:
+
+- **Forward as-is (original)** — `none`; no AI, cleanup, deterministic reconstruction, branding, header, footer or disclaimer;
+- **Clean original** — `clean`; deterministic cleanup only;
+- **Structured template** — `template`; deterministic configured presentation;
+- **AI presentation + safe fallback** — `ai_then_fallback`; presentation AI only, with deterministic fallback and no authority to change canonical trading meaning.
+
+A valid destination-level formatting selection overrides an attached template's mode. `inherit`, invalid or absent override preserves the saved template behavior. Telegram endpoint identity and saved reusable bot credentials are preserved when formatting/template settings are edited.
+
+`Forward as-is` still uses the mature delivery path: the original source text is sent as stored and native Telegram entities are retained when available. It does not alter broker execution semantics.
+
+### Non-regression scope frozen by this branch
+
+The implementation intentionally leaves the established execution/management engine in place. Full branch CI remains the release gate for signal execution, fast/follow-up handling, reply/thread correlation, management actions, replay/idempotency, reconciliation, independent destination fanout, cTrader, MT5, MTProto and capability-driven symbols.
+
+LIVE remains outside this change. Do not mutate global LIVE, workspace `liveExecution`, or LIVE-account execution flags while finishing this release.
+
 ## Production state — 2026-09-16
 
 Latest production `main` commit:
