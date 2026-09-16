@@ -6,8 +6,8 @@ Draft PR: `#101`
 
 ## Latest implementation checkpoint — 2026-09-16
 
-Exact verified branch head for this checkpoint: `bcc50cd8b6fdcaf3c1a8ecdb7c262ab48c43f822`.
-Trading V1 CI `#2887` passed Worker/trading-core, MT5 bridge and MTProto suites on that exact head.
+Exact verified branch head for this checkpoint: `1c268972bc47595b08669a6e65b7d7e1606fe950`.
+Trading V1 CI `#2901` passed Worker/trading-core, MT5 bridge and MTProto suites on that exact head.
 
 Verified work now completed on the continuation branch:
 
@@ -31,7 +31,7 @@ Verified work now completed on the continuation branch:
 - omission of SL/TP in edited signal text is not treated as destructive removal;
 - edits that change trade identity/structure fail closed for review rather than mutating/opening another trade;
 - edit management fans across broker-bound groups for the same logical cohort while preserving each broker position identity;
-- broker idempotency for revisions now uses `metadata.source_revision_key`, so different edits of one Telegram message produce distinct broker action keys while retrying the same revision remains stable;
+- broker idempotency for revisions uses `metadata.source_revision_key`, so different edits of one Telegram message produce distinct broker action keys while retrying the same revision remains stable;
 - deterministic management parsing covers explicit SL/TP update/remove and partial-close variants while conditional/negated text remains fail-closed;
 - source replies and guarded no-reply context correlation remain intact;
 - Telegram destination `editMessageText` support is implemented, preserving destination message identity and native entities when available;
@@ -41,11 +41,43 @@ Verified work now completed on the continuation branch:
 - full-close state regression coverage confirms status `CLOSED`, remaining lots `0`, `closedAt` populated, and original opening broker identity/fill retained;
 - compatibility shim `src/pipeline/protection_validation_policy.js` intentionally leaves semantic authority to pre-planning execution protection policy and must not become a second geometry authority.
 
+### AI provider authority + diagnostics checkpoint
+
+Task 3 from `docs/superpowers/plans/2026-09-16-cmp-telegram-ai-observability-stabilization.md` is now implemented and green on the continuation branch.
+
+Verified provider/runtime behavior:
+
+- first-class provider transports exist for `openai`, `azure_openai`, `gemini`, `vertex_ai`, `cloudflare_ai`/`workers_ai`, and `aws_bedrock`;
+- OpenAI uses the Responses API path;
+- Azure OpenAI uses the configured Azure v1 Responses endpoint with `api-key` authentication;
+- Gemini sends the API key in `x-goog-api-key`, not in the request URL;
+- Vertex AI uses DB-backed project/location config and OAuth bearer credential material;
+- Cloudflare AI requires persisted provider account ID and no longer falls back to `CLOUDFLARE_ACCOUNT_ID` from runtime environment;
+- AWS Bedrock uses regional Converse requests with deterministic SigV4 signing and encrypted credential material resolved at runtime;
+- migration `0040_ai_provider_authority.sql` adds `provider_config`, removes the legacy plaintext `api_key NOT NULL` requirement, and reconciles provider-name constraints;
+- new admin provider writes encrypt credentials into `api_key_ciphertext`; plaintext columns remain compatibility-read only;
+- provider-specific non-secret config is whitelisted before persistence/public output (`vertex_ai`: project/location; `aws_bedrock`: region);
+- per-attempt AI diagnostics now preserve provider ID/type/model, outcome, latency, HTTP status when actually present, provider code, retryability, error class, and sanitized message;
+- raw provider response bodies, authorization values and configured credentials are not returned as diagnostics;
+- missing HTTP status stays absent rather than being coerced to `0` through `Number(null)`;
+- `POST /api/v1/admin/ai-providers/:id/test` is workspace-scoped, reuses provider authority, persists only a sanitized health diagnostic, and never returns stored credential material;
+- migration `0041_ai_provider_health.sql` adds the durable latest-health fields;
+- CI `#2889` proved the provider contract regressions RED;
+- CI `#2891` proved the first-class provider transports green;
+- CI `#2892` proved admin/schema provider authority RED;
+- CI `#2894` proved admin/schema authority green;
+- CI `#2895` proved normalized provider diagnostics RED;
+- CI `#2896` proved normalized provider diagnostics green;
+- CI `#2897` proved the nullable HTTP-status regression RED;
+- CI `#2901` passed Worker/trading-core, MT5 bridge and MTProto suites on the combined provider authority/diagnostic/health head.
+
+These are branch-verified capabilities only. They are not production authority until reviewed/merged/deployed from `main` and accepted under the normal safety process.
+
 Still pending before completion:
 
-1. verify reply/edit/context management through controlled real DEMO cTrader and MT5 acceptance after fresh authority checks;
-2. integrate normalized Operations/Admin journal visibility for revisions, skipped fields and edit/reply delivery outcomes;
-3. continue DB-authoritative AI provider/health/diagnostic Tasks 3–7 from the prior AI observability handoff;
+1. integrate the normalized append-only Operations journal as evidence only; it must not replace `destination_deliveries`, broker state, source idempotency, or any resend/retry authority;
+2. expose customer Operations through workspace-safe serializers and Mkety Admin through site-wide sanitized diagnostics without plaintext secrets;
+3. verify reply/edit/context management through controlled real DEMO cTrader and MT5 acceptance after fresh authority checks;
 4. run focused and full CI on each exact final head;
 5. run controlled real DEMO acceptance with fresh runtime/account/route checks and zero-LIVE audit;
 6. update root `AGENTS.md`, `CURRENT_HANDOFF.md`, and this handoff with exact final commit/CI/DEMO evidence before considering merge/release.
@@ -163,10 +195,11 @@ Use TDD.
 4. field-level SL/TP validation classification + persisted policy — core execution implementation green; operations/UI exposure still pending;
 5. revision-aware source event/idempotency model — implemented/green through CI `#2887`;
 6. semantic revision diff -> management lifecycle — implemented/green through CI `#2887`;
-7. Telegram destination edit operation preserving message mapping and formatting mode — implemented/green in CI `#2869` and retained through CI `#2887`;
+7. Telegram destination edit operation preserving message mapping and formatting mode — implemented/green in CI `#2869` and retained through CI `#2901`;
 8. reply/context non-regression — covered in automated suites; controlled DEMO acceptance still pending;
-9. operations journal integration — pending;
-10. continue AI provider/observability Tasks 3–7 from the prior handoff — next active scope;
-11. focused/full CI — continue after each TDD checkpoint;
-12. controlled real DEMO acceptance — pending;
-13. update root `AGENTS.md`, `CURRENT_HANDOFF.md`, and active handoffs with exact final commit/CI/evidence — pending final verified state.
+9. AI provider authority/transports/diagnostics/health — implemented/green through CI `#2901`;
+10. normalized Operations journal integration — next active scope;
+11. customer Operations + Mkety Admin serializers/views — pending;
+12. focused/full CI — continue after each TDD checkpoint;
+13. controlled real DEMO acceptance — pending;
+14. final root `AGENTS.md`, `CURRENT_HANDOFF.md`, and active handoff update with exact final CI/DEMO evidence — pending final verified state.
