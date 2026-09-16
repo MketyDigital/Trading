@@ -67,16 +67,34 @@ function realWorldManagementAlias(text) {
   return null;
 }
 
-function deterministicFallback(event, reason, detail = null) {
+function aiContext(ai, { error = null } = {}) {
+  if (!ai || typeof ai !== 'object') return null;
+  const context = {
+    provider: ai.provider ?? null,
+    model: ai.model ?? null,
+    diagnostics: Array.isArray(ai.diagnostics) ? ai.diagnostics : [],
+  };
+  if (error) context.error = error;
+  return context;
+}
+
+function deterministicFallback(event, reason, detail = null, ai = null) {
   const intent = recoverMaterialSignalFallback(event?.text);
+  const aiMeta = aiContext(ai, { error: detail || reason });
   if (!intent) {
-    return { status: 'NEEDS_REVIEW', source: 'fallback', reason: detail || reason };
+    return {
+      status: 'NEEDS_REVIEW',
+      source: 'fallback',
+      reason: detail || reason,
+      ...(aiMeta ? { ai: aiMeta } : {}),
+    };
   }
   return {
     status: 'READY',
     source: 'deterministic_fallback',
     intent,
     fallback: { reason, detail: detail || null },
+    ...(aiMeta ? { ai: aiMeta } : {}),
   };
 }
 
@@ -143,27 +161,27 @@ export async function interpretTradingEvent(event = {}, {
   }
 
   if (!ai?.success) {
-    return deterministicFallback(event, 'AI interpretation failed', ai?.error);
+    return deterministicFallback(event, 'AI interpretation failed', ai?.error, ai);
   }
 
   try {
     const payload = parseJson(ai.text);
     if (payload.event_type !== 'NEW_SIGNAL') {
-      return deterministicFallback(event, 'unsupported AI event type');
+      return deterministicFallback(event, 'unsupported AI event type', null, ai);
     }
     const intent = normalizeAiSignal(payload);
     const validation = validateCanonicalSignalIntent(intent, { rawText: event.text });
     if (!validation.ok) {
-      return deterministicFallback(event, 'AI hard validation conflict', validation.reason);
+      return deterministicFallback(event, 'AI hard validation conflict', validation.reason, ai);
     }
     return {
       status: 'READY',
       source: 'ai',
       intent,
       validationWarnings: validation.warnings || [],
-      ai: { provider: ai.provider ?? null, model: ai.model ?? null },
+      ai: aiContext(ai),
     };
   } catch (error) {
-    return deterministicFallback(event, 'invalid AI output', error?.message || 'invalid AI output');
+    return deterministicFallback(event, 'invalid AI output', error?.message || 'invalid AI output', ai);
   }
 }
