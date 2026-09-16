@@ -73,3 +73,18 @@ test('converting selective to all reuses one route id and removes siblings', () 
   assert.deepEqual(plan.deleteIds, ['route-b']);
   assert.deepEqual(plan.inserts, []);
 });
+
+test('moving a logical route to another source or destination preserves reusable route ids', () => {
+  const plan = planLogicalRouteReconcile({
+    existingRows: [row('route-a', 'feed-a'), row('route-b', 'feed-b')],
+    sourceConnectionId: 'source-secondary',
+    destinationId: 'dest-ctrader',
+    mode: 'selective',
+    selectedFeedIds: ['feed-x', 'feed-y'],
+    settings: { routeName: 'Moved route', priority: 25, filters: {}, enabled: true },
+  });
+  assert.deepEqual(plan.updates.map((item) => item.id), ['route-a', 'route-b']);
+  assert.deepEqual(plan.updates.map((item) => item.patch.source_connection_id), ['source-secondary', 'source-secondary']);
+  assert.deepEqual(plan.updates.map((item) => item.patch.destination_id), ['dest-ctrader', 'dest-ctrader']);
+  assert.deepEqual(plan.updates.map((item) => item.patch.source_feed_id), ['feed-x', 'feed-y']);
+});
