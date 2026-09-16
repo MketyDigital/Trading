@@ -1,3 +1,33 @@
+function accessRowTimestamp(row = {}) {
+  const raw = row.updatedAt ?? row.createdAt ?? row.lastRedeemedAt ?? row.expiresAt ?? null;
+  const parsed = Date.parse(String(raw ?? ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function accessRowRank(row = {}) {
+  return String(row.status ?? '').trim().toLowerCase() === 'active' ? 2 : 1;
+}
+
+export function collapseMketyWorkspaceAccessRows(codes = []) {
+  const map = new Map();
+  for (const code of Array.isArray(codes) ? codes : []) {
+    const key = String(code?.workspaceId ?? code?.id ?? '').trim();
+    if (!key) continue;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...code, historyCount: 1 });
+      continue;
+    }
+
+    const historyCount = Number(existing.historyCount || 1) + 1;
+    const candidateWins = accessRowRank(code) > accessRowRank(existing)
+      || (accessRowRank(code) === accessRowRank(existing) && accessRowTimestamp(code) > accessRowTimestamp(existing));
+    if (candidateWins) map.set(key, { ...code, historyCount });
+    else existing.historyCount = historyCount;
+  }
+  return [...map.values()];
+}
+
 export function renderMketyAdminAccessCodesPage() {
   return `<!doctype html>
 <html lang="en">
@@ -34,7 +64,7 @@ const headers=(json=false)=>{const h={'X-Mkety-Admin-Secret':$('staffSecret').va
 async function request(path,options={}){const r=await fetch(path,options);let b={};try{b=await r.json()}catch{}if(!r.ok||!b.ok)throw new Error(b.reason||('HTTP '+r.status));return b}
 function summary(e={}){const a=[];if(e.tradingExecutionDestination)a.push('Trading execution');if(e.telegramDestination||(Array.isArray(e.destinations)&&e.destinations.includes('telegram')))a.push('Telegram');if(e.customSubdomain)a.push('Subdomain');if(e.customHostname)a.push('Hostname');return a.length?a.join(', '):'Restricted'}
 function effectiveStatus(x){if(x.status==='active'&&x.expiresAt&&new Date(x.expiresAt).getTime()<=Date.now())return'expired';return x.status||'unknown'}
-function collapseWorkspaces(codes){const map=new Map();for(const code of codes){const key=String(code.workspaceId||code.id||'');if(!map.has(key))map.set(key,{...code,historyCount:1});else map.get(key).historyCount+=1}return[...map.values()]}
+function rowTime(x){const t=Date.parse(String(x.updatedAt||x.createdAt||x.lastRedeemedAt||x.expiresAt||''));return Number.isFinite(t)?t:0}function rowRank(x){return String(x.status||'').toLowerCase()==='active'?2:1}function collapseWorkspaces(codes){const map=new Map();for(const code of codes){const key=String(code.workspaceId||code.id||'').trim();if(!key)continue;const current=map.get(key);if(!current){map.set(key,{...code,historyCount:1});continue}const count=Number(current.historyCount||1)+1;const wins=rowRank(code)>rowRank(current)||(rowRank(code)===rowRank(current)&&rowTime(code)>rowTime(current));if(wins)map.set(key,{...code,historyCount:count});else current.historyCount=count}return[...map.values()]}
 function state(id,on){const n=$(id);n.textContent='State: '+(on?'ON':'OFF');n.className='state '+(on?'state-on':'state-off')}
 function renderRuntime(b){const t=b.tradingAccessEnabled===true,x=b.brokerExecutionEnabled===true,l=b.liveBrokerExecutionEnabled===true,e=b.effectiveBrokerExecutionEnabled===true,el=b.effectiveLiveBrokerExecutionEnabled===true;state('tradingSystemStatus',t);state('brokerStatus',x);state('liveBrokerStatus',l);$('effectiveStatus').textContent='Effective broker execution: '+(e?'ON':'BLOCKED');$('effectiveLiveStatus').textContent='Effective live execution: '+(el?'ON':'BLOCKED');$('brokerSafetyMessage').className=el?'warning':'okbox';$('brokerSafetyMessage').textContent=el?'LIVE MONEY EXECUTION IS ENABLED. Disable it unless explicitly approved for production.':!t?'Trading system is OFF.':!x?'Trading system is ON, but broker execution is globally blocked.':l?'Broker execution and LIVE are ON.':'Demo-ready posture: broker execution can run while LIVE remains OFF.'}
 async function refreshRuntime(){renderRuntime(await request(RUNTIME_API,{headers:headers()}))}
