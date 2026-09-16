@@ -212,6 +212,20 @@ def _is_receive_timeout(exc):
     return isinstance(exc, TimeoutError) or type(exc).__name__ in {'WebSocketTimeoutException', 'TimeoutError'}
 
 
+def initialize_terminal(mt5, terminal_path=None):
+    """Initialize exactly one MT5 installation when a terminal path is supplied.
+
+    Omitting the path preserves the historical MetaTrader5 auto-discovery behavior.
+    This explicit boundary is what allows several connector processes on one VPS
+    to bind deterministically to separate broker terminal installations.
+    """
+    path = str(terminal_path or '').strip()
+    initialized = mt5.initialize(path=path) if path else mt5.initialize()
+    if not initialized:
+        raise RuntimeError(f'MT5 initialize failed: {mt5.last_error()}')
+    return True
+
+
 class MketyMt5Connector:
     def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS,
                  symbol_refresh_seconds=DEFAULT_SYMBOL_REFRESH_SECONDS, config_path=None):
@@ -346,6 +360,8 @@ def parse_args(argv=None):
     parser.add_argument('--gateway', default=None, help=f'Mkety gateway (default {DEFAULT_GATEWAY})')
     parser.add_argument('--token', default=None, help='Pairing/reconnect connection token from Mkety Trading')
     parser.add_argument('--config', default=str(default_config_path()), help='Local protected connector configuration path')
+    parser.add_argument('--terminal', default=None, help='Exact terminal64.exe path for this broker/account instance')
+    parser.add_argument('--ledger', default=None, help='Replay ledger SQLite path for this connector instance')
     parser.add_argument('--reset', action='store_true', help='Forget local connector pairing and require a new token')
     return parser.parse_args(argv)
 
@@ -382,10 +398,15 @@ def main(argv=None):
 
     import MetaTrader5 as mt5
     import websocket
-    if not mt5.initialize():
-        raise RuntimeError(f'MT5 initialize failed: {mt5.last_error()}')
+    initialize_terminal(mt5, args.terminal)
     try:
-        connector = MketyMt5Connector(mt5, websocket.create_connection, config, config_path=Path(args.config))
+        connector = MketyMt5Connector(
+            mt5,
+            websocket.create_connection,
+            config,
+            ledger_path=Path(args.ledger) if args.ledger else None,
+            config_path=Path(args.config),
+        )
         connector.run_forever()
     finally:
         mt5.shutdown()
