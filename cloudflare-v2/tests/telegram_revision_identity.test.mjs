@@ -52,7 +52,7 @@ test('Telegram Bot edit preserves stable native identity and declares exact edit
   assert.equal(queued[0].external_event_id, '-100123:317');
   assert.deepEqual(queued[0].metadata.native_identity, { chat_id: '-100123', message_id: '317' });
   assert.equal(queued[0].metadata.telegram_update_kind, 'edited_channel_post');
-  assert.equal(queued[0].thread.edited_event_id, '317');
+  assert.equal(queued[0].thread.edited_event_id, '-100123:317');
 });
 
 test('revision key is stable for exact replay and changes when edited content changes', async () => {
@@ -62,7 +62,7 @@ test('revision key is stable for exact replay and changes when edited content ch
     occurred_at: '2026-09-16T20:21:00.000Z',
     text: 'SELL XAUUSD ENTRY 4275 SL 4380',
     structured_payload: {},
-    thread: { edited_event_id: 'telegram:-100123:317' },
+    thread: { edited_event_id: '-100123:317' },
     metadata: {
       telegram_update_kind: 'edited_channel_post',
       telegram_update_id: 901,
