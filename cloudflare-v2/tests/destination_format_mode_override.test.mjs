@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runV1DestinationDeliveryStage } from '../src/destinations/v1_destination_delivery_stage.js';
+import { runV1DestinationDeliveryAcceptanceStage } from '../src/destinations/v1_destination_delivery_acceptance.js';
 
 const raw = '  BUY XAUUSD NOW\nTP 2500  ';
 
@@ -15,7 +15,7 @@ function destinationStore(destination) {
 test('destination Forward as-is override wins over an attached structured template', async () => {
   let formattingMode = null;
   let sentText = null;
-  const result = await runV1DestinationDeliveryStage({
+  const result = await runV1DestinationDeliveryAcceptanceStage({
     workspaceId: 'ws-1',
     sourceId: 'source-1',
     event: { text: raw, metadata: {} },
@@ -41,9 +41,9 @@ test('destination Forward as-is override wins over an attached structured templa
   assert.equal(sentText, raw);
 });
 
-test('invalid or absent destination formatting override preserves attached template mode', async () => {
+test('inherit preserves an attached saved template mode', async () => {
   let formattingMode = null;
-  const result = await runV1DestinationDeliveryStage({
+  const result = await runV1DestinationDeliveryAcceptanceStage({
     workspaceId: 'ws-1', sourceId: 'source-1', event: { text: raw }, interpretation: { status: 'READY', intent: {} }, env: {},
   }, {
     destinationStore: destinationStore({
