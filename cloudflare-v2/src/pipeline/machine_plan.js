@@ -3,7 +3,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|UPDATE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
 const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?(?:\s+INDEX)?$/i;
 const DERIV_SYNTHETIC_SYMBOL_SOURCE = String.raw`(?:Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)`;
 const DERIV_SYNTHETIC_SYMBOL = new RegExp(`^${DERIV_SYNTHETIC_SYMBOL_SOURCE}$`, 'i');
@@ -88,6 +88,7 @@ function managementPlan(text) {
 
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
+  const containsTradeSide = /\b(?:BUY|SELL|LONG|SHORT)\b/.test(upper);
 
   const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s*(?:HIT\s*)?(?:✅+|[!.]+)?\s*$/u);
   if (targetHit) {
@@ -118,16 +119,18 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
 
-  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const moveSl = text.match(moveSlPattern);
+  const explicitSlPattern = new RegExp(`\\b(?:MOVE|TRAIL|CHANGE|NEW|UPDATE|SET)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directSlPattern = new RegExp(`\\b(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const moveSl = text.match(explicitSlPattern) || (!containsTradeSide ? text.match(directSlPattern) : null);
   if (moveSl) {
     const stopLoss = parsedNumber(moveSl[1]);
     if (stopLoss == null) return null;
     return withManagementSymbol(text, { type: 'MOVE_SL', stopLoss });
   }
 
-  const changeTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET)\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const changeTp = text.match(changeTpPattern);
+  const explicitTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directTpPattern = new RegExp(`\\bTP\\s*([1-9]\\d?)?\\s*(?:TO\\s*)?[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const changeTp = text.match(explicitTpPattern) || (!containsTradeSide ? text.match(directTpPattern) : null);
   if (changeTp) {
     const takeProfit = parsedNumber(changeTp[2]);
     if (takeProfit == null) return null;
@@ -141,6 +144,13 @@ function managementPlan(text) {
 
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
+  }
+  const closePercent = upper.match(/\bCLOSE\s+(\d{1,3}(?:\.\d+)?)\s*%\b/);
+  if (closePercent) {
+    const percent = Number(closePercent[1]);
+    if (percent > 0 && percent < 100) {
+      return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: percent / 100 });
+    }
   }
   if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
