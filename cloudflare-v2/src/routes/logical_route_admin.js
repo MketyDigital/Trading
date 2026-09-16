@@ -103,11 +103,21 @@ function normalizedSettings(settings = {}) {
   };
 }
 
-export function planLogicalRouteReconcile({ existingRows = [], mode, selectedFeedIds = [], settings = {} } = {}) {
+export function planLogicalRouteReconcile({
+  existingRows = [],
+  sourceConnectionId = null,
+  destinationId = null,
+  mode,
+  selectedFeedIds = [],
+  settings = {},
+} = {}) {
   const rows = Array.isArray(existingRows) ? existingRows : [];
   const normalizedMode = text(mode).toLowerCase();
   if (!['all', 'selective'].includes(normalizedMode)) throw new Error('ROUTE_MODE_INVALID');
-  const common = normalizedSettings(settings);
+  const authority = {};
+  if (text(sourceConnectionId)) authority.source_connection_id = text(sourceConnectionId);
+  if (text(destinationId)) authority.destination_id = text(destinationId);
+  const common = { ...normalizedSettings(settings), ...authority };
   const desiredFeeds = [...new Set((Array.isArray(selectedFeedIds) ? selectedFeedIds : []).map(text).filter(Boolean))];
   if (normalizedMode === 'selective' && desiredFeeds.length === 0) throw new Error('ROUTE_FEEDS_REQUIRED');
 
