@@ -64,31 +64,47 @@ async function resolveReplyMessageId(supabase, workspaceId, destination, parentE
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
-async function recordMessageMapping(supabase, workspaceId, destination, externalEventId, messageId) {
+async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination, externalEventId, result = {}) {
   const eventId = await findTradingEventId(supabase, workspaceId, externalEventId);
   if (!eventId) throw new Error('TELEGRAM_THREAD_EVENT_LOOKUP_FAILED');
   const destinationKey = `telegram-destination:${destination.id}`;
   const idempotencyKey = `telegram:${destination.id}:${externalEventId}`;
+  const succeeded = result?.ok === true && result?.messageId != null;
+  const responsePayload = {
+    chatId: String(destination.destination_ref ?? destination.destinationRef ?? ''),
+    destinationId: String(destination.id),
+    sourceExternalEventId: String(externalEventId),
+    httpStatus: Number(result?.status || 0),
+    ...(result?.messageId != null ? { messageId: Number(result.messageId) } : {}),
+    ...(result?.providerCode != null ? { providerCode: result.providerCode } : {}),
+    ...(text(result?.providerDescription) ? { providerDescription: text(result.providerDescription).slice(0, 300) } : {}),
+    ...(result?.retryAfter != null ? { retryAfter: Number(result.retryAfter) } : {}),
+  };
   const row = {
     workspace_id: String(workspaceId),
     trading_event_id: eventId,
     destination_type: 'telegram',
     destination_ref: destinationKey,
     idempotency_key: idempotencyKey,
-    status: 'SUCCEEDED',
+    status: succeeded ? 'SUCCEEDED' : 'FAILED',
+    error_code: succeeded ? null : (text(result?.errorCode) || 'TELEGRAM_DELIVERY_FAILED'),
+    failure_class: succeeded ? null : (Number(result?.status) === 429 || Number(result?.status) >= 500 ? 'RETRYABLE' : 'TERMINAL'),
     attempt_count: 1,
-    response_payload: {
-      messageId: Number(messageId),
-      chatId: String(destination.destination_ref ?? destination.destinationRef ?? ''),
-      destinationId: String(destination.id),
-      sourceExternalEventId: String(externalEventId),
-    },
+    response_payload: responsePayload,
     updated_at: new Date().toISOString(),
   };
   const { error } = await supabase
     .from('destination_deliveries')
     .upsert(row, { onConflict: 'workspace_id,idempotency_key' });
-  if (error) throw new Error('TELEGRAM_THREAD_MAPPING_WRITE_FAILED');
+  if (error) throw new Error('TELEGRAM_DELIVERY_JOURNAL_WRITE_FAILED');
+}
+
+async function recordMessageMapping(supabase, workspaceId, destination, externalEventId, messageId) {
+  return recordTelegramDeliveryOutcome(supabase, workspaceId, destination, externalEventId, {
+    ok: true,
+    status: 200,
+    messageId,
+  });
 }
 
 export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps = {}) {
@@ -114,29 +130,41 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
   const baseSendTelegram = deps.sendTelegram || sendTelegramDestination;
   const threadedSendTelegram = async (sendInput = {}) => {
     const destination = routedByChatId.get(text(sendInput.chatId));
+    let result;
     let replyToMessageId = null;
     if (parentExternalEventId && destination) {
       try {
         replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
       } catch {
-        return { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
+        result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
       }
-      if (!replyToMessageId) {
-        return { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
+      if (!result && !replyToMessageId) {
+        result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
       }
     }
-    const result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
-    if (result?.ok && destination && currentExternalEventId && result.messageId != null && supabase?.from) {
+    if (!result) {
+      result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
+    }
+
+    if (destination && currentExternalEventId && supabase?.from) {
       try {
-        await recordMessageMapping(supabase, workspaceId, destination, currentExternalEventId, result.messageId);
+        await recordTelegramDeliveryOutcome(supabase, workspaceId, destination, currentExternalEventId, result);
       } catch {
-        // The Telegram message is already accepted by Telegram. Never convert a
-        // mapping-journal failure into a send failure because a retry could create
-        // a duplicate post. A future reply will fail closed if this mapping is absent.
-        return { ...result, threadMappingPersisted: false };
+        // Never turn a completed Telegram send into a retryable send failure solely
+        // because journaling failed; that could duplicate a message. Surface journal
+        // health on the result and let Operations/Admin diagnostics repair visibility.
+        return {
+          ...result,
+          deliveryJournalPersisted: false,
+          ...(result?.ok ? { threadMappingPersisted: false } : {}),
+        };
       }
     }
-    return { ...result, ...(result?.ok ? { threadMappingPersisted: true } : {}) };
+    return {
+      ...result,
+      deliveryJournalPersisted: true,
+      ...(result?.ok ? { threadMappingPersisted: true } : {}),
+    };
   };
 
   return runV1DestinationDeliveryStage(input, {
@@ -150,4 +178,5 @@ export const telegramThreading = {
   replyExternalEventId,
   resolveReplyMessageId,
   recordMessageMapping,
+  recordTelegramDeliveryOutcome,
 };
