@@ -17,7 +17,13 @@ export function authorizeTelegramBotEvent({ source, input } = {}) {
   }
 
   const config = source.config;
-  if (!config || typeof config !== 'object' || Array.isArray(config) || !Array.isArray(config.chat_ids)) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return reject(400, 'TELEGRAM_BOT_SOURCE_POLICY_INVALID');
+  }
+  const configuredChatIds = Array.isArray(config.allowed_chat_ids)
+    ? config.allowed_chat_ids
+    : Array.isArray(config.chat_ids) ? config.chat_ids : null;
+  if (!configuredChatIds) {
     return reject(400, 'TELEGRAM_BOT_SOURCE_POLICY_INVALID');
   }
 
@@ -28,7 +34,7 @@ export function authorizeTelegramBotEvent({ source, input } = {}) {
     return reject(400, 'TELEGRAM_BOT_NATIVE_IDENTITY_REQUIRED');
   }
 
-  const allowedChatIds = new Set(config.chat_ids.map(clean).filter(Boolean));
+  const allowedChatIds = new Set(configuredChatIds.map(clean).filter(Boolean));
   if (!allowedChatIds.has(chatId)) {
     return reject(403, 'TELEGRAM_BOT_CHAT_NOT_AUTHORIZED');
   }
