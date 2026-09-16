@@ -7,7 +7,7 @@ import { sendTelegramDestination } from './telegram_destination.js';
 
 const DESTINATION_SELECT = [
   'id', 'workspace_id', 'destination_type', 'display_name', 'destination_ref', 'template_id',
-  'credential_ciphertext', 'settings', 'is_active', 'health_status',
+  'credential_ciphertext', 'credential_connection_id', 'settings', 'is_active', 'health_status',
 ].join(',');
 
 const TEMPLATE_SELECT = [
@@ -270,6 +270,8 @@ export function createV1DestinationDeliveryStore(supabase) {
       const destinationRows = new Map((destinations || []).map((row) => [text(row.id), row]));
       const routeRows = new Map(selectedRoutes.map((row) => [text(row.destination_id), row]));
       const templateIds = [...new Set((destinations || []).map((row) => text(row.template_id)).filter(Boolean))];
+      const credentialConnectionIds = [...new Set((destinations || []).map((row) => text(row.credential_connection_id)).filter(Boolean))];
+
       let templates = [];
       if (templateIds.length) {
         const { data, error } = await supabase
@@ -282,16 +284,34 @@ export function createV1DestinationDeliveryStore(supabase) {
       }
       const templateRows = new Map(templates.map((row) => [text(row.id), row]));
 
+      let credentialConnections = [];
+      if (credentialConnectionIds.length) {
+        const { data, error } = await supabase
+          .from('trading_destination_connections')
+          .select('id,workspace_id,provider_type,credential_ciphertext,is_active')
+          .eq('workspace_id', workspace)
+          .eq('is_active', true)
+          .in('id', credentialConnectionIds);
+        if (error) throw new Error('DESTINATION_CONNECTION_LIST_FAILED');
+        credentialConnections = data || [];
+      }
+      const credentialRows = new Map(credentialConnections.map((row) => [text(row.id), row]));
+
       return orderedIds
         .map((id) => destinationRows.get(id))
         .filter(Boolean)
         .map((row) => {
           const route = routeRows.get(text(row.id)) || {};
+          const connection = credentialRows.get(text(row.credential_connection_id));
           return {
             ...row,
             template: templateRows.get(text(row.template_id)) || null,
             route_filters: safeObject(route.filters),
             source_feed_id: text(route.source_feed_id) || null,
+            ...(connection ? {
+              shared_credential_ciphertext: connection.credential_ciphertext,
+              credential_connection_provider_type: connection.provider_type,
+            } : {}),
           };
         });
     },
@@ -320,9 +340,16 @@ async function safeRecord(destinationStore, workspaceId, destination, outcome) {
   }
 }
 
+function credentialCiphertextForDestination(destination = {}) {
+  return text(destination.shared_credential_ciphertext ?? destination.sharedCredentialCiphertext)
+    || text(destination.credential_ciphertext ?? destination.credentialCiphertext)
+    || null;
+}
+
 async function credentialsForDestination(destination, env, deps) {
-  if (!destination.credential_ciphertext) throw new Error('DESTINATION_CREDENTIALS_MISSING');
-  const plaintext = await deps.decryptCredentials(destination.credential_ciphertext, env.TRADING_MASTER_KEY);
+  const ciphertext = credentialCiphertextForDestination(destination);
+  if (!ciphertext) throw new Error('DESTINATION_CREDENTIALS_MISSING');
+  const plaintext = await deps.decryptCredentials(ciphertext, env.TRADING_MASTER_KEY);
   return normalizeCredentialEnvelope(plaintext);
 }
 
@@ -407,11 +434,14 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
 }
 
 async function deliverTelegram({ destination, event, interpretation, env }, deps) {
-  if (!destination.credential_ciphertext) {
+  if (!credentialCiphertextForDestination(destination)) {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CREDENTIALS_MISSING' });
   }
   if (!text(destination.destination_ref)) {
     return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_REF_MISSING' });
+  }
+  if (text(destination.credential_connection_id) && text(destination.credential_connection_provider_type) !== 'telegram_bot_api') {
+    return publicOutcome(destination, 'FAILED', { errorCode: 'DESTINATION_CONNECTION_PROVIDER_MISMATCH' });
   }
 
   let credentials;
