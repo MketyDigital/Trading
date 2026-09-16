@@ -42,6 +42,9 @@ ALTER TABLE public.source_destination_routes
 
 -- The original connection-level uniqueness prevented the same destination from
 -- being selected independently by multiple feeds under one Telegram transport.
+-- Drop every historical/current constraint name used by deployed revisions.
+ALTER TABLE public.source_destination_routes
+    DROP CONSTRAINT IF EXISTS source_destination_routes_workspace_id_source_connection_id_key;
 ALTER TABLE public.source_destination_routes
     DROP CONSTRAINT IF EXISTS source_destination_routes_workspace_id_source_connection_id_destination_id_key;
 ALTER TABLE public.source_destination_routes
