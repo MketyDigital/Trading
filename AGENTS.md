@@ -603,3 +603,71 @@ New focused coverage includes source-feed store/admin route contracts, route fil
 6. Re-query LIVE controls/account flags immediately before post-deploy DEMO testing.
 7. Re-run Telegram source/feed routing, Telegram shared destination bot, cTrader DEMO, MT5 DEMO, replay, management and reconnect acceptance.
 8. Final acceptance must again prove zero unintended LIVE actions and `live_broker_execution_enabled=false`.
+
+---
+
+## 20. Current production authority — 2026-09-16 PR #98
+
+**This section supersedes section 19's stale implementation-status wording. Section 19 is preserved only as historical development evidence.**
+
+Current production `main`:
+
+- commit `a3571eddf251ed974369021d97414e177d6280f1`
+- merged PR `#98` — simplified logical multi-feed routing and restored Telegram `Forward as-is (original)`
+
+Post-merge production verification on this exact commit:
+
+- Trading V1 CI `#2818` — success;
+- Production Cloudflare Deploy `#87` — success, including health probe and verification of the persisted owner broker switch without changing it;
+- Production Frontend E2E `#92` — success;
+- Production Connection Readiness `#50` — success;
+- Production Platform Configuration Verification `#49` — success for Worker broker bindings, shared gateway configuration, public gateway health and both broker WebSocket routes;
+- CodeQL — success for JavaScript/TypeScript, Python, C# and Actions.
+
+### 20.1 Current route authority
+
+Route scope is resolved independently for each persisted **source connection → destination** pair.
+
+- `All channels from this source` allows every authorized child feed to that destination, subject to normal filters/account/runtime gates.
+- Selective mode allows only the explicitly checked child feeds to that destination.
+- Once selective rows exist for a destination, an unchecked feed cannot inherit a legacy/default all-channels row for that same destination.
+- Selective routing for destination A does **not** suppress an unrelated all-channels/default route to destination B.
+- `cloudflare-v2/src/routes/logical_route_scope.js` is shared by destination delivery and broker planning; those two authority paths must not diverge.
+
+Existing logical subgroups carry their exact underlying `routeIds` during edits. The reconcile API must preserve sibling specialized logical groups, reject stale route IDs, reject overlapping feed ownership, fail closed when a new selective route conflicts with an existing default route, and validate target collisions before moving route rows to another source/destination.
+
+### 20.2 Symbol filters remain narrowing-only
+
+Blank Allowed Symbols + blank Blocked Symbols means no route-level narrowing. Allowed/blocked filters may reduce eligible canonical symbols, but they never make an unsupported instrument tradable.
+
+The destination account's current symbol catalog, aliases, risk constraints, environment, account state, runtime controls and LIVE gates remain authoritative. Instrument eligibility is capability-driven, not hard-coded by MT5/cTrader or broker brand.
+
+### 20.3 Telegram destination formatting
+
+Ready-made modes are:
+
+- `none` — **Forward as-is (original)**;
+- `clean` — **Clean original**;
+- `template` — **Structured template**;
+- `ai_then_fallback` — **AI presentation + safe fallback**.
+
+A valid destination-level formatting selection overrides an attached template's formatting mode. `inherit`, absent or invalid override preserves the saved template behavior. Forward as-is preserves the original stored source text and native Telegram entities when available, with no AI/cleanup/reconstruction/branding. Changing formatting must not rotate the saved Telegram bot credential, recreate the endpoint or alter canonical broker execution semantics.
+
+### 20.4 Current safety posture after production deployment
+
+Fresh post-deploy audit:
+
+- `trading_access_enabled=true`;
+- `broker_execution_enabled=true`;
+- `live_broker_execution_enabled=false`;
+- Mkay — `brokerModes=["demo"]`, `liveExecution=false`;
+- Starpips Forex — `brokerModes=["demo"]`, `liveExecution=false`;
+- cTrader LIVE account `48681337` — `execution_enabled=false`, `live_execution_enabled=false`.
+
+No LIVE gate was enabled by PR #98. CI/deployment/DEMO success does not authorize LIVE.
+
+### 20.5 Remaining acceptance
+
+Production gates are green, but real broker/source acceptance still requires fresh controlled DEMO evidence for feed A/B isolation, unselected-feed skip for the same selective destination, unrelated all-channels destination independence, reusable Telegram bot to multiple endpoints, exact Forward-as-is delivery, cTrader DEMO, MT5 DEMO with connector online, replay/no duplicate, management/reply/follow-up correlation, reconnect recovery and a final zero-LIVE audit.
+
+Current detailed operator semantics: `docs/PR98_PRODUCTION_ACCEPTANCE_ADDENDUM.md`.
