@@ -55,7 +55,7 @@ test('successful AI interpretation preserves provider, model, and sanitized atte
     },
   ];
   const result = await interpretTradingEvent({
-    text: 'Gold long setup around 2526 with protection 2518 and objectives 2530 then 2535.',
+    text: 'Buy gold if this setup is confirmed. Entry 2526, risk 2518, objectives 2530 and 2535',
   }, {
     aiRouter: {
       async processSignal() {
@@ -67,8 +67,8 @@ test('successful AI interpretation preserves provider, model, and sanitized atte
           text: JSON.stringify({
             event_type: 'NEW_SIGNAL',
             side: 'BUY',
-            symbol: 'XAUUSD',
-            order_type: 'LIMIT',
+            symbol: 'GOLD',
+            order_type: 'MARKET',
             entry: 2526,
             stop_loss: 2518,
             take_profits: [2530, 2535],
