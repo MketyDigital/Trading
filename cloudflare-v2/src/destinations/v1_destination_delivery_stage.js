@@ -1,5 +1,6 @@
 import { decryptSecret } from '../security/secret_box.js';
 import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
+import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
 import { formatTelegramDestinationMessage } from './formatting.js';
 import { evaluateRouteFilters } from './route_filters.js';
 import { renderTelegramDestination } from './telegram_presentation.js';
@@ -249,12 +250,7 @@ export function createV1DestinationDeliveryStore(supabase) {
       }
 
       const routes = Array.isArray(allRoutes) ? allRoutes : [];
-      const feedRoutes = feedId
-        ? routes.filter((row) => text(row.source_feed_id) === feedId)
-        : [];
-      const selectedRoutes = feedRoutes.length
-        ? feedRoutes
-        : routes.filter((row) => !text(row.source_feed_id));
+      const selectedRoutes = selectAuthorizedRoutesForFeed(routes, feedId);
       if (!selectedRoutes.length) return [];
 
       const orderedIds = selectedRoutes.map((row) => text(row.destination_id)).filter(Boolean);
@@ -393,8 +389,6 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
     return formatted;
   }
 
-  // Ambiguous/non-canonical signals are still useful to Telegram humans. Never let
-  // presentation AI invent trade semantics when canonical intent is unavailable.
   if (!interpretation?.intent && interpretation?.status !== 'MANAGEMENT' && !interpretation?.management) {
     const raw = cleanRawFallback(event, template, deps);
     return { ok: Boolean(text(raw.text)), ...raw, fallbackReason: 'CANONICAL_INTENT_UNAVAILABLE' };
