@@ -16,7 +16,7 @@ const cases = [
   ['NEW TP 4350', { type: 'CHANGE_TP', takeProfit: 4350 }],
   ['CHANGE TP2 TO 4400', { type: 'CHANGE_TP', targetIndex: 2, takeProfit: 4400 }],
   ['CLOSE 25%', { type: 'CLOSE_PARTIAL', fraction: 0.25 }],
-  ['CLOSE 0.01', { type: 'CLOSE_PARTIAL_VOLUME', lots: 0.01 }],
+  ['CLOSE 0.01', { type: 'CLOSE_PARTIAL', lots: 0.01 }],
   ['REMOVE SL', { type: 'REMOVE_SL' }],
   ['REMOVE TP2', { type: 'REMOVE_TP', targetIndex: 2 }],
   ['CANCEL TP2', { type: 'REMOVE_TP', targetIndex: 2 }],
