@@ -164,6 +164,16 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
       const feedStore = sourceFeedStoreFactory(supabase);
       await feedStore.upsertAllowedFeeds(workspaceId, data.id, chatIds);
     } catch {
+      try {
+        await supabase
+          .from('source_connections')
+          .delete()
+          .eq('workspace_id', workspaceId)
+          .eq('id', data.id);
+      } catch {
+        // The source remains disabled, so a failed compensating delete cannot
+        // make it operational. Surface the feed failure and let operators repair.
+      }
       return json({ ok: false, reason: 'SOURCE_FEED_UPSERT_FAILED' }, 503);
     }
     return json({ ok: true, workspaceId, source: safeSource(data) }, 201);
