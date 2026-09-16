@@ -38,11 +38,13 @@ function rowSettings(row = {}) {
   };
 }
 
-function sameSettings(a, b) {
-  return a.routeName === b.routeName
-    && a.priority === b.priority
-    && a.enabled === b.enabled
-    && stableJson(a.filters) === stableJson(b.filters);
+function settingsKey(settings = {}) {
+  return [
+    text(settings.routeName),
+    String(Number(settings.priority ?? 100)),
+    settings.enabled === false ? '0' : '1',
+    stableJson(settings.filters),
+  ].join('::');
 }
 
 function sourceIdOf(row = {}) {
@@ -58,38 +60,55 @@ function feedIdOf(row = {}) {
 }
 
 export function groupLogicalRoutes(routes = []) {
-  const grouped = new Map();
+  const pairs = new Map();
   for (const row of Array.isArray(routes) ? routes : []) {
     const sourceConnectionId = sourceIdOf(row);
     const destinationId = destinationIdOf(row);
     if (!sourceConnectionId || !destinationId) continue;
-    const key = `${sourceConnectionId}::${destinationId}`;
-    if (!grouped.has(key)) grouped.set(key, { sourceConnectionId, destinationId, rows: [] });
-    grouped.get(key).rows.push(row);
+    const pairKey = `${sourceConnectionId}::${destinationId}`;
+    if (!pairs.has(pairKey)) pairs.set(pairKey, { sourceConnectionId, destinationId, rows: [] });
+    pairs.get(pairKey).rows.push(row);
   }
 
-  return [...grouped.values()].map((group) => {
-    const selectiveRows = group.rows.filter((row) => feedIdOf(row));
-    const defaultRows = group.rows.filter((row) => !feedIdOf(row));
-    const authoritativeRows = selectiveRows.length ? selectiveRows : defaultRows;
-    const representative = authoritativeRows[0] || group.rows[0] || {};
-    const settings = rowSettings(representative);
-    const mixedSettings = authoritativeRows.some((row) => !sameSettings(settings, rowSettings(row)));
-    return {
-      logicalRouteKey: `${group.sourceConnectionId}::${group.destinationId}`,
-      sourceConnectionId: group.sourceConnectionId,
-      destinationId: group.destinationId,
-      mode: selectiveRows.length ? 'selective' : 'all',
-      selectedFeedIds: [...new Set(selectiveRows.map(feedIdOf).filter(Boolean))],
-      routeIds: group.rows.map((row) => text(row.id)).filter(Boolean),
-      routeName: mixedSettings ? null : settings.routeName,
-      priority: mixedSettings ? null : settings.priority,
-      filters: mixedSettings ? {} : settings.filters,
-      enabled: mixedSettings ? null : settings.enabled,
-      mixedSettings,
-      legacyDefaultSuppressed: selectiveRows.length > 0 && defaultRows.length > 0,
-    };
-  });
+  const result = [];
+  for (const pair of pairs.values()) {
+    const activeSelectiveExists = pair.rows.some((row) => feedIdOf(row) && rowSettings(row).enabled);
+    const compatibleGroups = new Map();
+
+    for (const row of pair.rows) {
+      const settings = rowSettings(row);
+      const key = settingsKey(settings);
+      if (!compatibleGroups.has(key)) compatibleGroups.set(key, { settings, rows: [] });
+      compatibleGroups.get(key).rows.push(row);
+    }
+
+    for (const compatible of compatibleGroups.values()) {
+      const selectiveRows = compatible.rows.filter((row) => feedIdOf(row));
+      const defaultRows = compatible.rows.filter((row) => !feedIdOf(row));
+      const settings = compatible.settings;
+      const routeIds = compatible.rows.map((row) => text(row.id)).filter(Boolean);
+      const mode = selectiveRows.length ? 'selective' : 'all';
+      const keySuffix = encodeURIComponent(settingsKey(settings));
+
+      result.push({
+        logicalRouteKey: `${pair.sourceConnectionId}::${pair.destinationId}::${keySuffix}`,
+        sourceConnectionId: pair.sourceConnectionId,
+        destinationId: pair.destinationId,
+        mode,
+        selectedFeedIds: [...new Set(selectiveRows.map(feedIdOf).filter(Boolean))],
+        routeIds,
+        routeName: settings.routeName,
+        priority: settings.priority,
+        filters: settings.filters,
+        enabled: settings.enabled,
+        mixedSettings: false,
+        legacyDefaultSuppressed: selectiveRows.length > 0 && defaultRows.length > 0,
+        suppressedBySelectiveRoutes: mode === 'all' && activeSelectiveExists,
+      });
+    }
+  }
+
+  return result;
 }
 
 function normalizedSettings(settings = {}) {
