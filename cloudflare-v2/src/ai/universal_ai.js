@@ -55,6 +55,12 @@ export class UniversalAIRouter {
         };
     }
 
+    optionalNumber(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+
     sanitizeProviderMessage(message, provider = {}) {
         let value = String(message ?? '').replace(/\s+/g, ' ').trim();
         if (!value) return null;
@@ -85,7 +91,7 @@ export class UniversalAIRouter {
         sanitizedMessage = null,
     } = {}) {
         const error = new Error(message || sanitizedMessage || 'AI provider request failed');
-        error.httpStatus = Number.isFinite(Number(httpStatus)) ? Number(httpStatus) : null;
+        error.httpStatus = this.optionalNumber(httpStatus);
         error.providerCode = providerCode ? String(providerCode) : null;
         error.retryable = Boolean(retryable);
         error.errorClass = String(errorClass || 'PROVIDER');
@@ -109,7 +115,7 @@ export class UniversalAIRouter {
     }
 
     async responseFailure(res, provider, label) {
-        const httpStatus = Number(res?.status);
+        const httpStatus = this.optionalNumber(res?.status);
         let raw = '';
         try { raw = await res.text(); } catch {}
 
@@ -130,11 +136,11 @@ export class UniversalAIRouter {
         const sanitizedMessage = this.sanitizeProviderMessage(extractedMessage, provider)
             || `${label} request failed`;
 
-        return this.providerFailure(`${label} HTTP ${Number.isFinite(httpStatus) ? httpStatus : 'error'}`, {
-            httpStatus: Number.isFinite(httpStatus) ? httpStatus : null,
-            providerCode: providerCode || (Number.isFinite(httpStatus) ? `HTTP_${httpStatus}` : 'AI_PROVIDER_HTTP_ERROR'),
-            retryable: Number.isFinite(httpStatus) ? this.httpRetryable(httpStatus) : true,
-            errorClass: Number.isFinite(httpStatus) ? this.httpErrorClass(httpStatus) : 'NETWORK',
+        return this.providerFailure(`${label} HTTP ${httpStatus ?? 'error'}`, {
+            httpStatus,
+            providerCode: providerCode || (httpStatus != null ? `HTTP_${httpStatus}` : 'AI_PROVIDER_HTTP_ERROR'),
+            retryable: httpStatus != null ? this.httpRetryable(httpStatus) : true,
+            errorClass: httpStatus != null ? this.httpErrorClass(httpStatus) : 'NETWORK',
             sanitizedMessage,
         });
     }
@@ -144,20 +150,20 @@ export class UniversalAIRouter {
             overrides.sanitizedMessage ?? err?.sanitizedMessage ?? err?.message ?? 'AI provider request failed',
             provider,
         ) || 'AI provider request failed';
-        const httpStatus = overrides.httpStatus ?? err?.httpStatus ?? null;
+        const httpStatus = this.optionalNumber(overrides.httpStatus ?? err?.httpStatus ?? null);
         const providerCode = overrides.providerCode ?? err?.providerCode ?? null;
         let errorClass = overrides.errorClass ?? err?.errorClass ?? null;
         let retryable = overrides.retryable ?? err?.retryable;
 
         if (!errorClass) {
-            if (Number.isFinite(Number(httpStatus))) errorClass = this.httpErrorClass(httpStatus);
+            if (httpStatus != null) errorClass = this.httpErrorClass(httpStatus);
             else if (err?.name === 'TypeError') errorClass = 'NETWORK';
             else if (/credential|api key/i.test(message)) errorClass = 'CREDENTIAL';
             else if (/missing|not configured|invalid/i.test(message)) errorClass = 'CONFIG';
             else errorClass = 'PROVIDER';
         }
         if (retryable == null) {
-            if (Number.isFinite(Number(httpStatus))) retryable = this.httpRetryable(httpStatus);
+            if (httpStatus != null) retryable = this.httpRetryable(httpStatus);
             else retryable = errorClass === 'NETWORK' || errorClass === 'TIMEOUT';
         }
 
@@ -165,7 +171,7 @@ export class UniversalAIRouter {
             ...this.providerIdentity(provider),
             outcome: 'FAILED',
             latencyMs: Math.max(0, Number(latencyMs) || 0),
-            ...(Number.isFinite(Number(httpStatus)) ? { httpStatus: Number(httpStatus) } : {}),
+            ...(httpStatus != null ? { httpStatus } : {}),
             ...(providerCode ? { providerCode: String(providerCode) } : {}),
             retryable: Boolean(retryable),
             errorClass: String(errorClass),
@@ -174,11 +180,12 @@ export class UniversalAIRouter {
     }
 
     successDiagnostic(provider, result, latencyMs) {
+        const httpStatus = this.optionalNumber(result?.httpStatus);
         return {
             ...this.providerIdentity(provider),
             outcome: 'SUCCESS',
             latencyMs: Math.max(0, Number(latencyMs) || 0),
-            ...(Number.isFinite(Number(result?.httpStatus)) ? { httpStatus: Number(result.httpStatus) } : {}),
+            ...(httpStatus != null ? { httpStatus } : {}),
             ...(result?.providerCode ? { providerCode: String(result.providerCode) } : {}),
             retryable: false,
         };
