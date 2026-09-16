@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { groupLogicalRoutes, planLogicalRouteReconcile } from '../src/routes/logical_route_admin.js';
+import { groupLogicalRoutes, inspectLogicalRouteEdit, planLogicalRouteReconcile } from '../src/routes/logical_route_admin.js';
 
 const row = (id, feedId = null, extra = {}) => ({
   id,
@@ -31,27 +31,73 @@ test('feed rows for same source and destination with compatible settings become 
   assert.equal(groups[0].mixedSettings, false);
 });
 
-test('incompatible historical feed rows are flagged and never silently normalized', () => {
+test('feed rows with incompatible settings stay separate logical routes', () => {
   const groups = groupLogicalRoutes([
     row('route-gold', 'feed-a', { route_name: 'Gold only', filters: { allowedCanonicalSymbols: ['XAUUSD'] } }),
     row('route-all', 'feed-b', { route_name: 'All supported', filters: {} }),
   ]);
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].mode, 'selective');
-  assert.deepEqual(groups[0].selectedFeedIds, ['feed-a', 'feed-b']);
-  assert.deepEqual(groups[0].routeIds, ['route-gold', 'route-all']);
-  assert.equal(groups[0].mixedSettings, true);
-  assert.equal(groups[0].routeName, null);
-  assert.deepEqual(groups[0].filters, {});
-  assert.equal(groups[0].priority, null);
-  assert.equal(groups[0].enabled, null);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((group) => group.selectedFeedIds), [['feed-a'], ['feed-b']]);
+  assert.deepEqual(groups.map((group) => group.routeName), ['Gold only', 'All supported']);
+  assert.deepEqual(groups[0].filters, { allowedCanonicalSymbols: ['XAUUSD'] });
+  assert.deepEqual(groups[1].filters, {});
+  assert.notEqual(groups[0].logicalRouteKey, groups[1].logicalRouteKey);
 });
 
 test('suppressed compatible legacy default is visible but does not change selective mode', () => {
   const groups = groupLogicalRoutes([row('route-default'), row('route-a', 'feed-a')]);
+  assert.equal(groups.length, 1);
   assert.equal(groups[0].mode, 'selective');
   assert.equal(groups[0].legacyDefaultSuppressed, true);
   assert.deepEqual(groups[0].selectedFeedIds, ['feed-a']);
+});
+
+test('route edit scope preserves sibling groups and detects feed overlap', () => {
+  const pairRows = [
+    row('route-gold', 'feed-a', { route_name: 'Gold only', filters: { allowedCanonicalSymbols: ['XAUUSD'] } }),
+    row('route-synthetic', 'feed-b', { route_name: 'Synthetic only', filters: { allowedCanonicalSymbols: ['DERIV:VOLATILITY_75'] } }),
+  ];
+  const scoped = inspectLogicalRouteEdit({
+    pairRows,
+    previousRouteIds: ['route-gold'],
+    selectedFeedIds: ['feed-a'],
+    mode: 'selective',
+  });
+  assert.deepEqual(scoped.editingRows.map((item) => item.id), ['route-gold']);
+  assert.deepEqual(scoped.siblingRows.map((item) => item.id), ['route-synthetic']);
+  assert.deepEqual(scoped.overlappingFeedRouteIds, []);
+  assert.deepEqual(scoped.activeSiblingSelectiveRouteIds, ['route-synthetic']);
+
+  const overlap = inspectLogicalRouteEdit({
+    pairRows,
+    previousRouteIds: ['route-gold'],
+    selectedFeedIds: ['feed-b'],
+    mode: 'selective',
+  });
+  assert.deepEqual(overlap.overlappingFeedRouteIds, ['route-synthetic']);
+});
+
+test('all-channels edit reports conflicting selective sibling groups instead of deleting them', () => {
+  const pairRows = [row('route-a', 'feed-a'), row('route-b', 'feed-b', { route_name: 'Other policy' })];
+  const scoped = inspectLogicalRouteEdit({
+    pairRows,
+    previousRouteIds: ['route-a'],
+    selectedFeedIds: [],
+    mode: 'all',
+  });
+  assert.deepEqual(scoped.editingRows.map((item) => item.id), ['route-a']);
+  assert.deepEqual(scoped.activeSiblingSelectiveRouteIds, ['route-b']);
+});
+
+test('create scope exposes an existing default route so caller can require edit instead of silently replacing it', () => {
+  const scoped = inspectLogicalRouteEdit({
+    pairRows: [row('route-default')],
+    previousRouteIds: [],
+    selectedFeedIds: ['feed-a'],
+    mode: 'selective',
+  });
+  assert.deepEqual(scoped.editingRows, []);
+  assert.deepEqual(scoped.siblingDefaultRouteIds, ['route-default']);
 });
 
 test('converting all-channels to selective reuses existing route id', () => {
@@ -78,7 +124,7 @@ test('selective edit preserves selected route ids and deletes only unchecked row
   assert.deepEqual(plan.inserts, []);
 });
 
-test('converting selective to all reuses one route id and removes siblings', () => {
+test('converting selective to all reuses one route id and removes only rows supplied to that logical group', () => {
   const plan = planLogicalRouteReconcile({
     existingRows: [row('route-a', 'feed-a'), row('route-b', 'feed-b')],
     mode: 'all',
