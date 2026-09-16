@@ -65,6 +65,12 @@ export function applyProtectionValidationPolicy(action = {}, rawPolicy = {}) {
     return { allowed: true, action: { ...action }, skipped: [] };
   }
 
+  const hasStopLoss = action.stopLoss != null;
+  const hasTakeProfit = action.takeProfit != null;
+  if (!hasStopLoss && !hasTakeProfit) {
+    return { allowed: true, action: { ...action }, skipped: [] };
+  }
+
   const side = String(action.side || '').toUpperCase();
   if (!['BUY', 'SELL'].includes(side)) {
     return { allowed: false, reason: 'INVALID_EXECUTION_SIDE', action: { ...action }, skipped: [] };
@@ -75,14 +81,14 @@ export function applyProtectionValidationPolicy(action = {}, rawPolicy = {}) {
   const next = { ...action };
   const skipped = [];
 
-  if (action.stopLoss != null && !stopIsValid(side, reference, action.stopLoss)) {
+  if (hasStopLoss && !stopIsValid(side, reference, action.stopLoss)) {
     const maySkip = policy.invalidProtectionPolicy === 'skip_invalid' && policy.allowInvalidStopLossSkip;
     if (!maySkip) return { allowed: false, reason: 'INVALID_STOP_LOSS_GEOMETRY', action: { ...action }, skipped };
     next.stopLoss = null;
     skipped.push({ field: 'stopLoss', reason: 'SL_SKIPPED_INVALID_GEOMETRY' });
   }
 
-  if (action.takeProfit != null && !targetIsValid(side, reference, action.takeProfit)) {
+  if (hasTakeProfit && !targetIsValid(side, reference, action.takeProfit)) {
     const maySkip = policy.invalidProtectionPolicy === 'skip_invalid' && policy.allowInvalidTakeProfitSkip;
     if (!maySkip) return { allowed: false, reason: 'INVALID_TAKE_PROFIT_GEOMETRY', action: { ...action }, skipped };
     next.takeProfit = null;
