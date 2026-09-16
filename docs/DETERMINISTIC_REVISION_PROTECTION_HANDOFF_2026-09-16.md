@@ -6,6 +6,9 @@ Draft PR: `#101`
 
 ## Latest implementation checkpoint — 2026-09-16
 
+Exact verified branch head for this checkpoint: `bcc50cd8b6fdcaf3c1a8ecdb7c262ab48c43f822`.
+Trading V1 CI `#2887` passed Worker/trading-core, MT5 bridge and MTProto suites on that exact head.
+
 Verified work now completed on the continuation branch:
 
 - deterministic incomplete-signal regression was reproduced RED on Trading V1 CI `#2832`;
@@ -17,31 +20,35 @@ Verified work now completed on the continuation branch:
 - backward-compatible default remains `reject_trade`;
 - explicit `skip_invalid` can omit invalid SL/TP components only when corresponding per-field allow flags are enabled;
 - risk-based sizing still blocks when an invalid SL would remove the stop required for risk calculation;
-- Telegram Bot edits preserve stable `chat_id:message_id` identity and explicit edit lineage;
+- Telegram Bot source policy now accepts the canonical `allowed_chat_ids` allowlist as well as legacy `chat_ids`, without weakening authorization;
+- Telegram Bot edits preserve stable source message identity and exact edit lineage;
+- source edit revisions are persisted append-only in `trading_event_revisions` via migration `0039_trading_event_revisions.sql`;
 - revision hashing produces the same key for exact edit replay and a different key for changed edited content;
-- deterministic management parsing now covers explicit SL/TP update/remove and partial-close variants while conditional/negated text remains fail-closed;
+- changed edits are interpreted from the incoming edited event, while exact revision replay returns the persisted revision and remains duplicate/no-resend;
+- exact edit/original-message correlation resolves to the existing logical trade before ordinary duplicate replay suppression;
+- semantic source edit diff supports changed SL/TP as `MODIFY_POSITION` only, never `OPEN_POSITION`;
+- formatting-only/no-semantic-change edits produce no broker action;
+- omission of SL/TP in edited signal text is not treated as destructive removal;
+- edits that change trade identity/structure fail closed for review rather than mutating/opening another trade;
+- edit management fans across broker-bound groups for the same logical cohort while preserving each broker position identity;
+- broker idempotency for revisions now uses `metadata.source_revision_key`, so different edits of one Telegram message produce distinct broker action keys while retrying the same revision remains stable;
+- deterministic management parsing covers explicit SL/TP update/remove and partial-close variants while conditional/negated text remains fail-closed;
 - source replies and guarded no-reply context correlation remain intact;
 - Telegram destination `editMessageText` support is implemented, preserving destination message identity and native entities when available;
 - source edit with unresolved destination mapping fails isolated and never falls back to a duplicate standalone send;
 - Trading V1 CI `#2869` passed Worker/trading-core, MT5 bridge and MTProto suites for Telegram destination edit lineage;
-- compatibility shim `src/pipeline/protection_validation_policy.js` intentionally delegates semantic authority to pre-planning execution protection policy and must not become a second geometry authority.
-
-Active RED checkpoint:
-
-- `cloudflare-v2/tests/production_missing_fill_price.test.mjs` was added at commit `7cf77e97dd91f0c127068c4c30d1885385334a05` to prove a broker success with `fillPrice: null` must not be materialized/audited as price `0` through JavaScript `Number(null)` coercion;
-- Trading V1 CI `#2870` is the RED verification run for that regression at the time of this checkpoint;
-- do not mark the fill-price durability defect fixed until the RED failure is observed, the minimal implementation is applied, and exact-head CI is green.
+- missing broker `fillPrice` no longer becomes `0` through `Number(null)` coercion in the production coordinator; the RED regression was CI `#2870` and the fixed path was green on CI `#2872`;
+- full-close state regression coverage confirms status `CLOSED`, remaining lots `0`, `closedAt` populated, and original opening broker identity/fill retained;
+- compatibility shim `src/pipeline/protection_validation_policy.js` intentionally leaves semantic authority to pre-planning execution protection policy and must not become a second geometry authority.
 
 Still pending before completion:
 
-1. finish null-fill/close-state durability hardening and regression verification;
-2. finish semantic edit diff -> broker management lifecycle, including corrected skipped protection on the same group with no duplicate OPEN;
-3. verify reply/edit/context management across both cTrader and MT5 paths;
-4. integrate normalized Operations/Admin journal visibility for revisions, skipped fields and edit/reply delivery outcomes;
-5. continue DB-authoritative AI provider/health/diagnostic Tasks 3–7 from the prior AI observability handoff;
-6. run focused and full CI on exact final head;
-7. run controlled real DEMO acceptance with fresh runtime/account/route checks and zero-LIVE audit;
-8. update root `AGENTS.md`, `CURRENT_HANDOFF.md`, and this handoff with exact final commit/CI/DEMO evidence before considering merge/release.
+1. verify reply/edit/context management through controlled real DEMO cTrader and MT5 acceptance after fresh authority checks;
+2. integrate normalized Operations/Admin journal visibility for revisions, skipped fields and edit/reply delivery outcomes;
+3. continue DB-authoritative AI provider/health/diagnostic Tasks 3–7 from the prior AI observability handoff;
+4. run focused and full CI on each exact final head;
+5. run controlled real DEMO acceptance with fresh runtime/account/route checks and zero-LIVE audit;
+6. update root `AGENTS.md`, `CURRENT_HANDOFF.md`, and this handoff with exact final commit/CI/DEMO evidence before considering merge/release.
 
 Read in this order:
 
@@ -82,13 +89,13 @@ When `skip_invalid` is explicitly enabled, invalid optional SL/TP values may be 
 
 ### Telegram edits
 
-Telegram Bot API ingress receives `edited_message` and `edited_channel_post` using stable `chat_id:message_id` identity. Edits are revisions of one logical source message.
+Telegram Bot API ingress receives `edited_message` and `edited_channel_post` using stable source-message identity. Edits are revisions of one logical source message.
 
-An edit must semantic-diff against the materialized logical trade and produce management actions only for changed trade fields. It must never create an accidental duplicate OPEN.
+A changed edit is append-only persisted as a revision, semantic-diffed against the materialized logical trade, and may produce management actions only for changed supported trade fields. It must never create an accidental duplicate OPEN.
 
-Formatting-only edits produce no broker action.
+Formatting-only edits produce no broker action. Exact replay of one revision remains idempotent. A later changed revision gets a distinct broker action identity.
 
-An invalid SL/TP skipped initially may be corrected by editing the source message; the corrected field should then be applied to the same position group when valid and authorized.
+An invalid SL/TP skipped initially may be corrected by editing the source message; the corrected field can then be applied to the same position group when valid and authorized.
 
 ### Replies and context
 
@@ -125,10 +132,15 @@ A Telegram edit/send/reply failure must remain isolated from broker destinations
 
 ## Existing code facts confirmed during investigation
 
-- `cloudflare-v2/src/http/telegram_bot_webhook.js` accepts message, edited_message, channel_post and edited_channel_post.
-- Telegram Bot ingress preserves stable native identity `chat_id:message_id`.
-- `cloudflare-v2/src/events/trading_event.js` canonicalizes reply identity into `thread.reply_to_event_id`.
-- `cloudflare-v2/src/events/source_revision.js` now provides deterministic edit revision hashing.
+- `cloudflare-v2/src/http/telegram_bot_webhook.js` accepts message, edited_message, channel_post and edited_channel_post and preserves exact original-message edit lineage.
+- `cloudflare-v2/src/events/trading_event.js` canonicalizes Telegram reply/edit identities.
+- `cloudflare-v2/src/events/source_revision.js` provides deterministic edit revision hashing.
+- `cloudflare-v2/src/storage/supabase_ingest_store.js` reserves and persists append-only revisions and revision interpretations.
+- `cloudflare-v2/src/pipeline/ingest.js` distinguishes changed edit revision from exact revision replay without weakening normal source idempotency.
+- `cloudflare-v2/src/correlation/trade_correlator.js` resolves edit lineage before ordinary duplicate suppression.
+- `cloudflare-v2/src/execution/source_edit_management.js` produces supported semantic edit management and cannot create broker OPEN actions.
+- `cloudflare-v2/src/pipeline/v1_orchestrator.js` applies edit management to the matched durable group/cohort.
+- `cloudflare-v2/src/pipeline/v1_execution_stage.js` uses source revision identity for broker action idempotency on revisions while retaining existing identity for normal events.
 - `cloudflare-v2/src/destinations/v1_destination_delivery_acceptance.js` maps source parent event -> prior successful destination Telegram message ID for replies and edits.
 - `cloudflare-v2/src/destinations/telegram_destination.js` implements `sendMessage` and `editMessageText` with sanitized failure diagnostics.
 - Destination delivery journaling records successful Telegram message IDs and sanitized rejection details.
@@ -147,14 +159,14 @@ Use TDD.
 
 1. regression tests for incomplete deterministic signals — implemented/green;
 2. fix interpreter acceptance of safely incomplete deterministic intent — implemented/green;
-3. regression/implementation for broader deterministic management syntax — implemented; retain non-regression coverage;
-4. field-level SL/TP validation classification + persisted policy — core implementation present; UI/persistence exposure and operations visibility still require final audit;
-5. revision-aware source event/idempotency model — source revision identity present; lifecycle application still requires final verification;
-6. semantic revision diff -> management lifecycle — pending final integration/verification;
-7. Telegram destination edit operation preserving message mapping and formatting mode — implemented/green in CI #2869;
-8. reply/context non-regression — existing correlator behavior retained; full acceptance still pending;
+3. regression/implementation for broader deterministic management syntax — implemented/green;
+4. field-level SL/TP validation classification + persisted policy — core execution implementation green; operations/UI exposure still pending;
+5. revision-aware source event/idempotency model — implemented/green through CI `#2887`;
+6. semantic revision diff -> management lifecycle — implemented/green through CI `#2887`;
+7. Telegram destination edit operation preserving message mapping and formatting mode — implemented/green in CI `#2869` and retained through CI `#2887`;
+8. reply/context non-regression — covered in automated suites; controlled DEMO acceptance still pending;
 9. operations journal integration — pending;
-10. continue AI provider/observability Tasks 3–7 from the prior handoff — pending;
-11. focused/full CI — ongoing after each TDD checkpoint;
+10. continue AI provider/observability Tasks 3–7 from the prior handoff — next active scope;
+11. focused/full CI — continue after each TDD checkpoint;
 12. controlled real DEMO acceptance — pending;
 13. update root `AGENTS.md`, `CURRENT_HANDOFF.md`, and active handoffs with exact final commit/CI/evidence — pending final verified state.
