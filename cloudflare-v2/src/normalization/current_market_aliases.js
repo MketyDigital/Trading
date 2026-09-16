@@ -1,5 +1,5 @@
 const CURRENT_MARKET_PATTERNS = [
-  /\bC\s*\.\s*M\s*\.\s*P\s*\.?\b/gi,
+  /\bC\s*\.\s*M\s*\.\s*P(?:\s*\.)?(?=\W|$)/gi,
   /\bCMP\b/gi,
   /\bCURRENT\s+MARKET\s+PRICE\b/gi,
   /\bCURRENT\s+MKT\s+PRICE\b/gi,
