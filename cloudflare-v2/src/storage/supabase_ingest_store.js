@@ -26,13 +26,22 @@ function persistedEvent(row = {}) {
     source_external_id: row.source_external_id == null ? null : String(row.source_external_id),
     external_event_id: String(row.external_event_id),
     occurred_at: row.occurred_at || row.created_at || null,
-    received_at: row.created_at || row.occurred_at || null,
+    received_at: row.received_at || row.created_at || row.occurred_at || null,
     text: String(row.raw_text ?? ''),
     structured_payload: row.structured_payload && typeof row.structured_payload === 'object'
       ? row.structured_payload
       : {},
     thread: row.thread && typeof row.thread === 'object' ? row.thread : {},
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+  };
+}
+
+function interpretationPayload(interpretation = {}) {
+  const status = String(interpretation.status || 'NEEDS_REVIEW');
+  return {
+    processing_status: status,
+    canonical_intent: interpretation.intent || null,
+    error_code: status === 'READY' || status === 'MANAGEMENT' ? null : interpretation.reason || null,
   };
 }
 
@@ -123,7 +132,7 @@ export function createSupabaseIngestStores(supabase, {
       if (error?.code === '23505') {
         let lookup = supabase
           .from('trading_events')
-          .select('id,event_version,source_type,source_external_id,external_event_id,occurred_at,created_at,raw_text,structured_payload,thread,metadata,processing_status,canonical_intent,error_code')
+          .select('id,event_version,source_type,source_external_id,external_event_id,occurred_at,received_at,created_at,raw_text,structured_payload,thread,metadata,processing_status,canonical_intent,error_code')
           .eq('workspace_id', row.workspace_id);
 
         if (row.canonical_event_id) {
@@ -151,15 +160,48 @@ export function createSupabaseIngestStores(supabase, {
       return { ok: false, duplicate: false, error: error?.message || 'event reservation failed' };
     },
 
+    async reserveRevision(row) {
+      const { data, error } = await supabase
+        .from('trading_event_revisions')
+        .insert(row)
+        .select('id')
+        .single();
+
+      if (!error && data?.id) {
+        return { ok: true, duplicate: false, revisionId: data.id };
+      }
+
+      if (error?.code === '23505') {
+        const { data: existing, error: lookupError } = await supabase
+          .from('trading_event_revisions')
+          .select('id,event_version,source_type,source_external_id,external_event_id,occurred_at,received_at,created_at,raw_text,structured_payload,thread,metadata,processing_status,canonical_intent,error_code')
+          .eq('trading_event_id', row.trading_event_id)
+          .eq('revision_key', row.revision_key)
+          .maybeSingle();
+        if (!lookupError && existing?.id) {
+          const event = persistedEvent(existing);
+          const interpretation = persistedInterpretation(existing);
+          return {
+            ok: true,
+            duplicate: true,
+            revisionId: existing.id,
+            ...(event ? { event } : {}),
+            ...(interpretation ? { interpretation } : {}),
+          };
+        }
+      }
+
+      return { ok: false, duplicate: false, error: error?.message || 'event revision reservation failed' };
+    },
+
     async updateInterpretation(eventId, interpretation = {}) {
       if (!eventId) return;
-      const status = String(interpretation.status || 'NEEDS_REVIEW');
-      const payload = {
-        processing_status: status,
-        canonical_intent: interpretation.intent || null,
-        error_code: status === 'READY' || status === 'MANAGEMENT' ? null : interpretation.reason || null,
-      };
-      await supabase.from('trading_events').update(payload).eq('id', eventId);
+      await supabase.from('trading_events').update(interpretationPayload(interpretation)).eq('id', eventId);
+    },
+
+    async updateRevisionInterpretation(revisionId, interpretation = {}) {
+      if (!revisionId) return;
+      await supabase.from('trading_event_revisions').update(interpretationPayload(interpretation)).eq('id', revisionId);
     },
   };
 
