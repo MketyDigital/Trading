@@ -1,7 +1,19 @@
 import { encryptSecret } from '../security/secret_box.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 
-const PROVIDERS = new Set(['openai','gemini','google','deepseek','groq','cloudflare_ai','workers_ai','custom']);
+const PROVIDERS = new Set([
+  'openai',
+  'azure_openai',
+  'gemini',
+  'google',
+  'vertex_ai',
+  'deepseek',
+  'groq',
+  'cloudflare_ai',
+  'workers_ai',
+  'aws_bedrock',
+  'custom',
+]);
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -10,6 +22,24 @@ function json(body, status = 200) {
 function text(value) { const v = String(value ?? '').trim(); return v || null; }
 function number(value, fallback) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }
 async function body(request) { try { const v = await request.json(); return v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { return null; } }
+
+function safeProviderConfig(providerName, input = {}) {
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  if (providerName === 'vertex_ai') {
+    const projectId = text(source.projectId ?? source.project_id);
+    const location = text(source.location);
+    return {
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(location ? { location } : {}),
+    };
+  }
+  if (providerName === 'aws_bedrock') {
+    const region = text(source.region);
+    return region ? { region } : {};
+  }
+  return {};
+}
+
 function publicProvider(row = {}) {
   return {
     id: row.id,
@@ -21,6 +51,9 @@ function publicProvider(row = {}) {
     temperature: Number(row.temperature ?? 0.1),
     maxOutputTokens: Number(row.max_output_tokens ?? 1000),
     accountId: row.account_id ?? null,
+    providerConfig: row.provider_config && typeof row.provider_config === 'object' && !Array.isArray(row.provider_config)
+      ? row.provider_config
+      : {},
     usesBinding: Boolean(row.uses_binding),
     credentialConfigured: Boolean(row.api_key_ciphertext || row.api_key_encrypted || row.api_key),
     createdAt: row.created_at ?? null,
@@ -58,6 +91,7 @@ function parse(input = {}) {
   const providerName = text(input.providerName ?? input.provider_name)?.toLowerCase();
   const modelName = text(input.modelName ?? input.model_name);
   if (!providerName || !PROVIDERS.has(providerName) || !modelName) return { ok: false, reason: 'AI_PROVIDER_CONFIGURATION_INVALID' };
+  const providerConfig = safeProviderConfig(providerName, input.providerConfig ?? input.provider_config);
   return {
     ok: true,
     value: {
@@ -69,6 +103,7 @@ function parse(input = {}) {
       temperature: Math.max(0, Math.min(2, number(input.temperature, 0.1))),
       max_output_tokens: Math.max(64, Math.min(32000, Math.trunc(number(input.maxOutputTokens ?? input.max_output_tokens, 1000)))),
       account_id: text(input.accountId ?? input.account_id),
+      provider_config: providerConfig,
       uses_binding: Boolean(input.usesBinding ?? input.uses_binding),
     },
     apiKey: text(input.apiKey ?? input.api_key),
