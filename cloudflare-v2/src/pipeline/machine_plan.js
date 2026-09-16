@@ -128,18 +128,21 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL', stopLoss });
   }
 
-  const explicitTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const directTpPattern = new RegExp(`\\bTP\\s*([1-9]\\d?)?\\s*(?:TO\\s*)?[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const changeTp = text.match(explicitTpPattern) || (!containsTradeSide ? text.match(directTpPattern) : null);
-  if (changeTp) {
-    const takeProfit = parsedNumber(changeTp[2]);
+  const explicitIndexedTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP([1-9]\\d?)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const explicitUnindexedTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directIndexedTpPattern = new RegExp(`\\bTP([1-9]\\d?)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directUnindexedTpPattern = new RegExp(`\\bTP(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const indexedTp = text.match(explicitIndexedTpPattern) || (!containsTradeSide ? text.match(directIndexedTpPattern) : null);
+  if (indexedTp) {
+    const takeProfit = parsedNumber(indexedTp[2]);
     if (takeProfit == null) return null;
-    const targetIndex = changeTp[1] ? Number(changeTp[1]) : null;
-    return withManagementSymbol(text, {
-      type: 'CHANGE_TP',
-      takeProfit,
-      ...(targetIndex ? { targetIndex } : {}),
-    });
+    return withManagementSymbol(text, { type: 'CHANGE_TP', takeProfit, targetIndex: Number(indexedTp[1]) });
+  }
+  const unindexedTp = text.match(explicitUnindexedTpPattern) || (!containsTradeSide ? text.match(directUnindexedTpPattern) : null);
+  if (unindexedTp) {
+    const takeProfit = parsedNumber(unindexedTp[1]);
+    if (takeProfit == null) return null;
+    return withManagementSymbol(text, { type: 'CHANGE_TP', takeProfit });
   }
 
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
