@@ -141,3 +141,48 @@ test('passes an explicit latency budget into AI router', async () => {
   });
   assert.equal(seen, 333);
 });
+
+test('does not call AI merely because a deterministic signal is missing optional protection', async () => {
+  for (const text of [
+    'xauusd sell\n\nentry 4273.25-4279.76\nsl 4380',
+    'BUY XAUUSD ENTRY 4275 TP 4300',
+    'SELL XAUUSD SL 4300',
+    'BUY XAUUSD TP 4350',
+    'V75 index Sell Now!!! 😡😡😡',
+  ]) {
+    let called = false;
+    const result = await interpretTradingEvent({ text }, {
+      aiRouter: {
+        processSignal: async () => {
+          called = true;
+          throw new Error('AI must not run for deterministic incomplete signals');
+        },
+      },
+    });
+    assert.equal(result.status, 'READY', text);
+    assert.equal(result.source, 'deterministic', text);
+    assert.equal(called, false, text);
+    assert.equal(result.intent.incomplete, true, text);
+  }
+});
+
+test('understands invalid SELL SL geometry deterministically before execution validation', async () => {
+  let called = false;
+  const result = await interpretTradingEvent({ text: 'xauusd sell\n\nentry 4273.25-4279.76\nsl 4180' }, {
+    aiRouter: {
+      processSignal: async () => {
+        called = true;
+        throw new Error('AI must not decide deterministic geometry');
+      },
+    },
+  });
+
+  assert.equal(result.status, 'READY');
+  assert.equal(result.source, 'deterministic');
+  assert.equal(called, false);
+  assert.equal(result.intent.side, 'SELL');
+  assert.deepEqual(result.intent.entry, { kind: 'RANGE', min: 4273.25, max: 4279.76 });
+  assert.equal(result.intent.stopLoss, 4180);
+  assert.deepEqual(result.intent.takeProfits, []);
+  assert.equal(result.intent.incomplete, true);
+});
