@@ -28,13 +28,14 @@ test('Telegram destination adapter sends a sanitized sendMessage request and res
   assert.equal(JSON.stringify(result).includes('TEST_BOT_TOKEN'), false);
 });
 
-test('Telegram destination adapter fails closed without returning Telegram response details', async () => {
+test('Telegram destination adapter fails closed with sanitized provider diagnostics and no credentials', async () => {
   const result = await sendTelegramDestination({
     botToken: 'TEST_BOT_TOKEN',
     chatId: 'TEST_CHAT_ID',
     text: 'BUY XAUUSD',
     fetchFn: async () => new Response(JSON.stringify({
       ok: false,
+      error_code: 400,
       description: 'synthetic remote error detail',
     }), {
       status: 400,
@@ -42,8 +43,14 @@ test('Telegram destination adapter fails closed without returning Telegram respo
     }),
   });
 
-  assert.deepEqual(result, { ok: false, status: 400, errorCode: 'TELEGRAM_SEND_REJECTED' });
-  assert.equal(JSON.stringify(result).includes('synthetic remote error detail'), false);
+  assert.deepEqual(result, {
+    ok: false,
+    status: 400,
+    errorCode: 'TELEGRAM_SEND_REJECTED',
+    providerCode: 400,
+    providerDescription: 'synthetic remote error detail',
+  });
+  assert.equal(JSON.stringify(result).includes('TEST_BOT_TOKEN'), false);
 });
 
 test('Telegram destination adapter validates required fields before network use', async () => {
