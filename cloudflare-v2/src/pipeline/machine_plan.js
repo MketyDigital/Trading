@@ -4,7 +4,7 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
 const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
-const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?$/i;
+const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?(?:\s+INDEX)?$/i;
 const DERIV_SYNTHETIC_SYMBOL_SOURCE = String.raw`(?:Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)`;
 const DERIV_SYNTHETIC_SYMBOL = new RegExp(`^${DERIV_SYNTHETIC_SYMBOL_SOURCE}$`, 'i');
 const OPTIONAL_MANAGEMENT_SYMBOL_WORDS = String.raw`(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}`;
@@ -276,7 +276,7 @@ function extractSymbolToken(text, sideInfo) {
 
   const synthetic = extractDerivSyntheticSymbol(after, { anchored: false });
   if (synthetic) return synthetic;
-  const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?)/i)?.[1];
+  const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?(?:\s+index)?)/i)?.[1];
   if (derivShort) return derivShort;
   const compact = after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1] || null;
   return compact && isLikelyCompactSymbol(compact) ? compact : null;
