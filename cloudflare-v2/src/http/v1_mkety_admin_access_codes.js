@@ -245,14 +245,14 @@ export function createMketyAdminAccessCodeStore(supabase) {
     async revokeAccessCode(id) {
       const accessCodeId = text(id);
       if (!accessCodeId) throw new Error('ACCESS_CODE_ID_REQUIRED');
-      if (typeof supabase.rpc !== 'function') throw new Error('ACCESS_CODE_REVOKE_RPC_UNAVAILABLE');
-      const { data, error } = await supabase.rpc('revoke_trading_workspace_access', {
-        p_access_code_id: accessCodeId,
-      });
-      if (error) throw new Error('ACCESS_CODE_REVOKE_FAILED');
-      const revoked = Array.isArray(data) ? data[0] : data;
-      if (!revoked?.id) throw new Error('ACCESS_CODE_REVOKE_FAILED');
-      return revoked;
+      const { data, error } = await supabase
+        .from('trading_access_codes')
+        .update({ status: 'revoked', updated_at: new Date().toISOString() })
+        .eq('id', accessCodeId)
+        .select(ACCESS_CODE_PUBLIC_SELECT)
+        .maybeSingle();
+      if (error || !data) throw new Error('ACCESS_CODE_REVOKE_FAILED');
+      return data;
     },
     async purgeSyntheticWorkspace(id) {
       const workspaceId = text(id);
@@ -351,34 +351,40 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
       try {
         controls = createTradingRuntimeControlStore(await supabaseFactory(env));
       } catch {
-        return json({ ok: false, reason: 'RUNTIME_CONTROL_STORE_UNAVAILABLE' }, 503);
+        return json({ ok: false, reason: 'MKETY_ADMIN_RUNTIME_CONTROL_STORE_UNAVAILABLE' }, 503);
       }
     }
     if (request.method === 'GET') {
       try {
         return json(await runtimeControlResponse(controls));
-      } catch (error) {
-        return json({ ok: false, reason: error?.message || 'RUNTIME_CONTROL_READ_FAILED' }, 503);
+      } catch {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' }, 503);
       }
     }
-    if (request.method !== 'PATCH' && request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
-    const body = await readJson(request);
-    if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-    if (!hasRuntimePatch(body)) return json({ ok: false, reason: 'RUNTIME_CONTROL_PATCH_REQUIRED' }, 400);
-    try {
-      if (typeof body.tradingAccessEnabled === 'boolean') {
-        await controls.setTradingAccessEnabled(body.tradingAccessEnabled, 'mkety-admin');
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+      if (!hasRuntimePatch(body)) {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_BOOLEAN_REQUIRED' }, 400);
       }
-      if (typeof body.brokerExecutionEnabled === 'boolean') {
-        await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, 'mkety-admin');
+      try {
+        if (typeof body.tradingAccessEnabled === 'boolean') {
+          if (typeof controls.setTradingAccessEnabled !== 'function') throw new Error('TRADING_ACCESS_CONTROL_UNAVAILABLE');
+          await controls.setTradingAccessEnabled(body.tradingAccessEnabled, { updatedBy: 'mkety-admin' });
+        }
+        if (typeof body.brokerExecutionEnabled === 'boolean') {
+          await controls.setBrokerExecutionEnabled(body.brokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+        }
+        if (typeof body.liveBrokerExecutionEnabled === 'boolean') {
+          if (typeof controls.setLiveBrokerExecutionEnabled !== 'function') throw new Error('LIVE_BROKER_CONTROL_UNAVAILABLE');
+          await controls.setLiveBrokerExecutionEnabled(body.liveBrokerExecutionEnabled, { updatedBy: 'mkety-admin' });
+        }
+        return json(await runtimeControlResponse(controls));
+      } catch {
+        return json({ ok: false, reason: 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503);
       }
-      if (typeof body.liveBrokerExecutionEnabled === 'boolean') {
-        await controls.setLiveBrokerExecutionEnabled(body.liveBrokerExecutionEnabled, 'mkety-admin');
-      }
-      return json(await runtimeControlResponse(controls));
-    } catch (error) {
-      return json({ ok: false, reason: error?.message || 'RUNTIME_CONTROL_UPDATE_FAILED' }, 503);
     }
+    return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, PATCH' });
   }
 
   let accessStore = store;
@@ -386,35 +392,39 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     try {
       accessStore = createMketyAdminAccessCodeStore(await supabaseFactory(env));
     } catch {
-      return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
+      return json({ ok: false, reason: 'MKETY_ADMIN_ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
+    }
+  }
+
+  const purgeWorkspaceId = purgeWorkspaceIdFromPath(url.pathname);
+  if (purgeWorkspaceId) {
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (typeof accessStore.purgeSyntheticWorkspace !== 'function') return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_UNAVAILABLE' }, 503);
+    try {
+      const result = await accessStore.purgeSyntheticWorkspace(purgeWorkspaceId);
+      return json({ ok: true, workspace: result });
+    } catch (error) {
+      const reason = String(error?.message || 'SYNTHETIC_WORKSPACE_PURGE_FAILED');
+      if (reason === 'SYNTHETIC_WORKSPACE_PROTECTED') return json({ ok: false, reason }, 403);
+      return json({ ok: false, reason: 'SYNTHETIC_WORKSPACE_PURGE_FAILED' }, 503);
     }
   }
 
   const revokeId = revokeIdFromPath(url.pathname);
   if (revokeId) {
-    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
+    if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
+    if (typeof accessStore.revokeAccessCode !== 'function') return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_UNAVAILABLE' }, 503);
     try {
       const row = await accessStore.revokeAccessCode(revokeId);
       return json({ ok: true, accessCode: safePublicAccessCode(row) });
-    } catch (error) {
-      return json({ ok: false, reason: error?.message || 'ACCESS_CODE_REVOKE_FAILED' }, 503);
+    } catch {
+      return json({ ok: false, reason: 'ACCESS_CODE_REVOKE_FAILED' }, 503);
     }
   }
 
-  const purgeId = purgeWorkspaceIdFromPath(url.pathname);
-  if (purgeId) {
-    if (request.method !== 'DELETE') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
-    try {
-      const result = await accessStore.purgeSyntheticWorkspace(purgeId);
-      return json({ ok: true, workspace: result });
-    } catch (error) {
-      const reason = error?.message || 'SYNTHETIC_WORKSPACE_PURGE_FAILED';
-      const status = reason === 'SYNTHETIC_WORKSPACE_PROTECTED' ? 403 : 503;
-      return json({ ok: false, reason }, status);
-    }
+  if (url.pathname !== '/api/v1/mkety-admin/access-codes') {
+    return json({ ok: false, reason: 'MKETY_ADMIN_ROUTE_NOT_FOUND' }, 404);
   }
-
-  if (url.pathname !== '/api/v1/mkety-admin/access-codes') return json({ ok: false, reason: 'NOT_FOUND' }, 404);
 
   if (request.method === 'GET') {
     try {
@@ -425,16 +435,20 @@ export async function handleMketyAdminAccessCodesRequest(request, env = {}, {
     }
   }
 
-  if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
-  const body = await readJson(request);
-  if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-  const plan = await createMketyAdminAccessCodePlan(body, { now, randomUUID });
-  if (!plan.ok) return json({ ok: false, reason: plan.reason }, 400);
-
-  try {
-    const row = await accessStore.createAccessCode(plan);
-    return json({ ok: true, accessCode: safePublicAccessCode(row, plan.plainCode) }, 201);
-  } catch (error) {
-    return json({ ok: false, reason: error?.message || 'ACCESS_CODE_CREATE_FAILED' }, 503);
+  if (request.method === 'POST') {
+    const body = await readJson(request);
+    if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+    const plan = await createMketyAdminAccessCodePlan(body, { now, randomUUID });
+    if (!plan.ok) return json({ ok: false, reason: plan.reason }, 400);
+    try {
+      const row = await accessStore.createAccessCode(plan);
+      return json({ ok: true, accessCode: safePublicAccessCode(row, plan.plainCode) }, 201);
+    } catch (error) {
+      const reason = String(error?.message || 'ACCESS_CODE_CREATE_FAILED');
+      const clientErrors = new Set(['ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND', 'ACCESS_CODE_REISSUE_OWNER_MISMATCH']);
+      return json({ ok: false, reason: clientErrors.has(reason) ? reason : 'ACCESS_CODE_CREATE_FAILED' }, clientErrors.has(reason) ? 409 : 503);
+    }
   }
+
+  return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
 }
