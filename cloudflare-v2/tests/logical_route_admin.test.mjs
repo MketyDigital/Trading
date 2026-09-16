@@ -31,16 +31,20 @@ test('feed rows for same source and destination with compatible settings become 
   assert.equal(groups[0].mixedSettings, false);
 });
 
-test('feed rows with incompatible settings stay separate logical routes', () => {
+test('incompatible historical feed rows are flagged and never silently normalized', () => {
   const groups = groupLogicalRoutes([
     row('route-gold', 'feed-a', { route_name: 'Gold only', filters: { allowedCanonicalSymbols: ['XAUUSD'] } }),
     row('route-all', 'feed-b', { route_name: 'All supported', filters: {} }),
   ]);
-  assert.equal(groups.length, 2);
-  assert.deepEqual(groups.map((group) => group.selectedFeedIds), [['feed-a'], ['feed-b']]);
-  assert.deepEqual(groups.map((group) => group.routeName), ['Gold only', 'All supported']);
-  assert.deepEqual(groups[0].filters, { allowedCanonicalSymbols: ['XAUUSD'] });
-  assert.deepEqual(groups[1].filters, {});
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].mode, 'selective');
+  assert.deepEqual(groups[0].selectedFeedIds, ['feed-a', 'feed-b']);
+  assert.deepEqual(groups[0].routeIds, ['route-gold', 'route-all']);
+  assert.equal(groups[0].mixedSettings, true);
+  assert.equal(groups[0].routeName, null);
+  assert.deepEqual(groups[0].filters, {});
+  assert.equal(groups[0].priority, null);
+  assert.equal(groups[0].enabled, null);
 });
 
 test('suppressed compatible legacy default is visible but does not change selective mode', () => {
