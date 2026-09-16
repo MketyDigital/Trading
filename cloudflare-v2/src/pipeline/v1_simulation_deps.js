@@ -3,6 +3,8 @@ import { decryptConnectionCredentials } from '../security/connection_credentials
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
 import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
+import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
+import { evaluateRouteFilters } from '../destinations/route_filters.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -176,20 +178,44 @@ function resolveDestinationSymbol(account, symbol) {
   return resolved;
 }
 
-async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
-  const trustedSourceId = String(sourceId || '').trim();
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {} } = {}) {
+  const trustedSourceId = text(sourceId);
   if (!trustedSourceId) return [];
 
-  const { data: routes, error: routeError } = await supabase
+  const { data: routesData, error: routeError } = await supabase
     .from('source_destination_routes')
-    .select('destination_id,priority')
+    .select('destination_id,priority,source_feed_id,filters')
     .eq('workspace_id', workspaceId)
     .eq('source_connection_id', trustedSourceId)
     .eq('is_active', true)
     .order('priority', { ascending: true });
   if (routeError) throw new Error('failed to load source broker routes');
 
-  const destinationIds = (routes || []).map((row) => String(row.destination_id || '').trim()).filter(Boolean);
+  const routes = Array.isArray(routesData) ? routesData : [];
+  let feedId = null;
+  const providerFeedId = providerFeedIdFromEvent(event);
+  if (providerFeedId) {
+    const { data: feed, error: feedError } = await supabase
+      .from('source_feeds')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('source_connection_id', trustedSourceId)
+      .eq('provider_feed_id', providerFeedId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (feedError) throw new Error('failed to resolve source feed for broker routes');
+    feedId = text(feed?.id) || null;
+  }
+
+  const feedRoutes = feedId
+    ? routes.filter((row) => text(row.source_feed_id) === feedId)
+    : [];
+  const selectedRoutes = feedRoutes.length
+    ? feedRoutes
+    : routes.filter((row) => !text(row.source_feed_id));
+  if (!selectedRoutes.length) return [];
+
+  const destinationIds = selectedRoutes.map((row) => text(row.destination_id)).filter(Boolean);
   if (!destinationIds.length) return [];
 
   const { data: destinations, error: destinationError } = await supabase
@@ -201,15 +227,16 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId) {
     .in('id', destinationIds);
   if (destinationError) throw new Error('failed to load broker destinations');
 
-  const byDestination = new Map((destinations || []).map((row) => [String(row.id), row]));
-  return destinationIds
-    .map((id) => byDestination.get(id))
-    .filter(Boolean)
-    .map((row) => String(row.destination_ref || '').trim())
+  const byDestination = new Map((destinations || []).map((row) => [text(row.id), row]));
+  return selectedRoutes
+    .map((route) => ({ route, destination: byDestination.get(text(route.destination_id)) }))
+    .filter(({ destination }) => Boolean(destination))
+    .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
+    .map(({ destination }) => text(destination.destination_ref))
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, sourceId, accountCatalogLoader } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -222,7 +249,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   return {
     ...state,
     async accountProvider() {
-      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId);
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation });
       if (!accountIds.length) return [];
       const { data, error } = await supabase
         .from('trade_accounts')
