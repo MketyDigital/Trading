@@ -59,6 +59,10 @@ function feedIdOf(row = {}) {
   return text(row.source_feed_id ?? row.sourceFeedId) || null;
 }
 
+function rowIdOf(row = {}) {
+  return text(row.id);
+}
+
 export function groupLogicalRoutes(routes = []) {
   const pairs = new Map();
   for (const row of Array.isArray(routes) ? routes : []) {
@@ -86,7 +90,7 @@ export function groupLogicalRoutes(routes = []) {
       const selectiveRows = compatible.rows.filter((row) => feedIdOf(row));
       const defaultRows = compatible.rows.filter((row) => !feedIdOf(row));
       const settings = compatible.settings;
-      const routeIds = compatible.rows.map((row) => text(row.id)).filter(Boolean);
+      const routeIds = compatible.rows.map(rowIdOf).filter(Boolean);
       const mode = selectiveRows.length ? 'selective' : 'all';
       const keySuffix = encodeURIComponent(settingsKey(settings));
 
@@ -109,6 +113,54 @@ export function groupLogicalRoutes(routes = []) {
   }
 
   return result;
+}
+
+export function inspectLogicalRouteEdit({
+  pairRows = [],
+  previousRouteIds = [],
+  selectedFeedIds = [],
+  mode = 'selective',
+} = {}) {
+  const rows = Array.isArray(pairRows) ? pairRows : [];
+  const previousIds = [...new Set((Array.isArray(previousRouteIds) ? previousRouteIds : []).map(text).filter(Boolean))];
+  const previous = new Set(previousIds);
+  const foundPrevious = new Set();
+  const editingRows = [];
+  const siblingRows = [];
+
+  for (const row of rows) {
+    const id = rowIdOf(row);
+    if (id && previous.has(id)) {
+      editingRows.push(row);
+      foundPrevious.add(id);
+    } else {
+      siblingRows.push(row);
+    }
+  }
+
+  const desiredFeeds = new Set((Array.isArray(selectedFeedIds) ? selectedFeedIds : []).map(text).filter(Boolean));
+  const overlappingFeedRouteIds = siblingRows
+    .filter((row) => feedIdOf(row) && desiredFeeds.has(feedIdOf(row)))
+    .map(rowIdOf)
+    .filter(Boolean);
+  const activeSiblingSelectiveRouteIds = siblingRows
+    .filter((row) => feedIdOf(row) && rowSettings(row).enabled)
+    .map(rowIdOf)
+    .filter(Boolean);
+  const siblingDefaultRouteIds = siblingRows
+    .filter((row) => !feedIdOf(row))
+    .map(rowIdOf)
+    .filter(Boolean);
+
+  return {
+    editingRows,
+    siblingRows,
+    missingPreviousRouteIds: previousIds.filter((id) => !foundPrevious.has(id)),
+    overlappingFeedRouteIds,
+    activeSiblingSelectiveRouteIds,
+    siblingDefaultRouteIds,
+    mode: text(mode).toLowerCase(),
+  };
 }
 
 function normalizedSettings(settings = {}) {
