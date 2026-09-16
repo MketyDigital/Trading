@@ -114,9 +114,11 @@ export function planLogicalRouteReconcile({
   const rows = Array.isArray(existingRows) ? existingRows : [];
   const normalizedMode = text(mode).toLowerCase();
   if (!['all', 'selective'].includes(normalizedMode)) throw new Error('ROUTE_MODE_INVALID');
+  const targetSourceId = text(sourceConnectionId);
+  const targetDestinationId = text(destinationId);
   const authority = {};
-  if (text(sourceConnectionId)) authority.source_connection_id = text(sourceConnectionId);
-  if (text(destinationId)) authority.destination_id = text(destinationId);
+  if (targetSourceId) authority.source_connection_id = targetSourceId;
+  if (targetDestinationId) authority.destination_id = targetDestinationId;
   const common = { ...normalizedSettings(settings), ...authority };
   const desiredFeeds = [...new Set((Array.isArray(selectedFeedIds) ? selectedFeedIds : []).map(text).filter(Boolean))];
   if (normalizedMode === 'selective' && desiredFeeds.length === 0) throw new Error('ROUTE_FEEDS_REQUIRED');
@@ -136,11 +138,15 @@ export function planLogicalRouteReconcile({
     return { updates, inserts, deleteIds };
   }
 
+  const movingAuthority = rows.some((row) =>
+    (targetSourceId && sourceIdOf(row) !== targetSourceId)
+    || (targetDestinationId && destinationIdOf(row) !== targetDestinationId));
+
   const byFeed = new Map();
   const reusable = [];
   for (const row of rows) {
     const feedId = feedIdOf(row);
-    if (feedId && !byFeed.has(feedId)) byFeed.set(feedId, row);
+    if (!movingAuthority && feedId && !byFeed.has(feedId)) byFeed.set(feedId, row);
     else reusable.push(row);
   }
 
