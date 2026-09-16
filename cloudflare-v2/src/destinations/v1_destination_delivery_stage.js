@@ -17,6 +17,7 @@ const TEMPLATE_SELECT = [
 ].join(',');
 
 const WEBHOOK_MODES = new Set(['mkety_signed', 'raw_text', 'raw_json']);
+const TELEGRAM_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
 
 function text(value) {
   return String(value ?? '').trim();
@@ -379,7 +380,11 @@ function cleanRawFallback(event, template, deps) {
 
 async function formatTelegramForDelivery({ destination, event, interpretation }, deps) {
   const template = safeObject(destination.template);
-  const mode = text(template.formatting_mode ?? template.formattingMode) || 'template';
+  const settings = safeObject(destination.settings);
+  const requestedMode = text(settings.formattingMode ?? settings.formatting_mode).toLowerCase();
+  const mode = TELEGRAM_FORMAT_MODES.has(requestedMode)
+    ? requestedMode
+    : (text(template.formatting_mode ?? template.formattingMode) || 'template');
 
   if (mode !== 'ai_then_fallback') {
     const formatted = deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
