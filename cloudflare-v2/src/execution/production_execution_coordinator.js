@@ -1,4 +1,5 @@
 import { evaluateAccountPolicy } from './account_policy.js';
+import { applyProtectionValidationPolicy } from '../pipeline/protection_validation_policy.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -68,12 +69,15 @@ function mergePolicyRequest(plan, action, materialized = {}) {
   };
 }
 
-function safeBrokerOutcome(action = {}, result = {}) {
+function safeBrokerOutcome(action = {}, result = {}, skippedProtections = []) {
   const outcome = {
     status: result?.duplicate === true ? 'DUPLICATE' : 'SUCCEEDED',
     legId: action.legId ?? null,
     idempotencyKey: action.idempotencyKey ?? null,
   };
+  if (Array.isArray(skippedProtections) && skippedProtections.length) {
+    outcome.skippedProtections = skippedProtections.map((item) => ({ ...item }));
+  }
   if (result?.duplicate === true) outcome.duplicate = true;
   if (result?.brokerPositionId != null) outcome.brokerPositionId = String(result.brokerPositionId);
   if (result?.brokerOrderId != null) outcome.brokerOrderId = String(result.brokerOrderId);
@@ -298,6 +302,18 @@ async function runAccountPlan({
     }
 
     const safetyPolicy = accountSafetyPolicy(currentAccount);
+    const protection = applyProtectionValidationPolicy(executableAction, safetyPolicy);
+    if (!protection.allowed) {
+      outcomes.push({
+        status: 'BLOCKED',
+        legId: executableAction?.legId ?? null,
+        idempotencyKey: executableAction?.idempotencyKey ?? null,
+        reason: protection.reason || 'INVALID_PROTECTION_GEOMETRY',
+      });
+      continue;
+    }
+    executableAction = protection.action;
+
     const finalPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
     const policy = evaluateAccountPolicy(safetyPolicy, finalPolicyRequest);
     if (!policy.allowed) {
@@ -385,7 +401,7 @@ async function runAccountPlan({
       }
     }
 
-    outcomes.push(safeBrokerOutcome(executableAction, result));
+    outcomes.push(safeBrokerOutcome(executableAction, result, protection.skipped));
   }
 
   const failed = outcomes.some((item) => item.status === 'FAILED');
