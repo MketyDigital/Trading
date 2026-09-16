@@ -671,3 +671,173 @@ No LIVE gate was enabled by PR #98. CI/deployment/DEMO success does not authoriz
 Production gates are green, but real broker/source acceptance still requires fresh controlled DEMO evidence for feed A/B isolation, unselected-feed skip for the same selective destination, unrelated all-channels destination independence, reusable Telegram bot to multiple endpoints, exact Forward-as-is delivery, cTrader DEMO, MT5 DEMO with connector online, replay/no duplicate, management/reply/follow-up correlation, reconnect recovery and a final zero-LIVE audit.
 
 Current detailed operator semantics: `docs/PR98_PRODUCTION_ACCEPTANCE_ADDENDUM.md`.
+
+---
+
+## 21. Continuation authority — 2026-09-16 PR #101
+
+**This section supersedes stale production-head wording in section 20 and records only behavior verified on the isolated continuation branch. It does not claim that PR #101 is deployed.**
+
+### 21.1 Actual production main at continuation start
+
+At the start of this continuation audit, current `main` was:
+
+- commit `98bb917d562a40e212a51bd6eba726ff2d212fbc`;
+- merged PR `#100` — `Stabilize CMP and Telegram diagnostics`.
+
+Section 20's PR #98 production-head statement is therefore historical/stale. Re-query `main` and production deployment state before any future acceptance session rather than assuming either section remains current.
+
+Continuation development is isolated on:
+
+- branch `fix/ai-operations-observability-continuation`;
+- draft PR `#101`.
+
+No continuation work in this section is production authority until reviewed, merged to `main`, deployed through the normal production workflow and accepted under the DEMO safety matrix.
+
+### 21.2 Deterministic-first interpretation invariants verified on PR #101
+
+Clear, structurally explicit trading intent must not require AI merely because an optional field is missing.
+
+Verified behavior includes:
+
+- explicit side + symbol + entry/SL/TP combinations remain deterministic when optional SL or TP fields are absent;
+- the production regression `xauusd sell / entry 4273.25-4279.76 / sl 4380` no longer escalates to AI merely because no TP exists;
+- supported Deriv shorthand including `V75 index Sell Now!!!` normalizes deterministically;
+- prose, contradiction, conditional/negated commands and genuinely ambiguous material remain guarded/fail-closed rather than being broadly accepted;
+- syntactically clear but geometrically invalid protection remains understood as intent; geometry is a validation/policy concern, not an AI-interpretation concern.
+
+AI remains bounded fallback for genuine ambiguity, never execution authority.
+
+### 21.3 Invalid SL/TP policy verified on PR #101
+
+Protection validation has one canonical semantic authority under `cloudflare-v2/src/execution/protection_validation_policy.js`.
+
+- backward-compatible default is strict `reject_trade`;
+- opt-in `skip_invalid` may omit invalid optional SL/TP components only when the corresponding field policy permits it;
+- valid sibling protections may still proceed;
+- risk-based sizing still blocks when the invalid/missing SL is required to calculate risk;
+- skipping an invalid protective field must never relax symbol, side, entry, volume/risk, route/account, broker capability, workspace authorization, runtime or LIVE gates;
+- skipped protection outcomes must remain auditable and are part of the pending normalized Operations-journal work.
+
+The pipeline compatibility shim must not become a second geometry authority.
+
+### 21.4 Telegram edits/replies/context lifecycle verified on PR #101
+
+Telegram edits use the same native logical message identity but are distinct persisted revisions.
+
+Mandatory behavior now covered by branch tests/CI:
+
+- changed edits are append-only persisted in `trading_event_revisions` (migration `0039_trading_event_revisions.sql`);
+- exact revision replay remains idempotent/no-resend;
+- changed revision content receives a distinct deterministic revision key;
+- edit/original-message lineage resolves before ordinary duplicate suppression;
+- source edits may produce supported management `MODIFY_POSITION` actions on the existing logical group/cohort;
+- edit processing cannot produce an accidental broker `OPEN_POSITION`;
+- formatting-only/no-semantic-change edits produce no broker action;
+- omission of SL/TP from an edit is not destructive removal; removal must be explicit;
+- identity/structural contradictions in an edit fail closed rather than mutating another trade;
+- different revisions of one Telegram message receive distinct broker idempotency keys; retry of the same revision receives the same key;
+- explicit replies remain the strongest correlation path;
+- guarded no-reply context management remains available only when correlation is unambiguous;
+- expanded deterministic management includes explicit SL/TP update/remove, BE, partial/full close and pending-cancel variants while conditional/negated wording remains fail-closed.
+
+Telegram destination lineage is independent of presentation mode:
+
+- source reply -> reply to the mapped destination parent message;
+- source edit -> edit the mapped destination message with Telegram edit semantics;
+- `none`, `clean`, `template`, and `ai_then_fallback` may change presentation but must not break reply/edit lineage;
+- missing edit mapping or Telegram edit failure is isolated and must never fall back to a duplicate standalone send or trigger broker resend.
+
+### 21.5 Durable state fixes verified on PR #101
+
+- missing broker `fillPrice` remains absent and is not converted to `0` by `Number(null)`;
+- successful full close materialization sets the leg/group lifecycle closed as appropriate, remaining volume to zero, and a non-null close timestamp while preserving original opening broker identity/fill;
+- the historical section 13 `closed_at` / `fillPrice` defect is therefore fixed on this branch, but real post-deploy DEMO acceptance is still required before production signoff.
+
+### 21.6 DB-authoritative AI provider contract verified on PR #101
+
+First-class provider transports now include:
+
+- `openai`;
+- `azure_openai`;
+- `gemini` / compatibility `google`;
+- `vertex_ai`;
+- `cloudflare_ai` / compatibility `workers_ai`;
+- `aws_bedrock`;
+- existing generic compatible providers where explicitly configured.
+
+Provider rows are authoritative for provider-specific config. Runtime environment variables must not silently supply provider-specific account/project/region configuration.
+
+Verified contracts include:
+
+- OpenAI Responses API;
+- Azure OpenAI configured v1 Responses endpoint with `api-key` authentication;
+- Gemini `generateContent` with `x-goog-api-key`, not key-in-URL;
+- Vertex AI regional endpoint with DB project/location config and OAuth bearer credential;
+- Cloudflare AI persisted account ID + bearer token, with **no `CLOUDFLARE_ACCOUNT_ID` fallback**;
+- AWS Bedrock regional Converse request with deterministic SigV4 signing.
+
+Migration `0040_ai_provider_authority.sql`:
+
+- adds `provider_config JSONB`;
+- removes legacy plaintext `api_key NOT NULL` so encrypted-only rows are valid;
+- reconciles provider-name constraints.
+
+New provider writes use encrypted `api_key_ciphertext`. Legacy plaintext/encrypted columns are compatibility-read only; do not create new plaintext credential writes.
+
+Provider-specific public/non-secret config is whitelisted before persistence/output. Do not accept arbitrary secret-bearing JSON config as a bypass around encrypted credential storage.
+
+### 21.7 AI diagnostics + health verified on PR #101
+
+`UniversalAIRouter` now returns additive sanitized per-attempt diagnostics while preserving the existing top-level success/error contract used by interpretation.
+
+Diagnostics may contain:
+
+- provider ID/type/model;
+- attempt outcome;
+- latency;
+- HTTP status only when actually present;
+- provider code;
+- retryability;
+- normalized error class;
+- bounded sanitized message;
+- circuit-open state.
+
+Diagnostics must never expose configured credentials, bearer/API-key values, raw authorization headers or raw provider response bodies. Missing HTTP status stays absent; never allow `Number(null)` to materialize it as `0`.
+
+`POST /api/v1/admin/ai-providers/:id/test` is workspace-scoped, uses the persisted provider row and encrypted credential resolution, and persists only sanitized latest-health evidence. Migration `0041_ai_provider_health.sql` stores latest status/check time/diagnostic. Health checking is diagnostics only and never grants trading authority.
+
+### 21.8 Exact branch verification evidence
+
+Important green checkpoints include:
+
+- CI `#2835` — deterministic incomplete-signal fixes;
+- CI `#2869` — Telegram destination edit lineage;
+- CI `#2872` — missing-fill durability fix;
+- CI `#2887` — revision lifecycle + revision-aware broker idempotency;
+- CI `#2891` — first-class AI provider transports;
+- CI `#2894` — DB/admin provider authority;
+- CI `#2896` — normalized sanitized provider diagnostics;
+- CI `#2901` — combined provider authority, diagnostics, health action and nullable-status fix; Worker/trading-core, MT5 bridge and MTProto all passed.
+
+Exact verified code head for CI `#2901`: `1c268972bc47595b08669a6e65b7d7e1606fe950`.
+
+Documentation-only commits after a green code head do not convert branch behavior into production authority.
+
+### 21.9 Next active scope
+
+Next active implementation scope is normalized Operations evidence and customer/admin observability.
+
+Rules for that work:
+
+1. existing `destination_deliveries` remains retry/outbox execution authority;
+2. trading events/revisions, position groups/legs and broker reconciliation state remain their existing authorities;
+3. a new normalized operation journal is **evidence only** and must never itself authorize, retry or resend broker/destination actions;
+4. every journal row must be workspace-scoped and secret-safe;
+5. customer Operations must expose only customer-owned concepts and actionable sanitized reasons;
+6. Mkety Admin may expose richer internal normalized context but still no plaintext secrets/tokens/passwords;
+7. broker success + persistence failure remains repair-only/no-resend;
+8. continue TDD and exact-head CI before moving to controlled real DEMO acceptance;
+9. LIVE remains off throughout this stream.
+
+Primary continuation handoff: `docs/DETERMINISTIC_REVISION_PROTECTION_HANDOFF_2026-09-16.md`.
