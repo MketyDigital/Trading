@@ -25,19 +25,36 @@ function safeEntities(value) {
     : [];
 }
 
-async function telegramRejection(response, status) {
+async function telegramRejection(response, status, errorCode = 'TELEGRAM_SEND_REJECTED') {
   try {
     const payload = await response.json();
     const providerCode = Number(payload?.error_code);
     const retryAfter = Number(payload?.parameters?.retry_after);
-    return failure('TELEGRAM_SEND_REJECTED', status, {
+    return failure(errorCode, status, {
       ...(Number.isInteger(providerCode) ? { providerCode } : {}),
       ...(sanitizeProviderDescription(payload?.description) ? { providerDescription: sanitizeProviderDescription(payload.description) } : {}),
       ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfter } : {}),
     });
   } catch {
-    return failure('TELEGRAM_SEND_REJECTED', status);
+    return failure(errorCode, status);
   }
+}
+
+function validateCommonInput({ botToken, chatId, messageText, parseMode, entities, fetchFn }) {
+  const token = text(botToken);
+  const target = text(chatId);
+  const message = String(messageText ?? '');
+  const mode = text(parseMode) || 'plain';
+  const nativeEntities = safeEntities(entities);
+
+  if (!token) return { error: failure('TELEGRAM_BOT_TOKEN_REQUIRED') };
+  if (!target) return { error: failure('TELEGRAM_CHAT_ID_REQUIRED') };
+  if (!message.trim()) return { error: failure('TELEGRAM_MESSAGE_REQUIRED') };
+  if (mode !== 'plain' && !ALLOWED_PARSE_MODES.has(mode)) return { error: failure('TELEGRAM_PARSE_MODE_UNSUPPORTED') };
+  if (nativeEntities.length && mode !== 'plain') return { error: failure('TELEGRAM_ENTITIES_PARSE_MODE_CONFLICT') };
+  if (typeof fetchFn !== 'function') return { error: failure('TELEGRAM_TRANSPORT_UNAVAILABLE') };
+
+  return { token, target, message, mode, nativeEntities };
 }
 
 export async function sendTelegramDestination({
@@ -50,20 +67,12 @@ export async function sendTelegramDestination({
   fetchFn = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
-  const token = text(botToken);
-  const target = text(chatId);
-  const message = String(messageText ?? '');
-  const mode = text(parseMode) || 'plain';
-  const nativeEntities = safeEntities(entities);
+  const validated = validateCommonInput({ botToken, chatId, messageText, parseMode, entities, fetchFn });
+  if (validated.error) return validated.error;
+  const { token, target, message, mode, nativeEntities } = validated;
   const replyId = Number(replyToMessageId);
 
-  if (!token) return failure('TELEGRAM_BOT_TOKEN_REQUIRED');
-  if (!target) return failure('TELEGRAM_CHAT_ID_REQUIRED');
-  if (!message.trim()) return failure('TELEGRAM_MESSAGE_REQUIRED');
-  if (mode !== 'plain' && !ALLOWED_PARSE_MODES.has(mode)) return failure('TELEGRAM_PARSE_MODE_UNSUPPORTED');
-  if (nativeEntities.length && mode !== 'plain') return failure('TELEGRAM_ENTITIES_PARSE_MODE_CONFLICT');
   if (replyToMessageId != null && (!Number.isInteger(replyId) || replyId <= 0)) return failure('TELEGRAM_REPLY_MESSAGE_ID_INVALID');
-  if (typeof fetchFn !== 'function') return failure('TELEGRAM_TRANSPORT_UNAVAILABLE');
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), boundedTimeout(timeoutMs));
@@ -110,6 +119,71 @@ export async function sendTelegramDestination({
   } catch (error) {
     if (error?.name === 'AbortError') return failure('TELEGRAM_SEND_TIMEOUT');
     return failure('TELEGRAM_TRANSPORT_FAILED');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function editTelegramDestination({
+  botToken,
+  chatId,
+  messageId,
+  text: messageText,
+  parseMode = 'plain',
+  entities = null,
+  fetchFn = globalThis.fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+} = {}) {
+  const validated = validateCommonInput({ botToken, chatId, messageText, parseMode, entities, fetchFn });
+  if (validated.error) return validated.error;
+  const { token, target, message, mode, nativeEntities } = validated;
+  const editMessageId = Number(messageId);
+  if (!Number.isInteger(editMessageId) || editMessageId <= 0) return failure('TELEGRAM_EDIT_MESSAGE_ID_INVALID');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), boundedTimeout(timeoutMs));
+  try {
+    const body = {
+      chat_id: target,
+      message_id: editMessageId,
+      text: message,
+      disable_web_page_preview: true,
+    };
+    if (nativeEntities.length) body.entities = nativeEntities;
+    else if (mode !== 'plain') body.parse_mode = mode;
+
+    const response = await fetchFn(`https://api.telegram.org/bot${token}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    const status = Number(response?.status || 0);
+    if (!response?.ok) return telegramRejection(response, status, 'TELEGRAM_EDIT_REJECTED');
+
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      return failure('TELEGRAM_EDIT_RESPONSE_INVALID', status);
+    }
+    if (payload?.ok !== true || payload?.result?.message_id == null) {
+      return failure('TELEGRAM_EDIT_RESPONSE_INVALID', status, {
+        ...(Number.isInteger(Number(payload?.error_code)) ? { providerCode: Number(payload.error_code) } : {}),
+        ...(sanitizeProviderDescription(payload?.description) ? { providerDescription: sanitizeProviderDescription(payload.description) } : {}),
+      });
+    }
+
+    return {
+      ok: true,
+      messageId: payload.result.message_id,
+      status,
+      edited: true,
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') return failure('TELEGRAM_EDIT_TIMEOUT');
+    return failure('TELEGRAM_EDIT_TRANSPORT_FAILED');
   } finally {
     clearTimeout(timer);
   }
