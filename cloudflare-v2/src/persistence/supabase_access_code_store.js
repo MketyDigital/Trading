@@ -24,10 +24,23 @@ function safeMetadata(record = {}, payload = {}, entitlements = record.entitleme
   };
 }
 
+function subscriptionFailure(record, now = new Date()) {
+  if (!record?.id || String(record.product || '') !== 'trading') {
+    return { ok: false, status: 403, reason: 'ACCESS_SUBSCRIPTION_INVALID' };
+  }
+  if (String(record.status || '') !== 'active') {
+    return { ok: false, status: 403, reason: 'ACCESS_SUBSCRIPTION_REVOKED' };
+  }
+  if (record.expires_at && new Date(record.expires_at).getTime() <= new Date(now).getTime()) {
+    return { ok: false, status: 403, reason: 'ACCESS_SUBSCRIPTION_EXPIRED' };
+  }
+  return null;
+}
+
 export function createTradingAccessCodeStore(supabase) {
   requireSupabase(supabase);
 
-  async function restoreSession({ workspaceId, subject, accessCodeId } = {}) {
+  async function restoreSession({ workspaceId, subject, accessCodeId, now = new Date() } = {}) {
     const wid = String(workspaceId || '').trim();
     const sub = String(subject || '').trim();
     const sessionCodeId = String(accessCodeId || '').trim() || null;
@@ -55,6 +68,20 @@ export function createTradingAccessCodeStore(supabase) {
     const currentAccessCodeId = String(workspace.metadata?.accessCodeId || membership.metadata?.accessCodeId || '').trim() || null;
     if (currentAccessCodeId && sessionCodeId !== currentAccessCodeId) {
       return { ok: false, status: 401, reason: 'ACCESS_SESSION_SUPERSEDED' };
+    }
+
+    if (currentAccessCodeId) {
+      const { data: accessCode, error: accessCodeError } = await supabase
+        .from('trading_access_codes')
+        .select('id,workspace_id,product,status,expires_at')
+        .eq('id', currentAccessCodeId)
+        .maybeSingle();
+      if (accessCodeError) return { ok: false, status: 503, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
+      if (!accessCode || String(accessCode.workspace_id || '') !== wid) {
+        return { ok: false, status: 403, reason: 'ACCESS_SUBSCRIPTION_INVALID' };
+      }
+      const failed = subscriptionFailure(accessCode, now);
+      if (failed) return failed;
     }
 
     const rawEntitlements = workspace.metadata?.entitlements || membership.metadata?.entitlements || {};
@@ -94,6 +121,7 @@ export function createTradingAccessCodeStore(supabase) {
           workspaceId: plan.workspace.id,
           subject: plan.membership.subject,
           accessCodeId: plan.codeId,
+          now: payload.now || new Date(),
         });
         return restored.ok ? { ...restored, mode: 'access_code_login' } : restored;
       }
