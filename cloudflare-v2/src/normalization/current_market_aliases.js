@@ -10,8 +10,15 @@ const CURRENT_MARKET_PATTERNS = [
   /\bMKT\s+PRICE\b/gi,
 ];
 
+function stripSeparatorDelimitedPresentationFooter(value) {
+  const lines = String(value ?? '').replace(/\r/g, '').split('\n');
+  const separatorIndex = lines.findIndex((line) => /^\s*(?:~{3,}|-{3,}|\*{3,}|_{3,}|={3,})\s*$/.test(line));
+  if (separatorIndex <= 0) return String(value ?? '');
+  return lines.slice(0, separatorIndex).join('\n').trimEnd();
+}
+
 export function normalizeCurrentMarketAliases(value) {
-  let text = String(value ?? '');
+  let text = stripSeparatorDelimitedPresentationFooter(value);
   for (const pattern of CURRENT_MARKET_PATTERNS) text = text.replace(pattern, ' NOW ');
   return text.replace(/[ \t]+/g, ' ').trim();
 }
