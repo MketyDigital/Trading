@@ -83,8 +83,11 @@ export function createSourceFeedStore(supabase) {
 
 export function providerFeedIdFromEvent(event = {}) {
   const metadata = safeObject(event.metadata);
+  const nativeIdentity = safeObject(metadata.native_identity ?? metadata.nativeIdentity);
   return text(
-    metadata.telegram_chat_id
+    nativeIdentity.chat_id
+    ?? nativeIdentity.chatId
+    ?? metadata.telegram_chat_id
     ?? metadata.telegramChatId
     ?? metadata.chat_id
     ?? metadata.chatId
