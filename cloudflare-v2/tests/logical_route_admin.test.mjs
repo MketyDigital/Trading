@@ -23,7 +23,7 @@ test('legacy default route is exposed as one all-channels logical route', () => 
   assert.deepEqual(groups[0].routeIds, ['route-default']);
 });
 
-test('feed rows for same source and destination become one selective logical route', () => {
+test('feed rows for same source and destination with compatible settings become one selective logical route', () => {
   const groups = groupLogicalRoutes([row('route-a', 'feed-a'), row('route-b', 'feed-b')]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].mode, 'selective');
@@ -31,7 +31,19 @@ test('feed rows for same source and destination become one selective logical rou
   assert.equal(groups[0].mixedSettings, false);
 });
 
-test('suppressed legacy default is visible but does not change selective mode', () => {
+test('feed rows with incompatible settings stay separate logical routes', () => {
+  const groups = groupLogicalRoutes([
+    row('route-gold', 'feed-a', { route_name: 'Gold only', filters: { allowedCanonicalSymbols: ['XAUUSD'] } }),
+    row('route-all', 'feed-b', { route_name: 'All supported', filters: {} }),
+  ]);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((group) => group.selectedFeedIds), [['feed-a'], ['feed-b']]);
+  assert.deepEqual(groups.map((group) => group.routeName), ['Gold only', 'All supported']);
+  assert.deepEqual(groups[0].filters, { allowedCanonicalSymbols: ['XAUUSD'] });
+  assert.deepEqual(groups[1].filters, {});
+});
+
+test('suppressed compatible legacy default is visible but does not change selective mode', () => {
   const groups = groupLogicalRoutes([row('route-default'), row('route-a', 'feed-a')]);
   assert.equal(groups[0].mode, 'selective');
   assert.equal(groups[0].legacyDefaultSuppressed, true);
