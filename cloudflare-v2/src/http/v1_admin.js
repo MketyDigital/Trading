@@ -17,6 +17,10 @@ import { createAdminSourceStore, handleAuthorizedV1AdminSourcesRequest } from '.
 import { createAdminAccountStore, handleAuthorizedV1AdminAccountsRequest } from './v1_admin_accounts.js';
 import { createAdminHostnameStore, handleAuthorizedV1AdminHostnamesRequest } from './v1_admin_hostnames.js';
 import { createAdminDestinationStore, handleAuthorizedV1AdminDestinationsRequest } from './v1_admin_destinations.js';
+import {
+  createAdminDestinationConnectionStore,
+  handleAuthorizedV1AdminDestinationConnectionsRequest,
+} from './v1_admin_destination_connections.js';
 import { createAdminAIStore, handleAuthorizedV1AdminAIRequest } from './v1_admin_ai.js';
 import { createBrandingStore, handleAuthorizedBrandingRequest } from './v1_branding.js';
 import {
@@ -241,6 +245,7 @@ export async function handleV1AdminRequest(request, env = {}, {
   accountStoreFactory = createAdminAccountStore,
   adminHostnameStoreFactory = createAdminHostnameStore,
   destinationStoreFactory = createAdminDestinationStore,
+  destinationConnectionStoreFactory = createAdminDestinationConnectionStore,
   aiStoreFactory = createAdminAIStore,
   brandingStoreFactory = createBrandingStore,
   operationsStoreFactory = createAdminOperationsStore,
@@ -310,6 +315,13 @@ export async function handleV1AdminRequest(request, env = {}, {
     try { accountStore = accountStoreFactory(supabase); }
     catch { return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminAccountsRequest(request, authorization, { accountStore, env });
+  }
+
+  if (url.pathname === '/api/v1/admin/destination-connections' || url.pathname.startsWith('/api/v1/admin/destination-connections/')) {
+    let connectionStore;
+    try { connectionStore = destinationConnectionStoreFactory(supabase, env); }
+    catch { return json({ ok: false, reason: 'DESTINATION_CONNECTION_STORE_UNAVAILABLE' }, 503); }
+    return handleAuthorizedV1AdminDestinationConnectionsRequest(request, authorization, { connectionStore, env });
   }
 
   if (
