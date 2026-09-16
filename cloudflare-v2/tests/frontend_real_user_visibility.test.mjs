@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collapseMketyWorkspaceAccessRows, withMketyAdminAccessManagement } from '../src/dashboard_mkety_admin_access.js';
+import { collapseMketyWorkspaceAccessRows } from '../src/dashboard_mkety_admin_access_codes.js';
 import { withUnifiedTradingConnections } from '../src/dashboard_unified_connections.js';
 import { withSimplifiedAccountControls } from '../src/dashboard_simplified_account_controls.js';
 import { withCTraderCbotConnections } from '../src/dashboard_ctrader_cbot_connections.js';
