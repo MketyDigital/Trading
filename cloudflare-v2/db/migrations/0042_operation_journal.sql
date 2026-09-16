@@ -67,7 +67,8 @@ CREATE INDEX IF NOT EXISTS operation_journal_stage_status_time_idx
 
 ALTER TABLE public.operation_journal ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.operation_journal FROM anon, authenticated;
+REVOKE ALL PRIVILEGES ON TABLE public.operation_journal FROM anon, authenticated;
+GRANT ALL PRIVILEGES ON TABLE public.operation_journal TO service_role;
 
 COMMENT ON TABLE public.operation_journal IS
   'Append-only normalized operational evidence. This table is observability only and never grants retry, resend, routing, broker execution, reconciliation or trading authority.';
