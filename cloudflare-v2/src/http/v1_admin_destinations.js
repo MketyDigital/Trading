@@ -13,7 +13,7 @@ const TEMPLATE_SELECT = [
 ].join(',');
 
 const ROUTE_SELECT = [
-  'id', 'workspace_id', 'source_connection_id', 'destination_id', 'route_name', 'priority', 'is_active',
+  'id', 'workspace_id', 'source_connection_id', 'source_feed_id', 'destination_id', 'route_name', 'priority', 'is_active',
   'filters', 'created_at', 'updated_at',
 ].join(',');
 
@@ -94,6 +94,7 @@ function publicRoute(row = {}) {
     id: row.id,
     workspaceId: row.workspace_id ?? row.workspaceId,
     sourceConnectionId: row.source_connection_id ?? row.sourceConnectionId,
+    sourceFeedId: row.source_feed_id ?? row.sourceFeedId ?? null,
     destinationId: row.destination_id ?? row.destinationId,
     routeName: row.route_name ?? row.routeName ?? null,
     priority: Number(row.priority ?? 100),
@@ -162,21 +163,52 @@ function parseTemplateInput(body = {}) {
   };
 }
 
+function normalizeCanonicalSymbolList(value) {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  if (!Array.isArray(value)) return { ok: false };
+  return {
+    ok: true,
+    value: [...new Set(value.map((item) => String(item ?? '').trim().toUpperCase()).filter(Boolean))],
+  };
+}
+
+function parseRouteFilters(value) {
+  if (value === undefined || value === null) return { ok: true, filters: {} };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, reason: 'ROUTE_FILTERS_INVALID' };
+  const filters = { ...value };
+  const allowed = normalizeCanonicalSymbolList(value.allowedCanonicalSymbols ?? value.allowed_canonical_symbols);
+  const blocked = normalizeCanonicalSymbolList(value.blockedCanonicalSymbols ?? value.blocked_canonical_symbols);
+  if (!allowed.ok || !blocked.ok) return { ok: false, reason: 'ROUTE_FILTERS_INVALID' };
+  if (allowed.value !== undefined) {
+    filters.allowedCanonicalSymbols = allowed.value;
+    delete filters.allowed_canonical_symbols;
+  }
+  if (blocked.value !== undefined) {
+    filters.blockedCanonicalSymbols = blocked.value;
+    delete filters.blocked_canonical_symbols;
+  }
+  return { ok: true, filters };
+}
+
 function parseRouteInput(body = {}) {
   const sourceConnectionId = text(body.sourceConnectionId ?? body.source_connection_id);
+  const sourceFeedId = text(body.sourceFeedId ?? body.source_feed_id);
   const destinationId = text(body.destinationId ?? body.destination_id);
   const priority = Number(body.priority ?? 100);
   if (!sourceConnectionId) return { ok: false, reason: 'SOURCE_CONNECTION_REQUIRED' };
   if (!destinationId) return { ok: false, reason: 'DESTINATION_REQUIRED' };
   if (!Number.isFinite(priority)) return { ok: false, reason: 'ROUTE_PRIORITY_INVALID' };
+  const parsedFilters = parseRouteFilters(body.filters);
+  if (!parsedFilters.ok) return parsedFilters;
   return {
     ok: true,
     input: {
       sourceConnectionId,
+      sourceFeedId,
       destinationId,
       routeName: text(body.routeName ?? body.route_name),
       priority,
-      filters: safeObject(body.filters),
+      filters: parsedFilters.filters,
     },
   };
 }
@@ -312,6 +344,7 @@ export function createAdminDestinationStore(supabase) {
       const row = {
         workspace_id: String(workspaceId),
         source_connection_id: input.sourceConnectionId,
+        source_feed_id: input.sourceFeedId || null,
         destination_id: input.destinationId,
         route_name: input.routeName,
         priority: input.priority ?? 100,
