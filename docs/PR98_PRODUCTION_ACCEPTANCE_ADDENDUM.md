@@ -84,18 +84,46 @@ Post-deploy safety audit remained:
 
 No LIVE switch was enabled by PR #98. DEMO/CI/deployment success does not authorize LIVE.
 
+## Real post-deploy DEMO evidence — 2026-09-16
+
+Production traffic after deployment provided real broker evidence without injecting any test event or mutating routes.
+
+Source feed `-1001822170589` emitted:
+
+1. `telegram:-1001822170589:24135` — `V75(1s) Sell Now!!!!!` — parsed `READY` as fast/incomplete `DERIV:VOLATILITY_75_1S` SELL.
+2. `telegram:-1001822170589:24136` — full V75(1s) SELL signal with entry range, SL and TP1–TP3 — parsed `READY` as the compatible completion.
+
+Verified outcomes:
+
+- cTrader DEMO account `48685071` opened the first leg exactly once at 0.20 lots, broker position `138094107`, fill `5749.35`.
+- The full signal reused the same logical group and modified broker position `138094107` with SL `5815` and TP1 `5720`; it did not duplicate leg 1.
+- TP2 and TP3 were added as independent legs with broker positions `138094685` and `138094690`.
+- Durable group `163eaf58-8aa4-4ee8-a05e-1efb769d5ad4` contains both external event IDs, is no longer incomplete, and retains the original opening fill/order/deal/position identifiers on leg 1.
+- All four cTrader destination-delivery actions were `SUCCEEDED`, attempt count `1`, with distinct idempotency keys and broker responses reporting `duplicate=false`.
+- Octa MT5 DEMO produced **zero execution-delivery rows** for these V75(1s) events. Its current catalog does not advertise Volatility 75, so the synthetic was not forced onto the incompatible MT5 account.
+- Deriv cTrader DEMO catalog does advertise `DERIV:VOLATILITY_75` / `DERIV:VOLATILITY_75_1S` products and XAUUSD.
+- Octa MT5 DEMO catalog advertises XAUUSD and other normal broker symbols; it is therefore suitable for a later cross-broker XAUUSD acceptance when its connector is freshly online.
+- A subsequent freeform analysis event remained `NEEDS_REVIEW` when the AI cascade failed; Mkety did not invent a trading action from it.
+
+Current production routing remained unchanged while gathering this evidence: cTrader and MT5 are still legacy/all-channels routes with blank symbol filters. No selective route or broker account setting was mutated for this acceptance evidence.
+
+### Current MT5 availability limitation
+
+The Octa MT5 account row reports connector status `connected`, but its last durable heartbeat is `2026-09-14T11:09:36.328Z`. There is no separate persisted connector-session registry in Supabase. Treat MT5 real-session acceptance as **not currently proven online** until the Windows terminal/connector sends a fresh heartbeat. This is an external availability limitation, not evidence of a code failure.
+
 ## Remaining real DEMO acceptance
 
-Production gates prove deploy/configuration safety, not end-to-end broker acceptance. Before any LIVE consideration, still obtain controlled DEMO evidence for:
+Production gates plus the real V75 evidence above now prove cTrader DEMO synthetic execution, fast→full completion, durable correlation, incompatible-MT5 isolation and non-duplicate execution for that event set.
+
+Still outstanding before any LIVE consideration:
 
 1. normal Telegram Bot source allowlist/feed creation;
 2. selected feed A/B routing and an unselected feed skip for the same destination;
-3. an unrelated all-channels destination continuing independently;
+3. an unrelated all-channels destination continuing independently while another destination is selective;
 4. one reusable Telegram delivery bot serving multiple destination endpoints;
-5. `Forward as-is` exact-text delivery;
-6. cTrader DEMO execution on a supported catalog symbol;
-7. MT5 DEMO execution with the intended connector online and a supported catalog symbol;
-8. replay/idempotency with no duplicate broker open;
-9. management/reply/follow-up correlation to the durable original position group;
-10. connector disconnect/reconnect recovery;
-11. final fresh zero-LIVE audit.
+5. `Forward as-is` exact-text Telegram delivery;
+6. MT5 DEMO XAUUSD execution with the intended connector freshly online;
+7. an explicit replay/recovery exercise proving no duplicate broker open (current evidence proves unique first-attempt idempotency but not a deliberate replay);
+8. management/reply handling such as SL-to-BE, explicit SL/TP update, partial/full close and pending cancellation where applicable;
+9. connector disconnect/reconnect recovery;
+10. final fresh zero-LIVE audit.
