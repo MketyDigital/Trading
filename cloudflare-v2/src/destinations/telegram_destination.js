@@ -11,14 +11,33 @@ function boundedTimeout(value) {
   return Math.max(100, Math.min(parsed, 15000));
 }
 
-function failure(errorCode, status = 0) {
-  return { ok: false, status: Number(status) || 0, errorCode };
+function sanitizeProviderDescription(value) {
+  return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) || null;
+}
+
+function failure(errorCode, status = 0, extra = {}) {
+  return { ok: false, status: Number(status) || 0, errorCode, ...extra };
 }
 
 function safeEntities(value) {
   return Array.isArray(value)
     ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)).map((item) => ({ ...item }))
     : [];
+}
+
+async function telegramRejection(response, status) {
+  try {
+    const payload = await response.json();
+    const providerCode = Number(payload?.error_code);
+    const retryAfter = Number(payload?.parameters?.retry_after);
+    return failure('TELEGRAM_SEND_REJECTED', status, {
+      ...(Number.isInteger(providerCode) ? { providerCode } : {}),
+      ...(sanitizeProviderDescription(payload?.description) ? { providerDescription: sanitizeProviderDescription(payload.description) } : {}),
+      ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfter } : {}),
+    });
+  } catch {
+    return failure('TELEGRAM_SEND_REJECTED', status);
+  }
 }
 
 export async function sendTelegramDestination({
@@ -68,7 +87,7 @@ export async function sendTelegramDestination({
     });
 
     const status = Number(response?.status || 0);
-    if (!response?.ok) return failure('TELEGRAM_SEND_REJECTED', status);
+    if (!response?.ok) return telegramRejection(response, status);
 
     let payload;
     try {
@@ -77,7 +96,10 @@ export async function sendTelegramDestination({
       return failure('TELEGRAM_RESPONSE_INVALID', status);
     }
     if (payload?.ok !== true || payload?.result?.message_id == null) {
-      return failure('TELEGRAM_RESPONSE_INVALID', status);
+      return failure('TELEGRAM_RESPONSE_INVALID', status, {
+        ...(Number.isInteger(Number(payload?.error_code)) ? { providerCode: Number(payload.error_code) } : {}),
+        ...(sanitizeProviderDescription(payload?.description) ? { providerDescription: sanitizeProviderDescription(payload.description) } : {}),
+      });
     }
 
     return {
