@@ -3,8 +3,8 @@ import { parseSignalNumber, SIGNAL_NUMBER_SOURCE } from '../normalization/signal
 
 const MARKET_COMMAND_BLOCKER = /\b(?:MAYBE|LATER|TOMORROW|WATCH|WATCHING|CONSIDER|CONSIDERING|IF|WAIT|WAITING|POSSIBLE|POSSIBLY|LOOKING|INTERESTING|THINK|THINKING|MIGHT|MAY|COULD|SHOULD|WOULD|CAN|AVOID|NEVER|DONT|DON'T|NOT)\b/i;
 const KNOWN_COMPACT_SYMBOL = /^(?:GOLD|XAU|XAUUSD|SILVER|XAG|XAGUSD|BITCOIN|BTC|BTCUSD|ETHEREUM|ETHER|ETH|ETHUSD|DJ30|DJI|DOW|DOWJONES|US30|USTEC|US100|NASDAQ|NASDAQ100|NAS100|SPX500|SP500|US500|DAX|DAX40|GER40|FTSE|FTSE100|UK100|NIKKEI|NIKKEI225|JP225|HANGSENG|HSI|HK50|WTI|WTICRUDE|CRUDEOIL|USOIL|BRENT|BRENTCRUDE|UKOIL)$/i;
-const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
-const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?$/i;
+const MANAGEMENT_COMMAND_WORD = /^(?:MOVE|TRAIL|SET|UPDATE|SL|STOP|TO|BE|BREAK|EVEN|BREAKEVEN|RISK|FREE|SECURE|PROFITS|CHANGE|NEW|REMOVE|TP(?:[1-9]\d?)?|CLOSE|HALF|CANCEL|DELETE|THE|PENDING|ALL|HOLD|KEEP|RUNNING|HIT|LAYERS|NOW|AND|MAKE|SURE)$/i;
+const DERIV_SHORT = /^V(10|15|25|30|50|75|90|100)(?:\s*\(\s*1S\s*\))?(?:\s+INDEX)?$/i;
 const DERIV_SYNTHETIC_SYMBOL_SOURCE = String.raw`(?:Volatility\s+\d+(?:\s*\(1s\)|\s+1s)?(?:\s+Index)?|Boom\s+\d+(?:\s+Index)?|Crash\s+\d+(?:\s+Index)?|Step\s+Index|Jump\s+\d+(?:\s+Index)?)`;
 const DERIV_SYNTHETIC_SYMBOL = new RegExp(`^${DERIV_SYNTHETIC_SYMBOL_SOURCE}$`, 'i');
 const OPTIONAL_MANAGEMENT_SYMBOL_WORDS = String.raw`(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}`;
@@ -76,6 +76,9 @@ function withManagementSymbol(text, management) {
 
 function informationalManagementPlan(text) {
   const upper = text.toUpperCase();
+  if (/^\s*STOPPED\s+(?:OUT\s+)?AT\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)\b/.test(upper)) {
+    return { status: 'NEEDS_INTERPRETATION', reason: 'INFORMATIONAL_MANAGEMENT' };
+  }
   if (/^\s*(?:HOLD|KEEP\s+RUNNING)\s*[!.]*\s*$/.test(upper)) {
     return { status: 'NO_ACTION', reason: 'INFORMATIONAL_MANAGEMENT', information: { type: 'HOLD_POSITION' } };
   }
@@ -88,10 +91,22 @@ function managementPlan(text) {
 
   const upper = text.toUpperCase();
   if (!isConfidentExecutionInstruction(text)) return null;
+  const containsTradeSide = /\b(?:BUY|SELL|LONG|SHORT)\b/.test(upper);
 
   const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s*(?:HIT\s*)?(?:✅+|[!.]+)?\s*$/u);
   if (targetHit) {
     return { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: Number(targetHit[1]) } };
+  }
+
+  const removeSl = /\b(?:REMOVE|DELETE|CANCEL)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}\s+(?:SL|STOP)\b/i.test(text)
+    || /\b(?:REMOVE|DELETE|CANCEL)\s+(?:SL|STOP)\b/i.test(text);
+  if (removeSl) return withManagementSymbol(text, { type: 'REMOVE_SL' });
+
+  const removeTp = text.match(/\b(?:REMOVE|DELETE|CANCEL)\b(?:\s+(?:THE\s+)?[A-Z0-9_./#&().-]+){0,8}\s+TP\s*([1-9]\d?)?\b/i)
+    || text.match(/\b(?:REMOVE|DELETE|CANCEL)\s+TP\s*([1-9]\d?)?\b/i);
+  if (removeTp) {
+    const targetIndex = removeTp[1] ? Number(removeTp[1]) : null;
+    return withManagementSymbol(text, { type: 'REMOVE_TP', ...(targetIndex ? { targetIndex } : {}) });
   }
 
   const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
@@ -118,29 +133,47 @@ function managementPlan(text) {
     return withManagementSymbol(text, { type: 'MOVE_SL_TO_BE' });
   }
 
-  const moveSlPattern = new RegExp(`\\b(?:MOVE|TRAIL)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const moveSl = text.match(moveSlPattern);
+  const explicitSlPattern = new RegExp(`\\b(?:MOVE|TRAIL|CHANGE|NEW|UPDATE|SET)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directSlPattern = new RegExp(`\\b(?:SL|STOP)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const moveSl = text.match(explicitSlPattern) || (!containsTradeSide ? text.match(directSlPattern) : null);
   if (moveSl) {
     const stopLoss = parsedNumber(moveSl[1]);
     if (stopLoss == null) return null;
     return withManagementSymbol(text, { type: 'MOVE_SL', stopLoss });
   }
 
-  const changeTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET)\\s+TP\\s*([1-9]\\d?)?(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
-  const changeTp = text.match(changeTpPattern);
-  if (changeTp) {
-    const takeProfit = parsedNumber(changeTp[2]);
+  const explicitIndexedTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP([1-9]\\d?)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const explicitUnindexedTpPattern = new RegExp(`\\b(?:CHANGE|NEW|MOVE|SET|UPDATE)${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+TP(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directIndexedTpPattern = new RegExp(`\\bTP([1-9]\\d?)(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const directUnindexedTpPattern = new RegExp(`\\bTP(?:\\s+TO)?\\s*[:=@-]?\\s*(${SIGNAL_NUMBER_SOURCE})\\b`, 'i');
+  const indexedTp = text.match(explicitIndexedTpPattern) || (!containsTradeSide ? text.match(directIndexedTpPattern) : null);
+  if (indexedTp) {
+    const takeProfit = parsedNumber(indexedTp[2]);
     if (takeProfit == null) return null;
-    const targetIndex = changeTp[1] ? Number(changeTp[1]) : null;
-    return withManagementSymbol(text, {
-      type: 'CHANGE_TP',
-      takeProfit,
-      ...(targetIndex ? { targetIndex } : {}),
-    });
+    return withManagementSymbol(text, { type: 'CHANGE_TP', takeProfit, targetIndex: Number(indexedTp[1]) });
+  }
+  const unindexedTp = text.match(explicitUnindexedTpPattern) || (!containsTradeSide ? text.match(directUnindexedTpPattern) : null);
+  if (unindexedTp) {
+    const takeProfit = parsedNumber(unindexedTp[1]);
+    if (takeProfit == null) return null;
+    return withManagementSymbol(text, { type: 'CHANGE_TP', takeProfit });
   }
 
   if (/\bCLOSE\s+(?:HALF|50%)\b|\b(?:HALF|50%)\s+CLOSE\b/.test(upper)) {
     return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: 0.5 });
+  }
+  const closePercent = upper.match(/\bCLOSE\s+(\d{1,3}(?:\.\d+)?)\s*%/)
+    || upper.match(/(\d{1,3}(?:\.\d+)?)\s*%\s+CLOSE\b/);
+  if (closePercent) {
+    const percent = Number(closePercent[1]);
+    if (percent > 0 && percent < 100) {
+      return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', fraction: percent / 100 });
+    }
+  }
+  const closeLots = text.match(new RegExp(`\\bCLOSE\\s+(${SIGNAL_NUMBER_SOURCE})(?!\\s*%)`, 'i'));
+  if (closeLots) {
+    const lots = parsedNumber(closeLots[1]);
+    if (lots != null && lots > 0) return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', lots });
   }
   if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
@@ -276,7 +309,7 @@ function extractSymbolToken(text, sideInfo) {
 
   const synthetic = extractDerivSyntheticSymbol(after, { anchored: false });
   if (synthetic) return synthetic;
-  const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?)/i)?.[1];
+  const derivShort = after.match(/^(V(?:10|15|25|30|50|75|90|100)(?:\s*\(\s*1s\s*\))?(?:\s+index)?)/i)?.[1];
   if (derivShort) return derivShort;
   const compact = after.match(/^([A-Za-z][A-Za-z0-9_./#&.-]{1,24})\b/)?.[1] || null;
   return compact && isLikelyCompactSymbol(compact) ? compact : null;

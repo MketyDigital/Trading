@@ -213,6 +213,14 @@ export function correlateTradingEvent({
   fastCompletionWindowMs = 30 * 60 * 1000,
 } = {}) {
   const scoped = scopedGroups(activeGroups, event);
+  const editedEventId = event?.thread?.edited_event_id != null ? String(event.thread.edited_event_id) : null;
+  if (editedEventId) {
+    const editMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(editedEventId));
+    const target = matchedManagementTarget(editMatches, 'EDIT_TARGET', 'AMBIGUOUS_EDIT_TARGET');
+    if (target) return target;
+    return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
+  }
+
   if (isDuplicateSourceEvent(scoped, event)) {
     return { status: 'NO_ACTION', reason: 'DUPLICATE_SOURCE_EVENT' };
   }

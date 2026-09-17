@@ -1,6 +1,25 @@
+import { sanitizeOperationString } from '../operations/operation_journal.js';
+
 const DELIVERY_STATUSES = Object.freeze(['PENDING', 'SUCCEEDED', 'RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const FAILURE_STATUSES = Object.freeze(['RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const SECRET_KEY_PATTERN = /(secret|token|password|credential|authorization|api[_-]?key|private[_-]?key|cipher)/i;
+const DROP_PERSISTED_KEYS = new Set([
+  'stack',
+  'stacktrace',
+  'stack_trace',
+  'raw_body',
+  'rawbody',
+  'request_body',
+  'requestbody',
+  'response_body',
+  'responsebody',
+  'raw_payload',
+  'rawpayload',
+  'request_payload',
+  'requestpayload',
+  'response_payload',
+  'responsepayload',
+]);
 const RESILIENCE_SCOPE_MISMATCH = 'OPERATIONS_RESILIENCE_WORKSPACE_SCOPE_MISMATCH';
 
 function text(value) {
@@ -41,13 +60,18 @@ function exactWorkspaceRow(row, workspaceId) {
   return row;
 }
 
+function normalizedPersistedKey(key) {
+  return String(key ?? '').trim().replace(/[\s-]+/g, '_').toLowerCase();
+}
+
 function sanitizePersistedValue(value) {
   if (Array.isArray(value)) return value.map(sanitizePersistedValue);
   if (!value || typeof value !== 'object') return value;
 
   const safe = {};
   for (const [key, nested] of Object.entries(value)) {
-    if (SECRET_KEY_PATTERN.test(key)) continue;
+    const normalizedKey = normalizedPersistedKey(key);
+    if (SECRET_KEY_PATTERN.test(key) || DROP_PERSISTED_KEYS.has(normalizedKey)) continue;
     safe[key] = sanitizePersistedValue(nested);
   }
   return safe;
@@ -117,6 +141,22 @@ function safeRecentFailure(row = {}) {
     nextAttemptAt: row.next_attempt_at ?? null,
     lastAttemptAt: row.last_attempt_at ?? null,
     updatedAt: row.updated_at ?? null,
+  };
+}
+
+function safeOperationTimelineRow(row = {}) {
+  return {
+    tradingEventId: row.trading_event_id ?? null,
+    correlationId: row.correlation_id ?? null,
+    stage: row.stage ?? null,
+    operation: row.operation ?? null,
+    status: row.status ?? null,
+    errorCode: row.error_code ?? null,
+    failureClass: row.failure_class ?? null,
+    retryable: row.retryable == null ? null : Boolean(row.retryable),
+    summary: row.summary == null ? null : sanitizeOperationString(row.summary, 1000),
+    details: sanitizePersistedValue(row.details && typeof row.details === 'object' ? row.details : {}),
+    observedAt: row.observed_at ?? null,
   };
 }
 
@@ -448,12 +488,22 @@ export function createAdminOperationsStore(supabase, {
         });
       });
 
+      const operationJournalResult = assertQuery(await supabase
+        .from('operation_journal')
+        .select('workspace_id,correlation_id,trading_event_id,stage,operation,status,error_code,failure_class,retryable,summary,details,observed_at')
+        .eq('workspace_id', boundWorkspaceId)
+        .order('observed_at', { ascending: false })
+        .limit(boundedRecentLimit), 'operation journal');
+      const operationTimeline = exactWorkspaceRows(operationJournalResult.data, boundWorkspaceId)
+        .map(safeOperationTimelineRow);
+
       const resilience = await loadResilienceSummary(resilienceMetricsSource, boundWorkspaceId);
 
       return {
         workspaceId: boundWorkspaceId,
         observedAt,
         recentEvents,
+        operationTimeline,
         deliveries: {
           counts: Object.fromEntries(countEntries),
           overdueRetryable: Number(overdue.count || 0),
@@ -541,12 +591,22 @@ export function createAdminOperationsStore(supabase, {
         .order('created_at', { ascending: true }), 'destination delivery audit');
       const deliveryRows = exactWorkspaceRows(deliveriesResult.data, boundWorkspaceId);
 
+      const operationJournalResult = assertQuery(await supabase
+        .from('operation_journal')
+        .select('workspace_id,correlation_id,trading_event_id,stage,operation,status,error_code,failure_class,retryable,summary,details,observed_at')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('trading_event_id', boundEventId)
+        .order('observed_at', { ascending: true }), 'event operation journal');
+      const operationTimeline = exactWorkspaceRows(operationJournalResult.data, boundWorkspaceId)
+        .map(safeOperationTimelineRow);
+
       return {
         workspaceId: boundWorkspaceId,
         event: safeAuditEvent(eventRow),
         source: sourceRow ? safeAuditSource(sourceRow) : null,
         positionGroups: groupRows.map((row) => safeAuditGroup(row, legsByGroup.get(text(row.id)) || [])),
         deliveries: deliveryRows.map(safeAuditDelivery),
+        operationTimeline,
         historyCoverage: {
           actorHistoryRecorded: false,
         },

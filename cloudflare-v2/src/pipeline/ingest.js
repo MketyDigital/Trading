@@ -1,5 +1,6 @@
 import { verifySignedSourcePayload } from '../security/source_auth.js';
 import { normalizeTradingEvent } from '../events/trading_event.js';
+import { buildSourceRevisionKey } from '../events/source_revision.js';
 import { interpretTradingEvent } from '../ai/trading_interpreter.js';
 import { buildCanonicalSourceEventId } from '../sources/canonical_event_id.js';
 import { authorizeMtprotoEvent } from '../sources/mtproto/external_policy.js';
@@ -65,6 +66,46 @@ async function interpretAndPersist({
   return interpretation;
 }
 
+async function interpretRevisionAndPersist({
+  source,
+  event,
+  revisionId,
+  eventStore,
+  aiRouter,
+  aiRouterFactory,
+  interpretationTimeoutMs,
+}) {
+  const interpretation = await interpretTradingEvent(event, {
+    aiRouter,
+    aiRouterFactory: aiRouterFactory
+      ? () => aiRouterFactory({ source, event })
+      : undefined,
+    timeoutMs: interpretationTimeoutMs,
+  });
+
+  if (eventStore.updateRevisionInterpretation) {
+    await eventStore.updateRevisionInterpretation(revisionId, interpretation);
+  }
+  return interpretation;
+}
+
+function revisionReservationRow({ source, event, eventId, revisionKey }) {
+  return {
+    trading_event_id: eventId,
+    workspace_id: source.workspace_id,
+    revision_key: revisionKey,
+    event_version: event.version,
+    source_type: event.source.type,
+    source_external_id: event.source.external_id,
+    external_event_id: event.external_event_id,
+    occurred_at: event.occurred_at,
+    raw_text: event.text,
+    structured_payload: event.structured_payload,
+    thread: event.thread,
+    metadata: event.metadata,
+  };
+}
+
 export async function ingestTradingEvent({
   rawBody,
   sourceId,
@@ -104,9 +145,6 @@ export async function ingestTradingEvent({
     return { ok: false, status: 400, reason: 'INVALID_JSON' };
   }
 
-  // Transports are listeners only. The authenticated source row remains
-  // authoritative for Telegram account scope and accepted chats even if a
-  // webhook/queue handler is bypassed before canonical ingest.
   const mtprotoPolicy = authorizeMtprotoEvent({ source, input });
   if (!mtprotoPolicy.ok) return mtprotoPolicy;
   const telegramBotPolicy = authorizeTelegramBotEvent({ source, input });
@@ -127,6 +165,7 @@ export async function ingestTradingEvent({
   }
 
   const event = normalized.event;
+  const revisionKey = await buildSourceRevisionKey(event);
   const canonicalEventId = deriveCanonicalEventId(source, input);
   const reservationRow = {
     workspace_id: source.workspace_id,
@@ -146,6 +185,58 @@ export async function ingestTradingEvent({
   const reservation = await eventStore.reserve(reservationRow);
 
   if (reservation?.duplicate) {
+    if (revisionKey && typeof eventStore.reserveRevision === 'function' && reservation.eventId) {
+      const revisionReservation = await eventStore.reserveRevision(revisionReservationRow({
+        source,
+        event,
+        eventId: reservation.eventId,
+        revisionKey,
+      }));
+
+      if (!revisionReservation?.ok) {
+        return { ok: false, status: 503, reason: 'EVENT_REVISION_RESERVATION_FAILED' };
+      }
+
+      if (revisionReservation.duplicate) {
+        return {
+          ok: true,
+          duplicate: true,
+          revision: true,
+          recoveryReady: true,
+          eventId: reservation.eventId,
+          revisionId: revisionReservation.revisionId ?? null,
+          event: revisionReservation.event ?? event,
+          ...(revisionReservation.interpretation ? { interpretation: revisionReservation.interpretation } : {}),
+        };
+      }
+
+      const revisionEvent = {
+        ...event,
+        metadata: {
+          ...(event.metadata || {}),
+          source_revision_key: revisionKey,
+        },
+      };
+      const interpretation = await interpretRevisionAndPersist({
+        source,
+        event: revisionEvent,
+        revisionId: revisionReservation.revisionId,
+        eventStore,
+        aiRouter,
+        aiRouterFactory,
+        interpretationTimeoutMs,
+      });
+      return {
+        ok: true,
+        duplicate: false,
+        revision: true,
+        eventId: reservation.eventId,
+        revisionId: revisionReservation.revisionId ?? null,
+        event: revisionEvent,
+        interpretation,
+      };
+    }
+
     const persistedEvent = recoverPersistedEvent(source, reservation.event);
     if (!persistedEvent) {
       return {

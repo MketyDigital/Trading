@@ -65,3 +65,38 @@ test('full close actions preserve each open leg volume, identity, and symbol con
     { type: 'CLOSE_POSITION', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', lots: 0.03 }
   ]);
 });
+
+test('explicit lot partial close uses the existing CLOSE_PARTIAL broker action without inventing a new action type', () => {
+  const group = {
+    symbol: 'XAUUSD',
+    legs: [{ legId: '1', targetIndex: 1, brokerPositionId: 'p1', lots: 0.05, volumeStepLots: 0.01, status: 'OPEN' }],
+  };
+  assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_PARTIAL', lots: 0.01 }), [
+    { type: 'CLOSE_PARTIAL', legId: '1', targetIndex: 1, brokerPositionId: 'p1', symbol: 'XAUUSD', lots: 0.01 },
+  ]);
+});
+
+test('explicit lot partial close fails closed when requested lots would fully close the leg', () => {
+  const group = {
+    symbol: 'XAUUSD',
+    legs: [{ legId: '1', targetIndex: 1, brokerPositionId: 'p1', lots: 0.01, volumeStepLots: 0.01, status: 'OPEN' }],
+  };
+  assert.throws(() => buildManagementActions(group, { type: 'CLOSE_PARTIAL', lots: 0.01 }), /without full close/i);
+});
+
+test('remove SL and indexed TP become explicit protection-clear MODIFY_POSITION actions', () => {
+  const group = {
+    symbol: 'XAUUSD',
+    legs: [
+      { legId: '1', targetIndex: 1, brokerPositionId: 'p1', status: 'OPEN' },
+      { legId: '2', targetIndex: 2, brokerPositionId: 'p2', status: 'OPEN' },
+    ],
+  };
+  assert.deepEqual(buildManagementActions(group, { type: 'REMOVE_SL' }), [
+    { type: 'MODIFY_POSITION', managementType: 'REMOVE_SL', legId: '1', targetIndex: 1, brokerPositionId: 'p1', symbol: 'XAUUSD', clearStopLoss: true },
+    { type: 'MODIFY_POSITION', managementType: 'REMOVE_SL', legId: '2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', clearStopLoss: true },
+  ]);
+  assert.deepEqual(buildManagementActions(group, { type: 'REMOVE_TP', targetIndex: 2 }), [
+    { type: 'MODIFY_POSITION', managementType: 'REMOVE_TP', legId: '2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', clearTakeProfit: true },
+  ]);
+});

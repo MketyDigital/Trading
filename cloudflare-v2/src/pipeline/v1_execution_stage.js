@@ -24,7 +24,8 @@ function sanitizeAction(action = {}) {
 function withDurableActionIdentity(action, { result, accountId, groupId, index } = {}) {
   if (!action) return null;
   if (String(action.idempotencyKey || '').trim()) return action;
-  const sourceEventId = String(result?.event?.external_event_id || result?.eventId || '').trim();
+  const revisionKey = String(result?.event?.metadata?.source_revision_key || '').trim();
+  const sourceEventId = revisionKey || String(result?.event?.external_event_id || result?.eventId || '').trim();
   const group = String(groupId || '').trim();
   const account = String(accountId || '').trim();
   const actionType = String(action.type || 'ACTION').trim().toUpperCase();

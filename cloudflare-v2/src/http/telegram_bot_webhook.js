@@ -93,17 +93,22 @@ function nativeEventFromUpdate(update, extracted, nowMs) {
   if (!chatId || !messageId) return { ok: false, reason: 'TELEGRAM_BOT_NATIVE_IDENTITY_REQUIRED' };
   if (!body.trim()) return { ok: true, ignored: true, reason: 'TELEGRAM_BOT_EMPTY_MESSAGE' };
 
+  const externalEventId = `${chatId}:${messageId}`;
   const replyTo = text(message?.reply_to_message?.message_id);
+  const isEdit = kind === 'edited_message' || kind === 'edited_channel_post';
+  const thread = {};
+  if (replyTo) thread.reply_to_message_id = replyTo;
+  if (isEdit) thread.edited_event_id = externalEventId;
   const entities = telegramEntities(message);
   return {
     ok: true,
     event: {
       source_external_id: chatId,
-      external_event_id: `${chatId}:${messageId}`,
+      external_event_id: externalEventId,
       occurred_at: occurredAt(message, nowMs),
       text: body,
       structured_payload: {},
-      thread: replyTo ? { reply_to_message_id: replyTo } : {},
+      thread,
       metadata: {
         telegram_update_id: update?.update_id ?? null,
         telegram_update_kind: kind,

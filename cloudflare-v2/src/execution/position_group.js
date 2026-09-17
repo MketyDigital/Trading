@@ -176,16 +176,53 @@ export function buildManagementActions(group, management) {
       takeProfit,
     }));
   }
+  if (management?.type === 'REMOVE_SL') {
+    return openLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      managementType: 'REMOVE_SL',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      clearStopLoss: true,
+    }));
+  }
+  if (management?.type === 'REMOVE_TP') {
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null
+      ? openLegs
+      : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+    return matchingLegs.map((leg) => ({
+      type: 'MODIFY_POSITION',
+      managementType: 'REMOVE_TP',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      clearTakeProfit: true,
+    }));
+  }
   if (management?.type === 'CLOSE_PARTIAL') {
-    const fraction = Number(management.fraction);
-    if (!(fraction > 0 && fraction <= 1)) throw new Error('partial-close fraction must be > 0 and <= 1');
+    const requestedLots = management.lots == null ? null : Number(management.lots);
+    const fraction = management.fraction == null ? null : Number(management.fraction);
+    const hasLots = Number.isFinite(requestedLots) && requestedLots > 0;
+    const hasFraction = Number.isFinite(fraction) && fraction > 0 && fraction <= 1;
+    if (!hasLots && !hasFraction) throw new Error('partial close requires positive lots or fraction > 0 and <= 1');
+
     return openLegs.map((leg) => {
       const volumeStep = Number(management.volumeStep || leg.volumeStepLots || 0.01);
       if (!(volumeStep > 0)) throw new Error('partial-close volumeStep must be positive');
+      const legLots = Number(leg.lots);
       let lots;
-      if (leg.lots != null) {
-        lots = floorToStep(Number(leg.lots) * fraction, volumeStep);
-        if (!(lots > 0) || lots >= Number(leg.lots)) {
+      if (hasLots) {
+        lots = floorToStep(requestedLots, volumeStep);
+        if (!(lots > 0)) throw new Error('partial-close lots are below the representable volume step');
+        if (Number.isFinite(legLots) && lots >= legLots) {
+          throw new Error('partial-close volume is not representable without full close');
+        }
+      } else if (Number.isFinite(legLots)) {
+        lots = floorToStep(legLots * fraction, volumeStep);
+        if (!(lots > 0) || lots >= legLots) {
           throw new Error('partial-close volume is not representable without full close');
         }
       }
@@ -195,7 +232,7 @@ export function buildManagementActions(group, management) {
         targetIndex: leg.targetIndex,
         brokerPositionId: leg.brokerPositionId,
         symbol: group.symbol,
-        fraction,
+        ...(hasFraction ? { fraction } : {}),
         lots,
       };
     });

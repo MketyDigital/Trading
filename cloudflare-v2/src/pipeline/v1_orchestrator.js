@@ -1,6 +1,7 @@
 import { buildExecutionPlan } from '../execution/execution_plan.js';
 import { evaluateAccountPolicy } from '../execution/account_policy.js';
 import { buildManagementActions } from '../execution/position_group.js';
+import { buildEditedSignalManagement } from '../execution/source_edit_management.js';
 
 function normalizeAccount(account = {}) {
   const sizingMode = account.sizingMode || (() => {
@@ -218,8 +219,6 @@ async function orchestrateMatchedManagement({
     .map((account) => [String(account?.id ?? ''), account])
     .filter(([id]) => Boolean(id)));
 
-  // Validate the entire logical trade cohort before mutating any state. A missing
-  // account must fail closed instead of allowing management to drift to another account.
   for (const matchedGroup of loaded.groups) {
     if (!accountById.has(String(matchedGroup.tradeAccountId ?? ''))) {
       return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_ACCOUNT_NOT_FOUND' };
@@ -298,6 +297,91 @@ async function orchestrateMatchedManagement({
   };
 }
 
+async function orchestrateMatchedEdit({
+  event,
+  interpretation,
+  nowMs,
+  correlation,
+  stateStore,
+  accountProvider,
+}) {
+  const base = { executionEnabled: false, actions: [] };
+  const loaded = await loadMatchedFastGroups(correlation, stateStore);
+  if (!loaded.ok) {
+    return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
+  }
+
+  const accounts = await accountProvider(event.workspace_hint, event, interpretation);
+  const accountById = new Map((Array.isArray(accounts) ? accounts : [])
+    .map((account) => [String(account?.id ?? ''), account])
+    .filter(([id]) => Boolean(id)));
+
+  for (const matchedGroup of loaded.groups) {
+    if (!accountById.has(String(matchedGroup.tradeAccountId ?? ''))) {
+      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: 'MATCHED_ACCOUNT_NOT_FOUND' };
+    }
+  }
+
+  const diffs = loaded.groups.map((matchedGroup) => ({
+    matchedGroup,
+    diff: buildEditedSignalManagement(matchedGroup, interpretation.intent, { rawText: event.text }),
+  }));
+  const unsafe = diffs.find(({ diff }) => diff.status === 'NEEDS_REVIEW');
+  if (unsafe) {
+    return {
+      ...base,
+      status: 'NEEDS_REVIEW',
+      correlation,
+      accounts: [],
+      reason: unsafe.diff.reason || 'EDIT_MANAGEMENT_UNSAFE',
+    };
+  }
+
+  const results = [];
+  const stagedGroups = [];
+  for (const { matchedGroup, diff } of diffs) {
+    const account = normalizeAccount(accountById.get(String(matchedGroup.tradeAccountId)));
+    if (account.execution_enabled !== true && account.executionEnabled !== true) {
+      results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
+      continue;
+    }
+
+    if (diff.status === 'NO_ACTION') {
+      results.push({ accountId: account.id, status: 'SKIPPED', reason: diff.reason, actions: [] });
+      continue;
+    }
+
+    const policy = evaluateAccountPolicy(account.safetyPolicy, {
+      symbol: matchedGroup.symbol,
+      actionKind: 'REDUCE_RISK',
+    });
+    if (!policy.allowed) {
+      results.push({ accountId: account.id, status: 'BLOCKED', policy, actions: [] });
+      continue;
+    }
+
+    stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs));
+    results.push({
+      accountId: account.id,
+      status: 'READY',
+      groupId: matchedGroup.id,
+      policy,
+      actions: simulationActions(diff.actions),
+    });
+  }
+
+  for (const group of stagedGroups) {
+    await stateStore.putGroup(group);
+  }
+
+  return {
+    ...base,
+    status: 'SIMULATED',
+    correlation,
+    accounts: results,
+  };
+}
+
 function matchedFastGroupIds(correlation = {}) {
   if (Array.isArray(correlation.groupIds) && correlation.groupIds.length) {
     return [...new Set(correlation.groupIds.map(String).filter(Boolean))];
@@ -350,8 +434,6 @@ export async function orchestrateTradingEventSimulation({
   if (typeof accountProvider !== 'function') throw new TypeError('accountProvider is required');
   if (typeof instrumentProvider !== 'function') throw new TypeError('instrumentProvider is required');
 
-  // This service is intentionally simulation-only. It accepts no broker executor
-  // dependency and never dispatches a destination or broker command.
   const base = { executionEnabled: false, actions: [] };
   const isSignal = interpretation.status === 'READY' && interpretation.intent;
   const isManagement = interpretation.status === 'MANAGEMENT' && interpretation.management;
@@ -370,6 +452,18 @@ export async function orchestrateTradingEventSimulation({
       return { ...base, status: 'CORRELATED', correlation, accounts: [] };
     }
     return orchestrateMatchedManagement({
+      event,
+      interpretation,
+      nowMs,
+      correlation,
+      stateStore,
+      accountProvider,
+    });
+  }
+
+  const isEdit = isSignal && correlation?.status === 'MATCHED' && correlation?.reason === 'EDIT_TARGET';
+  if (isEdit) {
+    return orchestrateMatchedEdit({
       event,
       interpretation,
       nowMs,
@@ -451,6 +545,8 @@ export async function orchestrateTradingEventSimulation({
         status: 'BLOCKED',
         policy: plan.policy,
         risk: plan.risk,
+        protectionIssues: plan.protectionIssues ?? [],
+        protectionSkips: plan.protectionSkips ?? [],
         actions: [],
       });
       continue;
@@ -477,6 +573,8 @@ export async function orchestrateTradingEventSimulation({
         groupId: reconciliation.group.id,
         policy: plan.policy,
         risk: plan.risk,
+        protectionIssues: plan.protectionIssues ?? [],
+        protectionSkips: plan.protectionSkips ?? [],
         actions: simulationActions(reconciliation.actions),
       });
       continue;
@@ -497,6 +595,8 @@ export async function orchestrateTradingEventSimulation({
       groupId: group.id,
       policy: plan.policy,
       risk: plan.risk,
+      protectionIssues: plan.protectionIssues ?? [],
+      protectionSkips: plan.protectionSkips ?? [],
       actions: simulationActions(plan.actions),
     });
   }

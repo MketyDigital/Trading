@@ -252,3 +252,51 @@ test('global kill switch blocks reply-targeted management and emits zero actions
   assert.deepEqual(result.accounts[0].actions, []);
   assert.equal(persisted, false);
 });
+
+test('skip-invalid protection remains visible on the orchestrated account result for lifecycle journaling', async () => {
+  const sellWithInvalidTp = {
+    status: 'READY',
+    intent: {
+      side: 'SELL',
+      orderType: 'MARKET',
+      symbol: { canonical: 'XAUUSD' },
+      entry: { kind: 'MARKET' },
+      stopLoss: 4300,
+      takeProfits: [4250, 4220, 4350],
+      fastEntry: false,
+      incomplete: false,
+    },
+  };
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-protection-skip' },
+    interpretation: sellWithInvalidTp,
+    eventId: 'db-event-protection-skip',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [enabledAccount({
+      fixedLots: 0.02,
+      safety_policy: {
+        enabled: true,
+        killSwitch: false,
+        allowedSymbols: ['XAUUSD'],
+        maxLotsPerTrade: 1,
+        invalidProtectionPolicy: 'skip_invalid',
+        allowInvalidTakeProfitSkip: true,
+      },
+    })],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({ currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }),
+    marketPriceProvider: async () => 4275,
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.takeProfit), [4250, 4220]);
+  assert.deepEqual(result.accounts[0].protectionSkips, [{
+    field: 'takeProfits',
+    targetIndex: 3,
+    code: 'TP3_SKIPPED_INVALID_GEOMETRY',
+    value: 4350,
+  }]);
+});

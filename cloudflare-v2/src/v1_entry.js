@@ -1,5 +1,6 @@
 import legacyWorker from './index.js';
 import { renderMketyAdminAccessCodesPage } from './dashboard_mkety_admin_access_codes.js';
+import { renderMketyAdminOperationsPage } from './dashboard_mkety_admin_operations.js';
 import { renderEnterpriseTradingPortal } from './dashboard_enterprise_portal.js';
 import { withEnterpriseConnectionEnhancements } from './dashboard_enterprise_enhancements.js';
 import { withRoutingAiCompletion } from './dashboard_routing_ai_completion.js';
@@ -14,6 +15,7 @@ import { handleInternalSourceEventRequest } from './http/internal_source_event.j
 import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
 import { handleMketyAdminAccessCodesRequest } from './http/v1_mkety_admin_access_codes.js';
+import { handleMketyAdminOperationsRequest } from './http/v1_mkety_admin_operations.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -150,6 +152,7 @@ export function createTradingV1Entrypoint({
   tradingViewHandler = handleTradingViewWebhookRequest,
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
   mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
+  mketyAdminOperationsHandler = handleMketyAdminOperationsRequest,
   publicBrandingHandler = handlePublicBrandingRequest,
   customHostnameRouteProofHandler = handleCustomHostnameRouteProofRequest,
   queueRuntime = null,
@@ -167,6 +170,7 @@ export function createTradingV1Entrypoint({
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
+      if (url.pathname === '/mkety-admin/operations' || url.pathname === '/mkety-admin/operations/') return htmlResponse(renderMketyAdminOperationsPage());
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
       if (url.pathname === '/api/v1/custom-hostname/probe') {
         const supabase = await publicSupabase(env);
@@ -180,6 +184,7 @@ export function createTradingV1Entrypoint({
       if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();
       if (['/api/v1/access/redeem', '/api/v1/access/session', '/api/v1/access/logout'].includes(url.pathname)) return accessCodeRedeemHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
+      if (url.pathname === '/api/v1/mkety-admin/operations') return mketyAdminOperationsHandler(request, env, { ctx });
       if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname.startsWith('/api/v1/mkety-admin/test-workspaces/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
       if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) {

@@ -238,3 +238,45 @@ test('treats compact TP checkmark updates as target-hit management', () => {
     status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 2 },
   });
 });
+
+test('parses concise SL and TP updates as deterministic management', () => {
+  const cases = [
+    ['SL 4280', { type: 'MOVE_SL', stopLoss: 4280 }],
+    ['NEW SL 4281', { type: 'MOVE_SL', stopLoss: 4281 }],
+    ['UPDATE SL 4282', { type: 'MOVE_SL', stopLoss: 4282 }],
+    ['CHANGE SL TO 4283', { type: 'MOVE_SL', stopLoss: 4283 }],
+    ['STOP LOSS 4284', { type: 'MOVE_SL', stopLoss: 4284 }],
+    ['TP 4350', { type: 'CHANGE_TP', takeProfit: 4350 }],
+    ['TP1 4351', { type: 'CHANGE_TP', takeProfit: 4351, targetIndex: 1 }],
+    ['UPDATE TP1 4352', { type: 'CHANGE_TP', takeProfit: 4352, targetIndex: 1 }],
+    ['CHANGE TP2 TO 4400', { type: 'CHANGE_TP', takeProfit: 4400, targetIndex: 2 }],
+  ];
+
+  for (const [text, management] of cases) {
+    assert.deepEqual(buildMachinePlan({ text }), { status: 'MANAGEMENT', management }, text);
+  }
+});
+
+test('parses arbitrary explicit partial-close percentages without weakening close-half behavior', () => {
+  assert.deepEqual(buildMachinePlan({ text: 'CLOSE 25%' }), {
+    status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.25 },
+  });
+  assert.deepEqual(buildMachinePlan({ text: '25% CLOSE GOLD' }), {
+    status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.25, symbol: { source: 'GOLD', canonical: 'XAUUSD' } },
+  });
+  assert.deepEqual(buildMachinePlan({ text: 'CLOSE HALF' }), {
+    status: 'MANAGEMENT', management: { type: 'CLOSE_PARTIAL', fraction: 0.5 },
+  });
+});
+
+test('concise management extensions still fail closed for negated, uncertain, conditional, or question forms', () => {
+  for (const text of [
+    "don't update SL 4280",
+    'maybe TP1 4350 later',
+    'SL 4280 if price holds',
+    'should we change TP2 to 4400?',
+    'close 25% if it reverses',
+  ]) {
+    assert.equal(buildMachinePlan({ text }).status, 'NEEDS_INTERPRETATION', text);
+  }
+});

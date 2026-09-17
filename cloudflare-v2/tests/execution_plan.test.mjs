@@ -72,3 +72,56 @@ test('returns BLOCKED before emitting broker actions when account safety policy 
   assert.deepEqual(plan.actions, []);
   assert.ok(plan.policy.reasons.includes('SYMBOL_NOT_ALLOWED'));
 });
+
+test('strict protection policy blocks invalid SELL stop geometry before broker actions', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'LIMIT', symbol:{canonical:'XAUUSD'}, entry:{kind:'RANGE',min:4273.25,max:4279.76}, stopLoss:4180, takeProfits:[], incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.01,safetyPolicy:{enabled:true}},
+    instrument,
+    currentMarketPrice:4275,
+  });
+  assert.equal(plan.status, 'BLOCKED');
+  assert.equal(plan.reason, 'INVALID_PROTECTION');
+  assert.deepEqual(plan.actions, []);
+  assert.ok(plan.protectionIssues.some((item) => item.field === 'stopLoss' && item.code === 'SL_INVALID_GEOMETRY'));
+});
+
+test('skip-invalid policy opens fixed-lot trade without invalid SELL stop and records skip reason', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'LIMIT', symbol:{canonical:'XAUUSD'}, entry:{kind:'RANGE',min:4273.25,max:4279.76}, stopLoss:4180, takeProfits:[], incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.01,safetyPolicy:{enabled:true,invalidProtectionPolicy:'skip_invalid',allowInvalidStopLossSkip:true}},
+    instrument,
+    currentMarketPrice:4275,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.group.stopLoss, null);
+  assert.equal(plan.actions[0].stopLoss, null);
+  assert.deepEqual(plan.protectionSkips, [{ field:'stopLoss', code:'SL_SKIPPED_INVALID_GEOMETRY', value:4180 }]);
+});
+
+test('skip-invalid policy removes only invalid target while preserving valid SELL targets', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'MARKET', symbol:{canonical:'XAUUSD'}, entry:{kind:'MARKET'}, stopLoss:4300, takeProfits:[4250, 4220, 4350], incomplete:false,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.01,safetyPolicy:{enabled:true,invalidProtectionPolicy:'skip_invalid',allowInvalidTakeProfitSkip:true}},
+    instrument,
+    currentMarketPrice:4275,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.actions.map((action) => action.takeProfit), [4250, 4220]);
+  assert.deepEqual(plan.protectionSkips, [{ field:'takeProfits', targetIndex:3, code:'TP3_SKIPPED_INVALID_GEOMETRY', value:4350 }]);
+});
+
+test('risk-based sizing stays blocked when the only stop is invalid even under skip policy', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'LIMIT', symbol:{canonical:'XAUUSD'}, entry:{kind:'PRICE',value:4275}, stopLoss:4180, takeProfits:[4250], incomplete:false,
+  }, {
+    account:{balance:10000,sizingMode:'RISK_PERCENT',riskPercent:1,safetyPolicy:{enabled:true,invalidProtectionPolicy:'skip_invalid',allowInvalidStopLossSkip:true}},
+    instrument,
+  });
+  assert.equal(plan.status, 'BLOCKED');
+  assert.equal(plan.reason, 'INVALID_PROTECTION_REQUIRED_FOR_RISK_SIZING');
+  assert.deepEqual(plan.actions, []);
+});

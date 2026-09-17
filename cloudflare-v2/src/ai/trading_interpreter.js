@@ -5,6 +5,8 @@ import { normalizeCurrentMarketAliases } from '../normalization/current_market_a
 import { recoverKnownNaturalLanguageSignal, recoverMaterialSignalFallback } from './relaxed_signal_recovery.js';
 
 const INTERPRETER_PROMPT = `Return JSON only. Classify the trading message into one of: NEW_SIGNAL, MANAGEMENT, NON_ACTIONABLE. For NEW_SIGNAL use fields: side BUY|SELL, symbol, order_type MARKET|LIMIT|STOP|STOP_LIMIT, entry (number, {min,max}, or null for current market), stop_loss (number|null), take_profits (number array), fast_entry (boolean). Never invent missing numeric prices. If uncertain return {"event_type":"NON_ACTIONABLE"}.`;
+const NATURAL_LANGUAGE_RECOVERY_MARKER = /\b(?:AROUND|NEAR|ABOUT|PROTECT|PROTECTION|RISK|OBJECTIVE|OBJECTIVES|AIM|AIMS|TARGET|TARGETS|SETUP|LOOKS?|GOOD|HERE|UNDER|ABOVE|BELOW|THEN|LET\s+IT\s+RUN)\b/i;
+const EXPLICIT_SIGNAL_STRUCTURE = /\b(?:ENTRY(?:\s+(?:PRICE|ZONE))?|SL|S\s*\/\s*L|STOP\s+LOSS|TP(?:[1-9]\d*)?|T\s*\/\s*P|TAKE\s+PROFIT|MARKET|NOW|CMP|CURRENT\s+(?:MARKET|MKT|PRICE))\b/i;
 
 function parseJson(text) {
   const cleaned = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -65,17 +67,43 @@ function realWorldManagementAlias(text) {
   return null;
 }
 
-function deterministicFallback(event, reason, detail = null) {
+function aiContext(ai, { error = null } = {}) {
+  if (!ai || typeof ai !== 'object') return null;
+  const context = {
+    provider: ai.provider ?? null,
+    model: ai.model ?? null,
+    diagnostics: Array.isArray(ai.diagnostics) ? ai.diagnostics : [],
+  };
+  if (error) context.error = error;
+  return context;
+}
+
+function deterministicFallback(event, reason, detail = null, ai = null) {
   const intent = recoverMaterialSignalFallback(event?.text);
+  const aiMeta = aiContext(ai, { error: detail || reason });
   if (!intent) {
-    return { status: 'NEEDS_REVIEW', source: 'fallback', reason: detail || reason };
+    return {
+      status: 'NEEDS_REVIEW',
+      source: 'fallback',
+      reason: detail || reason,
+      ...(aiMeta ? { ai: aiMeta } : {}),
+    };
   }
   return {
     status: 'READY',
     source: 'deterministic_fallback',
     intent,
     fallback: { reason, detail: detail || null },
+    ...(aiMeta ? { ai: aiMeta } : {}),
   };
+}
+
+function trustIncompleteMachinePlan(text, intent = {}) {
+  if (intent.fastEntry) return true;
+  const source = String(text ?? '');
+  if (NATURAL_LANGUAGE_RECOVERY_MARKER.test(source)) return false;
+  if (EXPLICIT_SIGNAL_STRUCTURE.test(source)) return true;
+  return intent?.entry?.kind === 'PRICE' || intent?.entry?.kind === 'RANGE';
 }
 
 export async function interpretTradingEvent(event = {}, {
@@ -96,7 +124,9 @@ export async function interpretTradingEvent(event = {}, {
     if (deterministic.status === 'READY' && deterministic.intent?.incomplete) {
       const recovered = recoverKnownNaturalLanguageSignal(deterministicText);
       if (recovered) return { status: 'READY', source: 'deterministic_relaxed', intent: recovered };
-      if (deterministic.intent?.fastEntry) return { ...deterministic, source: 'deterministic' };
+      if (trustIncompleteMachinePlan(deterministicText, deterministic.intent)) {
+        return { ...deterministic, source: 'deterministic' };
+      }
     } else {
       return { ...deterministic, source: 'deterministic' };
     }
@@ -131,27 +161,27 @@ export async function interpretTradingEvent(event = {}, {
   }
 
   if (!ai?.success) {
-    return deterministicFallback(event, 'AI interpretation failed', ai?.error);
+    return deterministicFallback(event, 'AI interpretation failed', ai?.error, ai);
   }
 
   try {
     const payload = parseJson(ai.text);
     if (payload.event_type !== 'NEW_SIGNAL') {
-      return deterministicFallback(event, 'unsupported AI event type');
+      return deterministicFallback(event, 'unsupported AI event type', null, ai);
     }
     const intent = normalizeAiSignal(payload);
     const validation = validateCanonicalSignalIntent(intent, { rawText: event.text });
     if (!validation.ok) {
-      return deterministicFallback(event, 'AI hard validation conflict', validation.reason);
+      return deterministicFallback(event, 'AI hard validation conflict', validation.reason, ai);
     }
     return {
       status: 'READY',
       source: 'ai',
       intent,
       validationWarnings: validation.warnings || [],
-      ai: { provider: ai.provider ?? null, model: ai.model ?? null },
+      ai: aiContext(ai),
     };
   } catch (error) {
-    return deterministicFallback(event, 'invalid AI output', error?.message || 'invalid AI output');
+    return deterministicFallback(event, 'invalid AI output', error?.message || 'invalid AI output', ai);
   }
 }

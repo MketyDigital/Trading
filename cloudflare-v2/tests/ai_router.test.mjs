@@ -52,12 +52,12 @@ test('respects caller latency budget instead of fixed 12 second wait', async () 
   assert.ok(Date.now() - started < 80);
 });
 
-test('passes Cloudflare account id through router env instead of undefined global env', async () => {
+test('passes Cloudflare account id from provider database config', async () => {
   let requestedUrl;
   const router = new UniversalAIRouter([
-    { provider_name: 'cloudflare_ai', api_key: 'token', model_name: '@cf/test/model', is_active: true },
+    { provider_name: 'cloudflare_ai', api_key: 'token', account_id: 'acct-123', model_name: '@cf/test/model', is_active: true },
   ], {
-    env: { CLOUDFLARE_ACCOUNT_ID: 'acct-123' },
+    env: { CLOUDFLARE_ACCOUNT_ID: 'must-not-be-used' },
     fetchFn: async (url) => {
       requestedUrl = String(url);
       return { ok: true, json: async () => ({ result: { response: 'formatted' } }) };
@@ -66,6 +66,7 @@ test('passes Cloudflare account id through router env instead of undefined globa
   const result = await router.processSignal('x', 'y', { timeoutMs: 100 });
   assert.equal(result.success, true);
   assert.match(requestedUrl, /accounts\/acct-123\/ai\/run/);
+  assert.equal(requestedUrl.includes('must-not-be-used'), false);
 });
 
 test('does not silently fall back to stale provider model names', async () => {

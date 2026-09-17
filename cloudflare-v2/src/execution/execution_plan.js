@@ -1,6 +1,7 @@
 import { calculateRiskPlan } from '../risk/risk_engine.js';
 import { buildPositionGroup } from './position_group.js';
 import { evaluateAccountPolicy } from './account_policy.js';
+import { applyProtectionPolicy } from './protection_validation_policy.js';
 
 function decimals(step) {
   const text = String(step ?? 0.01);
@@ -39,9 +40,43 @@ function openActionsFromGroup(group) {
 
 export function buildExecutionPlan(intent, { account = {}, instrument = {}, currentMarketPrice, groupId = null, exposure = {} } = {}) {
   if (!intent?.side || !intent?.symbol?.canonical) throw new TypeError('canonical executable intent required');
-  const targetCount = Array.isArray(intent.takeProfits) && intent.takeProfits.length ? intent.takeProfits.length : 1;
+  const safetyPolicy = account.safetyPolicy || account.safety_policy || { enabled: true };
+  const protection = applyProtectionPolicy(intent, safetyPolicy, { currentMarketPrice });
+  if (!protection.ok) {
+    return {
+      status: 'BLOCKED',
+      reason: protection.reason,
+      policy: null,
+      risk: null,
+      riskEntryPrice: null,
+      group: null,
+      actions: [],
+      protectionIssues: protection.protectionIssues,
+      protectionSkips: protection.protectionSkips,
+    };
+  }
+
+  const executableIntent = protection.intent;
+  const targetCount = Array.isArray(executableIntent.takeProfits) && executableIntent.takeProfits.length ? executableIntent.takeProfits.length : 1;
   const volumeStep = Number(instrument.stepLots ?? 0.01);
   const sizingMode = String(account.sizingMode ?? 'RISK_PERCENT').toUpperCase();
+
+  if ((sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK')
+      && intent.stopLoss != null
+      && executableIntent.stopLoss == null
+      && protection.protectionSkips.some((item) => item.field === 'stopLoss')) {
+    return {
+      status: 'BLOCKED',
+      reason: 'INVALID_PROTECTION_REQUIRED_FOR_RISK_SIZING',
+      policy: null,
+      risk: null,
+      riskEntryPrice: null,
+      group: null,
+      actions: [],
+      protectionIssues: protection.protectionIssues,
+      protectionSkips: protection.protectionSkips,
+    };
+  }
 
   let risk = null;
   let totalLots;
@@ -51,21 +86,21 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     const fixedLotsPerTarget = normalizeFixedLots(account.fixedLots, instrument);
     totalLots = Number((fixedLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
-    if (!Number.isFinite(Number(intent.stopLoss))) throw new Error('stop loss is required for risk sizing');
-    riskEntryPrice = resolveRiskEntry(intent, currentMarketPrice);
+    if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
+    riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
       riskPercent: sizingMode === 'RISK_PERCENT' ? account.riskPercent : undefined,
       riskAmount: sizingMode === 'FIXED_RISK' ? account.riskAmount : undefined,
-      entry: riskEntryPrice, stopLoss: intent.stopLoss, targetCount, instrument,
+      entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
     });
     totalLots = risk.totalLots;
   } else {
     throw new TypeError(`unsupported sizing mode: ${sizingMode}`);
   }
 
-  const policy = evaluateAccountPolicy(account.safetyPolicy || { enabled: true }, {
-    symbol: intent.symbol.canonical,
+  const policy = evaluateAccountPolicy(safetyPolicy, {
+    symbol: executableIntent.symbol.canonical,
     totalLots,
     riskPercent: risk ? (Number(account.riskPercent) || 0) : Number(exposure.estimatedRiskPercent || 0),
     currentDailyPnlPercent: exposure.currentDailyPnlPercent,
@@ -74,9 +109,23 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   });
 
   if (!policy.allowed) {
-    return { status: 'BLOCKED', policy, risk, riskEntryPrice, group: null, actions: [] };
+    return {
+      status: 'BLOCKED', policy, risk, riskEntryPrice, group: null, actions: [],
+      protectionIssues: protection.protectionIssues,
+      protectionSkips: protection.protectionSkips,
+    };
   }
 
-  const group = buildPositionGroup(intent, { totalLots, volumeStep, groupId });
-  return { status: 'READY', policy, risk, riskEntryPrice, group, actions: openActionsFromGroup(group) };
+  const group = buildPositionGroup(executableIntent, { totalLots, volumeStep, groupId });
+  return {
+    status: 'READY',
+    policy,
+    risk,
+    riskEntryPrice,
+    group,
+    actions: openActionsFromGroup(group),
+    protectionIssues: protection.protectionIssues,
+    protectionSkips: protection.protectionSkips,
+    effectiveIntent: executableIntent,
+  };
 }
