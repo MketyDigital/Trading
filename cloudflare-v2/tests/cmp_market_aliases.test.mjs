@@ -104,6 +104,51 @@ for (const item of incompleteDeterministicCases) {
   });
 }
 
+const productionParenthesizedRanges = [
+  {
+    name: 'BUY parenthesized market range with Starpips footer',
+    text: 'BUY XAUUSD (4369-4359)\n\nTake Profit 1 at 4373\nTake Profit 2 at 4379\nTake Profit 3 at 4399\n\nStop Loss at 4353\n\n~~~\nStarpips Forex',
+    side: 'BUY',
+    entry: { kind: 'RANGE', min: 4359, max: 4369 },
+    stopLoss: 4353,
+    takeProfits: [4373, 4379, 4399],
+  },
+  {
+    name: 'SELL parenthesized market range with Starpips footer',
+    text: 'SELL XAUUSD (4354.8-4364.8)\n\nTake Profit 1 at 4348\nTake Profit 2 at 4342\nTake Profit 3 at 4320\n\nStop Loss at 4372\n\n~~~\nStarpips Forex',
+    side: 'SELL',
+    entry: { kind: 'RANGE', min: 4354.8, max: 4364.8 },
+    stopLoss: 4372,
+    takeProfits: [4348, 4342, 4320],
+  },
+];
+
+for (const item of productionParenthesizedRanges) {
+  test(`parenthesized market range remains deterministic: ${item.name}`, async () => {
+    let aiCalled = false;
+    const result = await interpretTradingEvent({ text: item.text }, {
+      aiRouter: {
+        async processSignal() {
+          aiCalled = true;
+          return { success: false, error: 'AI must not be required for a clear range signal' };
+        },
+      },
+    });
+
+    assert.equal(result.status, 'READY');
+    assert.equal(result.source, 'deterministic');
+    assert.equal(result.intent.side, item.side);
+    assert.equal(result.intent.symbol.canonical, 'XAUUSD');
+    assert.equal(result.intent.orderType, 'MARKET');
+    assert.deepEqual(result.intent.entry, item.entry);
+    assert.equal(result.intent.stopLoss, item.stopLoss);
+    assert.deepEqual(result.intent.takeProfits, item.takeProfits);
+    assert.equal(result.intent.fastEntry, false);
+    assert.equal(result.intent.incomplete, false);
+    assert.equal(aiCalled, false);
+  });
+}
+
 test('CMP punctuation normalizes to NOW without changing unrelated command text', () => {
   assert.equal(normalizeCurrentMarketAliases('BUY XAUUSD (C.M.P.)'), 'BUY XAUUSD ( NOW )');
 });
