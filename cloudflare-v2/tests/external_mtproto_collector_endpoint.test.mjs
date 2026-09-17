@@ -122,3 +122,66 @@ test('collector token in endpoint path works without per-source authentication h
   assert.equal(response.status, 202);
   assert.equal(seenToken, 'path-token');
 });
+
+test('legacy external bridge reply_to_id becomes canonical Telegram reply lineage', async () => {
+  let forwarded;
+  const response = await handleExternalMtprotoCollectorRequest(
+    new Request('https://trade.mkety.com/api/v1/external/mtproto/collect/collector-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: '-1004387586337',
+        message_id: 902,
+        reply_to_id: 901,
+        text: 'SL at BE NOW',
+        account_id: 1,
+      }),
+    }),
+    {},
+    {
+      resolveCollector: async () => ({ id: 'collector-1' }),
+      resolveSourcesForChat: async () => [{ id: 'source-a', provider_type: 'external_mtproto', secret: 'secret-a' }],
+      eventsHandler: async (request) => {
+        forwarded = await request.json();
+        return new Response(JSON.stringify({ ok: true }), { status: 202 });
+      },
+      nowMs: () => 1770000000000,
+    },
+  );
+
+  assert.equal(response.status, 202);
+  assert.equal(forwarded.thread.reply_to_event_id, 'telegram:-1004387586337:901');
+  assert.equal(forwarded.external_event_id, 'telegram:-1004387586337:902');
+});
+
+test('legacy external bridge edit marker becomes canonical same-message edit lineage', async () => {
+  let forwarded;
+  const response = await handleExternalMtprotoCollectorRequest(
+    new Request('https://trade.mkety.com/api/v1/external/mtproto/collect/collector-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: '-1002366787615',
+        message_id: 321,
+        reply_to_id: 320,
+        text: 'SELL GOLD SL 4320 TP 4280',
+        edited: true,
+        account_id: 1,
+      }),
+    }),
+    {},
+    {
+      resolveCollector: async () => ({ id: 'collector-1' }),
+      resolveSourcesForChat: async () => [{ id: 'source-a', provider_type: 'external_mtproto', secret: 'secret-a' }],
+      eventsHandler: async (request) => {
+        forwarded = await request.json();
+        return new Response(JSON.stringify({ ok: true }), { status: 202 });
+      },
+      nowMs: () => 1770000000000,
+    },
+  );
+
+  assert.equal(response.status, 202);
+  assert.equal(forwarded.thread.reply_to_event_id, 'telegram:-1002366787615:320');
+  assert.equal(forwarded.thread.edited_event_id, 'telegram:-1002366787615:321');
+});
