@@ -90,6 +90,7 @@ def build_adapter(config):
         source_id=config['source_id'],
         account_scope=config.get('account_scope'),
         allowed_chat_ids=config.get('allowed_chat_ids'),
+        accept_outgoing=True,
         sink=sink,
     )
 

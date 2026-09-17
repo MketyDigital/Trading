@@ -19,6 +19,14 @@ def _default_client_factory(*, api_id, api_hash, session_string):
     )
 
 
+def _message_event_builders():
+    try:
+        from telethon import events
+    except ImportError:
+        return (None,)
+    return (events.NewMessage, events.MessageEdited)
+
+
 def _telegram_event_id(chat_id, message_id):
     if message_id is None or str(message_id) == '':
         return None
@@ -154,6 +162,7 @@ class ExternalMtprotoAdapter:
         account_scope=None,
         allowed_chat_ids=None,
         client_factory=None,
+        accept_outgoing=False,
         queue_size=256,
         retry_delays=None,
         sleep=None,
@@ -171,6 +180,7 @@ class ExternalMtprotoAdapter:
         self.account_scope = None if account_scope is None else str(account_scope).strip() or None
         self.allowed_chat_ids = {str(value).strip() for value in (allowed_chat_ids or set()) if str(value).strip()}
         self.client_factory = client_factory or _default_client_factory
+        self.accept_outgoing = bool(accept_outgoing)
         self.sink = sink
         self.queue = asyncio.Queue(maxsize=max(1, int(queue_size)))
         self.retry_delays = tuple(
@@ -206,7 +216,8 @@ class ExternalMtprotoAdapter:
             api_hash=self.api_hash,
             session_string=self.session_string,
         )
-        self.client.add_event_handler(self.handle_new_message)
+        for event_builder in _message_event_builders():
+            self.client.add_event_handler(self.handle_new_message, event_builder)
 
         try:
             await self.client.connect()
@@ -250,7 +261,7 @@ class ExternalMtprotoAdapter:
         return self.health()
 
     async def handle_new_message(self, event):
-        if getattr(event, 'out', False):
+        if getattr(event, 'out', False) and not self.accept_outgoing:
             return False
 
         chat_id = str(getattr(event, 'chat_id', '') or '')
