@@ -7,6 +7,7 @@ import { recoverKnownNaturalLanguageSignal, recoverMaterialSignalFallback } from
 const INTERPRETER_PROMPT = `Return JSON only. Classify the trading message into one of: NEW_SIGNAL, MANAGEMENT, NON_ACTIONABLE. For NEW_SIGNAL use fields: side BUY|SELL, symbol, order_type MARKET|LIMIT|STOP|STOP_LIMIT, entry (number, {min,max}, or null for current market), stop_loss (number|null), take_profits (number array), fast_entry (boolean). Never invent missing numeric prices. If uncertain return {"event_type":"NON_ACTIONABLE"}.`;
 const NATURAL_LANGUAGE_RECOVERY_MARKER = /\b(?:AROUND|NEAR|ABOUT|PROTECT|PROTECTION|RISK|OBJECTIVE|OBJECTIVES|AIM|AIMS|TARGET|TARGETS|SETUP|LOOKS?|GOOD|HERE|UNDER|ABOVE|BELOW|THEN|LET\s+IT\s+RUN)\b/i;
 const EXPLICIT_SIGNAL_STRUCTURE = /\b(?:ENTRY(?:\s+(?:PRICE|ZONE))?|SL|S\s*\/\s*L|STOP\s+LOSS|TP(?:[1-9]\d*)?|T\s*\/\s*P|TAKE\s+PROFIT|MARKET|NOW|CMP|CURRENT\s+(?:MARKET|MKT|PRICE))\b/i;
+const RELATIVE_PIP_PROTECTION = /\b(?:SL|S\s*\/?\s*L|STOP(?:\s+LOSS)?|TP(?:\s*\d+)?|T\s*\/?\s*P|TAKE\s+PROFIT)\b[^\n]{0,40}\b\d+(?:\.\d+)?\s*PIPS?\b/i;
 
 function parseJson(text) {
   const cleaned = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -112,6 +113,14 @@ export async function interpretTradingEvent(event = {}, {
   timeoutMs = 12000,
   systemPrompt = INTERPRETER_PROMPT,
 } = {}) {
+  if (RELATIVE_PIP_PROTECTION.test(String(event.text ?? ''))) {
+    return {
+      status: 'NEEDS_REVIEW',
+      source: 'deterministic',
+      reason: 'RELATIVE_PIP_PROTECTION_REQUIRES_PRICE_CONTEXT',
+    };
+  }
+
   const realWorldAlias = realWorldManagementAlias(event.text);
   if (realWorldAlias) return realWorldAlias;
 
