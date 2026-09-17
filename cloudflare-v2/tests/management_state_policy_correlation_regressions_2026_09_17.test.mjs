@@ -6,8 +6,10 @@ import { TradeStateStore } from '../src/state/trade_state_store.js';
 import { executeProductionPlan } from '../src/execution/production_execution_coordinator.js';
 import { evaluateBreakEvenEligibility } from '../src/execution/break_even_safety.js';
 import { correlateTradingEvent } from '../src/correlation/trade_correlator.js';
-import { renderDashboard } from '../src/dashboard.js';
+import { renderEnterpriseTradingPortal } from '../src/dashboard_enterprise_portal.js';
+import { withUserAcceptanceControls } from '../src/dashboard_user_acceptance_controls.js';
 import { buildExecutionPlan } from '../src/execution/execution_plan.js';
+import { orchestrateTradingEventSimulation } from '../src/pipeline/v1_orchestrator.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -37,7 +39,7 @@ test('production binding payload carries final protection state and explicit cle
   assert.deepEqual(productionTradeStateBindingPayload({
     actionType: 'MODIFY_POSITION', clearStopLoss: true, takeProfit: 1.1300,
   }), {
-    actionType: 'MODIFY_POSITION', status: 'OPEN', clearStopLoss: true, takeProfit: 1.1300,
+    actionType: 'MODIFY_POSITION', status: 'OPEN', takeProfit: 1.1300, clearStopLoss: true,
   });
 });
 
@@ -67,6 +69,7 @@ test('durable protection clear nulls only the requested field and preserves the 
   const saved = await store.getGroup('g1');
   assert.equal(saved.legs[0].stopLoss, null);
   assert.equal(saved.legs[0].takeProfit, 1.16);
+  assert.equal(saved.stopLoss, null);
 });
 
 test('successful MODIFY_POSITION binds desired protection even when broker response has no fresh ids or fill', async () => {
@@ -139,15 +142,17 @@ test('multiple replies to the same original signal continue matching the same lo
   }
 });
 
-test('account frontend exposes auto TP and entry-zone controls while fast entry is visibly always on without a toggle', () => {
-  const html = renderDashboard({});
-  assert.match(html, /data-action="account-auto-tp"/);
+test('real enterprise account frontend exposes auto TP and entry-zone controls while fast entry is visibly always on without a toggle', () => {
+  const html = withUserAcceptanceControls(renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }));
+  assert.match(html, /data-account-auto-tp-protection/);
   assert.match(html, /data-entry-zone-select/);
-  assert.match(html, /Fast entry[^<]*Always on|Always on[^<]*Fast entry/i);
+  assert.match(html, /Fast entry/);
+  assert.match(html, /Always on/);
   assert.equal(html.includes('data-action="account-fast-entry"'), false);
+  assert.match(html, /\/entry-zone-policy/);
 });
 
-test('empty structured fast-entry policy executes immediately and entry-zone policy mode is honored', () => {
+test('entry-zone policy mode is honored for range execution', () => {
   const intent = {
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'EURUSD' },
     entry: { kind: 'RANGE', min: 1.10, max: 1.11 }, stopLoss: 1.09, takeProfits: [1.12], fastEntry: false, incomplete: false,
@@ -156,11 +161,38 @@ test('empty structured fast-entry policy executes immediately and entry-zone pol
     account: {
       sizingMode: 'FIXED_LOTS', fixedLots: 0.01,
       safetyPolicy: { enabled: true, killSwitch: false },
-      fastEntryPolicy: {}, entryZonePolicy: { mode: 'MARKET_IF_IN_RANGE' },
+      entryZonePolicy: { mode: 'market_if_inside' },
     },
     instrument: { stepLots: 0.01, minLots: 0.01, maxLots: 10 }, currentMarketPrice: 1.105, groupId: 'g-zone',
   });
   assert.equal(plan.status, 'READY');
   assert.equal(plan.actions[0].orderType, 'MARKET');
   assert.equal(plan.actions[0].entry.kind, 'MARKET');
+});
+
+test('fast entry executes immediately even when a legacy account row still carries a wait policy', async () => {
+  const stored = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { external_event_id: 'telegram:-1001:500', workspace_hint: 'ws', source: { instance_id: 'src' }, thread: {} },
+    eventId: 'evt-fast',
+    interpretation: {
+      status: 'READY',
+      intent: {
+        side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'EURUSD' }, entry: { kind: 'MARKET' },
+        stopLoss: null, takeProfits: [], fastEntry: true, incomplete: true,
+      },
+    },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => stored.push(group), getGroup: async () => null },
+    accountProvider: async () => [{
+      id: 'a1', workspace_id: 'ws', execution_enabled: true, sizingMode: 'FIXED_LOTS', fixedLots: 0.01,
+      safety_policy: { enabled: true, killSwitch: false }, fast_entry_policy: { mode: 'wait_for_complete_signal' },
+    }],
+    instrumentProvider: async () => ({ stepLots: 0.01, minLots: 0.01, maxLots: 10 }),
+    marketPriceProvider: async () => 1.1,
+  });
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions[0].type, 'OPEN_POSITION');
+  assert.equal(stored.length, 1);
 });
