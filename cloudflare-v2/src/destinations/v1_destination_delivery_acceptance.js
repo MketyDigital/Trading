@@ -46,16 +46,32 @@ function editedExternalEventId(event = {}) {
   return current || null;
 }
 
+function equivalentTelegramExternalEventIds(externalEventId) {
+  const direct = text(externalEventId);
+  if (!direct) return [];
+  const values = [direct];
+  if (direct.startsWith('telegram:')) {
+    const native = direct.slice('telegram:'.length);
+    if (/^-?\d+:\d+$/.test(native)) values.push(native);
+  } else if (/^-?\d+:\d+$/.test(direct)) {
+    values.push(`telegram:${direct}`);
+  }
+  return [...new Set(values)];
+}
+
 async function findTradingEventId(supabase, workspaceId, externalEventId) {
   if (!supabase?.from || !workspaceId || !externalEventId) return null;
-  const { data, error } = await supabase
-    .from('trading_events')
-    .select('id')
-    .eq('workspace_id', String(workspaceId))
-    .eq('external_event_id', String(externalEventId))
-    .maybeSingle();
-  if (error) throw new Error('TELEGRAM_THREAD_EVENT_LOOKUP_FAILED');
-  return data?.id ? String(data.id) : null;
+  for (const candidate of equivalentTelegramExternalEventIds(externalEventId)) {
+    const { data, error } = await supabase
+      .from('trading_events')
+      .select('id')
+      .eq('workspace_id', String(workspaceId))
+      .eq('external_event_id', candidate)
+      .maybeSingle();
+    if (error) throw new Error('TELEGRAM_THREAD_EVENT_LOOKUP_FAILED');
+    if (data?.id) return String(data.id);
+  }
+  return null;
 }
 
 async function resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId) {
@@ -183,8 +199,6 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
       try {
         await recordTelegramDeliveryOutcome(supabase, workspaceId, destination, currentExternalEventId, result);
       } catch {
-        // Never turn a completed Telegram send/edit into a retryable transport failure solely
-        // because journaling failed; that could duplicate a destination message or broker action.
         return {
           ...result,
           deliveryJournalPersisted: false,
