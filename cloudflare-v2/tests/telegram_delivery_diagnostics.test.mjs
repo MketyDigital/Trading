@@ -230,3 +230,64 @@ test('unresolved Telegram edit mapping fails isolated and never falls back to a 
   assert.equal(result.status, 'FAILED');
   assert.equal(supabase.journalRow.error_code, 'TELEGRAM_EDIT_PARENT_UNRESOLVED');
 });
+
+test('Telegram Bot reply resolves parent delivery across equivalent telegram-prefixed and native event identities', async () => {
+  let sent = null;
+  let currentExternalLookup = null;
+  const supabase = {
+    from(table) {
+      if (table === 'trading_events') {
+        return {
+          select() { return this; },
+          eq(column, value) {
+            if (column === 'external_event_id') currentExternalLookup = String(value);
+            return this;
+          },
+          async maybeSingle() {
+            return {
+              data: currentExternalLookup === '-1001:21' ? { id: 'parent-event-uuid' } : null,
+              error: null,
+            };
+          },
+        };
+      }
+      if (table === 'destination_deliveries') {
+        return {
+          select() { return this; }, eq() { return this; }, order() { return this; },
+          async limit() { return { data: [{ response_payload: { messageId: 77 } }], error: null }; },
+          async upsert() { return { error: null }; },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+
+  const result = await runV1DestinationDeliveryAcceptanceStage({
+    workspaceId: 'ws-1',
+    sourceId: 'bot-source-1',
+    event: {
+      external_event_id: '-1001:22',
+      text: 'Move Stop Loss to Break Even.',
+      thread: { reply_to_event_id: 'telegram:-1001:21' },
+      metadata: { native_identity: { chat_id: '-1001', message_id: '22' } },
+    },
+    interpretation: { status: 'MANAGEMENT' },
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    supabase,
+    destinationStore: {
+      async listRoutedDestinations() {
+        return [{
+          id: 'dest-1', workspace_id: 'ws-1', destination_type: 'telegram', destination_ref: '-1002', is_active: true,
+          credential_ciphertext: 'cipher', template: { formatting_mode: 'none', parse_mode: 'plain' }, route_filters: {},
+        }];
+      },
+      async recordDestinationOutcome() {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'token' } }),
+    sendTelegram: async (input) => { sent = input; return { ok: true, status: 200, messageId: 88 }; },
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.equal(sent.replyToMessageId, 77);
+});
