@@ -68,3 +68,20 @@ test('launch console keeps Mkety staff access-code administration out of tenant 
   assert.match(html, /\/mkety-admin\/access-codes/);
   assert.equal(/fetch\(['"]\/api\/v1\/mkety-admin\/access-codes/.test(html), false);
 });
+
+test('launch console renders customer-safe lifecycle operations from the existing operations endpoint', () => {
+  const html = renderTradingLaunchConsole({});
+  assert.match(html, /id="operationRows"/);
+  assert.match(html, /Recent lifecycle activity/i);
+  assert.match(html, /api\('\/api\/v1\/admin\/operations'\)/);
+  assert.match(html, /state\.operations/);
+  assert.match(html, /function renderOperations/);
+  assert.match(html, /operationTimeline/);
+  assert.match(html, /correlationId/);
+  assert.match(html, /stage/);
+  assert.match(html, /status/);
+  assert.match(html, /summary/);
+  for (const forbidden of ['Cloudflare Workers', 'Supabase service role', 'OCI', 'Coolify', 'raw stack trace']) {
+    assert.equal(html.includes(forbidden), false, forbidden);
+  }
+});
