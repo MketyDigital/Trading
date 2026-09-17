@@ -20,7 +20,7 @@ test('normalizes operation evidence to a bounded secret-safe taxonomy', () => {
     errorCode: 'invalid_api_key',
     failureClass: 'AUTH',
     retryable: false,
-    summary: 'AI provider request failed.',
+    summary: 'AI provider request failed api_key=sk-summary-never-persist.',
     details: {
       httpStatus: 401,
       providerType: 'openai',
@@ -48,8 +48,11 @@ test('normalizes operation evidence to a bounded secret-safe taxonomy', () => {
   assert.equal(evidence.details.nested.safe, 'kept');
   assert.equal(Object.hasOwn(evidence.details, 'stack'), false);
   assert.equal(Object.hasOwn(evidence.details, 'raw_body'), false);
+  assert.equal(evidence.summary.includes('sk-summary-never-persist'), false);
+  assert.equal(evidence.summary.includes('[REDACTED]'), true);
   assert.equal(JSON.stringify(evidence).includes('sk-never-persist'), false);
   assert.equal(JSON.stringify(evidence).includes('Bearer never-persist'), false);
+  assert.equal(JSON.stringify(evidence).includes('sk-summary-never-persist'), false);
 });
 
 test('rejects unknown stage/status rather than creating free-form journal semantics', () => {
