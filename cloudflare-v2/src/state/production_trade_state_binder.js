@@ -15,11 +15,13 @@ function payloadFrom(binding = {}) {
   }
   const status = lifecycleStatus(binding);
   if (status) payload.status = status;
-  for (const key of ['fillPrice', 'executedLots', 'volumeStepLots', 'minimumLots']) {
+  for (const key of ['fillPrice', 'executedLots', 'volumeStepLots', 'minimumLots', 'stopLoss', 'takeProfit']) {
     if (binding[key] == null || binding[key] === '') continue;
     const value = Number(binding[key]);
     if (Number.isFinite(value)) payload[key] = value;
   }
+  if (binding.clearStopLoss === true) payload.clearStopLoss = true;
+  if (binding.clearTakeProfit === true) payload.clearTakeProfit = true;
   return payload;
 }
 
