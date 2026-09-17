@@ -31,6 +31,96 @@ function preservedTakeProfit(leg) {
   return value == null ? {} : { takeProfit: value };
 }
 
+const COMPOUND_PROTECTION_TYPES = new Set([
+  'MOVE_SL_TO_BE',
+  'MOVE_SL',
+  'CHANGE_TP',
+  'REMOVE_SL',
+  'REMOVE_TP',
+]);
+
+function coalesceCompoundProtectionActions(group, children) {
+  if (!children.every((child) => child && COMPOUND_PROTECTION_TYPES.has(child.type))) return null;
+
+  const openLegs = group.legs.filter((leg) => leg.status === 'OPEN' && leg.brokerPositionId);
+  const states = openLegs.map((leg) => ({
+    leg,
+    stopLoss: currentStopLoss(group, leg),
+    takeProfit: currentTakeProfit(leg),
+    clearStopLoss: false,
+    clearTakeProfit: false,
+    touched: false,
+  }));
+
+  for (const child of children) {
+    if (child.type === 'MOVE_SL_TO_BE') {
+      if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
+      for (const state of states) {
+        state.stopLoss = Number(group.entryPrice);
+        state.clearStopLoss = false;
+        state.touched = true;
+      }
+      continue;
+    }
+
+    if (child.type === 'MOVE_SL') {
+      const stopLoss = Number(child.stopLoss);
+      if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
+      for (const state of states) {
+        state.stopLoss = stopLoss;
+        state.clearStopLoss = false;
+        state.touched = true;
+      }
+      continue;
+    }
+
+    if (child.type === 'REMOVE_SL') {
+      for (const state of states) {
+        state.stopLoss = null;
+        state.clearStopLoss = true;
+        state.touched = true;
+      }
+      continue;
+    }
+
+    const targetIndex = child.targetIndex == null ? null : Number(child.targetIndex);
+    const matchingStates = targetIndex == null
+      ? states
+      : states.filter(({ leg }) => Number(leg.targetIndex) === targetIndex);
+
+    if (child.type === 'CHANGE_TP') {
+      const takeProfit = Number(child.takeProfit);
+      if (!Number.isFinite(takeProfit)) throw new Error('finite takeProfit is required');
+      for (const state of matchingStates) {
+        state.takeProfit = takeProfit;
+        state.clearTakeProfit = false;
+        state.touched = true;
+      }
+      continue;
+    }
+
+    if (child.type === 'REMOVE_TP') {
+      for (const state of matchingStates) {
+        state.takeProfit = null;
+        state.clearTakeProfit = true;
+        state.touched = true;
+      }
+    }
+  }
+
+  return states
+    .filter((state) => state.touched)
+    .map(({ leg, stopLoss, takeProfit, clearStopLoss, clearTakeProfit }) => ({
+      type: 'MODIFY_POSITION',
+      legId: leg.legId,
+      targetIndex: leg.targetIndex,
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      ...(stopLoss != null ? { stopLoss } : clearStopLoss ? { clearStopLoss: true } : {}),
+      ...(takeProfit != null ? { takeProfit } : clearTakeProfit ? { clearTakeProfit: true } : {}),
+    }));
+}
+
 export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep = 0.01) {
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
   if (!(Number(totalLots) > 0) || !(Number(volumeStep) > 0)) throw new TypeError('positive totalLots and volumeStep required');
@@ -144,8 +234,17 @@ export function buildManagementActions(group, management) {
   if (management?.type === 'COMPOUND') {
     const children = Array.isArray(management.actions) ? management.actions : [];
     if (children.length < 2) throw new Error('compound management requires at least two actions');
+    if (children.some((child) => !child || child.type === 'COMPOUND')) {
+      throw new Error('nested compound management is not supported');
+    }
+
+    const coalescedProtection = coalesceCompoundProtectionActions(group, children);
+    if (coalescedProtection) {
+      if (coalescedProtection.length === 0) throw new Error('compound management action unavailable');
+      return coalescedProtection;
+    }
+
     const expanded = children.map((child) => {
-      if (!child || child.type === 'COMPOUND') throw new Error('nested compound management is not supported');
       const actions = buildManagementActions(group, child);
       if (!Array.isArray(actions) || actions.length === 0) {
         throw new Error(`compound management action unavailable: ${String(child?.type || 'UNKNOWN')}`);
