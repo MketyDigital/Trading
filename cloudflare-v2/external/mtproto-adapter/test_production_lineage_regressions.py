@@ -67,6 +67,7 @@ class ProductionLineageRegressionTests(unittest.IsolatedAsyncioTestCase):
             client_factory=lambda **_kwargs: client,
             sink=sink,
             retry_delays=(),
+            accept_outgoing=True,
         )
         return adapter, client, deliveries
 
