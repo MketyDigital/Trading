@@ -28,5 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_trading_event_revisions_event_created
     ON public.trading_event_revisions(trading_event_id, created_at DESC);
 
 ALTER TABLE public.trading_event_revisions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON TABLE public.trading_event_revisions FROM anon, authenticated;
+GRANT ALL PRIVILEGES ON TABLE public.trading_event_revisions TO service_role;
 
 COMMIT;
