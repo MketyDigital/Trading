@@ -50,6 +50,13 @@ function logicalCohorts(groups = []) {
   return [...byKey.values()];
 }
 
+function cohortCreatedAt(cohort = []) {
+  const values = cohort
+    .map((group) => Number(group?.createdAt ?? group?.updatedAt ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? Math.min(...values) : 0;
+}
+
 function targetForCohort(cohort = [], reason = 'MATCHED') {
   if (cohort.length === 1) return { status: 'MATCHED', reason, groupId: cohort[0].id };
   if (cohort.length > 1 && sameLogicalTrade(cohort)) {
@@ -154,12 +161,28 @@ function sourceMessageContinuityTarget(groups = [], event = {}) {
   return null;
 }
 
-function activeLogicalTradeTarget(groups = []) {
+function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
   if (cohorts.length === 1) {
     return targetForCohort(cohorts[0], cohorts[0].length === 1 ? 'ONLY_ACTIVE_GROUP' : 'ONLY_ACTIVE_TRADE');
   }
+
+  const recentCohorts = cohorts
+    .map((cohort) => ({ cohort, createdAt: cohortCreatedAt(cohort) }))
+    .filter((entry) => entry.createdAt > 0 && Number(nowMs) - entry.createdAt <= Number(windowMs))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  if (recentCohorts.length > 0) {
+    const newest = recentCohorts[0];
+    const runnerUp = recentCohorts[1];
+    const clearlyNewest = !runnerUp || newest.createdAt - runnerUp.createdAt >= Number(recencyGapMs);
+    if (clearlyNewest) {
+      const target = targetForCohort(newest.cohort, 'RECENT_ACTIVE_TRADE');
+      if (target) return target;
+    }
+  }
+
   return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
 }
 
@@ -238,7 +261,10 @@ export function correlateTradingEvent({
     const continuityTarget = sourceMessageContinuityTarget(scoped, event);
     if (continuityTarget) return continuityTarget;
 
-    const target = activeLogicalTradeTarget(scoped);
+    const target = activeLogicalTradeTarget(scoped, {
+      nowMs: Number(nowMs),
+      windowMs: Number(correlationWindowMs),
+    });
     if (target) return target;
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }

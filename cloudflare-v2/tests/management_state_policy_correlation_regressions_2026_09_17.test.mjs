@@ -104,16 +104,40 @@ test('BE is eligible for any real profit beyond entry, even a very small move', 
   assert.equal(evaluateBreakEvenEligibility({ side: 'BUY', entryPrice: 1.10000, marketPrice: 1.10000 }).allowed, false);
 });
 
-test('no-reply management never guesses newest trade when multiple logical trades are plausible', () => {
+test('no-reply management targets a clearly fresh newest trade when older trades were opened long before it', () => {
   const groups = [
-    activeGroup({ id: 'old', sourceEventIds: ['telegram:-1001:100'], updatedAt: 1000 }),
-    activeGroup({ id: 'new', sourceEventIds: ['telegram:-1001:200'], updatedAt: 9000 }),
+    activeGroup({ id: 'old-gold', symbol: 'XAUUSD', sourceEventIds: ['telegram:-1001:100'], createdAt: 1000, updatedAt: 9900 }),
+    activeGroup({ id: 'new-eurusd', symbol: 'EURUSD', sourceEventIds: ['telegram:-1001:200'], createdAt: 9000, updatedAt: 9000 }),
   ];
   assert.deepEqual(correlateTradingEvent({
     event: { workspace_hint: 'ws', source: { instance_id: 'src' }, external_event_id: 'telegram:-1001:300', thread: {} },
     interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
     activeGroups: groups, nowMs: 10000, correlationWindowMs: 120000,
+  }), { status: 'MATCHED', reason: 'RECENT_ACTIVE_TRADE', groupId: 'new-eurusd' });
+});
+
+test('no-reply management fails closed when two distinct trades were opened within the same short interval', () => {
+  const groups = [
+    activeGroup({ id: 'gold', symbol: 'XAUUSD', sourceEventIds: ['telegram:-1001:100'], createdAt: 7000, updatedAt: 7000 }),
+    activeGroup({ id: 'eurusd', symbol: 'EURUSD', sourceEventIds: ['telegram:-1001:200'], createdAt: 10000, updatedAt: 10000 }),
+  ];
+  assert.deepEqual(correlateTradingEvent({
+    event: { workspace_hint: 'ws', source: { instance_id: 'src' }, external_event_id: 'telegram:-1001:300', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: groups, nowMs: 12000, correlationWindowMs: 120000,
   }), { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
+});
+
+test('no-reply recency uses trade opening time rather than later SL/TP updates on an old trade', () => {
+  const groups = [
+    activeGroup({ id: 'old-gold', symbol: 'XAUUSD', sourceEventIds: ['telegram:-1001:100'], createdAt: 1000, updatedAt: 11900 }),
+    activeGroup({ id: 'new-eurusd', symbol: 'EURUSD', sourceEventIds: ['telegram:-1001:200'], createdAt: 10000, updatedAt: 10000 }),
+  ];
+  assert.deepEqual(correlateTradingEvent({
+    event: { workspace_hint: 'ws', source: { instance_id: 'src' }, external_event_id: 'telegram:-1001:300', thread: {} },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    activeGroups: groups, nowMs: 12000, correlationWindowMs: 120000,
+  }), { status: 'MATCHED', reason: 'RECENT_ACTIVE_TRADE', groupId: 'new-eurusd' });
 });
 
 test('no-reply management still matches one unique logical trade across multiple broker accounts', () => {
