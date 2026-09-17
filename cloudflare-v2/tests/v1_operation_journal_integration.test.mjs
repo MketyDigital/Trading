@@ -98,6 +98,82 @@ function interpreterAttempt(details) {
   return details.attempts[0];
 }
 
+test('V1 lifecycle evidence records protection skips and edit-management changes explicitly', () => {
+  const rows = buildV1LifecycleEvidence({
+    sourceId: 'src-1',
+    result: {
+      ok: true,
+      duplicate: false,
+      revision: true,
+      eventId: 'db-event-1',
+      event: {
+        ...event,
+        thread: { edited_event_id: 'telegram:-100123:317' },
+        metadata: { source_revision_key: 'rev-b' },
+      },
+      interpretation: {
+        status: 'READY',
+        source: 'deterministic',
+        intent: {
+          side: 'SELL',
+          symbol: { canonical: 'XAUUSD' },
+          orderType: 'MARKET',
+          entry: { kind: 'MARKET' },
+          stopLoss: 4280,
+          takeProfits: [4250, 4220],
+          incomplete: false,
+        },
+      },
+    },
+    simulation: {
+      status: 'SIMULATED',
+      correlation: { status: 'MATCHED', reason: 'EDIT_TARGET', groupId: 'group-1' },
+      accounts: [{
+        accountId: 'acct-1',
+        status: 'READY',
+        groupId: 'group-1',
+        protectionSkips: [{
+          field: 'takeProfits',
+          targetIndex: 3,
+          code: 'TP3_SKIPPED_INVALID_GEOMETRY',
+          value: 4350,
+        }],
+        actions: [{
+          type: 'MODIFY_POSITION',
+          legId: 'leg-1',
+          stopLoss: 4280,
+          simulated: true,
+        }],
+      }],
+    },
+    destinations: {
+      status: 'DELIVERED',
+      succeeded: 1,
+      failed: 0,
+      outcomes: [{ destinationId: 'dest-1', status: 'SUCCEEDED', operation: 'edit' }],
+    },
+  });
+
+  const protection = rows.find((row) => row.operation === 'skip_invalid_protection');
+  assert.ok(protection);
+  assert.equal(protection.stage, 'BROKER_PLANNING');
+  assert.equal(protection.status, 'SKIPPED');
+  assert.equal(protection.errorCode, 'TP3_SKIPPED_INVALID_GEOMETRY');
+  assert.equal(protection.details.accountId, 'acct-1');
+  assert.equal(protection.details.targetIndex, 3);
+
+  const management = rows.find((row) => row.operation === 'source_edit_management');
+  assert.ok(management);
+  assert.equal(management.stage, 'MANAGEMENT');
+  assert.equal(management.status, 'SUCCEEDED');
+  assert.equal(management.positionGroupId, 'group-1');
+  assert.equal(management.details.correlationReason, 'EDIT_TARGET');
+  assert.deepEqual(management.details.actionTypes, ['MODIFY_POSITION']);
+
+  const destination = rows.find((row) => row.stage === 'DESTINATION');
+  assert.equal(destination.details.outcomes[0].operation, 'edit');
+});
+
 test('V1 handler writes lifecycle evidence without changing trading or destination results', async () => {
   const appended = [];
   const response = await handleV1EventsRequest(request(), {
