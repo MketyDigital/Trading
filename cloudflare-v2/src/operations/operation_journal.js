@@ -127,6 +127,8 @@ export function normalizeOperationEvidence(input = {}) {
     ? sanitizeDetailsValue(input.details)
     : {};
 
+  const rawSummary = text(input.summary, 1000);
+
   return {
     workspaceId: requiredText(input.workspaceId ?? input.workspace_id, 'OPERATION_WORKSPACE_REQUIRED'),
     evidenceKey: requiredText(input.evidenceKey ?? input.evidence_key, 'OPERATION_EVIDENCE_KEY_REQUIRED', 1000),
@@ -146,7 +148,7 @@ export function normalizeOperationEvidence(input = {}) {
     errorCode: text(input.errorCode ?? input.error_code, 256),
     failureClass: text(input.failureClass ?? input.failure_class, 256),
     retryable: input.retryable == null ? null : Boolean(input.retryable),
-    summary: text(input.summary, 1000),
+    summary: rawSummary == null ? null : sanitizeString(rawSummary, 1000),
     details,
     observedAt: optionalObservedAt(input.observedAt ?? input.observed_at),
   };
