@@ -30,6 +30,18 @@ function auditDb() {
       opened_at: '2026-09-13T10:00:03Z', closed_at: null, created_at: '2026-09-13T10:00:02Z', updated_at: '2026-09-13T10:00:03Z',
     }],
     destination_deliveries: [],
+    operation_journal: [{
+      id: 'oj-1', workspace_id: 'ws-1', evidence_key: 'evt-1:interpretation', correlation_id: 'telegram:-100:1',
+      trading_event_id: 'evt-1', source_connection_id: 'src-internal', ai_provider_id: 'provider-internal', connector_id: 'connector-internal',
+      stage: 'INTERPRETATION', operation: 'interpret_event', status: 'SUCCEEDED', error_code: null, failure_class: null,
+      retryable: false, summary: 'Interpretation ready.',
+      details: { source: 'ai', aiDiagnostics: { attempts: [{ providerType: 'openai', status: 'SUCCEEDED' }] }, api_key: 'never', raw_body: 'never-raw' },
+      observed_at: '2026-09-13T10:00:01.500Z', created_at: '2026-09-13T10:00:01.500Z',
+    }, {
+      id: 'oj-other', workspace_id: 'ws-2', evidence_key: 'other', correlation_id: 'other', trading_event_id: 'evt-1',
+      stage: 'BROKER_EXECUTION', operation: 'execute_plan', status: 'FAILED', summary: 'other tenant', details: { safe: 'cross-tenant-never' },
+      observed_at: '2026-09-13T10:00:02Z', created_at: '2026-09-13T10:00:02Z',
+    }],
   };
 
   return {
@@ -58,7 +70,7 @@ function auditDb() {
   };
 }
 
-test('event audit exposes parser provenance and durable reconciliation evidence without reconstruction', async () => {
+test('event audit exposes parser provenance, lifecycle evidence, and durable reconciliation without reconstruction', async () => {
   const audit = await createAdminOperationsStore(auditDb()).auditEvent('ws-1', 'evt-1');
 
   assert.equal(audit.event.canonicalIntent.source, 'deterministic');
@@ -72,4 +84,23 @@ test('event audit exposes parser provenance and durable reconciliation evidence 
   assert.deepEqual(group.sourceEventIds, ['evt-1', 'evt-followup']);
   assert.equal(group.legs[0].brokerPositionId, 'pos-77');
   assert.equal(group.legs[0].brokerOrderId, 'ord-88');
+
+  assert.deepEqual(audit.operationTimeline, [{
+    tradingEventId: 'evt-1',
+    correlationId: 'telegram:-100:1',
+    stage: 'INTERPRETATION',
+    operation: 'interpret_event',
+    status: 'SUCCEEDED',
+    errorCode: null,
+    failureClass: null,
+    retryable: false,
+    summary: 'Interpretation ready.',
+    details: { source: 'ai', aiDiagnostics: { attempts: [{ providerType: 'openai', status: 'SUCCEEDED' }] } },
+    observedAt: '2026-09-13T10:00:01.500Z',
+  }]);
+
+  const encoded = JSON.stringify(audit);
+  for (const forbidden of ['src-internal', 'provider-internal', 'connector-internal', 'never-raw', 'cross-tenant-never']) {
+    assert.equal(encoded.includes(forbidden), false, forbidden);
+  }
 });
