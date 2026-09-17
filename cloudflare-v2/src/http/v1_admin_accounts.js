@@ -11,6 +11,9 @@ const ACCOUNT_SELECT = [
 ].join(',');
 
 const SUPPORTED_BROKER_PLATFORMS = new Set(['mt5', 'ctrader']);
+const ENTRY_ZONE_MODES = new Set(['market_if_inside', 'midpoint', 'lower', 'upper', 'market_only']);
+const ALWAYS_ON_FAST_ENTRY_POLICY = Object.freeze({ enabled: true, mode: 'execute_immediately', locked: true });
+const DEFAULT_ENTRY_ZONE_POLICY = Object.freeze({ mode: 'market_if_inside' });
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -25,6 +28,16 @@ function json(body, status = 200, extraHeaders = {}) {
 
 function masterBrokerExecutionEnabled(env = {}) {
   return env.BROKER_EXECUTION_ENABLED === true || String(env.BROKER_EXECUTION_ENABLED ?? '').toLowerCase() === 'true';
+}
+
+function safeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function canonicalEntryZonePolicy(value) {
+  const raw = safeObject(value);
+  const mode = String(raw.mode ?? '').trim().toLowerCase();
+  return { mode: ENTRY_ZONE_MODES.has(mode) ? mode : DEFAULT_ENTRY_ZONE_POLICY.mode };
 }
 
 function publicAccount(account = {}) {
@@ -47,8 +60,8 @@ function publicAccount(account = {}) {
     autoTpProtection: safetyPolicy?.autoTpProtection === true,
     lotSizingType: account.lot_sizing_type ?? account.lotSizingType ?? null,
     lotValue: account.lot_value ?? account.lotValue ?? null,
-    fastEntryPolicy: account.fast_entry_policy ?? account.fastEntryPolicy ?? null,
-    entryZonePolicy: account.entry_zone_policy ?? account.entryZonePolicy ?? null,
+    fastEntryPolicy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
+    entryZonePolicy: canonicalEntryZonePolicy(account.entry_zone_policy ?? account.entryZonePolicy),
     credentialConfigured,
     createdAt: account.created_at ?? account.createdAt ?? null,
   };
@@ -76,10 +89,6 @@ function optionalNumber(value) {
   if (value === undefined || value === null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
-}
-
-function safeObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function parseAccountCreation(body) {
@@ -121,8 +130,8 @@ function parseAccountCreation(body) {
       active: false,
       executionEnabled: false,
       safetyPolicy,
-      fastEntryPolicy: safeObject(body.fastEntryPolicy ?? body.fast_entry_policy),
-      entryZonePolicy: safeObject(body.entryZonePolicy ?? body.entry_zone_policy),
+      fastEntryPolicy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
+      entryZonePolicy: canonicalEntryZonePolicy(body.entryZonePolicy ?? body.entry_zone_policy),
     },
   };
 }
@@ -189,8 +198,8 @@ export function createAdminAccountStore(supabase) {
         is_active: false,
         execution_enabled: false,
         safety_policy: { ...safeObject(input.safetyPolicy), killSwitch: true },
-        fast_entry_policy: safeObject(input.fastEntryPolicy),
-        entry_zone_policy: safeObject(input.entryZonePolicy),
+        fast_entry_policy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
+        entry_zone_policy: canonicalEntryZonePolicy(input.entryZonePolicy),
         credential_ciphertext: String(credentialCiphertext),
       };
       const { data, error } = await supabase
@@ -263,6 +272,19 @@ export function createAdminAccountStore(supabase) {
 
     async setAutoTpProtection(workspaceId, accountId, enabled) {
       return updateSafetyPolicy(workspaceId, accountId, { autoTpProtection: Boolean(enabled) }, 'ACCOUNT_AUTO_TP_PROTECTION_UPDATE_FAILED');
+    },
+
+    async setEntryZonePolicy(workspaceId, accountId, policy) {
+      const entryZonePolicy = canonicalEntryZonePolicy(policy);
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({ entry_zone_policy: entryZonePolicy, fast_entry_policy: { ...ALWAYS_ON_FAST_ENTRY_POLICY } })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_ENTRY_ZONE_POLICY_UPDATE_FAILED');
+      return data || null;
     },
   };
 }
@@ -422,6 +444,25 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       });
     } catch {
       return json({ ok: false, reason: 'ACCOUNT_FIXED_LOT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'entry-zone-policy') {
+    const mode = requiredText(body.mode)?.toLowerCase() ?? null;
+    if (!mode || !ENTRY_ZONE_MODES.has(mode)) {
+      return json({ ok: false, reason: 'ENTRY_ZONE_POLICY_MODE_INVALID' }, 400);
+    }
+    try {
+      const account = await accountStore.setEntryZonePolicy(workspaceId, accountId, { mode });
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({
+        ok: true,
+        workspaceId,
+        masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env),
+        account: publicAccount(account),
+      });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_ENTRY_ZONE_POLICY_UPDATE_FAILED' }, 503);
     }
   }
 
