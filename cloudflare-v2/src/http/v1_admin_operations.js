@@ -1,3 +1,5 @@
+import { sanitizeOperationString } from '../operations/operation_journal.js';
+
 const DELIVERY_STATUSES = Object.freeze(['PENDING', 'SUCCEEDED', 'RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const FAILURE_STATUSES = Object.freeze(['RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const SECRET_KEY_PATTERN = /(secret|token|password|credential|authorization|api[_-]?key|private[_-]?key|cipher)/i;
@@ -152,7 +154,7 @@ function safeOperationTimelineRow(row = {}) {
     errorCode: row.error_code ?? null,
     failureClass: row.failure_class ?? null,
     retryable: row.retryable == null ? null : Boolean(row.retryable),
-    summary: row.summary ?? null,
+    summary: row.summary == null ? null : sanitizeOperationString(row.summary, 1000),
     details: sanitizePersistedValue(row.details && typeof row.details === 'object' ? row.details : {}),
     observedAt: row.observed_at ?? null,
   };
