@@ -211,8 +211,8 @@ function tpSegmentValues(segment) {
 
 function extractExplicitTps(text) {
   const labeled = [];
-  const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*[:@-]?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
-  const spacedPattern = new RegExp(`\\bTP\\s+([1-9]\\d?)\\s*[:@-]\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  const compactPattern = new RegExp(`\\bTP([1-9]\\d?)\\s*(?:[:@-]|AT)?\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
+  const spacedPattern = new RegExp(`\\bTP\\s+([1-9]\\d?)\\s*(?:[:@-]|AT)\\s*(${SIGNAL_NUMBER_SOURCE})`, 'gi');
   for (const match of text.matchAll(compactPattern)) {
     const value = parsedNumber(match[2]);
     if (value == null) return null;

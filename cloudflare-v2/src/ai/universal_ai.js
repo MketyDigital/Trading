@@ -10,7 +10,8 @@ export class UniversalAIRouter {
             ? [...providers].sort((a, b) => this.priorityOf(a) - this.priorityOf(b))
             : [];
         this.env = options.env || {};
-        this.fetchFn = options.fetchFn || fetch;
+        const fetchImpl = typeof options.fetchFn === 'function' ? options.fetchFn : globalThis.fetch;
+        this.fetchFn = (...args) => fetchImpl.call(globalThis, ...args);
         this.credentialResolver = options.credentialResolver || null;
         this.workspaceId = String(options.workspaceId ?? '').trim() || null;
         this.circuitBreaker = options.circuitBreaker || null;
