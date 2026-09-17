@@ -55,6 +55,54 @@ function identityFromPayload(payload) {
   return { chat_id: chatId, message_id: messageId };
 }
 
+function telegramEventId(chatId, messageId) {
+  const id = cleanIdentityPart(messageId);
+  return id ? `telegram:${chatId}:${id}` : null;
+}
+
+function lineageThread(payload, identity) {
+  const existing = payload?.thread && typeof payload.thread === 'object' && !Array.isArray(payload.thread)
+    ? payload.thread
+    : null;
+
+  const existingReply = cleanIdentityPart(existing?.reply_to_event_id ?? existing?.replyToEventId ?? payload.reply_to_event_id ?? payload.replyToEventId);
+  const legacyReplyId = cleanIdentityPart(
+    payload.reply_to_id
+      ?? payload.reply_to_message_id
+      ?? payload.replyToId
+      ?? payload.replyToMessageId,
+  );
+  const replyToEventId = existingReply || telegramEventId(identity.chat_id, legacyReplyId);
+
+  const existingEdited = cleanIdentityPart(existing?.edited_event_id ?? existing?.editedEventId ?? payload.edited_event_id ?? payload.editedEventId);
+  const kind = cleanIdentityPart(
+    payload.update_kind
+      ?? payload.updateKind
+      ?? payload.event_type
+      ?? payload.eventType
+      ?? payload.type
+      ?? payload?.metadata?.update_kind
+      ?? payload?.metadata?.updateKind,
+  ).toLowerCase();
+  const hasEditMarker = payload.edited === true
+    || payload.is_edited === true
+    || payload.isEdited === true
+    || payload.is_edit === true
+    || payload.isEdit === true
+    || Boolean(cleanIdentityPart(payload.edit_date ?? payload.editDate ?? payload.edited_at ?? payload.editedAt))
+    || kind.includes('edit');
+  const editedEventId = existingEdited || (hasEditMarker
+    ? telegramEventId(identity.chat_id, identity.message_id)
+    : null);
+
+  if (!existing && !replyToEventId && !editedEventId) return null;
+  return {
+    ...(existing || {}),
+    reply_to_event_id: replyToEventId || null,
+    edited_event_id: editedEventId || null,
+  };
+}
+
 function normalizeExternalMtprotoBody(rawBody) {
   let payload;
   try {
@@ -72,13 +120,19 @@ function normalizeExternalMtprotoBody(rawBody) {
   if (!identity) return rawBody;
 
   const native = payload.metadata?.native_identity;
-  const hasCanonicalNativeIdentity = cleanIdentityPart(native?.chat_id) && cleanIdentityPart(native?.message_id);
-  const hasExternalEventId = cleanIdentityPart(payload.external_event_id);
-  if (hasCanonicalNativeIdentity && hasExternalEventId) return rawBody;
+  const hasCanonicalNativeIdentity = Boolean(cleanIdentityPart(native?.chat_id) && cleanIdentityPart(native?.message_id));
+  const hasExternalEventId = Boolean(cleanIdentityPart(payload.external_event_id));
+  const thread = lineageThread(payload, identity);
+  const hasCanonicalThread = payload.thread && typeof payload.thread === 'object' && !Array.isArray(payload.thread)
+    && cleanIdentityPart(payload.thread.reply_to_event_id) === cleanIdentityPart(thread?.reply_to_event_id)
+    && cleanIdentityPart(payload.thread.edited_event_id) === cleanIdentityPart(thread?.edited_event_id);
+
+  if (hasCanonicalNativeIdentity && hasExternalEventId && (!thread || hasCanonicalThread)) return rawBody;
 
   return JSON.stringify({
     ...payload,
     ...(hasExternalEventId ? {} : { external_event_id: `telegram:${identity.chat_id}:${identity.message_id}` }),
+    ...(thread ? { thread } : {}),
     metadata: {
       ...(payload.metadata || {}),
       ...(hasCanonicalNativeIdentity ? {} : { native_identity: identity }),
