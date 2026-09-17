@@ -86,6 +86,22 @@ function aiDiagnostics(interpretation = {}) {
   return source;
 }
 
+function simulationAccounts(simulation = {}) {
+  return Array.isArray(simulation?.accounts) ? simulation.accounts : [];
+}
+
+function flattenedSimulationActions(simulation = {}) {
+  return simulationAccounts(simulation)
+    .flatMap((account) => Array.isArray(account?.actions) ? account.actions : []);
+}
+
+function managementEvidenceStatus(simulation = {}) {
+  const accounts = simulationAccounts(simulation);
+  if (accounts.some((account) => String(account?.status ?? '').toUpperCase() === 'READY')) return 'SUCCEEDED';
+  if (accounts.some((account) => String(account?.status ?? '').toUpperCase() === 'BLOCKED')) return 'BLOCKED';
+  return flattenedSimulationActions(simulation).length ? 'SUCCEEDED' : 'SKIPPED';
+}
+
 export function buildV1LifecycleEvidence({
   sourceId,
   result,
@@ -171,8 +187,59 @@ export function buildV1LifecycleEvidence({
         status: simulation?.status ?? null,
         executionEnabled: simulation?.executionEnabled ?? null,
         actionCount: Array.isArray(simulation?.actions) ? simulation.actions.length : 0,
+        correlationReason: simulation?.correlation?.reason ?? null,
       },
     }));
+
+    simulationAccounts(simulation).forEach((account, accountIndex) => {
+      const accountId = text(account?.accountId ?? account?.account_id);
+      const skips = Array.isArray(account?.protectionSkips) ? account.protectionSkips : [];
+      skips.forEach((skip, skipIndex) => {
+        rows.push(normalized(base, `protection-skip:${accountId || accountIndex + 1}:${skipIndex + 1}`, {
+          stage: 'BROKER_PLANNING',
+          operation: 'skip_invalid_protection',
+          status: 'SKIPPED',
+          tradeAccountId: accountId,
+          errorCode: text(skip?.code),
+          summary: 'Invalid protective field was skipped by configured policy.',
+          details: {
+            accountId,
+            field: skip?.field ?? null,
+            targetIndex: skip?.targetIndex ?? null,
+            value: skip?.value ?? null,
+          },
+        }));
+      });
+    });
+
+    const correlationReason = text(simulation?.correlation?.reason);
+    const isEditManagement = correlationReason === 'EDIT_TARGET';
+    const isManagement = String(result?.interpretation?.status ?? '').toUpperCase() === 'MANAGEMENT';
+    if (isEditManagement || isManagement) {
+      const actions = flattenedSimulationActions(simulation);
+      const accountIds = simulationAccounts(simulation)
+        .map((account) => text(account?.accountId ?? account?.account_id))
+        .filter(Boolean);
+      const groupId = text(
+        simulation?.correlation?.groupId
+          ?? simulation?.correlation?.group_id
+          ?? simulationAccounts(simulation).find((account) => account?.groupId ?? account?.group_id)?.groupId
+          ?? simulationAccounts(simulation).find((account) => account?.groupId ?? account?.group_id)?.group_id,
+      );
+      rows.push(normalized(base, isEditManagement ? 'management:edit' : 'management:command', {
+        stage: 'MANAGEMENT',
+        operation: isEditManagement ? 'source_edit_management' : 'management_command',
+        status: managementEvidenceStatus(simulation),
+        positionGroupId: groupId,
+        summary: isEditManagement ? 'Source edit applied as management.' : 'Management command correlated to an existing trade.',
+        details: {
+          correlationReason,
+          accountIds,
+          actionTypes: [...new Set(actions.map((action) => text(action?.type)).filter(Boolean))],
+          actionCount: actions.length,
+        },
+      }));
+    }
   }
 
   if (execution) {
