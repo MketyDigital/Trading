@@ -81,7 +81,7 @@ const journalRows = [
     error_code: null,
     failure_class: null,
     retryable: false,
-    summary: 'Interpretation ready.',
+    summary: 'Interpretation ready api_key=sk-summary-never-show.',
     details: {
       source: 'ai',
       aiDiagnostics: {
@@ -129,7 +129,7 @@ test('operations snapshot adds a workspace-scoped customer-safe lifecycle timeli
     errorCode: null,
     failureClass: null,
     retryable: false,
-    summary: 'Interpretation ready.',
+    summary: 'Interpretation ready api_key=[REDACTED]',
     details: {
       source: 'ai',
       aiDiagnostics: {
@@ -147,6 +147,7 @@ test('operations snapshot adds a workspace-scoped customer-safe lifecycle timeli
     'connector-internal-id',
     'Bearer never-show',
     'sk-never-show',
+    'sk-summary-never-show',
     'raw-provider-body-never-show',
     'internal stack never show',
     'never-show',
