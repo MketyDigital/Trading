@@ -54,6 +54,11 @@ function isRiskIncreasingAction(action = {}) {
   return String(action.type || '').toUpperCase() === 'OPEN_POSITION';
 }
 
+function actionRequiresStateBinding(action = {}) {
+  return new Set(['OPEN_POSITION', 'MODIFY_POSITION', 'CLOSE_PARTIAL', 'CLOSE_POSITION', 'CANCEL_PENDING'])
+    .has(String(action.type || '').toUpperCase());
+}
+
 function policyRequest(plan = {}, action = {}) {
   return {
     symbol: action.symbol,
@@ -376,7 +381,10 @@ async function runAccountPlan({
       continue;
     }
 
-    if (result?.duplicate !== true && hasBindableBrokerResult(result) && typeof stateBinder === 'function') {
+    const shouldBindState = result?.duplicate !== true
+      && typeof stateBinder === 'function'
+      && (hasBindableBrokerResult(result) || actionRequiresStateBinding(executableAction));
+    if (shouldBindState) {
       try {
         const brokerPositionId = result?.brokerPositionId ?? null;
         const brokerOrderId = result?.brokerOrderId ?? null;
@@ -392,6 +400,10 @@ async function runAccountPlan({
           executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
           volumeStepLots: Number.isFinite(Number(result?.volumeStepLots)) ? Number(result.volumeStepLots) : null,
           minimumLots: Number.isFinite(Number(result?.minimumLots)) ? Number(result.minimumLots) : null,
+          stopLoss: optionalFiniteNumber(executableAction?.stopLoss),
+          takeProfit: optionalFiniteNumber(executableAction?.takeProfit),
+          clearStopLoss: executableAction?.clearStopLoss === true,
+          clearTakeProfit: executableAction?.clearTakeProfit === true,
         });
       } catch {
         if (typeof bindingRepairRecorder === 'function') {
