@@ -545,6 +545,8 @@ export async function orchestrateTradingEventSimulation({
         status: 'BLOCKED',
         policy: plan.policy,
         risk: plan.risk,
+        protectionIssues: plan.protectionIssues ?? [],
+        protectionSkips: plan.protectionSkips ?? [],
         actions: [],
       });
       continue;
@@ -571,6 +573,8 @@ export async function orchestrateTradingEventSimulation({
         groupId: reconciliation.group.id,
         policy: plan.policy,
         risk: plan.risk,
+        protectionIssues: plan.protectionIssues ?? [],
+        protectionSkips: plan.protectionSkips ?? [],
         actions: simulationActions(reconciliation.actions),
       });
       continue;
@@ -591,6 +595,8 @@ export async function orchestrateTradingEventSimulation({
       groupId: group.id,
       policy: plan.policy,
       risk: plan.risk,
+      protectionIssues: plan.protectionIssues ?? [],
+      protectionSkips: plan.protectionSkips ?? [],
       actions: simulationActions(plan.actions),
     });
   }
