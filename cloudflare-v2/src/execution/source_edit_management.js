@@ -68,18 +68,22 @@ export function buildEditedSignalManagement(group = {}, intent = {}, { rawText =
   const actions = [];
   for (const leg of legs) {
     const targetIndex = Number(leg.targetIndex) || 1;
+    const currentStop = finiteOrNull(leg.stopLoss ?? group.stopLoss);
+    const currentTp = finiteOrNull(leg.takeProfit);
     const nextTp = targetByIndex.get(targetIndex) ?? null;
-    const tpChanged = nextTp != null && finiteOrNull(leg.takeProfit) !== nextTp;
+    const tpChanged = nextTp != null && currentTp !== nextTp;
     if (!stopChanged && !tpChanged) continue;
 
+    const finalStop = stopChanged ? nextStop : currentStop;
+    const finalTp = tpChanged ? nextTp : currentTp;
     actions.push({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
       targetIndex,
       brokerPositionId: leg.brokerPositionId,
       symbol: canonicalSymbol(group.symbol),
-      ...(stopChanged ? { stopLoss: nextStop } : {}),
-      ...(tpChanged ? { takeProfit: nextTp } : {}),
+      ...(finalStop != null ? { stopLoss: finalStop } : {}),
+      ...(finalTp != null ? { takeProfit: finalTp } : {}),
     });
   }
 
