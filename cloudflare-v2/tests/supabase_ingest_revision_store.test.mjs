@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createSupabaseIngestStores } from '../src/storage/supabase_ingest_store.js';
 
 function revisionRow(overrides = {}) {
@@ -145,4 +146,11 @@ test('updateRevisionInterpretation persists normalized terminal fields to the re
     error_code: null,
   });
   assert.ok(supabase.calls.some((call) => call.op === 'update-eq' && call.column === 'id' && call.value === 'rev-1'));
+});
+
+test('migration 0039 keeps revision history private while allowing service-role runtime persistence', async () => {
+  const sql = await readFile(new URL('../db/migrations/0039_trading_event_revisions.sql', import.meta.url), 'utf8');
+  assert.match(sql, /ALTER TABLE public\.trading_event_revisions ENABLE ROW LEVEL SECURITY/i);
+  assert.match(sql, /REVOKE ALL PRIVILEGES ON TABLE public\.trading_event_revisions FROM anon, authenticated/i);
+  assert.match(sql, /GRANT ALL PRIVILEGES ON TABLE public\.trading_event_revisions TO service_role/i);
 });
