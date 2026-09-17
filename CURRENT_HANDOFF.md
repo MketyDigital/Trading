@@ -223,3 +223,56 @@ This checkpoint supersedes only the earlier in-progress verification wording abo
 - No LIVE gate or LIVE account execution permission was enabled by this release.
 
 PR #109 is therefore deployed to production code. Real production DEMO behavior still requires fresh source messages for the acceptance cases listed immediately above; do not infer those real-message rows solely from CI/deploy success.
+
+### Second management-state / policy hardening checkpoint — PR #110
+
+Fresh post-PR #109 DEMO observation proved the remaining SL/TP replacement defect was deeper than action construction. Successful broker `MODIFY_POSITION` calls were not consistently materialized back into durable `position_legs.stop_loss` / `position_legs.take_profit`. A later SL-only or TP-only instruction therefore read stale `NULL` protection state and could still erase the sibling field at the broker even though the action builder attempted to preserve it.
+
+PR #110 fixes the complete persistence chain:
+
+- the production execution coordinator now binds every successful lifecycle-changing action that requires durable state, including successful `MODIFY_POSITION` responses that return only success and no fresh broker identifiers/fill;
+- the production trade-state binder now carries desired `stopLoss`, `takeProfit`, `clearStopLoss` and `clearTakeProfit` values;
+- the durable trade-state store applies protection updates and explicit clears to the affected leg instead of leaving stale/null protection materialization;
+- group-level SL state is realigned when all open legs share the same stop, and explicit full SL removal clears the group stop only when all open legs are clear;
+- ordinary OPEN bindings remain backward-compatible and do not add meaningless null/false protection fields.
+
+The RED regression run failed on exactly these missing seams before implementation: missing protection fields in binder payload, clear-SL not nulling durable state, successful MODIFY with `{ok:true}` not being persisted, and unsafe no-reply newest-trade guessing. The final branch head `f382864008bf63a128d98eda8aa05d8f3015d0b3` passed Trading V1 CI #2998 before merge.
+
+Break-even semantics were also verified directly. `MOVE_SL_TO_BE`, `SL at BE`, break-even aliases and `Move SL to entry` use the original entry price as the target stop. Eligibility allows any actual favorable move beyond entry — even a very small positive move — while equality at entry is not considered positive movement. Broker-side minimum-distance/stop rules remain authoritative, so Mkety does not force an invalid stop when the broker says BE cannot yet be placed.
+
+No-reply management is now intentionally safer. The old `RECENT_ACTIVE_TRADE` fallback that could select the newest of several unrelated logical trades has been removed. Management priority is now explicit reply -> broker identity -> explicit thread -> explicit symbol -> safe source-message continuity -> one unique active logical trade. When more than one unrelated logical trade remains plausible, Mkety fails closed with `AMBIGUOUS_MANAGEMENT_TARGET` instead of guessing. A single logical trade represented by both cTrader and MT5 groups still fans out to both accounts.
+
+Reply behavior was regression-tested for repeated management replies. Two or more separate Telegram replies to the same original source signal continue to resolve through `REPLY_TARGET` to the same logical trade and its sibling account groups; replying once does not consume or invalidate the original source lineage.
+
+Fast entry is now a locked platform behavior rather than an optional account negotiation. Runtime account normalization always treats fast entry as `{ "enabled": true, "mode": "execute_immediately", "locked": true }`, and legacy rows that previously contained `{}` or `wait_for_complete_signal` no longer delay a fast/incomplete entry. There is intentionally no frontend off switch.
+
+Entry-zone policy is now canonical and executable for range entries. Existing/invalid empty policies normalize to `{ "mode": "market_if_inside" }`. Supported frontend modes are `market_if_inside`, `midpoint`, `lower`, `upper`, and `market_only`. When real market price is available, range materialization follows the chosen account policy; legacy range planning remains compatible when a market price is unavailable.
+
+The real enterprise account frontend now exposes account-level controls for existing connected brokers:
+
+- Automatic TP protection shows current ON/OFF state and can be enabled or disabled through the existing persisted safety policy;
+- Fast entry is displayed as `Always on` and has no toggle;
+- Entry-zone policy has a real persisted selector/save action;
+- fixed lot remains editable as before.
+
+Migration 0043 (`account_entry_and_fast_policy_normalization`) was applied directly to production Supabase after merge because the Cloudflare production workflow deploys Worker code but does not apply database migrations. Production account verification after migration shows:
+
+- cTrader DEMO `48685071`: `autoTpProtection=true`, fast entry `execute_immediately/enabled/locked`, entry zone `market_if_inside`, LIVE disabled;
+- MT5 DEMO `213921698`: `autoTpProtection=true`, fast entry `execute_immediately/enabled/locked`, entry zone `market_if_inside`, LIVE disabled;
+- cTrader LIVE `48681337`: execution remains disabled, LIVE remains disabled, fast entry normalized and entry zone normalized without enabling execution.
+
+PR #110 merged into `main` as `0594c35a864a716653365e411aed56c0366ada91`. Main Trading V1 CI #2999 passed. Production Cloudflare Deploy #97 passed the exact merged code through production credential validation, Cloudflare authentication, dry-run, Worker deployment, health probe, persisted broker-switch verification, secret cleanup and production safety-posture recording.
+
+Immediate post-deploy Supabase verification still shows `trading_access_enabled=true`, `broker_execution_enabled=true`, and `live_broker_execution_enabled=false`. The cTrader LIVE account remains `execution_enabled=false` and `live_execution_enabled=false`. No LIVE execution permission was enabled by PR #110 or migration 0043.
+
+Fresh real-production DEMO acceptance is still required before treating the behavioral rows as proven end-to-end. The next acceptance sequence should prove:
+
+1. open one DEMO trade without protection, set SL only, then TP only, then SL again, then TP again, then both together; cTrader and MT5 plus `position_legs` must retain the complete final SL/TP state after every step;
+2. explicit SL removal preserves TP, and explicit TP removal preserves SL, with durable state matching the broker;
+3. a BE phrase while price is only slightly favorable sets SL exactly to original entry when broker stop rules permit and keeps TP intact;
+4. no-reply management with one logical trade targets both intended DEMO account groups;
+5. no-reply management with two unrelated plausible trades fails closed as ambiguous;
+6. two or more replies to the same original signal all continue targeting that same logical trade without duplicate OPENs;
+7. the production account frontend round-trips Auto TP and entry-zone changes for existing DEMO accounts, while fast entry remains visibly locked on;
+8. a real range-entry signal demonstrates the selected entry-zone mode at execution;
+9. every final acceptance check re-confirms all LIVE controls/accounts remain disabled.
