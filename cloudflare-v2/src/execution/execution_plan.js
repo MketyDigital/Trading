@@ -2,10 +2,36 @@ import { calculateRiskPlan } from '../risk/risk_engine.js';
 import { buildPositionGroup } from './position_group.js';
 import { evaluateAccountPolicy } from './account_policy.js';
 import { applyProtectionPolicy } from './protection_validation_policy.js';
+import { materializeExecutionEntry } from './entry_materializer.js';
 
 function decimals(step) {
   const text = String(step ?? 0.01);
   return text.includes('.') ? text.split('.')[1].length : 0;
+}
+
+function policyMode(value, fallback) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value.mode : value;
+  const normalized = String(raw ?? '').trim().toUpperCase();
+  return normalized || fallback;
+}
+
+function entryZoneRangeMode(account = {}) {
+  const mode = policyMode(account.entryZonePolicy ?? account.entry_zone_policy, 'MARKET_IF_IN_RANGE');
+  if (['MARKET_IF_IN_RANGE', 'MARKET_IF_INSIDE', 'NEAREST_BOUNDARY'].includes(mode)) return 'MARKET_IF_IN_RANGE';
+  if (['MARKET_ALWAYS', 'MARKET_ONLY'].includes(mode)) return 'MARKET_ALWAYS';
+  if (['MIDPOINT', 'LOWER', 'UPPER'].includes(mode)) return mode;
+  return 'MARKET_IF_IN_RANGE';
+}
+
+function applyEntryZonePolicy(intent, account, currentMarketPrice) {
+  if (intent?.entry?.kind !== 'RANGE') return intent;
+  const price = Number(currentMarketPrice);
+  if (!(Number.isFinite(price) && price > 0)) return intent;
+  const materialized = materializeExecutionEntry(intent, {
+    currentPrice: price,
+    rangeMode: entryZoneRangeMode(account),
+  });
+  return { ...intent, orderType: materialized.orderType, entry: materialized.entry };
 }
 
 function resolveRiskEntry(intent, currentMarketPrice) {
@@ -40,8 +66,9 @@ function openActionsFromGroup(group) {
 
 export function buildExecutionPlan(intent, { account = {}, instrument = {}, currentMarketPrice, groupId = null, exposure = {} } = {}) {
   if (!intent?.side || !intent?.symbol?.canonical) throw new TypeError('canonical executable intent required');
+  const entryMaterializedIntent = applyEntryZonePolicy(intent, account, currentMarketPrice);
   const safetyPolicy = account.safetyPolicy || account.safety_policy || { enabled: true };
-  const protection = applyProtectionPolicy(intent, safetyPolicy, { currentMarketPrice });
+  const protection = applyProtectionPolicy(entryMaterializedIntent, safetyPolicy, { currentMarketPrice });
   if (!protection.ok) {
     return {
       status: 'BLOCKED',
@@ -62,7 +89,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const sizingMode = String(account.sizingMode ?? 'RISK_PERCENT').toUpperCase();
 
   if ((sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK')
-      && intent.stopLoss != null
+      && entryMaterializedIntent.stopLoss != null
       && executableIntent.stopLoss == null
       && protection.protectionSkips.some((item) => item.field === 'stopLoss')) {
     return {

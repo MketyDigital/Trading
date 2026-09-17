@@ -85,7 +85,7 @@ test('a full signal still completes a recent fast entry instead of being suppres
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g1' });
 });
 
-test('bare management targets the uniquely most-recent logical trade when older trades are also open', () => {
+test('bare management fails closed instead of guessing the newest trade when multiple logical trades are open', () => {
   const result = correlateTradingEvent({
     event: {
       source: { instance_id: 'listener-1' },
@@ -101,7 +101,7 @@ test('bare management targets the uniquely most-recent logical trade when older 
     correlationWindowMs: 120_000,
   });
 
-  assert.deepEqual(result, { status: 'MATCHED', reason: 'RECENT_ACTIVE_TRADE', groupId: 'v75' });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' });
 });
 
 test('bare management remains fail-closed when two distinct trades are equally recent', () => {

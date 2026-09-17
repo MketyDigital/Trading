@@ -50,10 +50,6 @@ function logicalCohorts(groups = []) {
   return [...byKey.values()];
 }
 
-function cohortUpdatedAt(cohort = []) {
-  return Math.max(0, ...cohort.map((group) => Number(group?.updatedAt ?? group?.createdAt ?? 0)).filter(Number.isFinite));
-}
-
 function targetForCohort(cohort = [], reason = 'MATCHED') {
   if (cohort.length === 1) return { status: 'MATCHED', reason, groupId: cohort[0].id };
   if (cohort.length > 1 && sameLogicalTrade(cohort)) {
@@ -158,28 +154,12 @@ function sourceMessageContinuityTarget(groups = [], event = {}) {
   return null;
 }
 
-function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
+function activeLogicalTradeTarget(groups = []) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
   if (cohorts.length === 1) {
     return targetForCohort(cohorts[0], cohorts[0].length === 1 ? 'ONLY_ACTIVE_GROUP' : 'ONLY_ACTIVE_TRADE');
   }
-
-  const recentCohorts = cohorts
-    .map((cohort) => ({ cohort, updatedAt: cohortUpdatedAt(cohort) }))
-    .filter((entry) => entry.updatedAt > 0 && Number(nowMs) - entry.updatedAt <= Number(windowMs))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-
-  if (recentCohorts.length > 0) {
-    const newest = recentCohorts[0];
-    const runnerUp = recentCohorts[1];
-    const clearlyNewest = !runnerUp || newest.updatedAt - runnerUp.updatedAt >= Number(recencyGapMs);
-    if (clearlyNewest) {
-      const target = targetForCohort(newest.cohort, 'RECENT_ACTIVE_TRADE');
-      if (target) return target;
-    }
-  }
-
   return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
 }
 
@@ -258,10 +238,7 @@ export function correlateTradingEvent({
     const continuityTarget = sourceMessageContinuityTarget(scoped, event);
     if (continuityTarget) return continuityTarget;
 
-    const target = activeLogicalTradeTarget(scoped, {
-      nowMs: Number(nowMs),
-      windowMs: Number(correlationWindowMs),
-    });
+    const target = activeLogicalTradeTarget(scoped);
     if (target) return target;
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }

@@ -19,6 +19,7 @@ function normalizeAccount(account = {}) {
     riskPercent: account.riskPercent ?? account.risk_percent,
     riskAmount: account.riskAmount ?? account.risk_amount,
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
+    fastEntryPolicy: { enabled: true, mode: 'execute_immediately', locked: true },
   };
 }
 
@@ -497,18 +498,6 @@ export async function orchestrateTradingEventSimulation({
     if (account.execution_enabled !== true && account.executionEnabled !== true) {
       results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
       continue;
-    }
-
-    if (interpretation.intent.fastEntry === true) {
-      const policy = String(account.fast_entry_policy || account.fastEntryPolicy || 'wait_for_complete_signal');
-      if (policy === 'forward_only') {
-        results.push({ accountId: account.id, status: 'SKIPPED', reason: 'FAST_ENTRY_FORWARD_ONLY', actions: [] });
-        continue;
-      }
-      if (policy === 'wait_for_complete_signal') {
-        results.push({ accountId: account.id, status: 'WAITING', reason: 'WAIT_FOR_COMPLETE_SIGNAL', actions: [] });
-        continue;
-      }
     }
 
     let instrument;

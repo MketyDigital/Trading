@@ -70,6 +70,13 @@ function executionPatch(currentLeg = {}, execution = {}, nowMs = Date.now()) {
     delete patch.fillPrice;
   }
 
+  if (actionType === 'MODIFY_POSITION') {
+    if (execution.clearStopLoss === true) patch.stopLoss = null;
+    if (execution.clearTakeProfit === true) patch.takeProfit = null;
+    delete patch.clearStopLoss;
+    delete patch.clearTakeProfit;
+  }
+
   if (actionType === 'OPEN_POSITION' && String(execution?.status || '').trim().toUpperCase() !== 'FAILED') {
     patch.openedAt = Number.isFinite(Number(currentLeg?.openedAt)) ? Number(currentLeg.openedAt) : Number(nowMs);
   }
@@ -159,6 +166,15 @@ export class TradeStateStore {
     if (actionTypeOf(execution) === 'OPEN_POSITION' && !(Number.isFinite(storedEntryPrice) && storedEntryPrice > 0)) {
       const fillPrice = Number(execution?.fillPrice);
       if (Number.isFinite(fillPrice) && fillPrice > 0) group.entryPrice = fillPrice;
+    }
+
+    if (actionTypeOf(execution) === 'MODIFY_POSITION') {
+      const openLegs = group.legs.filter((leg) => String(leg?.status || '').toUpperCase() === 'OPEN');
+      if (openLegs.length > 0) {
+        const stopValues = openLegs.map((leg) => leg.stopLoss).filter((value) => value != null && Number.isFinite(Number(value))).map(Number);
+        if (stopValues.length === openLegs.length && new Set(stopValues).size === 1) group.stopLoss = stopValues[0];
+        else if (execution.clearStopLoss === true && openLegs.every((leg) => leg.stopLoss == null)) group.stopLoss = null;
+      }
     }
 
     group.status = aggregateGroupStatus(group.legs, group.status);
