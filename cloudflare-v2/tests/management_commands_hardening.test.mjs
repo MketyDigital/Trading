@@ -67,12 +67,12 @@ test('conditional explicit-price management remains fail-closed', () => {
   }
 });
 
-test('explicit SL modification applies only to broker-bound open legs', () => {
+test('explicit SL modification applies only to broker-bound open legs and preserves TP', () => {
   const actions = buildManagementActions(openGroup(), { type: 'MOVE_SL', stopLoss: 3650 });
   assert.deepEqual(actions, [
-    { type: 'MODIFY_POSITION', legId: 'leg-1', targetIndex: 1, brokerPositionId: 'p1', symbol: 'XAUUSD', stopLoss: 3650 },
-    { type: 'MODIFY_POSITION', legId: 'leg-2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 3650 },
-    { type: 'MODIFY_POSITION', legId: 'leg-3', targetIndex: 3, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 3650 },
+    { type: 'MODIFY_POSITION', legId: 'leg-1', targetIndex: 1, brokerPositionId: 'p1', symbol: 'XAUUSD', stopLoss: 3650, takeProfit: 3655 },
+    { type: 'MODIFY_POSITION', legId: 'leg-2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', stopLoss: 3650, takeProfit: 3662 },
+    { type: 'MODIFY_POSITION', legId: 'leg-3', targetIndex: 3, brokerPositionId: 'p3', symbol: 'XAUUSD', stopLoss: 3650, takeProfit: 3675 },
   ]);
 });
 
