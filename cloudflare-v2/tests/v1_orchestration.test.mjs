@@ -93,20 +93,21 @@ test('account safety rejection produces zero simulated actions and does not pers
   assert.equal(persisted, false);
 });
 
-test('fast signal honors wait_for_complete_signal policy and remains action-free', async () => {
+test('fast signal executes immediately even when a legacy account row says wait_for_complete_signal', async () => {
   const fast = { status: 'READY', intent: { ...interpretation.intent, fastEntry: true, incomplete: true, takeProfits: [] } };
+  const persisted = [];
   const result = await orchestrateTradingEventSimulation({ event, interpretation: fast, eventId: 'db-event-3' }, {
     stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
-    stateStore: { putGroup: async () => { throw new Error('must not persist waiting fast signal'); } },
+    stateStore: { putGroup: async (group) => { persisted.push(group); return group; } },
     accountProvider: async () => [enabledAccount()],
     instrumentProvider: async () => instrument,
     exposureProvider: async () => ({}),
     marketPriceProvider: async () => 2500,
   });
 
-  assert.equal(result.accounts[0].status, 'WAITING');
-  assert.equal(result.accounts[0].reason, 'WAIT_FOR_COMPLETE_SIGNAL');
-  assert.deepEqual(result.accounts[0].actions, []);
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions[0].type, 'OPEN_POSITION');
+  assert.equal(persisted.length, 1);
 });
 
 test('ambiguous correlation remains action-free and cannot create another group', async () => {
