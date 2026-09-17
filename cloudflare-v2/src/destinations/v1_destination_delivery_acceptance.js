@@ -24,6 +24,12 @@ function withDestinationFormattingMode(row = {}) {
   return { ...row, template: { formatting_mode: 'none', parse_mode: 'plain' } };
 }
 
+function destinationFormattingMode(destination = {}) {
+  const settings = safeObject(destination.settings);
+  const requested = text(settings.formattingMode ?? settings.formatting_mode).toLowerCase();
+  return READY_MADE_FORMAT_MODES.has(requested) ? requested : 'none';
+}
+
 function replyExternalEventId(event = {}) {
   const direct = text(event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId);
   if (direct) return direct;
@@ -110,6 +116,7 @@ async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination,
     ...(result?.providerCode != null ? { providerCode: result.providerCode } : {}),
     ...(text(result?.providerDescription) ? { providerDescription: text(result.providerDescription).slice(0, 300) } : {}),
     ...(result?.retryAfter != null ? { retryAfter: Number(result.retryAfter) } : {}),
+    ...(result?.replyParentFallback === true ? { replyParentFallback: true } : {}),
   };
   const row = {
     workspace_id: String(workspaceId),
@@ -165,6 +172,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
     const destination = routedByChatId.get(text(sendInput.chatId));
     let result;
     let replyToMessageId = null;
+    let replyParentFallback = false;
 
     if (sourceEditedExternalEventId && destination) {
       let mappedMessageId = null;
@@ -186,12 +194,17 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
         } catch {
           result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
         }
-        if (!result && !replyToMessageId) {
+        if (!result && !replyToMessageId && destinationFormattingMode(destination) === 'none') {
+          replyParentFallback = true;
+        } else if (!result && !replyToMessageId) {
           result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
         }
       }
       if (!result) {
         result = await baseSendTelegram({ ...sendInput, ...(replyToMessageId ? { replyToMessageId } : {}) });
+        if (replyParentFallback && result && typeof result === 'object') {
+          result = { ...result, replyParentFallback: true };
+        }
       }
     }
 
