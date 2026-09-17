@@ -38,6 +38,53 @@ function identityFromPayload(payload = {}) {
   return { chat_id: chatId || clean(match[1]), message_id: messageId || clean(match[2]) };
 }
 
+function telegramEventId(chatId, messageId) {
+  const id = clean(messageId);
+  return id ? `telegram:${chatId}:${id}` : null;
+}
+
+function canonicalThread(payload, identity) {
+  const existing = payload?.thread && typeof payload.thread === 'object' && !Array.isArray(payload.thread)
+    ? payload.thread
+    : {};
+
+  const existingReply = clean(existing.reply_to_event_id ?? existing.replyToEventId ?? payload.reply_to_event_id ?? payload.replyToEventId);
+  const legacyReplyId = clean(
+    payload.reply_to_id
+      ?? payload.reply_to_message_id
+      ?? payload.replyToId
+      ?? payload.replyToMessageId,
+  );
+  const replyToEventId = existingReply || telegramEventId(identity.chat_id, legacyReplyId);
+
+  const existingEdited = clean(existing.edited_event_id ?? existing.editedEventId ?? payload.edited_event_id ?? payload.editedEventId);
+  const kind = clean(
+    payload.update_kind
+      ?? payload.updateKind
+      ?? payload.event_type
+      ?? payload.eventType
+      ?? payload.type
+      ?? payload?.metadata?.update_kind
+      ?? payload?.metadata?.updateKind,
+  ).toLowerCase();
+  const hasEditMarker = payload.edited === true
+    || payload.is_edited === true
+    || payload.isEdited === true
+    || payload.is_edit === true
+    || payload.isEdit === true
+    || Boolean(clean(payload.edit_date ?? payload.editDate ?? payload.edited_at ?? payload.editedAt))
+    || kind.includes('edit');
+  const editedEventId = existingEdited || (hasEditMarker
+    ? telegramEventId(identity.chat_id, identity.message_id)
+    : null);
+
+  return {
+    ...existing,
+    reply_to_event_id: replyToEventId || null,
+    edited_event_id: editedEventId || null,
+  };
+}
+
 function normalizePayload(rawBody) {
   let payload;
   try { payload = JSON.parse(rawBody); } catch { return null; }
@@ -51,6 +98,7 @@ function normalizePayload(rawBody) {
     payload: {
       ...payload,
       external_event_id: clean(payload.external_event_id) || `telegram:${identity.chat_id}:${identity.message_id}`,
+      thread: canonicalThread(payload, identity),
       metadata: {
         ...metadata,
         native_identity: {
