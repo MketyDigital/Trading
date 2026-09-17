@@ -25,8 +25,10 @@ function entryZoneRangeMode(account = {}) {
 
 function applyEntryZonePolicy(intent, account, currentMarketPrice) {
   if (intent?.entry?.kind !== 'RANGE') return intent;
+  const price = Number(currentMarketPrice);
+  if (!(Number.isFinite(price) && price > 0)) return intent;
   const materialized = materializeExecutionEntry(intent, {
-    currentPrice: currentMarketPrice,
+    currentPrice: price,
     rangeMode: entryZoneRangeMode(account),
   });
   return { ...intent, orderType: materialized.orderType, entry: materialized.entry };
