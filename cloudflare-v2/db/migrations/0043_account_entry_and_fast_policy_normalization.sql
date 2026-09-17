@@ -5,8 +5,8 @@ SET fast_entry_policy = '{"enabled":true,"mode":"execute_immediately","locked":t
 WHERE fast_entry_policy IS NULL
    OR fast_entry_policy = '{}'::jsonb
    OR COALESCE(fast_entry_policy->>'mode', '') <> 'execute_immediately'
-   OR COALESCE((fast_entry_policy->>'enabled')::boolean, false) IS DISTINCT FROM true
-   OR COALESCE((fast_entry_policy->>'locked')::boolean, false) IS DISTINCT FROM true;
+   OR LOWER(COALESCE(fast_entry_policy->>'enabled', '')) <> 'true'
+   OR LOWER(COALESCE(fast_entry_policy->>'locked', '')) <> 'true';
 
 UPDATE public.trade_accounts
 SET entry_zone_policy = '{"mode":"market_if_inside"}'::jsonb
