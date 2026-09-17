@@ -127,3 +127,10 @@ test('relative pip protection wording fails closed instead of executing 15 and 3
   assert.equal(result.reason, 'RELATIVE_PIP_PROTECTION_REQUIRES_PRICE_CONTEXT');
   assert.equal(aiCalled, false);
 });
+
+test('move SL to entry is deterministic break-even management', async () => {
+  const result = await interpretTradingEvent({ text: 'Move SL to entry' });
+  assert.equal(result.status, 'MANAGEMENT');
+  assert.equal(result.source, 'deterministic');
+  assert.deepEqual(result.management, { type: 'MOVE_SL_TO_BE' });
+});
