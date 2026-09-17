@@ -206,3 +206,20 @@ After PR #109 is merged/deployed, use new real messages—not replays of old fai
 7. source edits continue to edit the mapped Telegram destination rather than create duplicates;
 8. the external `spf2` process is inspected or fresh sequence evidence proves whether the upstream missing-message gap is resolved;
 9. final safety audit again proves every LIVE gate/account remains disabled.
+
+### Final PR #109 verification and production deployment checkpoint
+
+This checkpoint supersedes only the earlier in-progress verification wording above; all earlier investigation evidence remains preserved.
+
+- A deeper RED regression was added after the first protection fix: a compound `MOVE_SL` + `CHANGE_TP` command emitted two sequential broker amendments, where the second amendment could restore the old sibling protection and undo the first.
+- RED checkpoint head `6098909200ef57cb053f8b5bb3aa01bcb6a36a8d` failed Trading V1 CI #2979 exactly because the expected one final-state protection amendment was instead two conflicting amendments.
+- Commit `e6f7e7a0106587d8e335524966c0d2c2e78e5240` changed protection-only `COMPOUND` management to calculate the final SL/TP state per open leg and emit one `MODIFY_POSITION` per affected leg. Mixed compounds such as partial-close plus BE retain their existing ordered behavior.
+- Commit `ddd63eb3e1ce7dec08e88d91f576503de517cfb4` updated the compatibility expectation so SL changes explicitly preserve each leg's existing TP.
+- Trading V1 CI #2981 passed on the exact final PR code head: all 360 Worker test files passed, all 14 MT5 bridge tests passed, all 11 internal MTProto-listener tests passed, and all 32 external MTProto-adapter tests passed.
+- PR #109 was merged into `main` as `cc60f356920f32681e93346789bea030491115e9`.
+- Main Trading V1 CI #2982 passed on the merged commit.
+- Production Cloudflare Deploy #96 passed on the merged commit using the configured repository/environment production secrets: Cloudflare authentication, production dry-run, Worker deployment, production health probe, persisted owner broker-switch verification and production safety-posture recording all completed successfully.
+- Immediate post-deploy Supabase re-query confirmed `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`; cTrader LIVE `48681337` remains `execution_enabled=false` and `live_execution_enabled=false`; DEMO cTrader `48685071` and DEMO MT5 `213921698` remain LIVE-disabled.
+- No LIVE gate or LIVE account execution permission was enabled by this release.
+
+PR #109 is therefore deployed to production code. Real production DEMO behavior still requires fresh source messages for the acceptance cases listed immediately above; do not infer those real-message rows solely from CI/deploy success.
