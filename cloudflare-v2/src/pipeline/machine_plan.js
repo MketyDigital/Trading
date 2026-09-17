@@ -15,6 +15,8 @@ function normalizeSignalText(value) {
     .replace(/T\s*\/\s*P/gi, 'TP')
     .replace(/TAKE\s+PROFIT/gi, 'TP')
     .replace(/STOP\s+LOSS/gi, 'SL')
+    .replace(/\bTP\s*([1-9]\d?)\s+(?:AT|TO)\s+(?=-?\d)/gi, 'TP$1 ')
+    .replace(/\bSL\s+(?:AT|TO)\s+(?=-?\d)/gi, 'SL ')
     .replace(/\r/g, ' ')
     .replace(/[\t ]+/g, ' ')
     .trim();
