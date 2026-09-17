@@ -200,5 +200,13 @@ export function createOperationJournalStore(supabase, { nowFn = () => new Date()
   };
 }
 
+export function sanitizeOperationString(value, max = 2000) {
+  return sanitizeString(value, max);
+}
+
+export function sanitizeOperationDetails(value) {
+  return sanitizeDetailsValue(value);
+}
+
 export const OPERATION_JOURNAL_STAGES = Object.freeze([...OPERATION_STAGES]);
 export const OPERATION_JOURNAL_STATUSES = Object.freeze([...OPERATION_STATUSES]);
