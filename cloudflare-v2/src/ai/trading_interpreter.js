@@ -62,7 +62,8 @@ function realWorldManagementAlias(text) {
       information: { type: 'POSITION_STOPPED_AT_BREAK_EVEN' },
     };
   }
-  if (/^(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)(?:\s+NOW)?[!.]*$/.test(upper)) {
+  if (/^(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+(?:BE|BREAK\s*EVEN|BREAKEVEN)(?:\s+NOW)?[!.]*$/.test(upper)
+    || /^MOVE\s+(?:THE\s+)?(?:SL|STOP(?:\s+LOSS)?)\s+TO\s+(?:ENTRY|ENTRY\s+PRICE|BE|BREAK\s*EVEN|BREAKEVEN)(?:\s+NOW)?[!.]*$/.test(upper)) {
     return { status: 'MANAGEMENT', source: 'deterministic', management: { type: 'MOVE_SL_TO_BE' } };
   }
   return null;
