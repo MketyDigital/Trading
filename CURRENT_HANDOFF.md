@@ -276,3 +276,24 @@ Fresh real-production DEMO acceptance is still required before treating the beha
 7. the production account frontend round-trips Auto TP and entry-zone changes for existing DEMO accounts, while fast entry remains visibly locked on;
 8. a real range-entry signal demonstrates the selected entry-zone mode at execution;
 9. every final acceptance check re-confirms all LIVE controls/accounts remain disabled.
+
+### Bounded recent no-reply correction — PR #111
+
+The blanket removal of `RECENT_ACTIVE_TRADE` in PR #110 was too strict for a common operational sequence: a trader can open a fresh signal, change their mind seconds later, and send a bare management command such as `Close` without replying or naming the symbol while older unrelated positions are still running.
+
+PR #111 restores that useful behavior with a narrower safety rule:
+
+- explicit reply, broker identity, Telegram thread, explicit symbol and source-message continuity still retain higher priority;
+- when those stronger coordinates are absent and multiple logical trades are open, Mkety may target the newest logical trade only if that trade was opened inside the configured short correlation window and is clearly separated from the runner-up by the recency gap;
+- the current recency separation threshold is 5 seconds, matching the previously established guard;
+- if two different logical trades were opened within that same short interval, management remains `AMBIGUOUS_MANAGEMENT_TARGET` and no destructive broker command is guessed;
+- recency is based on trade opening time (`createdAt`), not `updatedAt`, so later SL/TP edits or other management on an old running trade cannot make that old trade appear newly opened;
+- a single logical trade fanned out across cTrader and MT5 remains one cohort and can still be targeted across both accounts.
+
+RED-first evidence: test-only commit `29f4d4e0b4866ae7f5022b93baa9c5300ef088f4` failed Trading V1 CI #3000 because the fresh newest trade was still rejected as ambiguous. Implementation head `bf9b67d2287aad7b91df4f4c1831d835d4e5e9ae` then passed Trading V1 CI #3001, including regression coverage for fresh newest targeting, same-short-interval ambiguity, and protection against old trades becoming recent through later updates.
+
+PR #111 merged to `main` as `fbac2cd28982a8b7db3af6e11c20665492a10624`. Main Trading V1 CI #3002 passed and Production Cloudflare Deploy #98 passed the exact merged code through production dry-run, Worker deployment, health probe and persisted safety verification.
+
+Immediate post-deploy Supabase verification confirms `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`. DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled but LIVE-disabled; cTrader LIVE `48681337` remains `execution_enabled=false` and `live_execution_enabled=false`. No LIVE permission was enabled by PR #111.
+
+Updated acceptance expectation: with an older Gold trade still running, a newly opened EURUSD trade followed seconds later by bare `Close` should target the fresh EURUSD logical trade when it is clearly newer than the older trade. If Gold and EURUSD were both opened within the same short recency interval, the same bare `Close` must fail closed as ambiguous. Fresh real DEMO traffic should verify both branches before first LIVE use.
