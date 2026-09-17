@@ -589,12 +589,22 @@ export function createAdminOperationsStore(supabase, {
         .order('created_at', { ascending: true }), 'destination delivery audit');
       const deliveryRows = exactWorkspaceRows(deliveriesResult.data, boundWorkspaceId);
 
+      const operationJournalResult = assertQuery(await supabase
+        .from('operation_journal')
+        .select('workspace_id,correlation_id,trading_event_id,stage,operation,status,error_code,failure_class,retryable,summary,details,observed_at')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('trading_event_id', boundEventId)
+        .order('observed_at', { ascending: true }), 'event operation journal');
+      const operationTimeline = exactWorkspaceRows(operationJournalResult.data, boundWorkspaceId)
+        .map(safeOperationTimelineRow);
+
       return {
         workspaceId: boundWorkspaceId,
         event: safeAuditEvent(eventRow),
         source: sourceRow ? safeAuditSource(sourceRow) : null,
         positionGroups: groupRows.map((row) => safeAuditGroup(row, legsByGroup.get(text(row.id)) || [])),
         deliveries: deliveryRows.map(safeAuditDelivery),
+        operationTimeline,
         historyCoverage: {
           actorHistoryRecorded: false,
         },
