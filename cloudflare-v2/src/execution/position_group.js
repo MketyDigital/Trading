@@ -7,6 +7,30 @@ function floorToStep(value, step) {
   return Number((Math.floor((Number(value) / Number(step)) + 1e-12) * Number(step)).toFixed(decimals(step)));
 }
 
+function finiteProtection(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function currentStopLoss(group, leg) {
+  return finiteProtection(leg?.stopLoss ?? group?.stopLoss);
+}
+
+function currentTakeProfit(leg) {
+  return finiteProtection(leg?.takeProfit);
+}
+
+function preservedStopLoss(group, leg) {
+  const value = currentStopLoss(group, leg);
+  return value == null ? {} : { stopLoss: value };
+}
+
+function preservedTakeProfit(leg) {
+  const value = currentTakeProfit(leg);
+  return value == null ? {} : { takeProfit: value };
+}
+
 export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep = 0.01) {
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
   if (!(Number(totalLots) > 0) || !(Number(volumeStep) > 0)) throw new TypeError('positive totalLots and volumeStep required');
@@ -109,6 +133,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss: protectedStop,
+      ...preservedTakeProfit(leg),
       targetIndex: leg.targetIndex,
     }));
 }
@@ -146,6 +171,7 @@ export function buildManagementActions(group, management) {
       side: group.side,
       entryPrice: Number(group.entryPrice),
       stopLoss: Number(group.entryPrice),
+      ...preservedTakeProfit(leg),
     }));
   }
   if (management?.type === 'MOVE_SL') {
@@ -158,6 +184,7 @@ export function buildManagementActions(group, management) {
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss,
+      ...preservedTakeProfit(leg),
     }));
   }
   if (management?.type === 'CHANGE_TP') {
@@ -174,6 +201,7 @@ export function buildManagementActions(group, management) {
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       takeProfit,
+      ...preservedStopLoss(group, leg),
     }));
   }
   if (management?.type === 'REMOVE_SL') {
@@ -185,6 +213,7 @@ export function buildManagementActions(group, management) {
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       clearStopLoss: true,
+      ...preservedTakeProfit(leg),
     }));
   }
   if (management?.type === 'REMOVE_TP') {
@@ -200,6 +229,7 @@ export function buildManagementActions(group, management) {
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       clearTakeProfit: true,
+      ...preservedStopLoss(group, leg),
     }));
   }
   if (management?.type === 'CLOSE_PARTIAL') {
