@@ -12,6 +12,8 @@ import { normalizeDestinationCredentialPlaintext } from '../destinations/destina
 import { createTelegramDestinationAiFormatter } from '../destinations/telegram_ai_formatter.js';
 import { createV1DestinationDeliveryStore } from '../destinations/v1_destination_delivery_stage.js';
 import { runV1DestinationDeliveryAcceptanceStage } from '../destinations/v1_destination_delivery_acceptance.js';
+import { createOperationJournalStore } from '../operations/operation_journal.js';
+import { buildV1LifecycleEvidence, appendV1LifecycleEvidenceBestEffort } from '../operations/v1_lifecycle_evidence.js';
 
 const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
 
@@ -82,6 +84,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   brokerExecutionControlResolver,
   destinationStoreFactory = createV1DestinationDeliveryStore,
   destinationStageFn = runV1DestinationDeliveryAcceptanceStage,
+  operationJournalStoreFactory = createOperationJournalStore,
   orchestrateDuplicates = false,
 } = {}) {
   if (request.method !== 'POST') {
@@ -104,6 +107,23 @@ export async function handleV1EventsRequest(request, env = {}, {
     const rawBody = await request.text();
     const supabase = await supabaseFactory(env);
     const stores = storesFactory(supabase, { masterKey });
+    let operationJournal = null;
+    try {
+      operationJournal = operationJournalStoreFactory(supabase);
+    } catch {
+      operationJournal = null;
+    }
+    const journalLifecycle = async (payload) => {
+      if (!operationJournal) return;
+      try {
+        const rows = buildV1LifecycleEvidence({ sourceId, ...payload });
+        await appendV1LifecycleEvidenceBestEffort(operationJournal, rows);
+      } catch {
+        // Operational evidence is strictly observational. It must never change
+        // ingress, destination, broker execution, replay or reconciliation flow.
+      }
+    };
+
     const interpretationTimeoutMs = Math.max(100, Number(env.TRADING_V1_AI_TIMEOUT_MS || 12000));
     let workspaceAiRouterPromise = null;
     let workspaceAiRouterWorkspaceId = null;
@@ -136,8 +156,10 @@ export async function handleV1EventsRequest(request, env = {}, {
     const duplicateReplayRequested = orchestrateDuplicates || recoveryReplay;
     const allowDuplicateOrchestration = duplicateReplayRequested && result?.recoveryReady === true;
     if (!result?.ok || (result?.duplicate && !allowDuplicateOrchestration)) {
+      const destinations = result?.ok && result?.duplicate ? skippedDuplicateDestinationStage() : null;
+      await journalLifecycle({ result, ...(destinations ? { destinations } : {}) });
       const responseBody = result?.ok && result?.duplicate
-        ? { ...result, destinations: skippedDuplicateDestinationStage() }
+        ? { ...result, destinations }
         : result;
       return json(responseBody, result?.ok ? 200 : Number(result?.status || 500));
     }
@@ -207,6 +229,7 @@ export async function handleV1EventsRequest(request, env = {}, {
     });
 
     const destinations = await destinationPromise;
+    await journalLifecycle({ result, destinations, simulation, execution });
     return json({ ...result, destinations, simulation, ...(execution ? { execution } : {}) }, 200);
   } catch (error) {
     console.error('V1 event ingress failed:', error);
