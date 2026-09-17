@@ -100,6 +100,25 @@ test('TP-only management preserves the existing stop loss in the final broker ac
   assert.equal(action.stopLoss, 4200);
 });
 
+test('combined SL and TP management coalesces to one final protection amendment per leg', () => {
+  const actions = buildManagementActions(openGroup(), {
+    type: 'COMPOUND',
+    actions: [
+      { type: 'MOVE_SL', stopLoss: 4250 },
+      { type: 'CHANGE_TP', takeProfit: 4450 },
+    ],
+  });
+  assert.deepEqual(actions, [{
+    type: 'MODIFY_POSITION',
+    legId: 'leg-1',
+    targetIndex: 1,
+    brokerPositionId: '138453790',
+    symbol: 'XAUUSD',
+    stopLoss: 4250,
+    takeProfit: 4450,
+  }]);
+});
+
 test('source edit that adds SL preserves an unchanged existing TP', () => {
   const group = openGroup();
   group.stopLoss = null;
