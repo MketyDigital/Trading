@@ -394,3 +394,40 @@ This restoration is deliberately narrow: it does not roll back reply preservatio
 - Fast-entry policy remains locked `execute_immediately`.
 - PR #113 did not enable LIVE. It restores native fast-completion semantics at correlation and removes the PR #112 downstream compensation.
 - Real production DEMO acceptance still requires a new fast -> full follow-up sequence after this deployment before the behavior is considered end-to-end accepted.
+
+
+### Fresh production acceptance after PR #113 + crossed-TP1 completion fix — 2026-09-18
+
+This section is cumulative. Do not remove the prior PR #109/#112/#113 findings; this evidence refines them.
+
+Fresh production evidence after PR #113:
+
+- External MTProto V25(1s) fast event `telegram:-1001822170589:24228` executed successfully.
+- Full replied V25(1s) event `telegram:-1001822170589:24229` correlated as `FAST_ENTRY_COMPLETION` and executed successfully.
+- Persisted cTrader logical group `4bdb3f29-33a6-436d-b819-d32c3a0e64de` is OPEN and `incomplete=false`, with both source event IDs `24228` and `24229`.
+- Original broker position `138489349` was retained as target 1 and modified to SL `876500` / TP1 `881500`; target-2 position `138489438` received TP2 `883500`; target-3 position `138489442` received TP3 `886000`. This is real post-PR #113 proof that ordinary fast -> full promotion is restored end-to-end without replacing leg 1.
+
+Fresh XAUUSD SELL evidence exposed a narrower missing requirement:
+
+- Fast event `telegram:-1004387586337:932` (`GOLD SELL`) opened cTrader DEMO position `138490038`, order `44271821`, deal `40844672`, fill `4363.78`, 0.2 lots.
+- The MT5 copy of fast event `932` failed independently with `MT5_CONNECTOR_OFFLINE`; this remains an infrastructure issue separate from fast-completion semantics.
+- Full event `telegram:-1004387586337:933` contained SELL range `4365-4375`, SL `4379`, TP1 `4361`, TP2 `4355`, TP3 `4335`.
+- PR #113 worked at correlation: event `933` was correctly classified as `FAST_ENTRY_COMPLETION`.
+- Broker planning nevertheless produced no executable account plan and broker execution became `NOT_EXECUTABLE`. The existing cTrader group stayed incomplete with only event `932`.
+- Because event `933` was not persisted into the logical group, later replies `935 TP1 HIT`, `936 SL at BE NOW`, and `937 TP2 HIT` returned `NO_REPLY_TARGET`.
+- Root cause: `buildExecutionPlan()` applied ordinary new-trade protection geometry against the **current market** before `reconcilePlannedFastEntry()`. If price had already moved through TP1 before the full follow-up arrived, TP1 became invalid against current market and the entire completion was blocked before the fast-entry reconciliation layer could preserve leg 1 and continue still-valid targets.
+- This exact case was already specified in the 2026-09-15 stabilization design under **Task 4: Follow-up SL/TP market-validity behavior**, but the task remained unchecked and `cloudflare-v2/tests/fast_followup_market_validity.test.mjs` did not exist. The requirement had been documented but not implemented.
+
+PR #114 implements the missing Task-4 behavior narrowly:
+
+- RED commit `f1da171bd35d31e8a27bd45194ed01b7f7fd849e` reproduces the real Gold geometry: existing SELL fill `4363.78`, full SL `4379`, targets `4361/4355/4335`, current market `4359`. CI #3016 failed as expected: account was `BLOCKED` instead of `READY`.
+- `execution_plan.js` now accepts an optional fast-completion protection reference. Ordinary/new trades are unchanged. For matched fast completion, structural SL/TP geometry is validated against the authoritative original fast-entry price instead of rejecting the full signal merely because market has already crossed an early target.
+- `v1_orchestrator.js` then checks each completion action against the fresh current market. A crossed TP on the already-open original leg is omitted rather than sent as an invalid modification; a still-valid SL can still be applied. Later target opens are kept only when their SL/TP remains market-valid. Leg 1 is never reopened/replaced.
+- In the production-shaped Gold regression, expected actions are: MODIFY original position `138490038` with SL `4379` and **without** crossed TP1; OPEN only target indexes 2 and 3 with TPs `4355` and `4335`; no duplicate target 1.
+- A second RED checkpoint `91fee5c620be617fc3b3eed80e3010d6cd844d30` proved fast completion was also losing the actual executed entry price (`4363.78`) and replacing it with null. That would break later BE management because `MOVE_SL_TO_BE` requires `group.entryPrice`.
+- Commit `4ac1a4fe8c3a2aebc23b7b7a4c9ed24c5c523a19` preserves the original executed fast entry price and entry object through promotion.
+- BE eligibility remains intentionally permissive once profitable: BUY requires fresh market strictly above entry; SELL requires fresh market strictly below entry. Even a small positive move is eligible, while flat/adverse price remains blocked.
+- CI #3018 passed the crossed-TP1 implementation before the entry-preservation regression was added. CI #3019 then failed exactly because entryPrice became null. The subsequent implementation restores the entry anchor; final PR-head CI must be green before merge.
+- LIVE is not enabled by this work.
+
+Post-merge production acceptance still requires a fresh crossed-TP1 fast/full DEMO sequence. The already-failed Gold event `933` must not be replayed blindly as broker execution; use a new source sequence to validate the deployed behavior.
