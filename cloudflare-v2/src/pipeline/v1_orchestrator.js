@@ -145,7 +145,28 @@ function plannedStateGroup(plan, { event, eventId, account, nowMs }) {
   };
 }
 
-function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs }) {
+function finitePositive(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function fastCompletionProtectionReference(group, currentMarketPrice) {
+  return finitePositive(group?.entryPrice)
+    ?? finitePositive(group?.entry?.executedPrice)
+    ?? finitePositive(group?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice)
+    ?? finitePositive(currentMarketPrice);
+}
+
+function protectionValueValidAtMarket(side, kind, value, currentMarketPrice) {
+  const price = finitePositive(value);
+  const market = finitePositive(currentMarketPrice);
+  if (price == null || market == null) return price != null;
+  if (kind === 'stopLoss') return side === 'BUY' ? price < market : price > market;
+  if (kind === 'takeProfit') return side === 'BUY' ? price > market : price < market;
+  return false;
+}
+
+function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
     eventId,
@@ -173,19 +194,48 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     status: existingFirst.status,
   };
 
-  const actions = [{
+  const currentPrice = finitePositive(currentMarketPrice);
+  const side = String(desired.side || '').toUpperCase();
+  const originalStopValid = desiredFirst.stopLoss == null
+    || protectionValueValidAtMarket(side, 'stopLoss', desiredFirst.stopLoss, currentPrice);
+  const originalTargetValid = desiredFirst.takeProfit == null
+    || protectionValueValidAtMarket(side, 'takeProfit', desiredFirst.takeProfit, currentPrice);
+
+  if (!originalStopValid) desired.legs[0].stopLoss = existingFirst.stopLoss ?? null;
+  if (!originalTargetValid) desired.legs[0].takeProfit = existingFirst.takeProfit ?? null;
+
+  const modify = {
     type: 'MODIFY_POSITION',
     legId: existingFirst.legId,
     brokerPositionId: existingFirst.brokerPositionId,
     symbol: desired.symbol,
-    stopLoss: desiredFirst.stopLoss,
-    takeProfit: desiredFirst.takeProfit,
     targetIndex: 1,
     idempotencyKey: `${existing.id}:leg:1:complete`,
-  }, ...plan.actions.slice(1).map((action) => ({
-    ...action,
-    idempotencyKey: `${existing.id}:leg:${action.targetIndex}`,
-  }))];
+  };
+  if (originalStopValid && desiredFirst.stopLoss != null) modify.stopLoss = desiredFirst.stopLoss;
+  if (originalTargetValid && desiredFirst.takeProfit != null) modify.takeProfit = desiredFirst.takeProfit;
+
+  const followupOpens = plan.actions.slice(1)
+    .filter((action) => {
+      const stopValid = action.stopLoss == null
+        || protectionValueValidAtMarket(side, 'stopLoss', action.stopLoss, currentPrice);
+      const targetValid = action.takeProfit == null
+        || protectionValueValidAtMarket(side, 'takeProfit', action.takeProfit, currentPrice);
+      return stopValid && targetValid;
+    })
+    .map((action) => ({
+      ...action,
+      idempotencyKey: `${existing.id}:leg:${action.targetIndex}`,
+    }));
+
+  const allowedTargetIndexes = new Set([
+    Number(existingFirst.targetIndex ?? 1),
+    ...followupOpens.map((action) => Number(action.targetIndex)),
+  ]);
+  desired.legs = desired.legs.filter((leg) => allowedTargetIndexes.has(Number(leg.targetIndex)));
+
+  const hasModifyProtection = Object.hasOwn(modify, 'stopLoss') || Object.hasOwn(modify, 'takeProfit');
+  const actions = [...(hasModifyProtection ? [modify] : []), ...followupOpens];
 
   return { group: desired, actions };
 }
@@ -520,6 +570,9 @@ export async function orchestrateTradingEventSimulation({
         account,
         instrument,
         currentMarketPrice,
+        ...(matchedGroup ? {
+          protectionReferencePrice: fastCompletionProtectionReference(matchedGroup, currentMarketPrice),
+        } : {}),
         groupId,
         exposure,
       });
@@ -549,6 +602,7 @@ export async function orchestrateTradingEventSimulation({
           eventId,
           account,
           nowMs: Number(nowMs),
+          currentMarketPrice,
         });
       } catch (error) {
         results.push({ accountId: account.id, status: 'BLOCKED', reason: 'FAST_ENTRY_RECONCILIATION_FAILED', error: error.message, actions: [] });
