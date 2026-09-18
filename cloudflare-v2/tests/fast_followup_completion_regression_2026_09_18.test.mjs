@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { orchestrateTradingEventSimulation } from '../src/pipeline/v1_orchestrator.js';
 
-test('replied full signal completes an existing fast-entry trade instead of becoming correlated with zero actions', async () => {
+test('correlator-classified fast completion reconciles the existing broker position', async () => {
   const saved = [];
   const existing = {
     id: 'fast-group',
@@ -59,7 +59,7 @@ test('replied full signal completes an existing fast-entry trade instead of beco
     },
   }, {
     stateCoordinator: {
-      correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'fast-group' }),
+      correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'fast-group' }),
     },
     stateStore: {
       getGroup: async (id) => id === 'fast-group' ? existing : null,
