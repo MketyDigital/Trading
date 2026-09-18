@@ -82,7 +82,7 @@ test('explicit reply completes the active fast trade even after 30 minutes', () 
     activeGroups: [fastGroup({ createdAt: now - 3_600_000, updatedAt: now - 3_600_000 })],
     nowMs: now,
   });
-  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g-fast' });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
 });
 
 test('explicit thread completes the active fast trade even after 30 minutes', () => {
@@ -92,7 +92,7 @@ test('explicit thread completes the active fast trade even after 30 minutes', ()
     activeGroups: [fastGroup({ threadId: 'thread-a', createdAt: now - 3_600_000, updatedAt: now - 3_600_000 })],
     nowMs: now,
   });
-  assert.deepEqual(result, { status: 'MATCHED', reason: 'THREAD_TARGET', groupId: 'g-fast' });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
 });
 
 test('two distinct compatible incomplete trades inside 30 minutes fail closed', () => {
@@ -116,4 +116,22 @@ test('unresolved explicit reply does not fall through to inference and attach an
     nowMs: now,
   });
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
+});
+
+
+test('explicit reply completion returns the whole logical multi-account fast cohort', () => {
+  const request = fullEvent({ event: { thread: { reply_to_event_id: 'telegram:-1001:100' } } });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [
+      fastGroup({ id: 'g-ct', tradeAccountId: 'ct' }),
+      fastGroup({ id: 'g-mt', tradeAccountId: 'mt' }),
+    ],
+    nowMs: now,
+  });
+  assert.deepEqual(result, {
+    status: 'MATCHED',
+    reason: 'FAST_ENTRY_COMPLETION',
+    groupIds: ['g-ct', 'g-mt'],
+  });
 });

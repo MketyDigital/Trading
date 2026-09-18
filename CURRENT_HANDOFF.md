@@ -346,3 +346,38 @@ Real production DEMO acceptance is still required after PR #112 is deployed. The
 - Immediate post-deploy Supabase verification confirmed `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`. DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled but LIVE-disabled; LIVE cTrader `48681337` remains execution-disabled and LIVE-disabled. Fast entry remains locked `execute_immediately`.
 - No LIVE permission was enabled by PR #112.
 - CI/deployment proves the code path is released, but the fast -> complete -> later-management behavior still requires a fresh real DEMO source sequence to count as end-to-end accepted.
+
+
+### Native fast-entry completion regression root cause and restoration — PR #113
+
+The operator correctly identified that fast -> full follow-up worked before the September stabilization updates and then regressed. The regression was not caused by the broker promotion algorithm itself. It was caused by two independently reasonable changes interacting with an older correlation/orchestration assumption.
+
+Historical chain:
+
+- Before the September 15 reply-integrity work, external/hosted MTProto did not always preserve Telegram reply identity into the canonical event. A visually replied full signal could therefore arrive without `reply_to_event_id` and fall through to generic fast-completion inference. The correlator emitted `FAST_ENTRY_COMPLETION`, which the orchestrator knew how to execute.
+- On 2026-09-15, reply-integrity commits including `89b522fc5ce40e4a2cfd1002ffdf37b6aef4230e` and `8fcbc31237882e15c7c961dfcaccb76f9ffb9b9f` correctly started preserving hosted/external MTProto reply identity.
+- The correlator still handled READY signals with reply/thread metadata before the fast-completion block and labeled them `REPLY_TARGET` / `THREAD_TARGET`.
+- The V1 orchestrator intentionally executed matched READY signals only when correlation reason was `FAST_ENTRY_COMPLETION`; generic READY `REPLY_TARGET` therefore became terminal `CORRELATED` with zero broker actions.
+- This is exactly what occurred in production for V10(1s) event `24186` and V75 event `24199`: both full signals were correctly parsed and correctly linked to the fast signal, but the semantic reason was wrong for broker promotion.
+- The September 15 stabilization also intentionally widened inference-only fast completion from the ordinary ~2-minute recent window to a dedicated 30-minute window (`087967e91fb9154ccb813b6124a42addfe47ce8c`). This was designed to support delayed full signals, but it increased the chance that multiple stale/incomplete same-symbol trades remain eligible. That explains the later `AMBIGUOUS_FAST_ENTRY_COMPLETION` on XAUUSD. PR #112 added immediate source-message continuity to safely disambiguate the newest adjacent same-channel fast/full pair; that narrow safeguard remains useful.
+
+PR #112 temporarily compensated downstream by allowing a generic matched READY signal to be reinterpreted as a fast completion inside the orchestrator. That restored the symptom but duplicated correlation responsibility in the wrong layer.
+
+PR #113 restores the clean/native architecture:
+
+1. For a complete READY signal with explicit Telegram reply identity, the correlator first checks whether the replied logical trade is still incomplete and has exact matching canonical symbol + side. If yes, correlation returns `FAST_ENTRY_COMPLETION` directly (including all broker-account groups in the same logical cohort).
+2. A complete READY signal with matching thread identity follows the same rule and returns `FAST_ENTRY_COMPLETION`.
+3. If a reply/thread resolves to an active trade but symbol/side/incomplete state is incompatible, correlation fails closed with `FAST_ENTRY_COMPLETION_MISMATCH`; it does not silently promote the wrong trade.
+4. Unresolved explicit reply remains fail-closed; it does not fall through to inference and attach another trade.
+5. The orchestrator is restored to the earlier simple contract: only `NEW_GROUP` or explicit `FAST_ENTRY_COMPLETION` proceeds into signal execution. The PR #112 generic matched-signal compensation layer is removed.
+6. Existing 30-minute inference support and the PR #112 adjacent-source continuity safeguard remain. This preserves delayed full-signal support while avoiding the production ambiguity seen when an immediate next full signal follows a new fast trade.
+
+TDD / verification:
+
+- RED commit `35a45e750dd527cab853dfc9d39022440c6cf0c6` changed the long-standing reply/thread expectations from `REPLY_TARGET` / `THREAD_TARGET` to the intended `FAST_ENTRY_COMPLETION` semantic and added multi-account reply-cohort coverage. Trading V1 CI #3010 failed as expected before implementation.
+- Source-level correlation implementation: `1dda5d8d6bf20b8d37b98a0707f2bd88c565bcfa`.
+- Downstream compensation removal: `c7f8d698d0d17af41c241279b7c0a715cf7e84bc`.
+- Orchestration regression realigned to native correlation: `6c8b63336c48ce2eb6b2eba8f0c05d91b7633aa5`.
+- Trading V1 CI #3013 passed all Worker/trading-core, MT5 bridge, internal MTProto and external MTProto stages.
+
+This restoration is deliberately narrow: it does not roll back reply preservation, raw Telegram forwarding fixes, SL/TP sibling-preservation fixes, source-edit handling, AI transport fixes, or broker safety controls. LIVE remains disabled and requires separate explicit acceptance.
