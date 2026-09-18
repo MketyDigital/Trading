@@ -18,6 +18,12 @@ class ConnectorTransportTests(unittest.TestCase):
     def test_valid_gateway_json_is_decoded(self):
         self.assertEqual(module.decode_gateway_message('{"type":"auth_ok"}'), {'type': 'auth_ok'})
 
+    def test_websocket_tls_uses_explicit_ca_bundle(self):
+        options = module.websocket_ssl_options()
+        self.assertEqual(options['cert_reqs'], module.ssl.CERT_REQUIRED)
+        self.assertTrue(options['ca_certs'])
+        self.assertTrue(str(options['ca_certs']).lower().endswith('.pem'))
+
 
 if __name__ == '__main__':
     unittest.main()
