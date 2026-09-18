@@ -335,3 +335,14 @@ Other fresh production findings from the same audit:
 - Raw Telegram forwarding continues independently of trading executability on routes configured for Telegram delivery.
 
 Real production DEMO acceptance is still required after PR #112 is deployed. The critical acceptance sequence is: send a new fast signal, verify both intended DEMO broker positions open, then send the complete signal both as (a) a genuine reply and (b) an immediate next same-channel message in separate tests. Verify the existing first broker position receives final SL+TP1, only additional target legs are opened, group `incomplete` becomes false, both fast and full source event IDs are retained, and later TP/BE/partial-close replies to the full signal target that same logical trade. Re-confirm all LIVE gates remain disabled throughout.
+
+
+#### PR #112 merge / production deployment checkpoint
+
+- PR #112 final reviewed head `317bcdfe93481b086e0f8814f97d84274d442820` passed Trading V1 CI #3008 before merge.
+- PR #112 merged into `main` as `43ad9f24e49d8d4c518203dc6aebad520129fb8c`.
+- Main Trading V1 CI #3009 passed on the merged commit.
+- Production Cloudflare Deploy #99 passed on the merged commit: production credential checks, Cloudflare authentication, final dry-run, Worker deployment, production health probe, persisted broker-switch verification, secret cleanup and safety-posture recording all completed successfully.
+- Immediate post-deploy Supabase verification confirmed `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`. DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled but LIVE-disabled; LIVE cTrader `48681337` remains execution-disabled and LIVE-disabled. Fast entry remains locked `execute_immediately`.
+- No LIVE permission was enabled by PR #112.
+- CI/deployment proves the code path is released, but the fast -> complete -> later-management behavior still requires a fresh real DEMO source sequence to count as end-to-end accepted.
