@@ -474,18 +474,42 @@ export async function orchestrateTradingEventSimulation({
     });
   }
 
-  const isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
-  if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion) {
-    return { ...base, status: 'CORRELATED', correlation, accounts: [] };
-  }
+  const explicitFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
+  const matchedSignalCandidate = isSignal
+    && correlation?.status === 'MATCHED'
+    && correlation?.reason !== 'EDIT_TARGET';
 
+  let isFastCompletion = explicitFastCompletion;
   let matchedByAccount = new Map();
-  if (isFastCompletion) {
+
+  if (explicitFastCompletion || matchedSignalCandidate) {
     const loaded = await loadMatchedFastGroups(correlation, stateStore);
     if (!loaded.ok) {
       return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
     }
+
+    const completionSymbol = String(interpretation?.intent?.symbol?.canonical ?? '').trim().toUpperCase();
+    const completionSide = String(interpretation?.intent?.side ?? '').trim().toUpperCase();
+    const compatibleIncomplete = loaded.groups.length > 0 && loaded.groups.every((group) =>
+      group?.incomplete === true
+      && String(group?.symbol ?? '').trim().toUpperCase() === completionSymbol
+      && String(group?.side ?? '').trim().toUpperCase() === completionSide
+    );
+
+    if (explicitFastCompletion && !compatibleIncomplete) {
+      return { ...base, status: 'NEEDS_REVIEW', correlation, accounts: [], reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+    }
+
+    if (matchedSignalCandidate && !compatibleIncomplete) {
+      return { ...base, status: 'CORRELATED', correlation, accounts: [] };
+    }
+
+    isFastCompletion = compatibleIncomplete;
     matchedByAccount = new Map(loaded.groups.map((group) => [String(group.tradeAccountId), group]));
+  }
+
+  if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion) {
+    return { ...base, status: 'CORRELATED', correlation, accounts: [] };
   }
 
   const accounts = await accountProvider(event.workspace_hint, event, interpretation);

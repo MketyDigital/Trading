@@ -161,6 +161,35 @@ function sourceMessageContinuityTarget(groups = [], event = {}) {
   return null;
 }
 
+function sourceMessageContinuityFastCompletionTarget(groups = [], event = {}, intent = {}) {
+  const current = telegramMessageCoordinate(event?.external_event_id);
+  if (!current) return null;
+
+  const symbol = String(intent?.symbol?.canonical ?? '').trim().toUpperCase();
+  const side = String(intent?.side ?? '').trim().toUpperCase();
+  if (!symbol || !side) return null;
+
+  const compatible = groups.filter((group) =>
+    group?.incomplete === true
+    && String(group?.symbol ?? '').trim().toUpperCase() === symbol
+    && String(group?.side ?? '').trim().toUpperCase() === side
+  );
+  const adjacent = logicalCohorts(compatible).filter((cohort) => cohort.some((group) =>
+    (group?.sourceEventIds || []).some((sourceEventId) => {
+      const coordinate = telegramMessageCoordinate(sourceEventId);
+      return coordinate?.channel === current.channel && coordinate.sequence === current.sequence - 1;
+    })
+  ));
+
+  if (adjacent.length === 1) {
+    return targetForCohort(adjacent[0], 'FAST_ENTRY_COMPLETION');
+  }
+  if (adjacent.length > 1) {
+    return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' };
+  }
+  return null;
+}
+
 function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs = 5000 } = {}) {
   if (groups.length === 0) return null;
   const cohorts = logicalCohorts(groups);
@@ -294,6 +323,13 @@ export function correlateTradingEvent({
     );
 
     if (!interpretation.intent.fastEntry && interpretation.intent.incomplete === false) {
+      const continuityFastCompletion = sourceMessageContinuityFastCompletionTarget(
+        fastEligible,
+        event,
+        interpretation.intent,
+      );
+      if (continuityFastCompletion) return continuityFastCompletion;
+
       const fastCompletion = correlateFastCompletion(fastCompletionMatches);
       if (fastCompletion) return fastCompletion;
     }
