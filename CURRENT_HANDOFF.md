@@ -297,3 +297,41 @@ PR #111 merged to `main` as `fbac2cd28982a8b7db3af6e11c20665492a10624`. Main Tra
 Immediate post-deploy Supabase verification confirms `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`. DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled but LIVE-disabled; cTrader LIVE `48681337` remains `execution_enabled=false` and `live_execution_enabled=false`. No LIVE permission was enabled by PR #111.
 
 Updated acceptance expectation: with an older Gold trade still running, a newly opened EURUSD trade followed seconds later by bare `Close` should target the fresh EURUSD logical trade when it is clearly newer than the older trade. If Gold and EURUSD were both opened within the same short recency interval, the same bare `Close` must fail closed as ambiguous. Fresh real DEMO traffic should verify both branches before first LIVE use.
+
+### Fast-entry full-signal promotion hardening — PR #112
+
+Fresh real-production DEMO traffic on 2026-09-18 exposed a critical fast-entry completion gap. The fast/incomplete signal itself could open correctly, while the later complete signal containing entry zone, SL and multiple TPs parsed correctly but failed to materialize onto the already-open position.
+
+Confirmed production examples:
+
+- V10(1s): `telegram:-1001822170589:24185` (`V10(1s) Sell Now!!!`) opened the fast trade. Full signal `24186` was a genuine Telegram reply, parsed READY/complete, correlated as `REPLY_TARGET`, but the orchestrator treated any matched READY signal other than literal `FAST_ENTRY_COMPLETION` as terminal `CORRELATED` and emitted zero broker actions.
+- V75: `24198` (`V75 index Buy Now!!!!`) opened the fast trade. Full replied signal `24199` suffered the same `REPLY_TARGET -> CORRELATED -> zero actions` defect. Because the full signal was never attached to the position group's `sourceEventIds`, later replies `24202` / `24203` / `24204` / `24205` (TP1/TP2/TP3 and partial-close+BE management) all failed with `NO_REPLY_TARGET`.
+- XAUUSD: `telegram:-1003902892609:364` (`Gold buy`) opened successfully on cTrader and MT5. Full signal `365` correlated as `FAST_ENTRY_COMPLETION` but produced no executable production account plan. Production-like fixed-lot fallback regression coverage proves the core three-target completion planner itself is executable, so this historical row does not justify weakening protection or lot constraints.
+- Newest XAUUSD test: `telegram:-1004387586337:920` (`GOLD BUY`) opened successfully on both DEMO brokers. Immediate next full signal `921` parsed correctly but failed as `AMBIGUOUS_FAST_ENTRY_COMPLETION` because older incomplete XAUUSD BUY groups were still inside the generic completion window. This proves generic symbol/side recency is insufficient when the source sequence itself identifies the intended fast signal.
+- Bot-copy source `-1002366787615:2464` / `2465` forwarded successfully to Telegram but had no routed broker execution on that source path; do not confuse its Telegram copy behavior with the external-MTProto broker-route failure above.
+
+PR #112 fixes both confirmed completion seams without broad guessing:
+
+1. A complete READY signal that is already matched by a genuine reply/thread coordinate can promote an existing fast-entry group even when the correlation reason is `REPLY_TARGET`, provided every matched group is still `incomplete=true` and symbol + side exactly match the complete signal. A mismatch remains non-promoting/fail-closed.
+2. For a non-reply complete signal, fast-completion correlation now checks immediate Telegram source-message continuity before the broad symbol/side completion window. If the immediately previous Telegram message belongs to one compatible incomplete logical trade, that cohort is selected as `FAST_ENTRY_COMPLETION`. If source continuity is not unique, ambiguity remains fail-closed.
+3. Completion reconciliation retains the original fast broker position as target 1, modifies that existing position with final SL + TP1, opens only the additional TP legs, marks the desired group complete, and appends the full signal's source event ID so all later genuine replies to the full signal can resolve normally.
+
+TDD / verification evidence:
+
+- Initial RED commit `fe9c96bba08dd0722d6e60cdb8607483aa06a622` reproduced the replied-full-signal zero-action defect; Trading V1 CI #3003 failed as expected before implementation.
+- Replied completion implementation commit `e061d2b8927f72f1cf38c84bda338e31885838d4`.
+- Production-like XAUUSD fixed-lot / three-target compatibility test commit `dd6b994fcf8e71872226c4c98fdd60dae3c88898`; Trading V1 CI #3005 passed.
+- Adjacent-source ambiguity RED commit `031e6259399ad8b78ee8fc84adc03926c3177a75`; Trading V1 CI #3006 failed as expected before the continuity fix.
+- Source-continuity implementation commit `918dadd401396857ba3a76623cec77edb04577dd`; Trading V1 CI #3007 passed all Worker/trading-core, MT5 bridge, internal MTProto and external MTProto test stages.
+
+Other fresh production findings from the same audit:
+
+- `Buy CADJPY now` followed seconds later by bare `Close` worked end-to-end through source-message continuity and closed both intended DEMO broker copies.
+- Correct `Sell NZDUSD @0.57199` opened on both DEMO brokers.
+- `TP: 0.5500` replied through the NZDUSD chain and succeeded on both brokers.
+- Initial `SL: 0.5680` for that SELL is below the ~0.57199 entry and therefore represents profit-side/invalid stop geometry for a SELL; broker rejection of that original instruction is not evidence that valid SL management is broken.
+- Typo symbol `NZDUSS` did not execute, as expected.
+- AI transport remains healthy: Bot-source `BUY XAUUSD` produced a successful OpenAI `gpt-5.6-luna` HTTP 200 provider attempt.
+- Raw Telegram forwarding continues independently of trading executability on routes configured for Telegram delivery.
+
+Real production DEMO acceptance is still required after PR #112 is deployed. The critical acceptance sequence is: send a new fast signal, verify both intended DEMO broker positions open, then send the complete signal both as (a) a genuine reply and (b) an immediate next same-channel message in separate tests. Verify the existing first broker position receives final SL+TP1, only additional target legs are opened, group `incomplete` becomes false, both fast and full source event IDs are retained, and later TP/BE/partial-close replies to the full signal target that same logical trade. Re-confirm all LIVE gates remain disabled throughout.
