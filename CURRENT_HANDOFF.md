@@ -445,3 +445,17 @@ Post-merge production acceptance still requires a fresh crossed-TP1 fast/full DE
 - PR #114 did not enable LIVE.
 - The ordinary V25 fast -> full flow already has fresh production proof from events `24228/24229`. The crossed-TP1 Gold behavior implemented by PR #114 still requires a **new** real DEMO source sequence after Deploy #101 for end-to-end acceptance; do not treat the earlier failed event `933` as post-fix evidence.
 - MT5 was independently offline during the fresh Gold fast event `932` (`MT5_CONNECTOR_OFFLINE`) and must be restored before dual-broker acceptance can be considered complete.
+
+
+#### Fresh post-Deploy #101 acceptance — V100 fast -> full
+
+- New fast event `telegram:-1001822170589:24239` (`V100 index Buy Now!!!`) executed successfully after PR #114 deployment.
+- Full replied event `telegram:-1001822170589:24240` carried range `605.50-606.50`, SL `599.50`, TP1 `609.50`, TP2 `613.00`, TP3 `617.00`.
+- Event `24240` correlated as `FAST_ENTRY_COMPLETION` and broker execution succeeded.
+- Persisted cTrader group `7bf67b25-f22c-4d32-bd92-173dc8c61a95` is `OPEN`, `incomplete=false`, and contains both source IDs `24239` and `24240`.
+- Original fast leg position `138501066` retained executed entry `606.08`, SL `599.5`, TP1 `609.5`.
+- Added target-2 position `138501181` has SL `599.5`, TP2 `613`.
+- Added target-3 position `138501189` has SL `599.5`, TP3 `617`.
+- This is fresh post-Deploy #101 production proof that fast -> full promotion, original-entry preservation, and full target expansion work on cTrader after PR #114.
+- Both DEMO accounts currently persist `entry_zone_policy={"mode":"market_only"}`.
+- Current code semantics: entry-zone policy is applied only when canonical `entry.kind === "RANGE"`. `market_only` maps that range to `MARKET_ALWAYS`, so execution uses the current market price regardless of the supplied range. Explicit price-based pending intents (`entry.kind === "PRICE"`, e.g. LIMIT/STOP orders) bypass the range policy and keep their explicit order type/price.
