@@ -173,3 +173,57 @@ test('implicit same-symbol fast completion remains executable with production fi
   assert.equal(result.accounts[0].actions[0].stopLoss, 4100);
   assert.equal(result.accounts[0].actions[0].takeProfit, 4450);
 });
+
+
+test('immediate next full signal selects the adjacent incomplete fast trade before older same-symbol fast trades', async () => {
+  const { correlateTradingEvent } = await import('../src/correlation/trade_correlator.js');
+  const groups = [
+    {
+      id: 'older-ct', workspaceId: 'ws', tradeAccountId: 'ct', sourceInstanceId: 'src',
+      sourceEventIds: ['telegram:-1001:90'], symbol: 'XAUUSD', side: 'BUY',
+      incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000, legs: [],
+    },
+    {
+      id: 'older-mt', workspaceId: 'ws', tradeAccountId: 'mt', sourceInstanceId: 'src',
+      sourceEventIds: ['telegram:-1001:90'], symbol: 'XAUUSD', side: 'BUY',
+      incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000, legs: [],
+    },
+    {
+      id: 'fresh-ct', workspaceId: 'ws', tradeAccountId: 'ct', sourceInstanceId: 'src',
+      sourceEventIds: ['telegram:-1001:100'], symbol: 'XAUUSD', side: 'BUY',
+      incomplete: true, status: 'OPEN', createdAt: 9000, updatedAt: 9000, legs: [],
+    },
+    {
+      id: 'fresh-mt', workspaceId: 'ws', tradeAccountId: 'mt', sourceInstanceId: 'src',
+      sourceEventIds: ['telegram:-1001:100'], symbol: 'XAUUSD', side: 'BUY',
+      incomplete: true, status: 'OPEN', createdAt: 9000, updatedAt: 9000, legs: [],
+    },
+  ];
+
+  const result = correlateTradingEvent({
+    event: {
+      workspace_hint: 'ws',
+      source: { instance_id: 'src' },
+      external_event_id: 'telegram:-1001:101',
+      thread: {},
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'XAUUSD' },
+        side: 'BUY',
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: groups,
+    nowMs: 10000,
+    fastCompletionWindowMs: 30 * 60 * 1000,
+  });
+
+  assert.deepEqual(result, {
+    status: 'MATCHED',
+    reason: 'FAST_ENTRY_COMPLETION',
+    groupIds: ['fresh-ct', 'fresh-mt'],
+  });
+});
