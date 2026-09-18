@@ -431,3 +431,17 @@ PR #114 implements the missing Task-4 behavior narrowly:
 - LIVE is not enabled by this work.
 
 Post-merge production acceptance still requires a fresh crossed-TP1 fast/full DEMO sequence. The already-failed Gold event `933` must not be replayed blindly as broker execution; use a new source sequence to validate the deployed behavior.
+
+
+#### PR #114 merge / production deployment checkpoint
+
+- PR #114 final head `381ba4eaead8c33d53b722b63221a9ab0feb2e36` passed Trading V1 CI #3021 before merge.
+- PR #114 merged into `main` as `d548bb113d1fcec5fb96ce6d8a80aaf517da0bd0`.
+- Main Trading V1 CI #3022 passed on the merged commit, including Worker/trading-core, MT5 bridge, internal MTProto and external MTProto stages.
+- Production Cloudflare Deploy #101 passed on the same merged commit: production credentials/authentication, final dry-run, Worker deployment, production health probe, persisted broker-switch verification, temporary-secret cleanup and safety-posture recording all succeeded.
+- Immediate post-deploy Supabase verification confirmed `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`.
+- DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled and LIVE-disabled. LIVE cTrader `48681337` remains execution-disabled and LIVE-disabled.
+- Fast-entry policy remains locked `execute_immediately`.
+- PR #114 did not enable LIVE.
+- The ordinary V25 fast -> full flow already has fresh production proof from events `24228/24229`. The crossed-TP1 Gold behavior implemented by PR #114 still requires a **new** real DEMO source sequence after Deploy #101 for end-to-end acceptance; do not treat the earlier failed event `933` as post-fix evidence.
+- MT5 was independently offline during the fresh Gold fast event `932` (`MT5_CONNECTOR_OFFLINE`) and must be restored before dual-broker acceptance can be considered complete.
