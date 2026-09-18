@@ -175,6 +175,11 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
   });
   desired.id = existing.id;
   desired.createdAt = existing.createdAt ?? nowMs;
+  const preservedEntryPrice = finitePositive(existing.entryPrice)
+    ?? finitePositive(existing.entry?.executedPrice)
+    ?? finitePositive(existing.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice);
+  if (preservedEntryPrice != null) desired.entryPrice = preservedEntryPrice;
+  if (existing.entry && typeof existing.entry === 'object') desired.entry = { ...existing.entry };
   desired.sourceEventIds = [...new Set([
     ...(existing.sourceEventIds || []).map(String),
     ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
