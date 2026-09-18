@@ -381,3 +381,16 @@ TDD / verification:
 - Trading V1 CI #3013 passed all Worker/trading-core, MT5 bridge, internal MTProto and external MTProto stages.
 
 This restoration is deliberately narrow: it does not roll back reply preservation, raw Telegram forwarding fixes, SL/TP sibling-preservation fixes, source-edit handling, AI transport fixes, or broker safety controls. LIVE remains disabled and requires separate explicit acceptance.
+
+
+#### PR #113 merge / production deployment checkpoint
+
+- PR #113 final head `447869e1c3945f1441c76c8cecc4ecb7fd6a8636` passed Trading V1 CI #3014 before merge.
+- PR #113 merged into `main` as `9a00559d7fb3e3573b50bfcf62e4b4e30e665c04`.
+- Main Trading V1 CI #3015 passed on the merged commit, including Worker/trading-core, MT5 bridge, internal MTProto and external MTProto test stages.
+- Production Cloudflare Deploy #100 passed on the same merged commit. Production credential checks, Cloudflare authentication, final dry-run, Worker deployment, production health probe, persisted broker-switch verification, temporary-secret cleanup and safety-posture recording all completed successfully.
+- Immediate post-deploy Supabase verification confirmed `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=false`.
+- DEMO cTrader `48685071` and DEMO MT5 `213921698` remain execution-enabled and LIVE-disabled. LIVE cTrader `48681337` remains execution-disabled and LIVE-disabled.
+- Fast-entry policy remains locked `execute_immediately`.
+- PR #113 did not enable LIVE. It restores native fast-completion semantics at correlation and removes the PR #112 downstream compensation.
+- Real production DEMO acceptance still requires a new fast -> full follow-up sequence after this deployment before the behavior is considered end-to-end accepted.
