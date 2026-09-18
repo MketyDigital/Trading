@@ -102,6 +102,8 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
 
   assert.equal(saved.length, 1);
   assert.equal(saved[0].incomplete, false);
+  assert.equal(saved[0].entryPrice, 4363.78);
+  assert.deepEqual(saved[0].entry, { kind: 'MARKET', executedPrice: 4363.78 });
   assert.deepEqual(saved[0].sourceEventIds, ['telegram:-1001:932', 'telegram:-1001:933']);
   assert.equal(saved[0].legs[0].brokerPositionId, '138490038');
   assert.equal(saved[0].legs[0].stopLoss, 4379);
