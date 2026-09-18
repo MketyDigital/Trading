@@ -298,8 +298,25 @@ export function correlateTradingEvent({
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }
 
+  const completeSignal = interpretation.status === 'READY'
+    && interpretation.intent
+    && interpretation.intent.fastEntry !== true
+    && interpretation.intent.incomplete === false;
+
   if (replyId) {
     const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
+    if (completeSignal) {
+      const symbol = String(interpretation.intent.symbol?.canonical ?? '').trim().toUpperCase();
+      const side = String(interpretation.intent.side ?? '').trim().toUpperCase();
+      const compatible = replyMatches.filter((group) =>
+        group.incomplete === true
+        && String(group.symbol ?? '').trim().toUpperCase() === symbol
+        && String(group.side ?? '').trim().toUpperCase() === side
+      );
+      const completion = correlateFastCompletion(compatible);
+      if (completion) return completion;
+      if (replyMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+    }
     const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
     if (target) return target;
     return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
@@ -307,6 +324,18 @@ export function correlateTradingEvent({
 
   if (threadId) {
     const threadMatches = scoped.filter((group) => group.threadId != null && String(group.threadId) === threadId);
+    if (completeSignal) {
+      const symbol = String(interpretation.intent.symbol?.canonical ?? '').trim().toUpperCase();
+      const side = String(interpretation.intent.side ?? '').trim().toUpperCase();
+      const compatible = threadMatches.filter((group) =>
+        group.incomplete === true
+        && String(group.symbol ?? '').trim().toUpperCase() === symbol
+        && String(group.side ?? '').trim().toUpperCase() === side
+      );
+      const completion = correlateFastCompletion(compatible);
+      if (completion) return completion;
+      if (threadMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+    }
     const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
     if (target) return target;
     return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
