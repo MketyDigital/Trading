@@ -459,3 +459,32 @@ Post-merge production acceptance still requires a fresh crossed-TP1 fast/full DE
 - This is fresh post-Deploy #101 production proof that fast -> full promotion, original-entry preservation, and full target expansion work on cTrader after PR #114.
 - Both DEMO accounts currently persist `entry_zone_policy={"mode":"market_only"}`.
 - Current code semantics: entry-zone policy is applied only when canonical `entry.kind === "RANGE"`. `market_only` maps that range to `MARKET_ALWAYS`, so execution uses the current market price regardless of the supplied range. Explicit price-based pending intents (`entry.kind === "PRICE"`, e.g. LIMIT/STOP orders) bypass the range policy and keep their explicit order type/price.
+
+
+### MT5 connector TLS CA hardening + OCI migration boundary — PR #115
+
+Fresh production/operator symptom:
+- Windows MT5 connector repeatedly failed before authentication with `SSLCertVerificationError: CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`.
+- This failure happens during TLS establishment to `wss://cbot.mkety.com:25345/v1/mt5`, before the connection token is evaluated. The pasted pairing/reconnect token is therefore not the cause of this TLS error, but because it was exposed in chat it must be rotated/reissued before further live use.
+- Git history confirms the 2026-09-16 MT5 connector change `78b3ae4b...` added deterministic `--terminal` and `--ledger` multi-instance support only; it did not change TLS behavior.
+- Gateway Caddy TLS configuration has likewise not changed since the outbound MT5 work. The Windows EXE release workflow previously installed `websocket-client` but did not install/bundle a dedicated CA bundle and the connector passed no explicit CA path to `websocket.create_connection`. Frozen Python therefore depended on ambient certificate-root behavior.
+
+PR #115 hardens the client trust path:
+- RED commit `7bb1e117b44ee5f8bef8917145804bda1352999a` requires the connector transport to expose an explicit verified CA bundle. MT5 Connector Release #77 failed at pure connector tests as expected.
+- Connector now imports `certifi` and `ssl`, builds explicit WebSocket SSL options with `CERT_REQUIRED`, hostname checking enabled, and `certifi.where()` as the CA file.
+- Every outbound gateway connection passes those SSL options to `websocket.create_connection`.
+- Windows release packaging now pins `certifi==2026.7.22` (current PyPI release verified 2026-09-19) and explicitly includes certifi data in the PyInstaller one-file executable.
+- This keeps certificate verification enabled; there is no insecure `CERT_NONE` / hostname-disable workaround.
+- The connector remains lightweight: one outbound WebSocket, 20-second heartbeat, 15-minute symbol refresh, one local SQLite replay ledger, and direct MetaTrader5 API use. No inbound customer VPS port is added.
+
+OCI migration boundary for the shared cTrader/MT5 gateway:
+- Keep `cbot.mkety.com` unchanged whenever possible. Move the gateway host behind the same hostname so baked MT5/cTrader WebSocket URLs do not change.
+- The Docker Compose/Caddy stack is cloud-neutral despite living under `deploy/coolify`; it can run on Coolify installed on OCI without trading-code changes.
+- Carry over unchanged secrets: `CBOT_TOKEN_SIGNING_KEY`, `CBOT_CONTROL_SECRET`, `CLOUDFLARE_DNS_API_TOKEN`, and ACME email. Keeping `CBOT_TOKEN_SIGNING_KEY` is essential because MT5 reconnect tokens are statelessly verified with that signing key and bound to account-row + connector-instance identity.
+- Carry over `CBOT_PUBLIC_HOST=cbot.mkety.com`; keep the DNS record DNS-only, not Cloudflare-proxied, because public broker WebSockets use TCP/TLS port 25345.
+- OCI must allow inbound TCP 25345 publicly to the Caddy host. Restrict SSH/management ports to administrator source IPs. Normal egress must remain available for ACME/DNS/registry operations.
+- Prefer an OCI reserved public IP for the gateway host so the DNS target remains stable.
+- After the OCI stack is healthy, change only the DNS A/AAAA target for `cbot.mkety.com` to the OCI reserved public IP. Let Caddy obtain/serve the certificate there, verify TLS + `/v1/cbot` + `/v1/mt5`, then retire Azure.
+- If the same public hostname remains, `CTRADER_CBOT_GATEWAY_URL`, `CTRADER_CBOT_WS_URL`, baked MT5 `DEFAULT_GATEWAY`, and cBot default URL do not need code changes.
+- If the gateway/control hostname changes, update GitHub production variable `CTRADER_CBOT_GATEWAY_URL` (and optional `MT5_CONNECTOR_GATEWAY_URL` if separately used), `CTRADER_CBOT_WS_URL`, and optional `MT5_CONNECTOR_WS_URL`, then redeploy Worker configuration; MT5 URLs must still normalize to `wss://...:25345/v1/mt5`.
+- Caddy continues to proxy public `:25345` to internal cTrader `:25346`, MT5 `:25347`, and authenticated control routes to internal `:8790/:8791`. Do not expose 8790/8791 directly.
