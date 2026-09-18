@@ -95,3 +95,81 @@ test('replied full signal completes an existing fast-entry trade instead of beco
   assert.equal(saved[0].incomplete, false);
   assert.deepEqual(saved[0].sourceEventIds, ['telegram:-1001:10', 'telegram:-1001:11']);
 });
+
+
+test('implicit same-symbol fast completion remains executable with production fixed-lot fallback constraints', async () => {
+  const saved = [];
+  const existing = {
+    id: 'gold-fast',
+    workspaceId: 'ws',
+    tradeAccountId: 'acct',
+    sourceInstanceId: 'src',
+    sourceEventIds: ['telegram:-1001:20'],
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    orderType: 'MARKET',
+    entry: { kind: 'MARKET', executedPrice: 4394.01 },
+    entryPrice: 4394.01,
+    stopLoss: null,
+    incomplete: true,
+    status: 'OPEN',
+    createdAt: 1000,
+    updatedAt: 1000,
+    legs: [{
+      legId: 'leg-1', targetIndex: 1, lots: 0.2, status: 'OPEN',
+      brokerPositionId: 'gold-pos', brokerOrderId: 'gold-order',
+      stopLoss: null, takeProfit: null,
+    }],
+  };
+
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'telegram:-1001:21',
+      workspace_hint: 'ws',
+      source: { instance_id: 'src' },
+      thread: {},
+      text: 'XAUUSD BUY full signal',
+    },
+    eventId: 'evt-gold-full',
+    nowMs: 2000,
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'XAUUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'RANGE', min: 4300, max: 4400 },
+        stopLoss: 4100,
+        takeProfits: [4450, 4500, 4570.99],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+  }, {
+    stateCoordinator: {
+      correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'gold-fast' }),
+    },
+    stateStore: {
+      getGroup: async (id) => id === 'gold-fast' ? existing : null,
+      putGroup: async (group) => saved.push(structuredClone(group)),
+    },
+    accountProvider: async () => [{
+      id: 'acct', workspace_id: 'ws', execution_enabled: true,
+      lot_sizing_type: 'fixed', lot_value: 0.2,
+      safety_policy: { killSwitch: false, autoTpProtection: true },
+      entry_zone_policy: { mode: 'market_only' },
+    }],
+    instrumentProvider: async () => ({
+      canonical: 'XAUUSD', platformSymbol: 'XAUUSD',
+      minLots: 0.2, maxLots: 0.2, stepLots: 0.2,
+    }),
+    marketPriceProvider: async () => undefined,
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions.length, 3);
+  assert.equal(result.accounts[0].actions[0].type, 'MODIFY_POSITION');
+  assert.equal(result.accounts[0].actions[0].stopLoss, 4100);
+  assert.equal(result.accounts[0].actions[0].takeProfit, 4450);
+});
