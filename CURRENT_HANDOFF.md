@@ -488,3 +488,13 @@ OCI migration boundary for the shared cTrader/MT5 gateway:
 - If the same public hostname remains, `CTRADER_CBOT_GATEWAY_URL`, `CTRADER_CBOT_WS_URL`, baked MT5 `DEFAULT_GATEWAY`, and cBot default URL do not need code changes.
 - If the gateway/control hostname changes, update GitHub production variable `CTRADER_CBOT_GATEWAY_URL` (and optional `MT5_CONNECTOR_GATEWAY_URL` if separately used), `CTRADER_CBOT_WS_URL`, and optional `MT5_CONNECTOR_WS_URL`, then redeploy Worker configuration; MT5 URLs must still normalize to `wss://...:25345/v1/mt5`.
 - Caddy continues to proxy public `:25345` to internal cTrader `:25346`, MT5 `:25347`, and authenticated control routes to internal `:8790/:8791`. Do not expose 8790/8791 directly.
+
+
+#### PR #115 merge / stable MT5 connector release checkpoint
+
+- PR #115 merged into `main` as `f3c81a9d3b4fa60ac72b6816e3c4648045aa49c4`.
+- Main MT5 Connector Release #82 passed completely on the merged commit.
+- Verified release stages: pinned dependency install, pure connector tests, standalone Windows PyInstaller build, packaged EXE runtime smoke test, SHA256 creation, artifact upload, and stable GitHub Release asset publication.
+- The stable `MketyMT5Connector.exe` release asset is therefore rebuilt with bundled certifi CA roots and explicit TLS certificate + hostname verification.
+- The previously exposed MT5 connection token must be rotated/reissued before further use. Do not reuse it for live acceptance.
+- No Cloudflare Worker trading code or LIVE execution gates were changed by PR #115.
