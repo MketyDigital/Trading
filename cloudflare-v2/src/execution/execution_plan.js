@@ -64,11 +64,15 @@ function openActionsFromGroup(group) {
   }));
 }
 
-export function buildExecutionPlan(intent, { account = {}, instrument = {}, currentMarketPrice, groupId = null, exposure = {} } = {}) {
+export function buildExecutionPlan(intent, { account = {}, instrument = {}, currentMarketPrice, protectionReferencePrice, groupId = null, exposure = {} } = {}) {
   if (!intent?.side || !intent?.symbol?.canonical) throw new TypeError('canonical executable intent required');
   const entryMaterializedIntent = applyEntryZonePolicy(intent, account, currentMarketPrice);
   const safetyPolicy = account.safetyPolicy || account.safety_policy || { enabled: true };
-  const protection = applyProtectionPolicy(entryMaterializedIntent, safetyPolicy, { currentMarketPrice });
+  const protection = applyProtectionPolicy(entryMaterializedIntent, safetyPolicy, {
+    currentMarketPrice: Number.isFinite(Number(protectionReferencePrice))
+      ? Number(protectionReferencePrice)
+      : currentMarketPrice,
+  });
   if (!protection.ok) {
     return {
       status: 'BLOCKED',
