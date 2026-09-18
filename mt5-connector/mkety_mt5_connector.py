@@ -2,10 +2,13 @@ import argparse
 import json
 import os
 import sqlite3
+import ssl
 import sys
 import time
 import uuid
 from pathlib import Path
+
+import certifi
 
 
 def _repo_bridge_path():
@@ -212,6 +215,15 @@ def _is_receive_timeout(exc):
     return isinstance(exc, TimeoutError) or type(exc).__name__ in {'WebSocketTimeoutException', 'TimeoutError'}
 
 
+def websocket_ssl_options():
+    """Use a bundled public CA set so frozen Windows builds verify TLS consistently."""
+    return {
+        'cert_reqs': ssl.CERT_REQUIRED,
+        'ca_certs': certifi.where(),
+        'check_hostname': True,
+    }
+
+
 def initialize_terminal(mt5, terminal_path=None):
     """Initialize exactly one MT5 installation when a terminal path is supplied.
 
@@ -315,7 +327,7 @@ class MketyMt5Connector:
         while True:
             socket = None
             try:
-                socket = self.websocket_factory(self.config['gateway_url'], timeout=30)
+                socket = self.websocket_factory(self.config['gateway_url'], timeout=30, sslopt=websocket_ssl_options())
                 if hasattr(socket, 'settimeout'):
                     socket.settimeout(1.0)
                 socket.send(json.dumps(self.auth_message(), separators=(',', ':')))
