@@ -1,0 +1,174 @@
+name: OCI Gateway Env Patch And Deploy
+
+on:
+  push:
+    branches:
+      - ops/oci-gateway-migration-20260919
+    paths:
+      - '.github/workflows/oci-gateway-env-patch-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-gateway-migration-stage
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      AZURE_COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      AZURE_COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      SOURCE_APP_UUID: edgvi4wezjodvwqa1dpkzbt7
+      TARGET_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+    steps:
+      - name: Validate control-plane credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in AZURE_COOLIFY_URL AZURE_COOLIFY_TOKEN OCI_COOLIFY_URL OCI_COOLIFY_TOKEN; do
+            test -n "${!v:-}" || { echo "Missing $v"; exit 2; }
+          done
+          echo 'MIGRATION_CREDENTIALS=READY'
+
+      - name: Fetch and mask authoritative Azure production envs
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="${AZURE_COOLIFY_URL%/}"; [[ "$src" == */api/v1 ]] && src_api="$src" || src_api="$src/api/v1"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 3 --retry-all-errors             -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN"             "$src_api/applications/$SOURCE_APP_UUID/envs" > "$RUNNER_TEMP/source.json"
+          SOURCE="$RUNNER_TEMP/source.json" node <<'NODE'
+          const fs=require('node:fs');
+          const rows=JSON.parse(fs.readFileSync(process.env.SOURCE,'utf8')||'[]');
+          const keys=['ACME_EMAIL','CBOT_COMMAND_TIMEOUT_MS','CBOT_CONTROL_SECRET','CBOT_PUBLIC_HOST','CBOT_TOKEN_SIGNING_KEY','CLOUDFLARE_DNS_API_TOKEN','MT5_CONNECTOR_COMMAND_TIMEOUT_MS'];
+          const out=[];
+          for(const key of keys){
+            const row=(Array.isArray(rows)?rows:[]).find(x=>x?.is_preview===false&&String(x.key||'')===key);
+            if(!row) throw new Error('Missing Azure production env '+key);
+            const value=String(row.value??'');
+            if(!value) throw new Error('Empty Azure production env '+key);
+            process.stdout.write('::add-mask::'+value.replace(/\r?\n/g,'')+'\n');
+            out.push({key,value,is_preview:false,is_literal:row.is_literal??false,is_multiline:row.is_multiline??false,is_shown_once:row.is_shown_once??false});
+          }
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/authoritative.json',JSON.stringify(out));
+          console.log('AZURE_ENV_AUTHORITY=READY');
+          NODE
+
+      - name: Patch exact production values onto staged OCI app
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"; [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          endpoint="$api/applications/$TARGET_APP_UUID/envs"
+
+          curl --proto '=https' --tlsv1.2 -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$endpoint" > "$RUNNER_TEMP/target-before.json"
+
+          SRC="$RUNNER_TEMP/authoritative.json" TGT="$RUNNER_TEMP/target-before.json" node <<'NODE'
+          const fs=require('node:fs');
+          const src=JSON.parse(fs.readFileSync(process.env.SRC,'utf8'));
+          const tgt=JSON.parse(fs.readFileSync(process.env.TGT,'utf8')||'[]');
+          const prod=new Set((Array.isArray(tgt)?tgt:[]).filter(x=>x?.is_preview===false).map(x=>String(x.key||'')));
+          for(const row of src) if(!prod.has(row.key)) throw new Error('OCI production env row missing: '+row.key);
+          fs.mkdirSync(process.env.RUNNER_TEMP+'/payloads',{recursive:true});
+          src.forEach((row,i)=>fs.writeFileSync(process.env.RUNNER_TEMP+'/payloads/'+i+'.json',JSON.stringify(row)));
+          NODE
+
+          for i in $(seq 0 6); do
+            key="$(I="$i" node -e "const x=require(process.env.RUNNER_TEMP+'/authoritative.json');process.stdout.write(x[Number(process.env.I)].key)")"
+            code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/patch-$i.json" -w '%{http_code}'               -X PATCH -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json'               --data-binary @"$RUNNER_TEMP/payloads/$i.json" "$endpoint")"
+            if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+              echo "OCI env patch failed for $key HTTP $code"
+              exit 3
+            fi
+            echo "OCI_ENV_PATCHED=$key"
+          done
+
+          curl --proto '=https' --tlsv1.2 -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$endpoint" > "$RUNNER_TEMP/target-after.json"
+          SRC="$RUNNER_TEMP/authoritative.json" TGT="$RUNNER_TEMP/target-after.json" node <<'NODE'
+          const fs=require('node:fs');
+          const src=JSON.parse(fs.readFileSync(process.env.SRC,'utf8'));
+          const tgt=JSON.parse(fs.readFileSync(process.env.TGT,'utf8')||'[]');
+          for(const s of src){
+            const t=(Array.isArray(tgt)?tgt:[]).find(x=>x?.is_preview===false&&String(x.key||'')===s.key);
+            if(!t) throw new Error('OCI env disappeared: '+s.key);
+            if(String(t.value??'')!==String(s.value??'')) throw new Error('OCI value mismatch: '+s.key);
+            if(Boolean(t.is_literal)!==Boolean(s.is_literal)) throw new Error('OCI literal flag mismatch: '+s.key);
+          }
+          console.log('OCI_ENV_VALUE_PARITY=PASS');
+          NODE
+
+      - name: Deploy staged OCI gateway
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"; [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/deploy.json" -w '%{http_code}'             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deploy?uuid=$TARGET_APP_UUID&force=true")"
+          [ "$code" = "200" ] || { echo "OCI deploy request failed HTTP $code"; exit 4; }
+          deployment_uuid="$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deploy.json'));const d=Array.isArray(x.deployments)?x.deployments[0]:null;if(!d?.deployment_uuid)process.exit(1);process.stdout.write(d.deployment_uuid)")"
+          echo "OCI_DEPLOYMENT_UUID=$deployment_uuid"
+          echo "deployment_uuid=$deployment_uuid" >> "$GITHUB_OUTPUT"
+
+          done=no
+          for i in $(seq 1 120); do
+            curl --proto '=https' --tlsv1.2 -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"               "$api/deployments/$deployment_uuid" > "$RUNNER_TEMP/deployment.json"
+            status="$(node -e "const x=require(process.env.RUNNER_TEMP+'/deployment.json');process.stdout.write(String(x.status||''))")"
+            case "${status,,}" in
+              finished|success|successful|succeeded|completed) done=yes; break ;;
+              failed|failure|error|cancelled|canceled)
+                echo "OCI deployment failed status=$status"
+                node <<'NODE'
+          const fs=require('fs');let x={};try{x=require(process.env.RUNNER_TEMP+'/deployment.json')}catch{}
+          const safe=String(x.logs||'').split(/\r?\n/).filter(Boolean).slice(-100).join('\n')
+            .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi,'Bearer ***')
+            .replace(/(CBOT_CONTROL_SECRET|CBOT_TOKEN_SIGNING_KEY|CLOUDFLARE_DNS_API_TOKEN)=\S+/gi,'$1=***');
+          console.log(safe||'(no diagnostic)');
+          NODE
+                exit 5
+                ;;
+            esac
+            sleep 5
+          done
+          [ "$done" = yes ] || { echo 'OCI deployment timeout'; exit 6; }
+          echo 'OCI_DEPLOYMENT=FINISHED'
+
+      - name: Verify OCI application state
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"; [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          for i in $(seq 1 40); do
+            curl --proto '=https' --tlsv1.2 -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"               "$api/applications/$TARGET_APP_UUID" > "$RUNNER_TEMP/app.json"
+            status="$(node -e "const x=require(process.env.RUNNER_TEMP+'/app.json');process.stdout.write(String(x.status||''))")"
+            case "${status,,}" in
+              running:healthy|running:unknown|running) echo "OCI_APP_STATUS=$status"; exit 0 ;;
+              exited:*|failed|error) echo "OCI app unhealthy: $status"; exit 7 ;;
+            esac
+            sleep 3
+          done
+          exit 8
+
+      - name: Direct health probe to OCI without DNS cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_ip="$(getent ahostsv4 deploy.mkety.com | awk 'NR==1{print $1}')"
+          test -n "$target_ip" || { echo 'Cannot resolve OCI public IPv4'; exit 9; }
+          echo "OCI_PUBLIC_IP=$target_ip"
+          if curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 20             --resolve "cbot.mkety.com:25345:$target_ip"             "https://cbot.mkety.com:25345/health" > "$RUNNER_TEMP/health.json"; then
+            BODY="$RUNNER_TEMP/health.json" node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.env.BODY));if(!b.ok)process.exit(1);console.log('OCI_DIRECT_HEALTH=PASS')"
+          else
+            echo 'OCI_DIRECT_HEALTH=BLOCKED'
+            echo 'Gateway is deployed but TCP 25345 is not reachable externally on OCI. DNS remains unchanged.'
+            exit 10
+          fi
+
+      - name: Remove secret-bearing migration files
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/source.json" "$RUNNER_TEMP/authoritative.json" "$RUNNER_TEMP/target-before.json" "$RUNNER_TEMP/target-after.json" "$RUNNER_TEMP/payloads" "$RUNNER_TEMP"/patch-*.json "$RUNNER_TEMP/deploy.json" "$RUNNER_TEMP/deployment.json" "$RUNNER_TEMP/app.json" "$RUNNER_TEMP/health.json"
