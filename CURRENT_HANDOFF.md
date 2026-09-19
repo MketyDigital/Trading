@@ -535,3 +535,27 @@ TDD / CI:
 - Fresh FBS MT5 account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51` remains persisted as connector `connected`, account `110664480`, server `FBS-Real`, environment `live`.
 - Post-deploy account safety: FBS LIVE has `execution_enabled=false`, `live_execution_enabled=false`; cTrader LIVE `48681337` also has both false. Demo cTrader/MT5 remain execution-enabled and live-disabled.
 - Important operator state: the persisted global `live_broker_execution_enabled` master control is currently `true` (updated before this deployment at 2026-09-18 23:11:29 UTC). PR #116 / Deploy #102 did not toggle it; the deployment explicitly preserved the persisted owner switch. Real-money execution still requires the per-account execution + live permissions, which remain false on both current LIVE accounts.
+
+
+### OCI migration discovery — 2026-09-19
+
+User requested moving only the shared cTrader/MT5 gateway from the current Azure/Coolify host to OCI while preserving Coolify and changing no trading behavior.
+
+Read-only Coolify inspection:
+- `MketyDigital/mksaas` already has a production GitHub Actions secret named `COOLIFY_TOKEN` and existing workflows authenticate to `https://deploy.mkety.com/api/v1`.
+- A temporary branch-only read-only inventory workflow was created on `MketyDigital/mksaas` branch `ops/read-only-coolify-inventory-20260919`; it performs GET-only Coolify API calls and does not mutate Coolify or expose secrets.
+- Coolify currently reports exactly one registered server: UUID `ynkdc4tx6bi7cyxf0kuy8kte`, name `localhost`, reachable/usable. No OCI server is registered yet.
+- Current Coolify applications/databases all resolve to that same localhost server. No second/remote deployment server exists.
+- The gateway itself did not appear in the sanitized `/applications` or `/services` inventory, so do not assume a Coolify application/service UUID for it until identified from the dashboard/resource detail or a more specific API endpoint.
+- No OCI credentials/secrets were found in `mksaas`; infrastructure creation in OCI cannot be safely automated from the currently available credentials.
+
+Migration boundary remains:
+- Do not change cBot/MT5 application code.
+- Keep `cbot.mkety.com` if possible.
+- Reuse the existing cloud-neutral `ctrader-cbot-gateway/deploy/coolify/docker-compose.yml` + Caddy stack.
+- Carry over unchanged `CBOT_TOKEN_SIGNING_KEY`, `CBOT_CONTROL_SECRET`, `CLOUDFLARE_DNS_API_TOKEN`, `ACME_EMAIL`, and `CBOT_PUBLIC_HOST=cbot.mkety.com`.
+- OCI public ingress required by the gateway workload is TCP `25345`; internal gateway ports `25346`, `25347`, `8790`, and `8791` must not be publicly exposed.
+- For Coolify management of OCI as a remote server, SSH (normally TCP `22`) must be reachable from the existing Coolify host during validation; restrict it to the Coolify/Azure source where possible.
+- OCI networking has two enforcement layers: VCN NSG/security-list rules and the instance OS firewall; both must allow required traffic.
+- Prefer an OCI Reserved Public IP for the gateway target.
+- Safe cutover sequence: register/validate OCI server in existing Coolify -> deploy parallel gateway copy -> verify health/TLS/cTrader DEMO/MT5 DEMO -> change only DNS A/AAAA for `cbot.mkety.com` -> verify reconnect + broker identity/symbol catalogs -> keep Azure online for rollback -> retire Azure only after stable soak.
