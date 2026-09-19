@@ -616,3 +616,15 @@ Migration boundary remains:
 - Final account-control snapshot: cTrader DEMO execution on/live off; cTrader LIVE execution off/live off; MT5 DEMO execution on/live off; FBS MT5 LIVE execution on/live on. Migration automation did not toggle these trading controls.
 - Important safety note: FBS MT5 LIVE is currently capable of real-money broker execution because both global and per-account live gates are enabled. Infrastructure cutover did not place any order.
 - Temporary migration branches/workflows were used for guarded inventory/cutover probes only; main production code remained unchanged apart from cumulative handoff documentation.
+
+#### Rollback procedure + live-test state check — 2026-09-19
+
+- Azure rollback sequence: (1) start old Azure Coolify app `edgvi4wezjodvwqa1dpkzbt7`; (2) verify direct Azure origin health/TLS on `20.57.161.98:25345`; (3) change Cloudflare `cbot.mkety.com` A record from OCI `89.168.70.209` back to Azure `20.57.161.98`, preserving DNS-only and TTL 300; (4) force long-lived connector sessions to reconnect by stopping OCI gateway or restarting connector process; (5) verify authenticated cTrader/MT5 session registry on Azure; (6) keep OCI available until acceptance is complete.
+- Current global runtime gates are intentionally enabled by owner: `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=true`.
+- FBS MT5 LIVE account `110664480` (`5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51`) is active with `execution_enabled=true`, `live_execution_enabled=true`; connector had successfully reconnected to OCI after Azure stop.
+- Fresh event `telegram:-1003902892609:379` at 2026-09-19 10:07 UTC parsed as fast-entry `BUY BTCUSD`. It did not route to FBS LIVE.
+- That event executed only on cTrader DEMO account `48685071`: one OPEN BTCUSD BUY leg, requested/executed 0.2 lots, fill 81280.58, broker position 138520138.
+- MT5 DEMO account `213921698` route failed with `MT5_CONNECTOR_OFFLINE`, requested 0.1 lots.
+- Source feed `-1003902892609` currently has routes only to cTrader DEMO destination `40eacf2a-...`, MT5 DEMO destination `87eb40ab-...`, and Telegram. There is no `trading_destinations` row targeting the FBS LIVE account row.
+- Therefore turning LIVE gates on alone does not send this source to FBS LIVE. A dedicated FBS LIVE broker destination + source route (with explicit 0.01 sizing) is still required before a real-money test can occur from this source.
+- No real-money order was placed by the migration or this verification.
