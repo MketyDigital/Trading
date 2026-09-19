@@ -580,9 +580,6 @@ export function createProductionExecutionDependencies({
     if (!['demo', 'live'].includes(environment)) {
       throw new Error('cTrader cBot trade account environment must be demo or live');
     }
-    if (environment === 'live' && !enabled(env.CTRADER_LIVE_TRADING_ENABLED)) {
-      throw new Error('live cTrader execution is disabled');
-    }
     const deliveryStore = deliveryStoreFor({
       factory: deliveryStoreFactory,
       supabase,
@@ -614,10 +611,7 @@ export function createProductionExecutionDependencies({
     if (!['demo', 'live'].includes(environment)) {
       throw new Error('cTrader trade account environment must be demo or live');
     }
-    const allowLiveTrading = environment === 'live' && enabled(env.CTRADER_LIVE_TRADING_ENABLED);
-    if (environment === 'live' && !allowLiveTrading) {
-      throw new Error('live cTrader execution is disabled');
-    }
+    const allowLiveTrading = environment === 'live';
 
     const batchKey = ctraderBatchKey(account, brokerAccountId, environment, groupId);
     let runtime = batchKey ? ctraderBatchRuntimes.get(batchKey)?.runtime : null;

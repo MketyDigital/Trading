@@ -267,16 +267,24 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
         };
       }
 
-      const environment = String(account?.environment || '').trim().toLowerCase();
       const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
       const lotValue = Number(account?.lot_value);
-      if (environment === 'demo' && lotSizingType === 'fixed' && Number.isFinite(lotValue) && lotValue > 0) {
+      if (lotSizingType === 'fixed' && Number.isFinite(lotValue) && lotValue > 0) {
+        const brokerMinLots = Number(resolvedSymbol.minLots ?? resolvedSymbol.minVolume);
+        const brokerMaxLots = Number(resolvedSymbol.maxLots ?? resolvedSymbol.maxVolume);
+        const brokerStepLots = Number(resolvedSymbol.stepLots ?? resolvedSymbol.stepVolume);
         return {
           canonical: symbol,
           platformSymbol: resolvedSymbol.platformSymbol,
-          minLots: lotValue,
-          maxLots: lotValue,
-          stepLots: lotValue,
+          minLots: Number.isFinite(brokerMinLots) && brokerMinLots > 0 ? brokerMinLots : lotValue,
+          maxLots: Number.isFinite(brokerMaxLots) && brokerMaxLots > 0 ? brokerMaxLots : lotValue,
+          stepLots: Number.isFinite(brokerStepLots) && brokerStepLots > 0 ? brokerStepLots : lotValue,
+          ...(Number.isFinite(Number(resolvedSymbol.tickSize)) ? { tickSize: Number(resolvedSymbol.tickSize) } : {}),
+          ...(Number.isFinite(Number(resolvedSymbol.tickValue)) ? { tickValue: Number(resolvedSymbol.tickValue) } : {}),
+          ...(Number.isFinite(Number(resolvedSymbol.tickValueLoss)) ? { tickValueLoss: Number(resolvedSymbol.tickValueLoss) } : {}),
+          ...(Number.isFinite(Number(resolvedSymbol.tickValueProfit)) ? { tickValueProfit: Number(resolvedSymbol.tickValueProfit) } : {}),
+          ...(Number.isFinite(Number(resolvedSymbol.contractSize)) ? { contractSize: Number(resolvedSymbol.contractSize) } : {}),
+          ...(Number.isFinite(Number(resolvedSymbol.digits)) ? { digits: Number(resolvedSymbol.digits) } : {}),
         };
       }
 
