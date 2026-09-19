@@ -27,12 +27,14 @@ jobs:
           echo "::add-mask::$CONTROL_SECRET"
           export CONTROL_SECRET
           base="https://cbot.mkety.com:25345"
+          azure_ip="20.57.161.98"
           declare -A endpoints
           endpoints[ctrader_demo]="/v1/connections/40eacf2a-5a8a-4648-9b90-55038748d2ed"
           endpoints[ctrader_live]="/v1/connections/4dbe17df-40b0-412a-88de-9bbc562969c7"
           endpoints[mt5_demo]="/v1/mt5-connections/87eb40ab-5cce-48c5-b764-149fd6b31ca5"
           endpoints[mt5_live]="/v1/mt5-connections/5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51"
 
+          echo "=== OCI CURRENT DNS ==="
           for name in ctrader_demo ctrader_live mt5_demo mt5_live; do
             path="${endpoints[$name]}"
             code="$(curl --proto '=https' --tlsv1.2 -sS -o "/tmp/$name.json" -w '%{http_code}'               -H "Authorization: Bearer $CONTROL_SECRET" "$base$path")"
@@ -56,5 +58,26 @@ jobs:
             lastHeartbeatAt:body.lastHeartbeatAt??null
           };
           console.log(JSON.stringify(safe));
+          NODE
+          done
+
+          echo "=== AZURE DIRECT ORIGIN ==="
+          for name in ctrader_demo ctrader_live mt5_demo mt5_live; do
+            path="${endpoints[$name]}"
+            code="$(curl --proto '=https' --tlsv1.2 -sS -o "/tmp/azure-$name.json" -w '%{http_code}'               --resolve "cbot.mkety.com:25345:$azure_ip"               -H "Authorization: Bearer $CONTROL_SECRET" "$base$path")"
+            NAME="azure_$name" CODE="$code" FILE="/tmp/azure-$name.json" node <<'NODE'
+          const fs=require('fs');
+          const name=process.env.NAME, code=Number(process.env.CODE);
+          let body={}; try{body=JSON.parse(fs.readFileSync(process.env.FILE,'utf8'))}catch{}
+          const identity=body.identity||{};
+          console.log(JSON.stringify({
+            name,http_status:code,ok:body.ok??false,online:body.online??false,reason:body.reason??null,
+            accountRowId:body.accountRowId??null,
+            accountNumber:identity.accountNumber??identity.account_id??identity.login??null,
+            server:identity.server??identity.serverName??null,
+            broker:identity.broker??identity.brokerName??null,
+            environment:identity.environment??null,
+            connectedAt:body.connectedAt??null,lastHeartbeatAt:body.lastHeartbeatAt??null
+          }));
           NODE
           done
