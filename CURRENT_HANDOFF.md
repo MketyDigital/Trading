@@ -559,3 +559,17 @@ Migration boundary remains:
 - OCI networking has two enforcement layers: VCN NSG/security-list rules and the instance OS firewall; both must allow required traffic.
 - Prefer an OCI Reserved Public IP for the gateway target.
 - Safe cutover sequence: register/validate OCI server in existing Coolify -> deploy parallel gateway copy -> verify health/TLS/cTrader DEMO/MT5 DEMO -> change only DNS A/AAAA for `cbot.mkety.com` -> verify reconnect + broker identity/symbol catalogs -> keep Azure online for rollback -> retire Azure only after stable soak.
+
+#### OCI migration topology correction + exact source/target inventory
+
+- Correct topology: current Azure gateway and target OCI Coolify are two separate Coolify installations.
+- Source Azure Coolify is accessed by `MketyDigital/Trading` production secrets `COOLIFY_URL` + `COOLIFY_TOKEN`.
+- Target OCI Coolify is `https://deploy.mkety.com`, accessed by `MketyDigital/mksaas` production secret `COOLIFY_TOKEN`.
+- Do not register OCI as a remote server in Azure Coolify. OCI already runs its own Coolify and appears there as server `localhost`, UUID `ynkdc4tx6bi7cyxf0kuy8kte`, reachable/usable.
+- Target placement requested by user: existing OCI project `telethon`, UUID `xrhsinddvxzghzcxgwux9esj`, environment `production`, UUID `ewiwnpz3mow3lko3kiaoznbt`.
+- Source Azure application discovered read-only: `Cbot Tcp gateway`, UUID `edgvi4wezjodvwqa1dpkzbt7`, status `running:unknown`.
+- Source application repository `MketyDigital/Trading`, branch `main`, base directory `/`, Docker Compose location `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`.
+- Source Azure env key set contains `ACME_EMAIL`, `CBOT_COMMAND_TIMEOUT_MS`, `CBOT_CONTROL_SECRET`, `CBOT_PUBLIC_HOST`, `CBOT_TOKEN_SIGNING_KEY`, `CLOUDFLARE_DNS_API_TOKEN`, and `MT5_CONNECTOR_COMMAND_TIMEOUT_MS` (Coolify returned duplicate rows for build/runtime variants). Values were deliberately not printed.
+- Target deployment must be a Git-backed Docker Compose application (`build_pack=dockercompose`) created in OCI `telethon/production`, from `https://github.com/MketyDigital/Trading`, branch `main`, base `/`, compose `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`, with instant deploy disabled until environment values are migrated and checked.
+- Exact Coolify API contract verified from current docs: `POST /api/v1/applications/public` accepts `project_uuid`, `server_uuid`, `environment_uuid`, `git_repository`, `git_branch`, `build_pack: dockercompose`, `base_directory`, `docker_compose_location`, and `instant_deploy`.
+- Do not cut DNS or stop Azure until OCI application is configured with identical required environment values, deployed, health/TLS and both WebSocket paths verified, and DEMO connector acceptance succeeds.
