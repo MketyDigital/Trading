@@ -55,3 +55,94 @@ jobs:
           const bs=Array.isArray(branches?.branches)?branches.branches:[];
           console.log('PRIVATE_APP_HAS_MAIN='+bs.some(b=>b.name==='main'));
           NODE
+
+
+  rebind-and-verify:
+    needs: inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      OCI_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+      PRIVATE_GITHUB_APP_UUID: chvanp2mn8p5msyzifqwywac
+    steps:
+      - name: Guard current gateway and rebind to private GitHub App
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/before.json
+          node <<'NODE'
+          const a=require('/tmp/before.json');
+          if(a.uuid!=='p9xqtqpbljnggchy36mzd7a0') throw new Error('unexpected application');
+          if(a.git_repository!=='MketyDigital/Trading') throw new Error('unexpected repository '+a.git_repository);
+          if(a.git_branch!=='main') throw new Error('unexpected branch '+a.git_branch);
+          if(a.build_pack!=='dockercompose') throw new Error('unexpected build pack '+a.build_pack);
+          if(a.docker_compose_location!=='/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml') throw new Error('unexpected compose location');
+          console.log('PRE_REBIND_GUARD=PASS');
+          NODE
+
+          node - <<'NODE' > /tmp/patch.json
+          process.stdout.write(JSON.stringify({
+            github_app_uuid: process.env.PRIVATE_GITHUB_APP_UUID,
+            git_repository: 'MketyDigital/Trading',
+            git_branch: 'main',
+            build_pack: 'dockercompose',
+            base_directory: '/',
+            docker_compose_location: '/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml',
+            is_preserve_repository_enabled: false
+          }));
+          NODE
+
+          curl -fsS -X PATCH             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             -H "Content-Type: application/json"             --data-binary @/tmp/patch.json             "$api/applications/$OCI_APP_UUID" > /tmp/patch-result.json
+
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/after.json
+          node <<'NODE'
+          const a=require('/tmp/after.json');
+          const ok =
+            a.git_repository==='MketyDigital/Trading' &&
+            a.git_branch==='main' &&
+            a.build_pack==='dockercompose' &&
+            a.docker_compose_location==='/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' &&
+            (a.github_app_uuid==='chvanp2mn8p5msyzifqwywac' || Number(a.source_id)===1);
+          if(!ok) throw new Error('private GitHub App rebind did not persist');
+          console.log('PRIVATE_SOURCE_REBIND=PASS');
+          console.log(JSON.stringify({
+            github_app_uuid:a.github_app_uuid??null,
+            source_id:a.source_id??null,
+            source_type:a.source_type??null,
+            repository:a.git_repository,
+            branch:a.git_branch
+          }));
+          NODE
+
+      - name: Redeploy through authenticated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -X POST             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/applications/$OCI_APP_UUID/start?force=true&instant_deploy=false" > /tmp/deploy.json
+          deployment_uuid="$(node -e "const x=require('/tmp/deploy.json'); if(!x.deployment_uuid)process.exit(1); process.stdout.write(String(x.deployment_uuid))")"
+          echo "DEPLOYMENT_UUID=$deployment_uuid"
+
+          for i in $(seq 1 80); do
+            curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/app.json
+            status="$(node -e "const x=require('/tmp/app.json');process.stdout.write(String(x.status||''))")"
+            echo "APP_STATUS=$status"
+            case "${status,,}" in
+              running|running:*) break ;;
+              exited|exited:*|failed|failed:*) echo "authenticated-source deploy failed"; exit 3 ;;
+            esac
+            sleep 5
+          done
+
+          curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 20             https://cbot.mkety.com:25345/health > /tmp/health.json
+          node -e "const x=require('/tmp/health.json');if(!x.ok)process.exit(1);console.log('PRIVATE_SOURCE_PUBLIC_HEALTH=PASS')"
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -f /tmp/before.json /tmp/patch.json /tmp/patch-result.json /tmp/after.json /tmp/deploy.json /tmp/app.json /tmp/health.json
