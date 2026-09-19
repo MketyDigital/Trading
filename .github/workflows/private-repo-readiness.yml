@@ -97,7 +97,16 @@ jobs:
           }));
           NODE
 
-          curl -fsS -X PATCH             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             -H "Content-Type: application/json"             --data-binary @/tmp/patch.json             "$api/applications/$OCI_APP_UUID" > /tmp/patch-result.json
+          http_code="$(curl -sS -o /tmp/patch-result.json -w '%{http_code}' -X PATCH \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/patch.json \
+            "$api/applications/$OCI_APP_UUID")"
+          if [ "$http_code" != "200" ]; then
+            echo "PATCH_HTTP=$http_code"
+            node -e "const x=require('/tmp/patch-result.json'); console.log(JSON.stringify({message:x.message||null,errors:x.errors||null}))"
+            exit 2
+          fi
 
           curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/after.json
           node <<'NODE'
