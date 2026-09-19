@@ -26,7 +26,7 @@ jobs:
           OCI_ORIGIN_IP="$OCI_ORIGIN_IP" node <<'NODE'
           const WebSocket=require('ws');
           const dns=require('dns');
-          const lookup=(host,opts,cb)=>cb(null,process.env.OCI_ORIGIN_IP,4);
+          const lookup=(host,opts,cb)=>cb(null,[{address:process.env.OCI_ORIGIN_IP,family:4}]);
           async function probe(path){
             return new Promise((resolve,reject)=>{
               const ws=new WebSocket('wss://cbot.mkety.com:25345'+path,{lookup});
