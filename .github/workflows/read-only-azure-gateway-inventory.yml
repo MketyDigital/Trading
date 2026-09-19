@@ -1,0 +1,78 @@
+name: Read-only Azure Gateway Inventory
+
+on:
+  push:
+    branches:
+      - ops/read-only-azure-gateway-inventory-20260919
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Inspect existing Azure gateway without exposing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${COOLIFY_URL:-}" || { echo 'Missing COOLIFY_URL'; exit 2; }
+          test -n "${COOLIFY_TOKEN:-}" || { echo 'Missing COOLIFY_TOKEN'; exit 2; }
+          root="${COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          auth=(-H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Accept: application/json')
+
+          curl -fsS --retry 3 --retry-all-errors "${auth[@]}" "$api/applications" > "$RUNNER_TEMP/apps.json"
+          APP_UUID="$(APPS="$RUNNER_TEMP/apps.json" node <<'NODE'
+          const fs=require('node:fs');
+          const apps=JSON.parse(fs.readFileSync(process.env.APPS,'utf8')||'[]');
+          const list=Array.isArray(apps)?apps:[];
+          const matches=list.filter(a=>{
+            const text=[a.name,a.description,a.fqdn,a.git_repository,a.git_full_url,a.base_directory,a.docker_compose_location].filter(Boolean).join(' ').toLowerCase();
+            return text.includes('cbot tcp gateway') ||
+              text.includes('cbot.mkety.com') ||
+              (text.includes('mketydigital/trading') && text.includes('ctrader-cbot-gateway'));
+          });
+          if(matches.length!==1){
+            console.error('gateway_match_count='+matches.length);
+            process.exit(1);
+          }
+          process.stdout.write(String(matches[0].uuid));
+          NODE
+          )"
+
+          curl -fsS --retry 3 --retry-all-errors "${auth[@]}" "$api/applications/$APP_UUID" > "$RUNNER_TEMP/app.json"
+          curl -fsS --retry 3 --retry-all-errors "${auth[@]}" "$api/applications/$APP_UUID/envs" > "$RUNNER_TEMP/envs.json"
+
+          APP="$RUNNER_TEMP/app.json" ENVS="$RUNNER_TEMP/envs.json" node <<'NODE'
+          const fs=require('node:fs');
+          const a=JSON.parse(fs.readFileSync(process.env.APP,'utf8')||'{}');
+          const envs=JSON.parse(fs.readFileSync(process.env.ENVS,'utf8')||'[]');
+          const pick=(x,k)=>x?.[k]??null;
+          const out={
+            uuid:a.uuid??null,
+            name:a.name??null,
+            description:a.description??null,
+            status:a.status??null,
+            fqdn:a.fqdn??null,
+            git_repository:a.git_repository??a.git_full_url??null,
+            git_branch:a.git_branch??null,
+            base_directory:a.base_directory??null,
+            docker_compose_location:a.docker_compose_location??null,
+            server_uuid:a.server_uuid??a.destination?.server?.uuid??null,
+            destination_uuid:a.destination_uuid??a.destination?.uuid??null,
+            project_uuid:a.project_uuid??a.environment?.project?.uuid??null,
+            environment_uuid:a.environment_uuid??a.environment?.uuid??null,
+            ports_exposes:a.ports_exposes??null,
+            ports_mappings:a.ports_mappings??null,
+            env_keys:(Array.isArray(envs)?envs:[]).map(e=>String(e.key||'')).sort()
+          };
+          console.log('AZURE_GATEWAY_INVENTORY_BEGIN');
+          console.log(JSON.stringify(out,null,2));
+          console.log('AZURE_GATEWAY_INVENTORY_END');
+          NODE
