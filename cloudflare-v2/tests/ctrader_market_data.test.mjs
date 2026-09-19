@@ -32,7 +32,13 @@ test('loads light symbols then full symbol metadata into canonical catalog', asy
   assert.equal(catalog[0].canonical, 'EURUSD');
   assert.equal(catalog[0].protocolLotSize, 10000000);
   assert.equal(catalog[0].lotSizeUnits, 100000);
+  assert.equal(catalog[0].minLots, 0.01);
+  assert.equal(catalog[0].stepLots, 0.01);
+  assert.equal(catalog[0].maxLots, 10);
   assert.equal(catalog[1].canonical, 'XAUUSD');
+  assert.equal(catalog[1].minLots, 0.01);
+  assert.equal(catalog[1].stepLots, 0.01);
+  assert.equal(catalog[1].maxLots, 500);
   assert.deepEqual(calls.map((m) => m.payloadType), [2114, 2116]);
 });
 
