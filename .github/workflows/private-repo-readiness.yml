@@ -1,0 +1,48 @@
+name: Private Repository Readiness Inventory
+on:
+  push:
+    branches:
+      - ops/private-readiness-20260919
+    paths:
+      - ".github/workflows/private-repo-readiness.yml"
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      OCI_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+    steps:
+      - name: Inspect OCI Coolify source integration without secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/app.json
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/github-apps" > /tmp/apps.json
+
+          node <<'NODE'
+          const app=require('/tmp/app.json');
+          const apps=require('/tmp/apps.json');
+          const safeApp={
+            uuid:app.uuid,
+            name:app.name,
+            git_repository:app.git_repository,
+            git_branch:app.git_branch,
+            build_pack:app.build_pack,
+            base_directory:app.base_directory,
+            docker_compose_location:app.docker_compose_location,
+            github_app_uuid:app.github_app_uuid ?? null,
+            source_id:app.source_id ?? null,
+            source_type:app.source_type ?? null,
+          };
+          console.log('APP='+JSON.stringify(safeApp));
+          console.log('GITHUB_APPS='+JSON.stringify((Array.isArray(apps)?apps:[]).map(x=>({
+            id:x.id,uuid:x.uuid,name:x.name,organization:x.organization,
+            installation_id:x.installation_id,is_public:x.is_public,type:x.type
+          }))));
+          NODE
