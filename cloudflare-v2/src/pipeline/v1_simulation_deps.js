@@ -171,7 +171,7 @@ function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
     if (resolved.reason === 'AMBIGUOUS_SYMBOL') {
       throw codedError(
         'DESTINATION_SYMBOL_AMBIGUOUS',
-        `destination symbol resolution is ambiguous for ${candidate}`,
+        `destination symbol resolution failed for ${candidate}: AMBIGUOUS_SYMBOL`,
       );
     }
     last = resolved;
