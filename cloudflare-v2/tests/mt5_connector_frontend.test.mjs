@@ -43,6 +43,18 @@ test('existing MT5 connector destinations expose token regeneration without recr
   assert.match(mt5, /connectionTokenExpiresAt/);
 });
 
+test('connected MT5 connector cards show connected state and refresh is recovery-only', () => {
+  const mt5 = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_mt5_connector_connections.js'), 'utf8');
+  const unified = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_unified_connections.js'), 'utf8');
+  assert.match(mt5, /data-provider-status/);
+  assert.match(mt5, /connected/);
+  assert.match(mt5, /Refresh MT5 connection/);
+  assert.match(mt5, /refreshManagers\(\)/);
+  assert.match(unified, /Connected/);
+  assert.match(unified, /serverName/);
+  assert.match(unified, /brokerName/);
+});
+
 test('production browser release gate verifies the shipped MT5 Connector contract without authenticating or clicking setup controls', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-frontend-e2e.yml'), 'utf8');
   assert.match(workflow, /showAdvancedMt5BridgeBtn/);
