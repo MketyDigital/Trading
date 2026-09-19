@@ -1,0 +1,29 @@
+name: Read-only Trading Gateway Variable Probe
+
+on:
+  push:
+    branches:
+      - ops/read-only-gateway-vars-20260919
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    env:
+      GATEWAY_URL: ${{ vars.CTRADER_CBOT_GATEWAY_URL }}
+      WS_URL: ${{ vars.CTRADER_CBOT_WS_URL }}
+      MT5_GATEWAY_URL: ${{ vars.MT5_CONNECTOR_GATEWAY_URL }}
+      MT5_WS_URL: ${{ vars.MT5_CONNECTOR_WS_URL }}
+    steps:
+      - name: Print non-secret gateway endpoints only
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'CTRADER_CBOT_GATEWAY_URL=%s\n' "${GATEWAY_URL:-}"
+          printf 'CTRADER_CBOT_WS_URL=%s\n' "${WS_URL:-}"
+          printf 'MT5_CONNECTOR_GATEWAY_URL=%s\n' "${MT5_GATEWAY_URL:-}"
+          printf 'MT5_CONNECTOR_WS_URL=%s\n' "${MT5_WS_URL:-}"
