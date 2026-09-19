@@ -589,3 +589,14 @@ Migration boundary remains:
 - `mksaas` production contains a separate current `CLOUDFLARE_API_TOKEN` used by Mkety production workflows. An attempted temporary automated target-token repair workflow did not start (workflow definition rejected before any job), so no Cloudflare credential was modified by that attempt.
 - Next required operator checks on OCI: allow inbound TCP 25345 to origin `89.168.70.209` in the instance VCN NSG/security-list and host firewall; then repair target `CLOUDFLARE_DNS_API_TOKEN` with a currently valid Cloudflare token that has Zone Read + DNS Edit for `mkety.com`, redeploy OCI, confirm ACME certificate success, direct health + `/v1/cbot` + `/v1/mt5`, then only consider DNS cutover.
 - Real trading execution controls and broker account flags were not changed by this infrastructure migration work.
+
+#### OCI gateway certificate repair checkpoint — 2026-09-19
+
+- `mksaas` production `CLOUDFLARE_API_TOKEN` was verified active via Cloudflare token verification.
+- Only the OCI target app `p9xqtqpbljnggchy36mzd7a0` production `CLOUDFLARE_DNS_API_TOKEN` was replaced with that current token; Azure source was not modified.
+- OCI gateway redeploy completed successfully after the token repair.
+- Fresh OCI Caddy logs show DNS-01 authorization succeeded and a trusted certificate for `cbot.mkety.com` was obtained successfully from Let's Encrypt.
+- Caddy is confirmed listening on public container port `25345` and serving the configured gateway.
+- Remaining blocker before direct external acceptance/cutover is OCI network reachability: `89.168.70.209:25345` times out externally even though Caddy listens internally. Check both OCI NSG/security-list ingress and the instance host firewall.
+- Required OCI ingress is stateful TCP destination `25345`, source `0.0.0.0/0` for public cTrader/MT5 clients. Do not expose internal ports `25346`, `25347`, `8790`, or `8791`.
+- After port 25345 is reachable, rerun direct-origin `/health`, `/v1/cbot`, and `/v1/mt5` probes before any DNS cutover. Azure remains production and rollback target.
