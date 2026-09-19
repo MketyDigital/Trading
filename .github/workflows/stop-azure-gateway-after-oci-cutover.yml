@@ -1,0 +1,91 @@
+name: Stop Azure gateway after OCI cutover
+on:
+  push:
+    branches:
+      - ops/stop-azure-gateway-after-oci-cutover-20260919
+permissions:
+  contents: read
+jobs:
+  cutover-finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      AZURE_COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      AZURE_COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      SOURCE_APP_UUID: edgvi4wezjodvwqa1dpkzbt7
+      OCI_MT5_LIVE_ROW: 5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51
+    steps:
+      - name: Fetch and mask gateway control secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${AZURE_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN" "$api/applications/$SOURCE_APP_UUID/envs" > /tmp/envs.json
+          secret="$(node -e "const rows=require('/tmp/envs.json');const r=rows.find(x=>x.key==='CBOT_CONTROL_SECRET'&&x.is_preview===false);if(!r?.value)process.exit(1);process.stdout.write(String(r.value))")"
+          echo "::add-mask::$secret"
+          echo "CONTROL_SECRET=$secret" >> "$GITHUB_ENV"
+
+      - name: Confirm OCI public gateway before stopping Azure
+        shell: bash
+        run: |
+          set -euo pipefail
+          ip="$(getent ahostsv4 cbot.mkety.com | awk 'NR==1{print $1}')"
+          [ "$ip" = "89.168.70.209" ] || { echo "Refusing stop: DNS is $ip"; exit 2; }
+          curl -fsS --proto '=https' --tlsv1.2 https://cbot.mkety.com:25345/health > /tmp/health.json
+          node -e "const x=require('/tmp/health.json');if(!x.ok)process.exit(1);console.log('OCI_PRESTOP_HEALTH=PASS')"
+
+      - name: Stop old Azure gateway without cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${AZURE_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          code="$(curl -sS -o /tmp/stop.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN"             "$api/applications/$SOURCE_APP_UUID/stop?docker_cleanup=false")"
+          [ "$code" = "200" ] || { echo "Azure gateway stop failed HTTP $code"; exit 3; }
+          echo "AZURE_GATEWAY_STOP_REQUEST=PASS"
+          for i in $(seq 1 30); do
+            curl -fsS -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN" "$api/applications/$SOURCE_APP_UUID" > /tmp/source-app.json
+            status="$(node -e "const x=require('/tmp/source-app.json');process.stdout.write(String(x.status||''))")"
+            echo "AZURE_GATEWAY_STATUS=$status"
+            case "${status,,}" in
+              stopped|exited|exited:*|stopped:*) exit 0 ;;
+            esac
+            sleep 3
+          done
+          echo "Azure stop requested but final stopped status not observed yet"
+          exit 4
+
+      - name: Wait for FBS MT5 connector to reconnect on OCI
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://cbot.mkety.com:25345/v1/mt5-connections/$OCI_MT5_LIVE_ROW"
+          for i in $(seq 1 60); do
+            code="$(curl -sS -o /tmp/mt5.json -w '%{http_code}' -H "Authorization: Bearer $CONTROL_SECRET" "$url")"
+            if [ "$code" = "200" ]; then
+              FILE=/tmp/mt5.json node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync(process.env.FILE,'utf8'));
+          const i=x.identity||{};
+          if(!x.ok||!x.online) process.exit(1);
+          console.log(JSON.stringify({
+            MT5_OCI_RECONNECTED:true,
+            accountRowId:x.accountRowId,
+            accountNumber:i.accountNumber??null,
+            server:i.server??i.serverName??null,
+            broker:i.broker??i.brokerName??null,
+            connectedAt:x.connectedAt,
+            lastHeartbeatAt:x.lastHeartbeatAt
+          }));
+          NODE
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "FBS MT5 connector did not reconnect to OCI within verification window"
+          exit 5
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -f /tmp/envs.json /tmp/health.json /tmp/stop.json /tmp/source-app.json /tmp/mt5.json
