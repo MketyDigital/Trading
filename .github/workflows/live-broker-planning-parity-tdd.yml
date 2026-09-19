@@ -1,0 +1,31 @@
+name: Live Broker Planning Parity TDD
+on:
+  push:
+    branches:
+      - fix/live-broker-planning-parity-20260919
+    paths:
+      - ".github/workflows/live-broker-planning-parity-tdd.yml"
+      - "cloudflare-v2/tests/v1_simulation_deps.test.mjs"
+      - "cloudflare-v2/tests/production_execution_deps.test.mjs"
+      - "cloudflare-v2/tests/destination_retry_production.test.mjs"
+      - "cloudflare-v2/src/pipeline/v1_simulation_deps.js"
+      - "cloudflare-v2/src/execution/production_execution_deps.js"
+      - "cloudflare-v2/src/execution/destination_retry_production.js"
+permissions:
+  contents: read
+jobs:
+  targeted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-v2/package-lock.json
+      - run: npm ci
+      - run: node --test tests/v1_simulation_deps.test.mjs tests/production_execution_deps.test.mjs tests/destination_retry_production.test.mjs
