@@ -25,7 +25,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: cloudflare-v2/package-lock.json
-      - run: npm ci
+      - run: npm install --ignore-scripts
       - run: node --test tests/v1_simulation_deps.test.mjs tests/production_execution_deps.test.mjs tests/destination_retry_production.test.mjs
