@@ -147,7 +147,38 @@ test('planning fails closed when destination broker symbol resolution is ambiguo
   });
 });
 
-test('LIVE planning still fails closed when broker instrument metadata is absent', async () => {
+test('LIVE fixed-lot planning derives broker volume constraints from the authoritative destination catalog', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  const instrument = await deps.instrumentProvider({
+    environment: 'live',
+    lot_sizing_type: 'fixed',
+    lot_value: 0.01,
+    provider_config: {
+      symbolCatalog: [{
+        platformSymbol: 'BTCUSD',
+        tradable: true,
+        minLots: 0.01,
+        maxLots: 500,
+        stepLots: 0.01,
+        tickSize: 0.01,
+        contractSize: 1,
+      }],
+    },
+  }, { symbol: { canonical: 'BTCUSD' } });
+
+  assert.equal(instrument.canonical, 'BTCUSD');
+  assert.equal(instrument.platformSymbol, 'BTCUSD');
+  assert.equal(instrument.minLots, 0.01);
+  assert.equal(instrument.maxLots, 500);
+  assert.equal(instrument.stepLots, 0.01);
+});
+
+test('LIVE fixed-lot planning still fails closed for symbols absent from the authoritative destination catalog', async () => {
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
     supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
@@ -158,8 +189,11 @@ test('LIVE planning still fails closed when broker instrument metadata is absent
     environment: 'live',
     lot_sizing_type: 'fixed',
     lot_value: 0.01,
-    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD' }] },
-  }, { symbol: { canonical: 'XAUUSD' } }), /simulation instrument metadata is not configured for XAUUSD/);
+    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 100, stepLots: 0.01 }] },
+  }, { symbol: { canonical: 'BTCUSD' } }), (error) => {
+    assert.equal(error.code, 'DESTINATION_SYMBOL_NOT_SUPPORTED');
+    return true;
+  });
 });
 
 test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
