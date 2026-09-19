@@ -654,3 +654,16 @@ Migration boundary remains:
 - TDD RED proof: targeted run `35438932503` reached tests and failed on the three intended regressions (LIVE fixed-lot planning, redundant cTrader LIVE env gate, retry LIVE-control propagation).
 - GREEN proof: targeted run `35438998373` passed all targeted tests after implementation; full Worker `npm test` run `35439048885` passed.
 - No real broker order was placed by this engineering fix. Existing owner LIVE controls were not toggled.
+
+
+#### LIVE broker parity production release — 2026-09-19
+
+- PR #117 `Fix LIVE broker planning parity and retry authority` merged to main as `0cfa3632a4bb3fdd1d0aefa58315b3928a6272a1`.
+- Standard PR checks passed: Worker, gateway, cBot build, deployment stack, normal tests and CodeQL.
+- Main Trading V1 CI #3032 (`35439275003`) passed Worker/trading-core, MT5 bridge and MTProto Python tests.
+- Production Cloudflare Deploy #103 (`35439275020`) completed successfully, including production health and persisted-owner-switch verification.
+- Fresh post-deploy runtime controls remain owner-enabled exactly as intended: `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=true`.
+- Fresh FBS LIVE state remains: account `110664480`, server `FBS-Real`, fixed 0.01 lots, active, execution ON, LIVE execution ON, persisted connector status connected.
+- FBS destination/route remains active: `mt5 live fbs` / `mt5 route fbs` from source feed `-1003902892609`.
+- Fresh authenticated OCI gateway session verification after deploy: FBS LIVE online with fresh heartbeat; MT5 DEMO online with fresh heartbeat; cTrader DEMO/LIVE sessions offline.
+- The release itself placed no real-money order. Real FBS 0.01 end-to-end acceptance still requires a new user-originated source signal after Deploy #103 and immediate audit of FBS destination delivery, position group/leg and broker ticket/fill.
