@@ -1,0 +1,48 @@
+name: OCI Gateway Direct Origin Probe
+on:
+  push:
+    branches:
+      - ops/oci-gateway-probe-20260919
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe OCI origin with production TLS hostname
+        shell: bash
+        env:
+          OCI_ORIGIN_IP: 89.168.70.209
+        run: |
+          set -euo pipefail
+          echo "OCI_ORIGIN_IP=$OCI_ORIGIN_IP"
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 20             --resolve "cbot.mkety.com:25345:$OCI_ORIGIN_IP"             "https://cbot.mkety.com:25345/health" -o "$RUNNER_TEMP/health.json"
+          BODY="$RUNNER_TEMP/health.json" node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.env.BODY));if(!b.ok)process.exit(1);console.log('OCI_ORIGIN_HEALTH=PASS')"
+          mkdir -p "$RUNNER_TEMP/ws"
+          cd "$RUNNER_TEMP/ws"
+          npm init -y >/dev/null 2>&1
+          npm install --silent ws@8
+          OCI_ORIGIN_IP="$OCI_ORIGIN_IP" node <<'NODE'
+          const WebSocket=require('ws');
+          const dns=require('dns');
+          const lookup=(host,opts,cb)=>cb(null,process.env.OCI_ORIGIN_IP,4);
+          async function probe(path){
+            return new Promise((resolve,reject)=>{
+              const ws=new WebSocket('wss://cbot.mkety.com:25345'+path,{lookup});
+              let opened=false;
+              const timer=setTimeout(()=>reject(new Error(path+' timeout')),12000);
+              ws.on('open',()=>{opened=true;ws.send(JSON.stringify({type:'unauthenticated_probe'}));});
+              ws.on('error',reject);
+              ws.on('close',(code,reason)=>{
+                clearTimeout(timer);
+                const why=String(reason||'');
+                if(!opened) return reject(new Error(path+' never upgraded'));
+                if(code!==1008||why!=='AUTH_REQUIRED') return reject(new Error(path+' unexpected '+code+' '+why));
+                console.log(path+'=PASS');
+                resolve();
+              });
+            });
+          }
+          (async()=>{await probe('/v1/cbot');await probe('/v1/mt5');})().catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
