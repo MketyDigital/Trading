@@ -11,13 +11,21 @@ jobs:
     timeout-minutes: 10
     environment: production
     env:
-      CONTROL_SECRET: ${{ secrets.CBOT_CONTROL_SECRET }}
+      AZURE_COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      AZURE_COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      SOURCE_APP_UUID: edgvi4wezjodvwqa1dpkzbt7
     steps:
       - name: Query cTrader and MT5 session registries read-only
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$CONTROL_SECRET"
+          test -n "$AZURE_COOLIFY_URL"
+          test -n "$AZURE_COOLIFY_TOKEN"
+          root="${AZURE_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN" "$api/applications/$SOURCE_APP_UUID/envs" > /tmp/source-envs.json
+          CONTROL_SECRET="$(node -e "const rows=require('/tmp/source-envs.json');const r=rows.find(x=>x.key==='CBOT_CONTROL_SECRET'&&x.is_preview===false);if(!r||!r.value)process.exit(1);process.stdout.write(String(r.value))")"
+          echo "::add-mask::$CONTROL_SECRET"
+          export CONTROL_SECRET
           base="https://cbot.mkety.com:25345"
           declare -A endpoints
           endpoints[ctrader_demo]="/v1/connections/40eacf2a-5a8a-4648-9b90-55038748d2ed"
