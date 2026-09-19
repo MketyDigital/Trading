@@ -17,6 +17,13 @@ function decimalUnit(position) {
   return Number(`1e-${position}`);
 }
 
+function cTraderProtocolVolumeToLots(volume, protocolLotSize) {
+  const rawVolume = finiteNumber(volume);
+  const rawLotSize = finiteNumber(protocolLotSize);
+  if (!(rawVolume >= 0) || !(rawLotSize > 0)) return undefined;
+  return rawVolume / rawLotSize;
+}
+
 export function fromMT5Symbols(symbols = []) {
   return symbols.map((symbol) => ({
     platform: 'mt5',
@@ -63,6 +70,9 @@ export function fromCTraderSymbols(symbols = []) {
       minVolume: finiteNumber(symbol.minVolume),
       maxVolume: finiteNumber(symbol.maxVolume),
       stepVolume: finiteNumber(symbol.stepVolume),
+      minLots: cTraderProtocolVolumeToLots(symbol.minVolume, protocolLotSize),
+      maxLots: cTraderProtocolVolumeToLots(symbol.maxVolume, protocolLotSize),
+      stepLots: cTraderProtocolVolumeToLots(symbol.stepVolume, protocolLotSize),
       maxExposure: finiteNumber(symbol.maxExposure),
       tradingMode: symbol.tradingMode,
       enableShortSelling: symbol.enableShortSelling,

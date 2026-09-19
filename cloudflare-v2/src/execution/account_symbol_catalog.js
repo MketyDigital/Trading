@@ -13,6 +13,14 @@ function finiteOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function cTraderLotsFromProtocolVolume(raw = {}, volumeValue) {
+  if (clean(raw.platform).toLowerCase() !== 'ctrader') return null;
+  const volume = finiteOrNull(volumeValue);
+  const protocolLotSize = finiteOrNull(raw.protocolLotSize ?? raw.raw?.lotSize);
+  if (volume == null || volume < 0 || !(protocolLotSize > 0)) return null;
+  return volume / protocolLotSize;
+}
+
 function safeAliases(value) {
   if (!Array.isArray(value)) return [];
   const out = [];
@@ -51,9 +59,9 @@ export function sanitizeAccountSymbolCatalog(input = []) {
       ['minVolume', raw.minVolume ?? raw.volumeMin ?? raw.volume_in_units_min],
       ['maxVolume', raw.maxVolume ?? raw.volumeMax ?? raw.volume_in_units_max],
       ['stepVolume', raw.stepVolume ?? raw.volumeStep ?? raw.volume_in_units_step],
-      ['minLots', raw.minLots ?? raw.minVolume ?? raw.volumeMin],
-      ['maxLots', raw.maxLots ?? raw.maxVolume ?? raw.volumeMax],
-      ['stepLots', raw.stepLots ?? raw.stepVolume ?? raw.volumeStep],
+      ['minLots', raw.minLots ?? cTraderLotsFromProtocolVolume(raw, raw.minVolume) ?? raw.minVolume ?? raw.volumeMin],
+      ['maxLots', raw.maxLots ?? cTraderLotsFromProtocolVolume(raw, raw.maxVolume) ?? raw.maxVolume ?? raw.volumeMax],
+      ['stepLots', raw.stepLots ?? cTraderLotsFromProtocolVolume(raw, raw.stepVolume) ?? raw.stepVolume ?? raw.volumeStep],
       ['lotSize', raw.lotSize],
       ['protocolLotSize', raw.protocolLotSize],
       ['tickSize', raw.tickSize],
