@@ -600,3 +600,19 @@ Migration boundary remains:
 - Remaining blocker before direct external acceptance/cutover is OCI network reachability: `89.168.70.209:25345` times out externally even though Caddy listens internally. Check both OCI NSG/security-list ingress and the instance host firewall.
 - Required OCI ingress is stateful TCP destination `25345`, source `0.0.0.0/0` for public cTrader/MT5 clients. Do not expose internal ports `25346`, `25347`, `8790`, or `8791`.
 - After port 25345 is reachable, rerun direct-origin `/health`, `/v1/cbot`, and `/v1/mt5` probes before any DNS cutover. Azure remains production and rollback target.
+
+#### OCI gateway production cutover completed — 2026-09-19
+
+- Cloudflare DNS pre-cutover record for `cbot.mkety.com`: A `20.57.161.98`, DNS-only (`proxied=false`), TTL 300.
+- Guarded DNS cutover changed only that record to OCI origin `89.168.70.209`, preserving DNS-only mode and TTL 300.
+- Public post-cutover verification using normal DNS passed immediately: `cbot.mkety.com` resolved to `89.168.70.209`; `https://cbot.mkety.com:25345/health` passed; unauthenticated WebSocket probes to `/v1/cbot` and `/v1/mt5` upgraded and returned expected `AUTH_REQUIRED` closure.
+- Initial authenticated session registry check showed all account rows offline on OCI. Direct-origin comparison proved FBS MT5 LIVE row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51` was still online on Azure because its pre-cutover WebSocket remained open; cTrader demo/live and MT5 demo were offline on both gateways.
+- Verified no operation-journal entries in the 10 minutes before forced handoff; no evidence of an in-flight broker command.
+- Old Azure Coolify application `edgvi4wezjodvwqa1dpkzbt7` (`Cbot Tcp gateway`) was stopped via Coolify API with `docker_cleanup=false` to preserve easy rollback. Observed status transition `running:unknown` -> `exited:unhealthy`.
+- After Azure stop, FBS MT5 LIVE connector automatically reconnected to OCI successfully. OCI authenticated registry evidence: account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51`, account `110664480`, server `FBS-Real`, broker `FBS Markets Inc.`, new `connectedAt=1789811064417`.
+- Azure app is stopped, not deleted; it remains the rollback resource. DNS now points production to OCI.
+- No cTrader or MT5 application code was changed for the migration; the same Git-backed Docker Compose stack and preserved `CBOT_TOKEN_SIGNING_KEY` / `CBOT_CONTROL_SECRET` were used.
+- Final runtime-control snapshot remains owner-enabled globally: `trading_access_enabled=true`, `broker_execution_enabled=true`, `live_broker_execution_enabled=true`.
+- Final account-control snapshot: cTrader DEMO execution on/live off; cTrader LIVE execution off/live off; MT5 DEMO execution on/live off; FBS MT5 LIVE execution on/live on. Migration automation did not toggle these trading controls.
+- Important safety note: FBS MT5 LIVE is currently capable of real-money broker execution because both global and per-account live gates are enabled. Infrastructure cutover did not place any order.
+- Temporary migration branches/workflows were used for guarded inventory/cutover probes only; main production code remained unchanged apart from cumulative handoff documentation.
