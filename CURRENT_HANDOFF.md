@@ -698,3 +698,15 @@ Migration boundary remains:
 - Added `docs/PRIVATE_REPOSITORY_OPERATIONS.md` with the private-source cutover, rollback, visibility-change acceptance, GitHub Free caveat, and future self-hosted-runner plan.
 - Important GitHub Free organization caveat verified from current GitHub docs: branch protection/rulesets are available for public repos on Free, but private-repo protection requires Pro/Team/Enterprise. Private visibility therefore improves confidentiality but removes GitHub-enforced branch protection on the current Free org plan.
 - Temporary private-readiness workflow was removed after collecting evidence; no probe workflow is intended to remain on main.
+
+#### Private Coolify source compatibility probe — 2026-09-19
+
+- Tested Coolify native application clone on current OCI production gateway `p9xqtqpbljnggchy36mzd7a0` to avoid secret plaintext handling.
+- Clone UUID `lne867rvcoe635pdul2nhnzw` was created successfully and inherited the exact production environment key set: `ACME_EMAIL`, `CBOT_COMMAND_TIMEOUT_MS`, `CBOT_CONTROL_SECRET`, `CBOT_PUBLIC_HOST`, `CBOT_TOKEN_SIGNING_KEY`, `CLOUDFLARE_DNS_API_TOKEN`, `MT5_CONNECTOR_COMMAND_TIMEOUT_MS`.
+- The cloned app remained on Coolify public source id `0`.
+- Current installed Coolify API rejects both source-conversion mutations: `github_app_uuid` and `source_id` return HTTP 422 with `This field is not allowed.`. Therefore cloning cannot be combined with API source conversion on this version.
+- Temporary secret-bearing clone `lne867rvcoe635pdul2nhnzw` was deleted successfully after the probe; volumes/docker/network cleanup were deliberately disabled because it was never deployed.
+- The only staged replacement retained is authenticated private-source app `wp23orxgfa9py7giponnvcjt` using Coolify GitHub App source id `1` (`mkety-github`). It is not production and still needs the seven production env values before cutover.
+- Production gateway remains `p9xqtqpbljnggchy36mzd7a0`; no DNS, trading controls, broker routes, connector settings, or runtime code were changed by this probe.
+- Repository-admin visibility mutation is not exposed by the connected GitHub toolset, so the final GitHub public->private visibility toggle cannot be performed programmatically through the current connector.
+- Credential-safety tooling also blocks assistant-mediated plaintext transfer of the seven gateway secret values between Coolify applications. This is the remaining infrastructure limitation before permanent private cutover.
