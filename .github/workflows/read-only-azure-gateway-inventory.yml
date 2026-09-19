@@ -70,7 +70,14 @@ jobs:
             environment_uuid:a.environment_uuid??a.environment?.uuid??null,
             ports_exposes:a.ports_exposes??null,
             ports_mappings:a.ports_mappings??null,
-            env_keys:(Array.isArray(envs)?envs:[]).map(e=>String(e.key||'')).sort()
+            env_schema:(Array.isArray(envs)?envs:[]).map(e=>({
+              key:String(e.key||''),
+              is_build_time:e.is_build_time??null,
+              is_preview:e.is_preview??null,
+              is_literal:e.is_literal??null,
+              is_multiline:e.is_multiline??null,
+              is_shown_once:e.is_shown_once??null
+            })).sort((a,b)=>a.key.localeCompare(b.key))
           };
           console.log('AZURE_GATEWAY_INVENTORY_BEGIN');
           console.log(JSON.stringify(out,null,2));
