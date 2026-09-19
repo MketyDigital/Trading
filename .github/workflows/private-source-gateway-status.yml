@@ -1,0 +1,35 @@
+name: Private Source Gateway Status Check
+on:
+  push:
+    branches:
+      - ops/private-source-gateway-cutover-20260919
+    paths:
+      - ".github/workflows/private-source-gateway-status.yml"
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      OLD_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+      NEW_APP_UUID: wp23orxgfa9py7giponnvcjt
+    steps:
+      - name: Check both apps and public health
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          for pair in "old:$OLD_APP_UUID" "new:$NEW_APP_UUID"; do
+            name="${pair%%:*}"; uuid="${pair#*:}"
+            curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$uuid" > "/tmp/$name.json"
+            NAME="$name" FILE="/tmp/$name.json" node <<'NODE'
+          const x=require(process.env.FILE);
+          console.log(JSON.stringify({name:process.env.NAME,uuid:x.uuid,status:x.status,source_id:x.source_id??null,repository:x.git_repository,branch:x.git_branch}));
+          NODE
+          done
+          curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 20             https://cbot.mkety.com:25345/health > /tmp/health.json
+          node -e "const x=require('/tmp/health.json');if(!x.ok)process.exit(1);console.log('PUBLIC_GATEWAY_HEALTH=PASS')"
