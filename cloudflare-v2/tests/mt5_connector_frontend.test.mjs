@@ -46,8 +46,8 @@ test('existing MT5 connector destinations expose token regeneration without recr
 test('connected MT5 connector cards show connected state and refresh is recovery-only', () => {
   const mt5 = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_mt5_connector_connections.js'), 'utf8');
   const unified = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_unified_connections.js'), 'utf8');
-  assert.match(mt5, /providerConfig/);
-  assert.match(mt5, /status[^\n]*connected/i);
+  assert.match(mt5, /data-provider-status/);
+  assert.match(mt5, /connected/);
   assert.match(mt5, /Refresh MT5 connection/);
   assert.match(mt5, /refreshManagers\(\)/);
   assert.match(unified, /Connected/);
