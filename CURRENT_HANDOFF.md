@@ -573,3 +573,19 @@ Migration boundary remains:
 - Target deployment must be a Git-backed Docker Compose application (`build_pack=dockercompose`) created in OCI `telethon/production`, from `https://github.com/MketyDigital/Trading`, branch `main`, base `/`, compose `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`, with instant deploy disabled until environment values are migrated and checked.
 - Exact Coolify API contract verified from current docs: `POST /api/v1/applications/public` accepts `project_uuid`, `server_uuid`, `environment_uuid`, `git_repository`, `git_branch`, `build_pack: dockercompose`, `base_directory`, `docker_compose_location`, and `instant_deploy`.
 - Do not cut DNS or stop Azure until OCI application is configured with identical required environment values, deployed, health/TLS and both WebSocket paths verified, and DEMO connector acceptance succeeds.
+
+#### OCI gateway staged deployment checkpoint — 2026-09-19
+
+- User added `OCI_COOLIFY_URL` + `OCI_COOLIFY_TOKEN` to Trading production secrets.
+- Created OCI Coolify application in target `telethon / production`: app UUID `p9xqtqpbljnggchy36mzd7a0`, name `Cbot Tcp gateway`, repo `MketyDigital/Trading`, branch `main`, compose `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`.
+- Azure source app remains `edgvi4wezjodvwqa1dpkzbt7`; Azure was not stopped or mutated.
+- Production env values were transferred source->target in GitHub Actions without printing values; target exact-value parity passed for `ACME_EMAIL`, `CBOT_COMMAND_TIMEOUT_MS`, `CBOT_CONTROL_SECRET`, `CBOT_PUBLIC_HOST`, `CBOT_TOKEN_SIGNING_KEY`, `CLOUDFLARE_DNS_API_TOKEN`, `MT5_CONNECTOR_COMMAND_TIMEOUT_MS`.
+- OCI deployment UUID `gk2x4rt3kp7yqz2muuagti4l` finished successfully and target app reached `running:unknown`.
+- No DNS cutover occurred; `cbot.mkety.com` still resolves/serves the Azure production gateway.
+- Correct OCI origin inferred/verified from Coolify-generated sslip.io hostnames: `89.168.70.209`. Direct `curl --resolve cbot.mkety.com:25345:89.168.70.209` timed out, proving public TCP 25345 is not reachable from GitHub-hosted external probes.
+- OCI Caddy logs prove the container is listening on `:25345` and serving the configured Caddy server, so the remaining 25345 reachability issue is outside the container (OCI NSG/security list and/or host firewall).
+- OCI Caddy logs also show fresh ACME DNS-01 certificate issuance failing because the copied Azure `CLOUDFLARE_DNS_API_TOKEN` is stale/invalid: Cloudflare returns HTTP 403 / code 9109 `Invalid access token` while trying to create `_acme-challenge.cbot.mkety.com`.
+- This stale DNS token likely did not break Azure immediately because Azure has an existing cached certificate. Do not cut over until OCI has a valid fresh certificate.
+- `mksaas` production contains a separate current `CLOUDFLARE_API_TOKEN` used by Mkety production workflows. An attempted temporary automated target-token repair workflow did not start (workflow definition rejected before any job), so no Cloudflare credential was modified by that attempt.
+- Next required operator checks on OCI: allow inbound TCP 25345 to origin `89.168.70.209` in the instance VCN NSG/security-list and host firewall; then repair target `CLOUDFLARE_DNS_API_TOKEN` with a currently valid Cloudflare token that has Zone Read + DNS Edit for `mkety.com`, redeploy OCI, confirm ACME certificate success, direct health + `/v1/cbot` + `/v1/mt5`, then only consider DNS cutover.
+- Real trading execution controls and broker account flags were not changed by this infrastructure migration work.
