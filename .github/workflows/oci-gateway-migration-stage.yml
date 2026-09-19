@@ -1,0 +1,305 @@
+name: OCI Gateway Migration Stage
+
+on:
+  push:
+    branches:
+      - ops/oci-gateway-migration-20260919
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-gateway-migration-stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      AZURE_COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+      AZURE_COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      SOURCE_APP_UUID: edgvi4wezjodvwqa1dpkzbt7
+      TARGET_PROJECT_UUID: xrhsinddvxzghzcxgwux9esj
+      TARGET_ENVIRONMENT_UUID: ewiwnpz3mow3lko3kiaoznbt
+      TARGET_SERVER_UUID: ynkdc4tx6bi7cyxf0kuy8kte
+      TARGET_APP_NAME: Cbot Tcp gateway
+      TARGET_REPOSITORY: https://github.com/MketyDigital/Trading
+      TARGET_BRANCH: main
+      TARGET_COMPOSE: /ctrader-cbot-gateway/deploy/coolify/docker-compose.yml
+    steps:
+      - name: Require both Coolify control planes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in AZURE_COOLIFY_URL AZURE_COOLIFY_TOKEN OCI_COOLIFY_URL OCI_COOLIFY_TOKEN; do
+            test -n "${!v:-}" || { echo "Missing required migration credential: $v"; exit 2; }
+          done
+          echo 'COOLIFY_CONTROL_PLANES=READY'
+
+      - name: Snapshot source gateway envs in-memory and mask values
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="${AZURE_COOLIFY_URL%/}"
+          [[ "$src" == */api/v1 ]] && src_api="$src" || src_api="$src/api/v1"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 3 --retry-all-errors             -H "Authorization: Bearer $AZURE_COOLIFY_TOKEN" -H 'Accept: application/json'             "$src_api/applications/$SOURCE_APP_UUID/envs" > "$RUNNER_TEMP/source-envs.json"
+
+          SOURCE_ENVS="$RUNNER_TEMP/source-envs.json" node <<'NODE'
+          const fs=require('node:fs');
+          const rows=JSON.parse(fs.readFileSync(process.env.SOURCE_ENVS,'utf8')||'[]');
+          const required=[
+            'ACME_EMAIL',
+            'CBOT_COMMAND_TIMEOUT_MS',
+            'CBOT_CONTROL_SECRET',
+            'CBOT_PUBLIC_HOST',
+            'CBOT_TOKEN_SIGNING_KEY',
+            'CLOUDFLARE_DNS_API_TOKEN',
+            'MT5_CONNECTOR_COMMAND_TIMEOUT_MS'
+          ];
+          const prod=new Map();
+          for(const row of Array.isArray(rows)?rows:[]){
+            if(row?.is_preview===false && required.includes(String(row.key||''))) prod.set(String(row.key),row);
+          }
+          const missing=required.filter(k=>!prod.has(k));
+          if(missing.length) throw new Error('Source gateway missing production env keys: '+missing.join(','));
+          for(const key of required){
+            const value=String(prod.get(key).value??'');
+            if(!value) throw new Error('Source gateway env is empty: '+key);
+            process.stdout.write('::add-mask::'+value.replace(/\r?\n/g,'')+'\n');
+          }
+          const safe=required.map(key=>{
+            const row=prod.get(key);
+            return {
+              key,
+              value:String(row.value??''),
+              is_preview:false,
+              is_literal:row.is_literal??false,
+              is_multiline:row.is_multiline??false,
+              is_shown_once:row.is_shown_once??false
+            };
+          });
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/gateway-prod-envs.json',JSON.stringify(safe));
+          console.log('SOURCE_GATEWAY_ENV_SNAPSHOT=READY keys='+required.join(','));
+          NODE
+
+      - name: Create or locate OCI gateway app in telethon production
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"
+          [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          auth=(-H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json')
+
+          curl --proto '=https' --tlsv1.2 -fsS --retry 3 --retry-all-errors "${auth[@]}" "$api/applications" > "$RUNNER_TEMP/oci-apps.json"
+          existing="$(APPS="$RUNNER_TEMP/oci-apps.json" PROJECT="$TARGET_PROJECT_UUID" ENVIRONMENT="$TARGET_ENVIRONMENT_UUID" node <<'NODE'
+          const fs=require('node:fs');
+          const apps=JSON.parse(fs.readFileSync(process.env.APPS,'utf8')||'[]');
+          const matches=(Array.isArray(apps)?apps:[]).filter(a=>{
+            const repo=String(a.git_repository||a.git_full_url||'').toLowerCase();
+            const compose=String(a.docker_compose_location||'');
+            const project=String(a.project_uuid||a.environment?.project?.uuid||'');
+            const environment=String(a.environment_uuid||a.environment?.uuid||'');
+            return repo.includes('mketydigital/trading') &&
+              compose==='/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml' &&
+              (!project || project===process.env.PROJECT) &&
+              (!environment || environment===process.env.ENVIRONMENT);
+          });
+          if(matches.length>1) throw new Error('Multiple OCI gateway application candidates found');
+          process.stdout.write(matches.length===1?String(matches[0].uuid):'');
+          NODE
+          )"
+
+          if [ -n "$existing" ]; then
+            uuid="$existing"
+            echo "OCI_GATEWAY_APP=EXISTING"
+          else
+            node <<'NODE' > "$RUNNER_TEMP/create-app.json"
+          process.stdout.write(JSON.stringify({
+            project_uuid:process.env.TARGET_PROJECT_UUID,
+            server_uuid:process.env.TARGET_SERVER_UUID,
+            environment_uuid:process.env.TARGET_ENVIRONMENT_UUID,
+            git_repository:process.env.TARGET_REPOSITORY,
+            git_branch:process.env.TARGET_BRANCH,
+            build_pack:'dockercompose',
+            base_directory:'/',
+            docker_compose_location:process.env.TARGET_COMPOSE,
+            name:process.env.TARGET_APP_NAME,
+            description:'Mkety shared cTrader + MT5 gateway migrated from Azure',
+            autogenerate_domain:false,
+            connect_to_docker_network:true,
+            instant_deploy:false
+          }));
+          NODE
+            code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/create-response.json" -w '%{http_code}'               -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json'               --data-binary @"$RUNNER_TEMP/create-app.json" "$api/applications/public")"
+            if [ "$code" != "201" ]; then
+              echo "OCI gateway app creation failed with HTTP $code."
+              node -e "const fs=require('fs');try{const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/create-response.json')); console.log(JSON.stringify({message:x.message||x.error||'unknown'}))}catch{}"
+              exit 3
+            fi
+            uuid="$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/create-response.json'));if(!x.uuid)process.exit(1);process.stdout.write(String(x.uuid))")"
+            echo "OCI_GATEWAY_APP=CREATED"
+          fi
+          echo "uuid=$uuid" >> "$GITHUB_OUTPUT"
+          echo "OCI_GATEWAY_APP_UUID=$uuid"
+
+          curl --proto '=https' --tlsv1.2 -fsS "${auth[@]}" "$api/applications/$uuid" > "$RUNNER_TEMP/oci-app.json"
+          APP="$RUNNER_TEMP/oci-app.json" node <<'NODE'
+          const fs=require('node:fs');const a=JSON.parse(fs.readFileSync(process.env.APP,'utf8')||'{}');
+          const repo=String(a.git_repository||a.git_full_url||'');
+          const branch=String(a.git_branch||'');
+          const compose=String(a.docker_compose_location||'');
+          const project=String(a.project_uuid||a.environment?.project?.uuid||'');
+          const environment=String(a.environment_uuid||a.environment?.uuid||'');
+          if(!repo.toLowerCase().includes('mketydigital/trading')) throw new Error('OCI gateway repository mismatch');
+          if(branch!=='main') throw new Error('OCI gateway branch mismatch');
+          if(compose!=='/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml') throw new Error('OCI gateway compose mismatch');
+          if(project && project!==process.env.TARGET_PROJECT_UUID) throw new Error('OCI gateway project mismatch');
+          if(environment && environment!==process.env.TARGET_ENVIRONMENT_UUID) throw new Error('OCI gateway environment mismatch');
+          console.log('OCI_GATEWAY_APP_CONTRACT=PASS');
+          NODE
+
+      - name: Sync production gateway environment directly Azure to OCI
+        shell: bash
+        env:
+          TARGET_APP_UUID: ${{ steps.target.outputs.uuid }}
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"
+          [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          endpoint="$api/applications/$TARGET_APP_UUID/envs"
+          curl --proto '=https' --tlsv1.2 -fsS             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$endpoint" > "$RUNNER_TEMP/target-envs-before.json"
+
+          SOURCE="$RUNNER_TEMP/gateway-prod-envs.json" TARGET="$RUNNER_TEMP/target-envs-before.json" node <<'NODE'
+          const fs=require('node:fs');
+          const source=JSON.parse(fs.readFileSync(process.env.SOURCE,'utf8'));
+          const target=JSON.parse(fs.readFileSync(process.env.TARGET,'utf8')||'[]');
+          const existing=new Set((Array.isArray(target)?target:[]).filter(x=>x?.is_preview===false).map(x=>String(x.key||'')));
+          fs.mkdirSync(process.env.RUNNER_TEMP+'/env-payloads',{recursive:true});
+          const manifest=[];
+          source.forEach((row,i)=>{
+            const body={
+              key:row.key,
+              value:row.value,
+              is_preview:false,
+              is_literal:row.is_literal,
+              is_multiline:row.is_multiline,
+              is_shown_once:row.is_shown_once
+            };
+            const path=process.env.RUNNER_TEMP+'/env-payloads/'+i+'.json';
+            fs.writeFileSync(path,JSON.stringify(body));
+            manifest.push({key:row.key,path,method:existing.has(row.key)?'PATCH':'POST'});
+          });
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/env-manifest.json',JSON.stringify(manifest));
+          NODE
+
+          count="$(node -e "const x=require(process.env.RUNNER_TEMP+'/env-manifest.json');process.stdout.write(String(x.length))")"
+          for i in $(seq 0 $((count-1))); do
+            key="$(I="$i" node -e "const x=require(process.env.RUNNER_TEMP+'/env-manifest.json');process.stdout.write(x[Number(process.env.I)].key)")"
+            file="$(I="$i" node -e "const x=require(process.env.RUNNER_TEMP+'/env-manifest.json');process.stdout.write(x[Number(process.env.I)].path)")"
+            method="$(I="$i" node -e "const x=require(process.env.RUNNER_TEMP+'/env-manifest.json');process.stdout.write(x[Number(process.env.I)].method)")"
+            code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/env-response-$i.json" -w '%{http_code}'               -X "$method" -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json'               --data-binary @"$file" "$endpoint")"
+            if [ "$code" != "201" ] && [ "$code" != "200" ]; then
+              echo "OCI env upsert failed for $key with HTTP $code."
+              exit 4
+            fi
+            echo "OCI_ENV_SYNCED=$key"
+          done
+
+          curl --proto '=https' --tlsv1.2 -fsS             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$endpoint" > "$RUNNER_TEMP/target-envs-after.json"
+          SOURCE="$RUNNER_TEMP/gateway-prod-envs.json" TARGET="$RUNNER_TEMP/target-envs-after.json" node <<'NODE'
+          const fs=require('node:fs');
+          const source=JSON.parse(fs.readFileSync(process.env.SOURCE,'utf8'));
+          const rows=JSON.parse(fs.readFileSync(process.env.TARGET,'utf8')||'[]');
+          const target=new Map((Array.isArray(rows)?rows:[]).filter(x=>x?.is_preview===false).map(x=>[String(x.key||''),x]));
+          for(const s of source){
+            const t=target.get(s.key);
+            if(!t) throw new Error('Target env key missing after sync: '+s.key);
+            if(String(t.value??'')!==String(s.value??'')) throw new Error('Target env value mismatch: '+s.key);
+            if(Boolean(t.is_literal)!==Boolean(s.is_literal)) throw new Error('Target env literal flag mismatch: '+s.key);
+          }
+          console.log('OCI_GATEWAY_ENV_EXACT_MATCH=PASS');
+          NODE
+
+      - name: Deploy OCI gateway
+        id: deploy
+        shell: bash
+        env:
+          TARGET_APP_UUID: ${{ steps.target.outputs.uuid }}
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"
+          [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/deploy.json" -w '%{http_code}'             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deploy?uuid=$TARGET_APP_UUID&force=true")"
+          [ "$code" = "200" ] || { echo "OCI gateway deploy request failed HTTP $code"; exit 5; }
+          deployment_uuid="$(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deploy.json'));const d=Array.isArray(x.deployments)?x.deployments[0]:null;if(!d?.deployment_uuid)process.exit(1);process.stdout.write(d.deployment_uuid)")"
+          echo "deployment_uuid=$deployment_uuid" >> "$GITHUB_OUTPUT"
+          echo "OCI_GATEWAY_DEPLOYMENT_UUID=$deployment_uuid"
+
+          done=no
+          for i in $(seq 1 120); do
+            curl --proto '=https' --tlsv1.2 -fsS               -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deployments/$deployment_uuid" > "$RUNNER_TEMP/deployment.json"
+            status="$(node -e "const x=require(process.env.RUNNER_TEMP+'/deployment.json');process.stdout.write(String(x.status||''))")"
+            case "${status,,}" in
+              finished|success|successful|succeeded|completed) done=yes; break ;;
+              failed|failure|error|cancelled|canceled)
+                echo "OCI gateway deployment failed with status=$status"
+                node <<'NODE'
+          const fs=require('fs');let x={};try{x=require(process.env.RUNNER_TEMP+'/deployment.json')}catch{}
+          const raw=String(x.logs||'');
+          const safe=raw.split(/\r?\n/).filter(Boolean).slice(-80).join('\n')
+            .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi,'Bearer ***')
+            .replace(/(CBOT_CONTROL_SECRET|CBOT_TOKEN_SIGNING_KEY|CLOUDFLARE_DNS_API_TOKEN)=\S+/gi,'$1=***');
+          console.log(safe||'(no safe deployment diagnostic)');
+          NODE
+                exit 6
+                ;;
+            esac
+            sleep 5
+          done
+          [ "$done" = yes ] || { echo 'Timed out waiting for OCI gateway deployment'; exit 7; }
+
+      - name: Verify OCI app is running
+        shell: bash
+        env:
+          TARGET_APP_UUID: ${{ steps.target.outputs.uuid }}
+        run: |
+          set -euo pipefail
+          dst="${OCI_COOLIFY_URL%/}"
+          [[ "$dst" == */api/v1 ]] && api="$dst" || api="$dst/api/v1"
+          for i in $(seq 1 40); do
+            curl --proto '=https' --tlsv1.2 -fsS               -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$TARGET_APP_UUID" > "$RUNNER_TEMP/app-state.json"
+            status="$(node -e "const x=require(process.env.RUNNER_TEMP+'/app-state.json');process.stdout.write(String(x.status||''))")"
+            case "${status,,}" in
+              running:healthy|running:unknown|running) echo "OCI_GATEWAY_APP_STATUS=$status"; exit 0 ;;
+              exited:*|failed|error) echo "OCI gateway app unhealthy: $status"; exit 8 ;;
+            esac
+            sleep 3
+          done
+          echo 'OCI gateway app did not reach running state'
+          exit 9
+
+      - name: Probe OCI gateway directly without changing DNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_ip="$(getent ahostsv4 deploy.mkety.com | awk 'NR==1{print $1}')"
+          test -n "$target_ip" || { echo 'Could not resolve OCI Coolify public IPv4'; exit 10; }
+          echo "OCI_DIRECT_TARGET_IP=$target_ip"
+          body="$RUNNER_TEMP/oci-health.json"
+          if ! curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 20             --resolve "cbot.mkety.com:25345:$target_ip"             "https://cbot.mkety.com:25345/health" -o "$body"; then
+            echo 'OCI_DIRECT_GATEWAY_PROBE=BLOCKED'
+            echo 'Check OCI ingress + OS firewall for TCP 25345. DNS has NOT been changed and Azure remains production.'
+            exit 11
+          fi
+          BODY="$body" node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.env.BODY));if(!b.ok)process.exit(1);console.log('OCI_DIRECT_GATEWAY_HEALTH=PASS')"
+
+      - name: Cleanup temporary secret-bearing files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/source-envs.json" "$RUNNER_TEMP/gateway-prod-envs.json" "$RUNNER_TEMP/env-payloads"             "$RUNNER_TEMP/env-manifest.json" "$RUNNER_TEMP/target-envs-before.json" "$RUNNER_TEMP/target-envs-after.json"             "$RUNNER_TEMP"/env-response-*.json "$RUNNER_TEMP/create-app.json" "$RUNNER_TEMP/create-response.json"             "$RUNNER_TEMP/oci-apps.json" "$RUNNER_TEMP/oci-app.json" "$RUNNER_TEMP/deploy.json"             "$RUNNER_TEMP/deployment.json" "$RUNNER_TEMP/app-state.json" "$RUNNER_TEMP/oci-health.json"
