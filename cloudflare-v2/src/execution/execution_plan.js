@@ -50,10 +50,23 @@ function normalizeFixedLots(value, instrument) {
   const min = Number(instrument?.minLots ?? step);
   const max = Number(instrument?.maxLots ?? Number.POSITIVE_INFINITY);
   if (!(lots > 0) || !(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid fixed lots and volume constraints required');
-  const stepped = Math.floor(lots / step) * step;
-  if (stepped < min) throw new RangeError('fixed lots are below broker minimum');
-  if (stepped > max) throw new RangeError('fixed lots exceed broker maximum');
-  return Number(stepped.toFixed(decimals(step)));
+
+  // A fixed-lot preference is user-facing intent; the broker catalog is the
+  // execution authority. Materialize the nearest executable size without
+  // rejecting a genuine trade solely because a broker uses a larger minimum
+  // or coarser volume step. Never exceed the broker-reported maximum.
+  const precision = decimals(step);
+  const minimumExecutable = Math.ceil((min / step) - 1e-12) * step;
+  const maximumExecutable = Number.isFinite(max)
+    ? Math.floor((max / step) + 1e-12) * step
+    : Number.POSITIVE_INFINITY;
+  if (!(maximumExecutable >= minimumExecutable)) throw new RangeError('broker volume constraints have no executable lot size');
+
+  const bounded = Math.min(Math.max(lots, minimumExecutable), maximumExecutable);
+  let executable = Math.floor((bounded / step) + 1e-12) * step;
+  if (executable < minimumExecutable) executable = minimumExecutable;
+  if (executable > maximumExecutable) executable = maximumExecutable;
+  return Number(executable.toFixed(precision));
 }
 
 function openActionsFromGroup(group) {

@@ -154,7 +154,7 @@ async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountC
   }));
 }
 
-function resolveDestinationSymbol(account, symbol) {
+function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
   const { catalog, aliases } = accountSymbolCatalogFromProviderConfig(account?.provider_config ?? {});
   if (!catalog.length) {
     throw codedError(
@@ -163,17 +163,24 @@ function resolveDestinationSymbol(account, symbol) {
     );
   }
 
-  const resolved = resolveAccountSymbol(symbol, catalog, aliases);
-  if (!resolved.ok) {
-    const code = resolved.reason === 'AMBIGUOUS_SYMBOL'
-      ? 'DESTINATION_SYMBOL_AMBIGUOUS'
-      : 'DESTINATION_SYMBOL_NOT_SUPPORTED';
-    throw codedError(
-      code,
-      `destination symbol resolution failed for ${symbol || 'UNKNOWN'}: ${resolved.reason || 'SYMBOL_NOT_FOUND'}`,
-    );
+  const candidates = [...new Set([symbol, sourceSymbol].map(text).filter(Boolean))];
+  let last = { ok: false, reason: 'SYMBOL_NOT_FOUND' };
+  for (const candidate of candidates) {
+    const resolved = resolveAccountSymbol(candidate, catalog, aliases);
+    if (resolved.ok) return resolved;
+    if (resolved.reason === 'AMBIGUOUS_SYMBOL') {
+      throw codedError(
+        'DESTINATION_SYMBOL_AMBIGUOUS',
+        `destination symbol resolution failed for ${candidate}: AMBIGUOUS_SYMBOL`,
+      );
+    }
+    last = resolved;
   }
-  return resolved;
+
+  throw codedError(
+    'DESTINATION_SYMBOL_NOT_SUPPORTED',
+    `destination symbol resolution failed for ${candidates.join(' / ') || 'UNKNOWN'}: ${last.reason || 'SYMBOL_NOT_FOUND'}`,
+  );
 }
 
 async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {} } = {}) {
@@ -257,7 +264,8 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
-      const resolvedSymbol = resolveDestinationSymbol(account, symbol);
+      const sourceSymbol = text(intent?.symbol?.source);
+      const resolvedSymbol = resolveDestinationSymbol(account, symbol, sourceSymbol);
       const instrument = instruments[symbol];
       if (instrument && typeof instrument === 'object') {
         return {

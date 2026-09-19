@@ -125,3 +125,43 @@ test('risk-based sizing stays blocked when the only stop is invalid even under s
   assert.equal(plan.reason, 'INVALID_PROTECTION_REQUIRED_FOR_RISK_SIZING');
   assert.deepEqual(plan.actions, []);
 });
+
+
+test('fixed lots below broker minimum are raised to the broker minimum instead of blocking a genuine trade', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'DERIV:VOLATILITY_75_1S'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.01,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.05,maxLots:100,stepLots:0.05},
+    currentMarketPrice:6000,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.05);
+});
+
+test('fixed lots are floored to the broker step without exceeding the configured preference', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'BTCUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:0.137,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:10,stepLots:0.01},
+    currentMarketPrice:100000,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.13);
+});
+
+test('fixed lots above broker maximum are capped at the broker executable maximum', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'MARKET', symbol:{canonical:'US500'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:25,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.1,maxLots:10,stepLots:0.1},
+    currentMarketPrice:7000,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 10);
+});
