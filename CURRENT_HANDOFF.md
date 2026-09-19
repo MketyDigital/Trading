@@ -498,3 +498,28 @@ OCI migration boundary for the shared cTrader/MT5 gateway:
 - The stable `MketyMT5Connector.exe` release asset is therefore rebuilt with bundled certifi CA roots and explicit TLS certificate + hostname verification.
 - The previously exposed MT5 connection token must be rotated/reissued before further use. Do not reuse it for live acceptance.
 - No Cloudflare Worker trading code or LIVE execution gates were changed by PR #115.
+
+
+### MT5 connected-state portal UX fix — PR #116
+
+Production observation:
+- Fresh MT5 connector session for account `110664480` / `FBS-Real` successfully authenticated and synced after the PR #115 TLS fix.
+- Persisted account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51` showed `provider_config.status=connected`, fresh broker/server identity, connector instance ID, and a synchronized symbol catalog.
+- Despite that, the user portal continued rendering the generic `Sync MT5 identity` action and could show a later refresh failure as though initial setup had never completed.
+- Root cause: `dashboard_mt5_connector_connections.js` injected the sync action unconditionally for every `mt5_connector` card, while `dashboard_unified_connections.js` did not render the persisted connector status/broker/server identity as a clear connected state.
+
+PR #116 behavior:
+- Connected MT5 rows now carry explicit account/provider/status data attributes from the authoritative account response.
+- A persisted `mt5_connector` row with `providerConfig.status === "connected"` renders a visible `Connected` state with broker, account, server, and environment.
+- Initial unsynced rows continue to show `Sync MT5 identity`.
+- Already-connected rows show `Refresh MT5 connection` instead, making re-sync a maintenance/recovery action rather than implying setup is incomplete.
+- After a successful MT5 sync/refresh, the shared connection manager is immediately reloaded so the card updates without requiring a manual page reload.
+- A later refresh error does not erase the persisted fact that the row previously completed identity synchronization.
+- Existing simplified Trading ON/OFF + live real-money controls remain intact; the implementation was adjusted to preserve their exact frontend composition contract.
+
+TDD / CI:
+- RED commit `80bd6153c1ff1678ce1a58038179627e4123cb5a`; Trading V1 CI #3023 failed as expected because the connected-state rendering did not exist.
+- First implementation exposed an existing fragile exact-string composition dependency in simplified account controls and one over-specific new test; CI #3026 correctly failed.
+- Composition/test boundary corrected in `7e1f9f9a4b50312ed0026d8b8da9f065df112f9a` and `335dd7dc0127d28b3e3c9cd3270273c727f33094`.
+- Trading V1 CI #3028 passed Worker/trading-core tests, pure MT5 tests, and MTProto tests.
+- No broker execution gates or LIVE permissions are changed by this frontend fix.
