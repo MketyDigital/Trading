@@ -155,3 +155,66 @@ jobs:
         if: always()
         shell: bash
         run: rm -f /tmp/before.json /tmp/patch.json /tmp/patch-result.json /tmp/after.json /tmp/deploy.json /tmp/app.json /tmp/health.json
+
+
+  create-private-source-app:
+    needs: inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      PRIVATE_GITHUB_APP_UUID: chvanp2mn8p5msyzifqwywac
+      PROJECT_UUID: xrhsinddvxzghzcxgwux9esj
+      SERVER_UUID: ynkdc4tx6bi7cyxf0kuy8kte
+      ENVIRONMENT_UUID: ewiwnpz3mow3lko3kiaoznbt
+      DESTINATION_UUID: nb5cewtbcimgywinjww047mx
+    steps:
+      - name: Create or locate authenticated private-source gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications" > /tmp/apps.json
+          existing="$(node -e "const xs=require('/tmp/apps.json');const a=(Array.isArray(xs)?xs:[]).find(x=>x.name==='Cbot Tcp gateway private'&&x.git_repository==='MketyDigital/Trading');if(a)process.stdout.write(a.uuid)")"
+          if [ -n "$existing" ]; then
+            uuid="$existing"
+            echo "PRIVATE_APP_REUSED=$uuid"
+          else
+            node - <<'NODE' > /tmp/create.json
+          process.stdout.write(JSON.stringify({
+            project_uuid: process.env.PROJECT_UUID,
+            server_uuid: process.env.SERVER_UUID,
+            environment_uuid: process.env.ENVIRONMENT_UUID,
+            destination_uuid: process.env.DESTINATION_UUID,
+            github_app_uuid: process.env.PRIVATE_GITHUB_APP_UUID,
+            git_repository: 'MketyDigital/Trading',
+            git_branch: 'main',
+            build_pack: 'dockercompose',
+            name: 'Cbot Tcp gateway private',
+            description: 'Authenticated private GitHub App source for Mkety shared cTrader + MT5 gateway',
+            base_directory: '/',
+            docker_compose_location: '/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml',
+            instant_deploy: false
+          }));
+          NODE
+            code="$(curl -sS -o /tmp/result.json -w '%{http_code}' -X POST               -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"               -H "Content-Type: application/json"               --data-binary @/tmp/create.json               "$api/applications/private-github-app")"
+            if [ "$code" != "201" ]; then
+              echo "CREATE_HTTP=$code"
+              node -e "const x=require('/tmp/result.json');console.log(JSON.stringify({message:x.message||null,errors:x.errors||null}))"
+              exit 2
+            fi
+            uuid="$(node -e "const x=require('/tmp/result.json');if(!x.uuid)process.exit(1);process.stdout.write(x.uuid)")"
+            echo "PRIVATE_APP_CREATED=$uuid"
+          fi
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$uuid" > /tmp/app.json
+          node <<'NODE'
+          const a=require('/tmp/app.json');
+          if(a.git_repository!=='MketyDigital/Trading') throw new Error('repo mismatch');
+          if(a.git_branch!=='main') throw new Error('branch mismatch');
+          if(a.build_pack!=='dockercompose') throw new Error('build pack mismatch');
+          if(a.docker_compose_location!=='/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml') throw new Error('compose path mismatch');
+          console.log('PRIVATE_APP_CONTRACT=PASS');
+          console.log(JSON.stringify({uuid:a.uuid,name:a.name,status:a.status,source_id:a.source_id??null,source_type:a.source_type??null,github_app_uuid:a.github_app_uuid??null}));
+          NODE
