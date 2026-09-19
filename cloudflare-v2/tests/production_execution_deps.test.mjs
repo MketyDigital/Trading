@@ -210,7 +210,7 @@ test('cTrader dispatch decrypts exact account credential envelope server-side an
   assert.equal(JSON.stringify(seen.runtime).includes('legacy-token'), false);
 });
 
-test('live cTrader account remains fail-closed unless a separate server-side live opt-in is true', async () => {
+test('live cTrader adapter does not require a redundant legacy env opt-in after coordinator LIVE authority passes', async () => {
   const row = account({
     platform: 'ctrader',
     account_id: '123456',
@@ -228,14 +228,17 @@ test('live cTrader account remains fail-closed unless a separate server-side liv
   }, {
     decryptCredentialsFn: ctraderCredentialDecryptor(),
     deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
-    ctraderRuntimeFactory: async () => { runtimeCalls += 1; return { execute() {}, close() {} }; },
+    ctraderRuntimeFactory: async (options) => {
+      runtimeCalls += 1;
+      assert.equal(options.environment, 'live');
+      assert.equal(options.allowLiveTrading, true);
+      return { execute: async () => ({ brokerPositionId: 'ct-live-position-1' }), close() {} };
+    },
   });
 
-  await assert.rejects(
-    () => deps.dispatchAction({ workspaceId: 'ws-a', account: row, action: { type: 'OPEN_POSITION', idempotencyKey: 'k1' } }),
-    /live cTrader execution is disabled/i,
-  );
-  assert.equal(runtimeCalls, 0);
+  const result = await deps.dispatchAction({ workspaceId: 'ws-a', account: row, action: { type: 'OPEN_POSITION', idempotencyKey: 'k1' } });
+  assert.equal(runtimeCalls, 1);
+  assert.equal(result.brokerPositionId, 'ct-live-position-1');
 });
 
 test('unsupported platform and missing per-account credential authority fail before executor construction', async () => {
