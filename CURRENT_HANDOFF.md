@@ -710,3 +710,17 @@ Migration boundary remains:
 - Production gateway remains `p9xqtqpbljnggchy36mzd7a0`; no DNS, trading controls, broker routes, connector settings, or runtime code were changed by this probe.
 - Repository-admin visibility mutation is not exposed by the connected GitHub toolset, so the final GitHub public->private visibility toggle cannot be performed programmatically through the current connector.
 - Credential-safety tooling also blocks assistant-mediated plaintext transfer of the seven gateway secret values between Coolify applications. This is the remaining infrastructure limitation before permanent private cutover.
+
+#### Authenticated private-source gateway cutover completed — 2026-09-19
+
+- Confirmed Trading production workflow already has GitHub Actions secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; Cloudflare Worker deployment does not require public repository access.
+- Reused the proven Azure->OCI masked env migration pattern to copy the seven current OCI gateway production env values from public-source app `p9xqtqpbljnggchy36mzd7a0` to authenticated private-source app `wp23orxgfa9py7giponnvcjt` entirely inside GitHub Actions runner memory/temp files.
+- Exact env parity passed for: `ACME_EMAIL`, `CBOT_COMMAND_TIMEOUT_MS`, `CBOT_CONTROL_SECRET`, `CBOT_PUBLIC_HOST`, `CBOT_TOKEN_SIGNING_KEY`, `CLOUDFLARE_DNS_API_TOKEN`, `MT5_CONNECTOR_COMMAND_TIMEOUT_MS`. No values were printed; temp files were cleaned.
+- No operation-journal entries existed in the five minutes immediately before cutover; no evidence of an in-flight broker command.
+- Controlled source cutover succeeded: old public-source gateway transitioned `running:unknown` -> `exited:unhealthy`; authenticated private-source app deployed successfully as deployment `hlqekck5ia2fpxxndvl50e01` and reached `running:unknown`.
+- Public acceptance on the authenticated-source app passed: `/health`, unauthenticated WebSocket `/v1/cbot`, and `/v1/mt5` all passed.
+- FBS LIVE account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51`, account `110664480`, server `FBS-Real`, broker `FBS Markets Inc.` automatically reconnected to the authenticated-source gateway. Rollback was not required.
+- Production gateway is now the Coolify app `wp23orxgfa9py7giponnvcjt`, source id `1` (`mkety-github` GitHub App). Old app `p9xqtqpbljnggchy36mzd7a0` is stopped rollback.
+- Repository visibility itself is still public pending the final GitHub visibility flip and one post-private redeploy acceptance.
+- GitHub Free caveats for the final private state: repository branch protection/rulesets are not available for private org repos on Free; GitHub CodeQL/code scanning and GitHub secret scanning for organization-owned private repos require GitHub Team/Enterprise with the relevant Code Security/Secret Protection features. Normal GitHub Actions, private repos, Actions secrets, and authenticated Coolify GitHub App access remain usable.
+- Temporary cutover workflows remain only on branch `ops/private-source-gateway-cutover-20260919` and are not merged to main; clean that branch after final private acceptance.
