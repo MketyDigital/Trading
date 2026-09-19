@@ -24,6 +24,8 @@ jobs:
           root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
           curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OCI_APP_UUID" > /tmp/app.json
           curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/github-apps" > /tmp/apps.json
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/github-apps/1/repositories" > /tmp/repos.json
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/github-apps/1/repositories/MketyDigital/Trading/branches" > /tmp/branches.json
 
           node <<'NODE'
           const app=require('/tmp/app.json');
@@ -45,4 +47,11 @@ jobs:
             id:x.id,uuid:x.uuid,name:x.name,organization:x.organization,
             installation_id:x.installation_id,is_public:x.is_public,type:x.type
           }))));
+          const repos=require('/tmp/repos.json');
+          const branches=require('/tmp/branches.json');
+          const list=Array.isArray(repos?.repositories)?repos.repositories:[];
+          const trading=list.filter(r => String(r.full_name||r.name||'').includes('Trading'));
+          console.log('PRIVATE_APP_TRADING_REPOS='+JSON.stringify(trading.map(r=>({id:r.id,name:r.name,full_name:r.full_name,private:r.private}))));
+          const bs=Array.isArray(branches?.branches)?branches.branches:[];
+          console.log('PRIVATE_APP_HAS_MAIN='+bs.some(b=>b.name==='main'));
           NODE
