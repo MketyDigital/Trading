@@ -682,3 +682,19 @@ Migration boundary remains:
 - All FBS LIVE open/close destination deliveries completed on attempt 1 with `failure_class=null`, `error_code=null`, `next_attempt_at=null`; no retry or uncertain row remained.
 - The same open/close flow also succeeded on MT5 DEMO, demonstrating LIVE now follows the same broker execution path while retaining separate LIVE authority gates.
 - This is the first confirmed real-money FBS LIVE end-to-end acceptance after the LIVE planner/retry parity fix. No assistant-generated trade was placed; the source events were user-originated.
+
+#### Private-repository readiness work — 2026-09-19
+
+- Goal: make `MketyDigital/Trading` permanently private without changing production trading behavior.
+- Repository scan found no runtime dependency on `raw.githubusercontent.com/MketyDigital/Trading`, anonymous `git clone` of this repo, or public GitHub Release download URLs.
+- GitHub Actions are same-repository `actions/checkout` / repository-token based and are compatible with private visibility.
+- OCI Coolify private source inventory found two GitHub sources: public source id `0` and authenticated `mkety-github` source id `1`, UUID `chvanp2mn8p5msyzifqwywac`, installed for organization `MketyDigital`.
+- Current production gateway app `p9xqtqpbljnggchy36mzd7a0` is still bound to Coolify public source id `0`.
+- Current installed Coolify version rejected in-place application PATCH of `github_app_uuid` with HTTP 422 (`This field is not allowed.`), so source conversion cannot be done safely in place through this API version.
+- A new authenticated private-source gateway app was successfully created via Coolify private-GitHub-App API: `wp23orxgfa9py7giponnvcjt`, name `Cbot Tcp gateway private`, source id `1`, repo `MketyDigital/Trading`, branch `main`, Docker Compose `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`.
+- The new private-source app is staged only and is not production. The existing production gateway remains unchanged/running.
+- Remaining one-time requirement before visibility change: copy the seven production gateway environment values from `p9xqtqpbljnggchy36mzd7a0` to `wp23orxgfa9py7giponnvcjt`, verify exact parity, then perform a controlled stop-old/start-new source cutover and validate health/WebSockets/authenticated sessions.
+- Required keys: `ACME_EMAIL`, `CBOT_COMMAND_TIMEOUT_MS`, `CBOT_CONTROL_SECRET`, `CBOT_PUBLIC_HOST`, `CBOT_TOKEN_SIGNING_KEY`, `CLOUDFLARE_DNS_API_TOKEN`, `MT5_CONNECTOR_COMMAND_TIMEOUT_MS`.
+- Added `docs/PRIVATE_REPOSITORY_OPERATIONS.md` with the private-source cutover, rollback, visibility-change acceptance, GitHub Free caveat, and future self-hosted-runner plan.
+- Important GitHub Free organization caveat verified from current GitHub docs: branch protection/rulesets are available for public repos on Free, but private-repo protection requires Pro/Team/Enterprise. Private visibility therefore improves confidentiality but removes GitHub-enforced branch protection on the current Free org plan.
+- Temporary private-readiness workflow was removed after collecting evidence; no probe workflow is intended to remain on main.
