@@ -1,0 +1,82 @@
+name: Private Coolify Clone Probe
+on:
+  push:
+    branches:
+      - ops/private-coolify-clone-20260919
+permissions:
+  contents: read
+jobs:
+  clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      SOURCE_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+      DESTINATION_UUID: nb5cewtbcimgywinjww047mx
+    steps:
+      - name: Clone production gateway without starting it
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications" > /tmp/apps.json
+          existing="$(node -e "const xs=require('/tmp/apps.json');const a=(Array.isArray(xs)?xs:[]).find(x=>x.name==='Cbot Tcp gateway private clone');if(a)process.stdout.write(a.uuid)")"
+          if [ -n "$existing" ]; then
+            clone_uuid="$existing"
+            echo "CLONE_REUSED=$clone_uuid"
+          else
+            cat >/tmp/clone.json <<'JSON'
+          {"destination_uuid":"nb5cewtbcimgywinjww047mx","name":"Cbot Tcp gateway private clone","clone_volumes":false}
+          JSON
+            code="$(curl -sS -o /tmp/clone-result.json -w '%{http_code}' -X POST               -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"               -H "Content-Type: application/json"               --data-binary @/tmp/clone.json               "$api/applications/$SOURCE_APP_UUID/clone")"
+            [ "$code" = "201" ] || { echo "CLONE_HTTP=$code"; cat /tmp/clone-result.json; exit 2; }
+            clone_uuid="$(node -e "const x=require('/tmp/clone-result.json');if(!x.uuid)process.exit(1);process.stdout.write(x.uuid)")"
+            echo "CLONE_CREATED=$clone_uuid"
+          fi
+          echo "CLONE_UUID=$clone_uuid" >> "$GITHUB_ENV"
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$clone_uuid" > /tmp/app.json
+          node <<'NODE'
+          const a=require('/tmp/app.json');
+          console.log('CLONE_APP='+JSON.stringify({
+            uuid:a.uuid,name:a.name,status:a.status,
+            git_repository:a.git_repository,git_branch:a.git_branch,
+            source_id:a.source_id,source_type:a.source_type,
+            build_pack:a.build_pack,docker_compose_location:a.docker_compose_location
+          }));
+          NODE
+      - name: Compare env key inventory only
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$SOURCE_APP_UUID/envs" > /tmp/src-env.json
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$CLONE_UUID/envs" > /tmp/dst-env.json
+          node <<'NODE'
+          const src=require('/tmp/src-env.json').filter(x=>!x.is_preview).map(x=>x.key).sort();
+          const dst=require('/tmp/dst-env.json').filter(x=>!x.is_preview).map(x=>x.key).sort();
+          console.log('SOURCE_KEYS='+src.join(','));
+          console.log('CLONE_KEYS='+dst.join(','));
+          if(JSON.stringify(src)!==JSON.stringify(dst)) throw new Error('clone env key set mismatch');
+          console.log('CLONE_ENV_KEYS_MATCH=PASS');
+          NODE
+      - name: Test source-id switch on clone only
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          echo '{"source_id":1}' >/tmp/patch.json
+          code="$(curl -sS -o /tmp/patch-result.json -w '%{http_code}' -X PATCH             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             -H "Content-Type: application/json"             --data-binary @/tmp/patch.json             "$api/applications/$CLONE_UUID")"
+          echo "SOURCE_ID_PATCH_HTTP=$code"
+          if [ "$code" != "200" ]; then
+            node -e "const x=require('/tmp/patch-result.json');console.log(JSON.stringify({message:x.message||null,errors:x.errors||null}))"
+            exit 3
+          fi
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$CLONE_UUID" > /tmp/after.json
+          node <<'NODE'
+          const a=require('/tmp/after.json');
+          console.log('CLONE_AFTER='+JSON.stringify({uuid:a.uuid,source_id:a.source_id,source_type:a.source_type,status:a.status}));
+          if(Number(a.source_id)!==1) throw new Error('source_id switch did not persist');
+          console.log('CLONE_PRIVATE_SOURCE_SWITCH=PASS');
+          NODE
