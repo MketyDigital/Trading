@@ -9,17 +9,11 @@ Keep `MketyDigital/Trading` permanently private without changing the production 
 - GitHub Actions use the repository-scoped `GITHUB_TOKEN` / `actions/checkout`, which continues to work when the repository is private.
 - No runtime dependency on `raw.githubusercontent.com/MketyDigital/Trading`, public GitHub release downloads, or anonymous `git clone` of this repository was found in the repository scan.
 - Cloudflare Worker deployment is GitHub Actions driven and does not require the repository to be public.
-- The OCI gateway currently serving production is `p9xqtqpbljnggchy36mzd7a0`.
-- OCI Coolify has an authenticated GitHub App source named `mkety-github` for the `MketyDigital` organization.
-- A staged authenticated-source gateway application has been created:
-  - name: `Cbot Tcp gateway private`
-  - UUID: `wp23orxgfa9py7giponnvcjt`
-  - repository: `MketyDigital/Trading`
-  - branch: `main`
-  - build pack: `dockercompose`
-  - compose: `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`
-  - Coolify source id: `1` (`mkety-github`)
-- The staged private-source app must not replace production until its seven gateway environment variables exactly match the current production gateway and a controlled authenticated-source deploy passes health/WebSocket checks.
+- The OCI gateway currently serving production is the authenticated private-source Coolify application `wp23orxgfa9py7giponnvcjt` (`Cbot Tcp gateway private`).
+- OCI Coolify uses authenticated GitHub App source `mkety-github` for organization `MketyDigital`, source id `1`.
+- Production repository source is `MketyDigital/Trading`, branch `main`, Docker Compose `/ctrader-cbot-gateway/deploy/coolify/docker-compose.yml`.
+- The previous public-source application `p9xqtqpbljnggchy36mzd7a0` is stopped and retained only as short-term rollback while the repository remains public.
+- Authenticated-source cutover, environment parity, gateway health, WebSocket checks and MT5 session reconnection have already passed. The remaining visibility task is the one-time GitHub public-to-private change after the agreed observation period, followed by private checkout/deploy acceptance.
 
 ## Required Coolify environment keys
 
@@ -35,21 +29,18 @@ Copy these from the current production gateway to the staged private-source gate
 
 The OCI Cloudflare DNS API token intentionally differs from the retired Azure value and must remain the working OCI value.
 
-## Controlled source cutover
+## Completed authenticated-source cutover
 
-1. Confirm `wp23orxgfa9py7giponnvcjt` has exact production env parity.
-2. Confirm the current public-source gateway remains healthy.
-3. Stop the current gateway `p9xqtqpbljnggchy36mzd7a0` without Docker cleanup.
-4. Deploy/start `wp23orxgfa9py7giponnvcjt`.
-5. Verify:
-   - `https://cbot.mkety.com:25345/health`
-   - `wss://cbot.mkety.com:25345/v1/cbot`
-   - `wss://cbot.mkety.com:25345/v1/mt5`
-   - authenticated MT5/cTrader session registries
-6. Keep the old application stopped as rollback until private-repository acceptance is complete.
-7. Change GitHub repository visibility to private.
-8. Trigger one no-code Coolify redeploy from the private source and verify health again. This proves the private GitHub App can clone after visibility changes.
-9. Verify the next normal GitHub Actions CI/deploy run succeeds while private.
+The Coolify source cutover is complete. Production is already running `wp23orxgfa9py7giponnvcjt` from authenticated GitHub App source `mkety-github`; `/health`, `/v1/cbot`, `/v1/mt5`, environment parity and MT5 session reconnection were verified.
+
+## Remaining private visibility sequence
+
+1. Keep the repository public through the agreed live-observation period unless the owner explicitly changes that decision.
+2. Immediately before the visibility flip, verify `wp23orxgfa9py7giponnvcjt` is healthy and authenticated connector sessions are current.
+3. Change GitHub repository visibility once from public to private.
+4. Trigger one no-code Coolify redeploy from the authenticated private source and verify health/WebSockets/sessions.
+5. Verify the next normal GitHub Actions CI/deploy run succeeds while private.
+6. Keep the repository private permanently; do not oscillate visibility for routine development.
 
 ## Rollback
 
