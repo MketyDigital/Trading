@@ -667,3 +667,18 @@ Migration boundary remains:
 - FBS destination/route remains active: `mt5 live fbs` / `mt5 route fbs` from source feed `-1003902892609`.
 - Fresh authenticated OCI gateway session verification after deploy: FBS LIVE online with fresh heartbeat; MT5 DEMO online with fresh heartbeat; cTrader DEMO/LIVE sessions offline.
 - The release itself placed no real-money order. Real FBS 0.01 end-to-end acceptance still requires a new user-originated source signal after Deploy #103 and immediate audit of FBS destination delivery, position group/leg and broker ticket/fill.
+
+
+#### First confirmed FBS LIVE post-fix acceptance — 2026-09-19
+
+- Production Cloudflare Deploy #103 on merge `0cfa3632a4bb3fdd1d0aefa58315b3928a6272a1` was live before this acceptance.
+- Fresh source event `telegram:-1003902892609:383` (`buy btcusd again`) was accepted after the deploy and routed to both MT5 DEMO and FBS MT5 LIVE.
+- FBS LIVE account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51` executed BTCUSD BUY successfully at fixed 0.01 lots.
+- FBS LIVE open delivery: status `SUCCEEDED`, requested lots `0.01`, broker retcode `10009` (`Request executed`), deal `5481774895`, order/position `5505241221`, fill `81231.05`, `recovered=false`, `duplicate=false`.
+- Persisted FBS LIVE position group/leg recorded requested `0.01`, executed `0.01`, broker order/position `5505241221`, no failure code.
+- Follow-up source event `telegram:-1003902892609:384` (`close`) correlated by source-message continuity and successfully closed the same FBS LIVE BTCUSD position.
+- FBS LIVE close delivery: status `SUCCEEDED`, requested lots `0.01`, broker retcode `10009`, deal `5481774908`, order/position `5505241234`, close fill `81211.6`, `recovered=false`, `duplicate=false`.
+- The corresponding FBS LIVE position group and leg are now `CLOSED`.
+- All FBS LIVE open/close destination deliveries completed on attempt 1 with `failure_class=null`, `error_code=null`, `next_attempt_at=null`; no retry or uncertain row remained.
+- The same open/close flow also succeeded on MT5 DEMO, demonstrating LIVE now follows the same broker execution path while retaining separate LIVE authority gates.
+- This is the first confirmed real-money FBS LIVE end-to-end acceptance after the LIVE planner/retry parity fix. No assistant-generated trade was placed; the source events were user-originated.
