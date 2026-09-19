@@ -6,7 +6,10 @@ import {
 import { createSupabaseDeliveryStore } from '../persistence/supabase_delivery_store.js';
 import { createProductionExecutionDependencies } from './production_execution_deps.js';
 import { executeProductionPlan } from './production_execution_coordinator.js';
-import { resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
+import {
+  resolveBrokerExecutionRuntimeControl,
+  resolveLiveBrokerExecutionRuntimeControl,
+} from '../persistence/supabase_runtime_control_store.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -137,6 +140,7 @@ export function createProductionDestinationRetryRuntime({
   executionDepsFactory = createProductionExecutionDependencies,
   executeProductionFn = executeProductionPlan,
   brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
+  liveBrokerExecutionControlResolver = resolveLiveBrokerExecutionRuntimeControl,
   batchLimit = 10,
   leaseMs = 30000,
   maxAttempts = 5,
@@ -205,6 +209,13 @@ export function createProductionDestinationRetryRuntime({
             deliveryStoreFactory: deliveryStoreOverride,
           });
 
+          let liveControl;
+          try {
+            liveControl = await liveBrokerExecutionControlResolver({ env, supabase });
+          } catch {
+            liveControl = { ok: false, enabled: false };
+          }
+
           result = await executeProductionFn({
             workspaceId: delivery.workspace_id,
             eventId: delivery.trading_event_id || null,
@@ -214,6 +225,8 @@ export function createProductionDestinationRetryRuntime({
               actions: [payload.action],
             }],
             brokerExecutionEnabled: true,
+            liveBrokerExecutionEnabled: liveControl?.ok === true && liveControl.enabled === true,
+            liveBrokerExecutionControlAvailable: liveControl?.ok === true,
           }, deps);
         } catch (error) {
           await retrySetupFailure(baseStore, delivery, error, { now, retryDelayMs: safeRetryDelayMs });
