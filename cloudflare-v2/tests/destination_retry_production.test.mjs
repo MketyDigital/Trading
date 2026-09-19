@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createProductionDestinationRetryRuntime } from '../src/execution/destination_retry_production.js';
 
 const brokerOn = async () => ({ ok: true, enabled: true });
+const liveOn = async () => ({ ok: true, enabled: true });
 
 function retryRow(overrides = {}) {
   return {
@@ -45,6 +46,7 @@ test('production retry claims through existing persistent store and dispatches o
   const runtime = createProductionDestinationRetryRuntime({
     supabaseFactory: async () => ({ from() {} }),
     brokerExecutionControlResolver: brokerOn,
+    liveBrokerExecutionControlResolver: liveOn,
     listDueFn: async () => [row],
     deliveryStoreFactory: () => baseStore,
     executionDepsFactory: async (context, overrides) => {
@@ -53,9 +55,11 @@ test('production retry claims through existing persistent store and dispatches o
       claimedStoreFactory = overrides.deliveryStoreFactory;
       return { accountLoader: async () => null, authorityLoader: async () => null, dispatchAction: async () => null, stateBinder: async () => null };
     },
-    executeProductionFn: async ({ workspaceId, accountPlans, brokerExecutionEnabled }, deps) => {
+    executeProductionFn: async ({ workspaceId, accountPlans, brokerExecutionEnabled, liveBrokerExecutionEnabled, liveBrokerExecutionControlAvailable }, deps) => {
       assert.equal(workspaceId, 'ws-1');
       assert.equal(brokerExecutionEnabled, true);
+      assert.equal(liveBrokerExecutionEnabled, true);
+      assert.equal(liveBrokerExecutionControlAvailable, true);
       assert.deepEqual(accountPlans, [{
         accountId: 'acc-1',
         groupId: 'g1',
