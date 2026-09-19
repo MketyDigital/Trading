@@ -1,0 +1,203 @@
+name: Private Source Gateway Controlled Cutover
+
+on:
+  push:
+    branches:
+      - ops/private-source-gateway-cutover-20260919
+    paths:
+      - ".github/workflows/private-source-gateway-cutover.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-source-gateway-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      OLD_APP_UUID: p9xqtqpbljnggchy36mzd7a0
+      NEW_APP_UUID: wp23orxgfa9py7giponnvcjt
+      FBS_LIVE_ROW: 5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51
+    steps:
+      - name: Preflight and fetch masked control secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OLD_APP_UUID" > /tmp/old.json
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$NEW_APP_UUID" > /tmp/new.json
+
+          node <<'NODE'
+          const old=require('/tmp/old.json'), neu=require('/tmp/new.json');
+          if(!String(old.status||'').startsWith('running')) throw new Error('old production gateway is not running');
+          if(Number(neu.source_id)!==1) throw new Error('new gateway is not bound to private GitHub App source');
+          if(neu.git_repository!=='MketyDigital/Trading'||neu.git_branch!=='main') throw new Error('new gateway source contract mismatch');
+          console.log('CUTOVER_PREFLIGHT=PASS');
+          NODE
+
+          curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OLD_APP_UUID/envs" > /tmp/envs.json
+          secret="$(node -e "const rows=require('/tmp/envs.json');const r=rows.find(x=>x.key==='CBOT_CONTROL_SECRET'&&x.is_preview===false);if(!r?.value)process.exit(1);process.stdout.write(String(r.value))")"
+          echo "::add-mask::$secret"
+          echo "CONTROL_SECRET=$secret" >> "$GITHUB_ENV"
+
+          curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 10 --max-time 20             https://cbot.mkety.com:25345/health > /tmp/pre-health.json
+          node -e "const x=require('/tmp/pre-health.json');if(!x.ok)process.exit(1);console.log('PRE_CUTOVER_HEALTH=PASS')"
+
+      - name: Ensure staged private-source app is stopped
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -sS -o /tmp/stop-new.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/applications/$NEW_APP_UUID/stop?docker_cleanup=false" >/tmp/stop-new-code.txt
+          sleep 3
+
+      - name: Stop current public-source gateway
+        id: stopold
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          code="$(curl -sS -o /tmp/stop-old.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/applications/$OLD_APP_UUID/stop?docker_cleanup=false")"
+          [ "$code" = "200" ] || { echo "OLD_STOP_HTTP=$code"; exit 2; }
+          echo "OLD_GATEWAY_STOP_REQUEST=PASS"
+          for i in $(seq 1 30); do
+            curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$OLD_APP_UUID" > /tmp/old-state.json
+            status="$(node -e "const x=require('/tmp/old-state.json');process.stdout.write(String(x.status||''))")"
+            echo "OLD_GATEWAY_STATUS=$status"
+            case "${status,,}" in
+              exited|exited:*|stopped|stopped:*) exit 0 ;;
+            esac
+            sleep 2
+          done
+          exit 3
+
+      - name: Deploy authenticated private-source gateway
+        id: deploynew
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          code="$(curl -sS -o /tmp/deploy.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/deploy?uuid=$NEW_APP_UUID&force=true")"
+          [ "$code" = "200" ] || { echo "NEW_DEPLOY_HTTP=$code"; exit 4; }
+          deployment_uuid="$(node -e "const x=require('/tmp/deploy.json');const d=Array.isArray(x.deployments)?x.deployments[0]:null;if(!d?.deployment_uuid)process.exit(1);process.stdout.write(d.deployment_uuid)")"
+          echo "NEW_DEPLOYMENT_UUID=$deployment_uuid"
+
+          for i in $(seq 1 120); do
+            curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deployments/$deployment_uuid" > /tmp/deployment.json
+            status="$(node -e "const x=require('/tmp/deployment.json');process.stdout.write(String(x.status||''))")"
+            case "${status,,}" in
+              finished|success|successful|succeeded|completed) break ;;
+              failed|failure|error|cancelled|canceled) echo "NEW_DEPLOYMENT_FAILED=$status"; exit 5 ;;
+            esac
+            sleep 3
+          done
+
+          for i in $(seq 1 40); do
+            curl -fsS -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/applications/$NEW_APP_UUID" > /tmp/new-state.json
+            status="$(node -e "const x=require('/tmp/new-state.json');process.stdout.write(String(x.status||''))")"
+            echo "NEW_GATEWAY_STATUS=$status"
+            case "${status,,}" in
+              running|running:*) exit 0 ;;
+              exited:*|failed|error) exit 6 ;;
+            esac
+            sleep 3
+          done
+          exit 7
+
+      - name: Verify public health and both WebSocket paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 10               https://cbot.mkety.com:25345/health > /tmp/health.json; then
+              node -e "const x=require('/tmp/health.json');if(!x.ok)process.exit(1)"
+              break
+            fi
+            sleep 2
+          done
+          node -e "const x=require('/tmp/health.json');if(!x.ok)process.exit(1);console.log('PRIVATE_SOURCE_HEALTH=PASS')"
+
+          mkdir -p /tmp/ws && cd /tmp/ws
+          npm init -y >/dev/null 2>&1
+          npm install --silent ws@8
+          node <<'NODE'
+          const WebSocket=require('ws');
+          async function probe(path){
+            return new Promise((resolve,reject)=>{
+              const ws=new WebSocket('wss://cbot.mkety.com:25345'+path);
+              let opened=false;
+              const timer=setTimeout(()=>reject(new Error(path+' timeout')),12000);
+              ws.on('open',()=>{opened=true;ws.send(JSON.stringify({type:'unauthenticated_probe'}));});
+              ws.on('error',reject);
+              ws.on('close',(code,reason)=>{
+                clearTimeout(timer);
+                const why=String(reason||'');
+                if(!opened)return reject(new Error(path+' never upgraded'));
+                if(code!==1008||why!=='AUTH_REQUIRED')return reject(new Error(path+' unexpected '+code+' '+why));
+                console.log(path+'=PASS');resolve();
+              });
+            });
+          }
+          (async()=>{await probe('/v1/cbot');await probe('/v1/mt5');})().catch(e=>{console.error(e.message);process.exit(1)});
+          NODE
+
+      - name: Verify FBS LIVE reconnects to private-source gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://cbot.mkety.com:25345/v1/mt5-connections/$FBS_LIVE_ROW"
+          for i in $(seq 1 60); do
+            code="$(curl -sS -o /tmp/fbs.json -w '%{http_code}' -H "Authorization: Bearer $CONTROL_SECRET" "$url")"
+            if [ "$code" = "200" ]; then
+              FILE=/tmp/fbs.json node <<'NODE'
+          const fs=require('fs');
+          const x=JSON.parse(fs.readFileSync(process.env.FILE,'utf8'));
+          const i=x.identity||{};
+          if(!x.ok||!x.online) process.exit(1);
+          console.log(JSON.stringify({
+            PRIVATE_SOURCE_FBS_RECONNECTED:true,
+            accountRowId:x.accountRowId,
+            accountNumber:i.accountNumber??null,
+            server:i.server??i.serverName??null,
+            broker:i.broker??i.brokerName??null,
+            connectedAt:x.connectedAt,
+            lastHeartbeatAt:x.lastHeartbeatAt
+          }));
+          NODE
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 8
+
+      - name: Roll back old gateway on any failure after old stop
+        if: failure() && steps.stopold.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"; [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -sS -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/applications/$NEW_APP_UUID/stop?docker_cleanup=false" >/tmp/rollback-stop-new.json || true
+          code="$(curl -sS -o /tmp/rollback-deploy-old.json -w '%{http_code}' -X POST             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN"             "$api/deploy?uuid=$OLD_APP_UUID&force=true")"
+          echo "ROLLBACK_OLD_DEPLOY_HTTP=$code"
+          [ "$code" = "200" ] || exit 20
+          for i in $(seq 1 60); do
+            if curl -fsS --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 10               https://cbot.mkety.com:25345/health >/tmp/rollback-health.json; then
+              node -e "const x=require('/tmp/rollback-health.json');if(!x.ok)process.exit(1);console.log('ROLLBACK_PUBLIC_HEALTH=PASS')"
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 21
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf /tmp/old.json /tmp/new.json /tmp/envs.json /tmp/pre-health.json /tmp/stop-new.json /tmp/stop-new-code.txt /tmp/stop-old.json /tmp/old-state.json /tmp/deploy.json /tmp/deployment.json /tmp/new-state.json /tmp/health.json /tmp/fbs.json /tmp/ws /tmp/rollback-*.json
