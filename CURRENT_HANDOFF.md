@@ -523,3 +523,15 @@ TDD / CI:
 - Composition/test boundary corrected in `7e1f9f9a4b50312ed0026d8b8da9f065df112f9a` and `335dd7dc0127d28b3e3c9cd3270273c727f33094`.
 - Trading V1 CI #3028 passed Worker/trading-core tests, pure MT5 tests, and MTProto tests.
 - No broker execution gates or LIVE permissions are changed by this frontend fix.
+
+
+#### PR #116 merge / production deployment checkpoint
+
+- PR #116 merged into `main` as `73657c19230ec8f39201ff49570aca79e0912638`.
+- Final PR-head Trading V1 CI #3029 passed.
+- Main Trading V1 CI #3030 passed all Worker/trading-core, MT5, and MTProto stages.
+- Production Cloudflare Deploy #102 passed completely: credentials/authentication, SaaS configuration, temporary dual-gate Wrangler generation, production dry-run, Worker deploy, production health probe, persisted broker-switch verification without changing it, temporary-secret cleanup, and recorded safety posture.
+- The production user portal now renders persisted MT5 connector setup state: connected rows show `Connected` with broker/account/server/environment and use `Refresh MT5 connection` as the maintenance action; unsynced rows retain `Sync MT5 identity`.
+- Fresh FBS MT5 account row `5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51` remains persisted as connector `connected`, account `110664480`, server `FBS-Real`, environment `live`.
+- Post-deploy account safety: FBS LIVE has `execution_enabled=false`, `live_execution_enabled=false`; cTrader LIVE `48681337` also has both false. Demo cTrader/MT5 remain execution-enabled and live-disabled.
+- Important operator state: the persisted global `live_broker_execution_enabled` master control is currently `true` (updated before this deployment at 2026-09-18 23:11:29 UTC). PR #116 / Deploy #102 did not toggle it; the deployment explicitly preserved the persisted owner switch. Real-money execution still requires the per-account execution + live permissions, which remain false on both current LIVE accounts.
