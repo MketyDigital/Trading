@@ -26,4 +26,4 @@ jobs:
         with:
           node-version: 22
       - run: npm install --ignore-scripts
-      - run: node --test tests/v1_simulation_deps.test.mjs tests/production_execution_deps.test.mjs tests/destination_retry_production.test.mjs
+      - run: npm test
