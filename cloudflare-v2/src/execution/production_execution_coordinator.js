@@ -41,6 +41,7 @@ function safeBrokerOutcome(action = {}, result = {}, skippedProtections = []) {
   const outcome = { status: result?.duplicate === true ? 'DUPLICATE' : 'SUCCEEDED', legId: action.legId ?? null, idempotencyKey: action.idempotencyKey ?? null };
   if (Array.isArray(skippedProtections) && skippedProtections.length) outcome.skippedProtections = skippedProtections.map((item) => ({ ...item }));
   if (result?.duplicate === true) outcome.duplicate = true;
+  if (result?.reconciledClosed === true || result?.positionClosed === true) outcome.reconciledClosed = true;
   if (result?.brokerPositionId != null) outcome.brokerPositionId = String(result.brokerPositionId);
   if (result?.brokerOrderId != null) outcome.brokerOrderId = String(result.brokerOrderId);
   if (result?.brokerDealId != null) outcome.brokerDealId = String(result.brokerDealId);
@@ -58,15 +59,16 @@ function blockedAccount(accountId, reason, extra = {}) { return { accountId: tex
 function failedAccount(accountId, reason, outcomes = []) { return { accountId: text(accountId), status: 'FAILED', reason, actions: outcomes }; }
 function summarize(accounts = [], executionEnabled = true) {
   const succeeded = accounts.filter((item) => item.status === 'SUCCEEDED').length;
+  const partial = accounts.filter((item) => item.status === 'PARTIAL').length;
   const failed = accounts.filter((item) => item.status === 'FAILED').length;
   const blocked = accounts.filter((item) => item.status === 'BLOCKED').length;
   let status = 'SUCCEEDED';
   if (!executionEnabled) status = 'BROKER_EXECUTION_DISABLED';
-  else if (failed > 0 && succeeded > 0) status = 'PARTIAL_FAILURE';
+  else if (failed > 0 && (succeeded > 0 || partial > 0)) status = 'PARTIAL_FAILURE';
   else if (failed > 0) status = 'FAILED';
-  else if (blocked > 0 && succeeded > 0) status = 'PARTIAL';
+  else if (partial > 0 || (blocked > 0 && succeeded > 0)) status = 'PARTIAL';
   else if (blocked > 0) status = 'BLOCKED';
-  return { executionEnabled, status, accounts, succeeded, failed, blocked };
+  return { executionEnabled, status, accounts, succeeded, partial, failed, blocked };
 }
 function validateAccountAuthority(account, workspaceId, requestedAccountId) {
   if (!account) return blockedAccount(requestedAccountId, 'ACCOUNT_NOT_FOUND');
@@ -166,7 +168,9 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
         await stateBinder({
           workspaceId, eventId, accountId: requestedAccountId, groupId: plan?.groupId ?? null, legId: executableAction?.legId ?? null,
           actionType: executableAction?.type ?? null,
-          status: brokerPositionId != null ? 'OPEN' : brokerOrderId != null ? 'PENDING' : null,
+          status: result?.reconciledClosed === true || result?.positionClosed === true
+            ? 'CLOSED'
+            : brokerPositionId != null ? 'OPEN' : brokerOrderId != null ? 'PENDING' : null,
           brokerPositionId, brokerOrderId, brokerDealId: result?.brokerDealId ?? null,
           fillPrice: optionalFiniteNumber(result?.fillPrice),
           executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
@@ -190,6 +194,15 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
   const blocked = outcomes.find((item) => item.status === 'BLOCKED');
   if (failed) return failedAccount(requestedAccountId, 'ACCOUNT_ACTION_FAILED', outcomes);
   if (!succeeded && blocked) return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', { ...(blocked.policy ? { policy: blocked.policy } : {}), ...(blocked.reason ? { blockReason: blocked.reason } : {}) });
+  if (succeeded && blocked) {
+    return {
+      accountId: requestedAccountId,
+      status: 'PARTIAL',
+      reason: 'ACCOUNT_ACTION_PARTIALLY_BLOCKED',
+      groupId: plan?.groupId ?? null,
+      actions: outcomes,
+    };
+  }
   return { accountId: requestedAccountId, status: 'SUCCEEDED', groupId: plan?.groupId ?? null, actions: outcomes };
 }
 
