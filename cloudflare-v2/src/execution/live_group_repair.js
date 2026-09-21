@@ -140,13 +140,25 @@ async function loadMt5ConnectorContext({ env, account, symbol }) {
 }
 
 async function loadGroupIntentAndAccount(supabase, workspaceId, groupId) {
-  const { data: groupRow, error: groupError } = await supabase
+  const select = 'id,runtime_group_id,workspace_id,trade_account_id,source_event_id,source_event_ids,canonical_symbol,side,stop_loss,status';
+  let lookup = await supabase
     .from('position_groups')
-    .select('id,runtime_group_id,workspace_id,trade_account_id,source_event_id,source_event_ids,canonical_symbol,side,stop_loss,status')
+    .select(select)
     .eq('workspace_id', String(workspaceId))
     .eq('runtime_group_id', String(groupId))
     .maybeSingle();
-  if (groupError || !groupRow) throw new Error('POSITION_GROUP_NOT_FOUND');
+  if (lookup.error) throw new Error('POSITION_GROUP_LOOKUP_FAILED');
+  if (!lookup.data) {
+    lookup = await supabase
+      .from('position_groups')
+      .select(select)
+      .eq('workspace_id', String(workspaceId))
+      .eq('id', String(groupId))
+      .maybeSingle();
+    if (lookup.error) throw new Error('POSITION_GROUP_LOOKUP_FAILED');
+  }
+  const groupRow = lookup.data;
+  if (!groupRow) throw new Error('POSITION_GROUP_NOT_FOUND');
 
   const { data: account, error: accountError } = await supabase
     .from('trade_accounts').select('*')
@@ -170,7 +182,7 @@ async function loadGroupIntentAndAccount(supabase, workspaceId, groupId) {
     if (!result.error) event = result.data;
   }
   if (!event?.canonical_intent) throw new Error('COMPLETED_SIGNAL_INTENT_NOT_FOUND');
-  return { groupRow, account, event, intent: event.canonical_intent };
+  return { groupRow, account, event, intent: event.canonical_intent, runtimeGroupId: String(groupRow.runtime_group_id) };
 }
 
 function syntheticClosedLeg(index, target, lot, stopLoss, nowMs) {
@@ -237,7 +249,7 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
   if (!workspaceId || !groupId) return { ok: false, reason: 'WORKSPACE_AND_GROUP_REQUIRED' };
   if (!(await controlsAllowLive(env, supabase))) return { ok: false, reason: 'LIVE_EXECUTION_GATES_NOT_ENABLED' };
 
-  const { account, event, intent } = await loadGroupIntentAndAccount(supabase, workspaceId, groupId);
+  const { account, event, intent, runtimeGroupId } = await loadGroupIntentAndAccount(supabase, workspaceId, groupId);
   if (account.environment !== 'live' || account.platform !== 'mt5' || account.provider_mode !== 'mt5_connector') {
     return { ok: false, reason: 'REPAIR_PROVIDER_NOT_SUPPORTED' };
   }
@@ -247,7 +259,7 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
   if (String(account.lot_sizing_type).toLowerCase() !== 'fixed') return { ok: false, reason: 'REPAIR_REQUIRES_FIXED_LOTS' };
 
   const state = tradeStateClient(env, workspaceId);
-  let group = await state.getGroup(groupId);
+  let group = await state.getGroup(runtimeGroupId);
   if (!group) return { ok: false, reason: 'DURABLE_GROUP_NOT_FOUND' };
 
   const lotValue = finite(account.lot_value);
@@ -288,7 +300,7 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
     await executeOne({ env, supabase, workspaceId, eventId, accountId, groupId: group.id, action: firstAction });
   }
 
-  group = await state.getGroup(groupId);
+  group = await state.getGroup(runtimeGroupId);
 
   for (let index = 2; index <= decision.targets.length; index += 1) {
     context = await loadMt5ConnectorContext({ env, account, symbol: group.symbol });
@@ -336,10 +348,10 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
       idempotencyKey: `repair:${group.id}:target:${index}:open`,
     };
     await executeOne({ env, supabase, workspaceId, eventId, accountId, groupId: group.id, action });
-    group = await state.getGroup(groupId);
+    group = await state.getGroup(runtimeGroupId);
   }
 
-  group = await state.getGroup(groupId);
+  group = await state.getGroup(runtimeGroupId);
   const openLike = (group.legs || []).some((leg) => ['OPEN', 'PENDING', 'PLANNED'].includes(String(leg.status).toUpperCase()));
   group.status = openLike ? 'OPEN' : 'CLOSED';
   group.incomplete = false;
