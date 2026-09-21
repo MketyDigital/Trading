@@ -142,8 +142,8 @@ test('redundant explicit BE command does not resend unchanged stop losses', asyn
     instrumentProvider: async () => { throw new Error('BE must not require market metadata'); },
   });
 
-  assert.equal(result.accounts[0].status, 'BLOCKED');
-  assert.equal(result.accounts[0].reason, 'MANAGEMENT_ACTION_UNAVAILABLE');
+  assert.equal(result.accounts[0].status, 'SKIPPED');
+  assert.equal(result.accounts[0].reason, 'BREAK_EVEN_ALREADY_APPLIED');
   assert.deepEqual(result.accounts[0].actions, []);
 });
 
@@ -162,4 +162,35 @@ test('target-hit protection fails closed when target index does not exist', asyn
   assert.equal(result.accounts[0].status, 'BLOCKED');
   assert.equal(result.accounts[0].reason, 'MANAGEMENT_ACTION_INVALID');
   assert.deepEqual(result.accounts[0].actions, []);
+});
+
+
+test('duplicate TP1 hit becomes a safe no-op after TP1 is already closed and BE is already applied', async () => {
+  const alreadyProtected = group();
+  alreadyProtected.legs[0].status = 'CLOSED';
+  alreadyProtected.legs[0].lots = 0;
+  alreadyProtected.legs[1].stopLoss = 2500;
+  alreadyProtected.legs[2].stopLoss = 2500;
+  let persisted;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, external_event_id: 'tp1-repeat' },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 1 } },
+    nowMs: 4000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: 'group-1' }) },
+    stateStore: {
+      getGroup: async () => structuredClone(alreadyProtected),
+      putGroup: async (value) => { persisted = structuredClone(value); return value; },
+    },
+    accountProvider: async () => [account(true)],
+    instrumentProvider: async () => { throw new Error('target hit must not require market metadata'); },
+  });
+
+  assert.equal(result.accounts[0].status, 'SKIPPED');
+  assert.equal(result.accounts[0].reason, 'TARGET_PROTECTION_ALREADY_APPLIED');
+  assert.deepEqual(result.accounts[0].actions, []);
+  assert.equal(persisted.legs[0].status, 'CLOSED');
+  assert.equal(persisted.legs[1].stopLoss, 2500);
+  assert.equal(persisted.legs[2].stopLoss, 2500);
 });
