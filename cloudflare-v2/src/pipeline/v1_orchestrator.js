@@ -343,6 +343,20 @@ async function orchestrateMatchedManagement({
     }
 
     if (!Array.isArray(actions) || actions.length === 0) {
+      const protectionAlreadyApplied = ['TARGET_HIT', 'MOVE_SL_TO_BE'].includes(String(interpretation.management?.type || '').toUpperCase());
+      if (protectionAlreadyApplied) {
+        stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs, interpretation.management));
+        results.push({
+          accountId: account.id,
+          status: 'SKIPPED',
+          reason: interpretation.management?.type === 'TARGET_HIT'
+            ? 'TARGET_PROTECTION_ALREADY_APPLIED'
+            : 'BREAK_EVEN_ALREADY_APPLIED',
+          policy,
+          actions: [],
+        });
+        continue;
+      }
       results.push({
         accountId: account.id,
         status: 'BLOCKED',
