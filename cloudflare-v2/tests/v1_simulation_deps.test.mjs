@@ -296,3 +296,37 @@ test('explicit simulation transport still uses configured simulation price fixtu
 
   assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), 2500);
 });
+
+
+test('real transport obtains planning price from broker-authoritative loader', async () => {
+  const calls = [];
+  const deps = await createV1SimulationDependencies({
+    env: { ...baseEnv(), TRADING_EXECUTION_TRANSPORT_MODE: 'real' },
+    supabase: { from() { throw new Error('database should not be used for market price test'); } },
+    event: { workspace_hint: 'workspace-1' },
+    brokerMarketPriceLoader: async (account, intent) => {
+      calls.push({ account, intent });
+      return 4360.25;
+    },
+  });
+
+  const account = { id: 'acct-live', platform: 'mt5', provider_mode: 'mt5_connector' };
+  const intent = { side: 'SELL', symbol: { canonical: 'XAUUSD' } };
+  assert.equal(await deps.marketPriceProvider(account, intent), 4360.25);
+  assert.equal(calls.length, 1);
+});
+
+test('simulation transport never calls the live broker market-price loader', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: {
+      ...baseEnv(),
+      TRADING_EXECUTION_TRANSPORT_MODE: 'simulation',
+      TRADING_V1_SIMULATION_PRICES: JSON.stringify({ XAUUSD: 2500 }),
+    },
+    supabase: { from() { throw new Error('database should not be used for market price test'); } },
+    event: { workspace_hint: 'workspace-1' },
+    brokerMarketPriceLoader: async () => { throw new Error('live loader must not run in simulation'); },
+  });
+
+  assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), 2500);
+});
