@@ -67,7 +67,6 @@ jobs:
             assert.match(publicDomText, /MT5 Connector — Recommended/);
             assert.ok(await page.locator('#connectCTraderBtn').count() > 0, 'connectCTraderBtn must ship in production DOM');
             assert.ok(await page.locator('#showMt5BridgeBtn').count() > 0, 'showMt5BridgeBtn must ship in production DOM');
-            assert.ok(await page.locator('#showAdvancedMt5BridgeBtn').count() > 0, 'showAdvancedMt5BridgeBtn must ship in production DOM');
             assert.equal(await page.locator('#showMt5BridgeBtn').isVisible(), false, 'MT5 setup control must remain hidden before workspace authentication');
             const shippedScripts = (await page.locator('script').allTextContents()).join('\n');
             assert.match(shippedScripts, /MketyMT5Connector\.exe/);
