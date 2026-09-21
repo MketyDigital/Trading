@@ -1,5 +1,6 @@
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 import { buildCTraderOrderCommand, buildCTraderManagementCommand } from '../execution/platform_translation.js';
+import { buildReconcileMessage } from './ctrader_protocol.js';
 
 const ORDER_ACCEPTED = 2;
 const ORDER_FILLED = 3;
@@ -97,6 +98,38 @@ function sameBrokerOrder(message, { brokerOrderId, clientOrderId }) {
   if (brokerOrderId != null && messageOrderId != null && String(messageOrderId) === String(brokerOrderId)) return true;
   if (clientOrderId && messageClientOrderId && String(messageClientOrderId) === String(clientOrderId)) return true;
   return false;
+}
+
+function reconciledOpenPositionIds(message = {}) {
+  if (Number(message?.payloadType) !== 2125) return new Set();
+  const positions = Array.isArray(message?.payload?.position) ? message.payload.position : [];
+  return new Set(positions.map((position) => String(position?.positionId ?? '')).filter(Boolean));
+}
+
+function isPositionNotFound(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '').toUpperCase();
+  return code === 'POSITION_NOT_FOUND' || code === 'POSITION_NOT_OPEN'
+    || message.includes('POSITION_NOT_FOUND') || message.includes('POSITION_NOT_OPEN');
+}
+
+async function reconcileMissingManagementPosition(session, { accountId, action, clientMsgId }) {
+  if (!action?.brokerPositionId || !isPositionNotFound(action?._dispatchError)) return null;
+  const reconcile = await session.request(buildReconcileMessage({
+    clientMsgId: `${clientMsgId}:reconcile`,
+    accountId,
+    returnProtectionOrders: false,
+  }), { successPayloadTypes: [2125] });
+  const openIds = reconciledOpenPositionIds(reconcile);
+  return openIds.has(String(action.brokerPositionId))
+    ? null
+    : {
+        duplicate: false,
+        reconciledClosed: true,
+        positionClosed: true,
+        brokerPositionId: String(action.brokerPositionId),
+        response: reconcile,
+      };
 }
 
 function classifiedError(message, deliveryFailureClass, code, cause = null) {
@@ -248,7 +281,27 @@ export async function executeCTraderAction(action, {
       clientMsgId,
       symbol: symbol || catalog.find((item) => item.platform === 'ctrader') || {},
     });
-    response = await session.request(managementMessage, { successPayloadTypes: [2126] });
+    try {
+      response = await session.request(managementMessage, { successPayloadTypes: [2126] });
+    } catch (error) {
+      if (action?.brokerPositionId && isPositionNotFound(error)) {
+        let reconciled = null;
+        try {
+          reconciled = await reconcileMissingManagementPosition(session, {
+            accountId,
+            action: { ...action, _dispatchError: error },
+            clientMsgId,
+          });
+        } catch {
+          reconciled = null;
+        }
+        if (reconciled) {
+          await deliveryStore.complete(action.idempotencyKey, reconciled);
+          return reconciled;
+        }
+      }
+      throw error;
+    }
     brokerAccepted = true;
     const result = { duplicate: false, ...extractBrokerIds(response), response };
     await deliveryStore.complete(action.idempotencyKey, result);
