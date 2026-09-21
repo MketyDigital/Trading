@@ -1,0 +1,66 @@
+name: One-time FBS LIVE group repair 2026-09-21
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/repair-fbs-live-20260921.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  repair-fbs-live-group:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      MKETY_TRADING_ADMIN_SECRET: ${{ secrets.MKETY_TRADING_ADMIN_SECRET }}
+    steps:
+      - name: Require owner admin secret
+        shell: bash
+        run: |
+          test -n "$MKETY_TRADING_ADMIN_SECRET" || { echo "MKETY_TRADING_ADMIN_SECRET is missing"; exit 1; }
+
+      - name: Repair exact FBS LIVE GOLD group after production endpoint is ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://trade.mkety.com/api/v1/mkety-admin/trade-repair/6f10d00f-7787-4f5b-8cf2-49b2215045cb"
+          payload='{"workspaceId":"5f63234c-20e9-426c-995f-56d129f51ece","confirmLive":true}'
+          body="$RUNNER_TEMP/fbs-live-repair.json"
+
+          for attempt in $(seq 1 36); do
+            status="$(curl -sS -o "$body" -w '%{http_code}'               -X POST "$endpoint"               -H "Content-Type: application/json"               -H "X-Mkety-Admin-Secret: $MKETY_TRADING_ADMIN_SECRET"               --data "$payload" || true)"
+
+            if [ "$status" = "200" ]; then
+              echo "Repair completed."
+              cat "$body"
+              exit 0
+            fi
+
+            if [ "$status" = "409" ]; then
+              reason="$(REPAIR_BODY="$(cat "$body")" node -e "try{const b=JSON.parse(process.env.REPAIR_BODY||'{}');process.stdout.write(String(b.reason||''))}catch{}")"
+              if [ "$reason" = "SIGNAL_STOP_ALREADY_INVALIDATED" ]; then
+                echo "Repair safely skipped because the live signal stop is already invalidated."
+                cat "$body"
+                exit 0
+              fi
+              echo "Repair endpoint returned a policy/state conflict: $reason"
+              cat "$body"
+              exit 1
+            fi
+
+            if [ "$status" = "404" ] || [ "$status" = "503" ] || [ "$status" = "000" ]; then
+              sleep 5
+              continue
+            fi
+
+            echo "Unexpected repair HTTP status: $status"
+            cat "$body" || true
+            exit 1
+          done
+
+          echo "Repair endpoint did not become ready."
+          cat "$body" || true
+          exit 1
