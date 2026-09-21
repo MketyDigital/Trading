@@ -299,6 +299,10 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
       throw new Error(`simulation instrument metadata is not configured for ${symbol || 'UNKNOWN'}`);
     },
     async marketPriceProvider(_account, intent) {
+      // Static simulation prices are test/staging fixtures only. They must
+      // never decide protection geometry or suppress TP legs for a real broker
+      // execution path.
+      if (String(env.TRADING_V1_SIMULATION || '').trim().toLowerCase() !== 'true') return undefined;
       const symbol = canonicalSymbol(intent);
       const price = Number(prices[symbol]);
       return Number.isFinite(price) ? price : undefined;
