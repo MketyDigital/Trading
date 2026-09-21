@@ -282,15 +282,35 @@ class MT5Engine:
             result = self._check_and_send(req, pending=True, symbol_info=symbol_info)
         return self._result(result)
 
+    def _already_closed(self, position_id):
+        return {
+            'ok': True,
+            'ticket': None,
+            'position_id': int(position_id),
+            'order_id': None,
+            'deal_id': None,
+            'fill_price': None,
+            'retcode': None,
+            'comment': 'position already closed',
+            'recovered': True,
+            'reconciled_closed': True,
+            'position_closed': True,
+        }
+
     def _modify(self, command, command_id):
         position_id = int(command['positionId'])
         symbol_info = None
         try:
-            positions = self.mt5.positions_get(ticket=position_id) or ()
-            if positions:
-                symbol_info = self._symbol(getattr(positions[0], 'symbol', ''))
-        except Exception:
-            symbol_info = None
+            positions = self.mt5.positions_get(ticket=position_id)
+            if positions is None:
+                raise RuntimeError(f'MT5_RECONCILIATION_UNCERTAIN:positions{self._last_error_text()}')
+            if not positions:
+                return self._already_closed(position_id)
+            symbol_info = self._symbol(getattr(positions[0], 'symbol', ''))
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError('MT5_RECONCILIATION_UNCERTAIN:positions') from exc
         request = {'action': self.mt5.TRADE_ACTION_SLTP, 'position': position_id}
         if command.get('stopLoss') is not None:
             request['sl'] = self._normalize_price(command['stopLoss'], symbol_info) if symbol_info is not None else float(command['stopLoss'])
@@ -301,8 +321,10 @@ class MT5Engine:
     def _close(self, command, command_id):
         position_id = int(command['positionId'])
         positions = self.mt5.positions_get(ticket=position_id)
+        if positions is None:
+            raise RuntimeError(f'MT5_RECONCILIATION_UNCERTAIN:positions{self._last_error_text()}')
         if not positions:
-            raise RuntimeError(f'position not found: {position_id}')
+            return self._already_closed(position_id)
         position = positions[0]
         symbol_info = self._symbol(position.symbol)
         symbol = str(getattr(symbol_info, 'name', '') or position.symbol)
