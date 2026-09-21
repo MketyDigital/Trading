@@ -245,15 +245,37 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
   return { group: desired, actions };
 }
 
-function managementAuditGroup(group, event, nowMs) {
-  return {
+function managementAuditGroup(group, event, nowMs, management = null) {
+  const next = {
     ...group,
+    legs: Array.isArray(group?.legs) ? group.legs.map((leg) => ({ ...leg })) : [],
     sourceEventIds: [...new Set([
       ...(group.sourceEventIds || []).map(String),
       ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
     ])],
     updatedAt: Number(nowMs),
   };
+
+  if (management?.type === 'TARGET_HIT') {
+    const hitIndex = Number(management.targetIndex);
+    if (Number.isInteger(hitIndex) && hitIndex >= 1) {
+      next.legs = next.legs.map((leg) => {
+        const targetIndex = Number(leg.targetIndex);
+        if (!Number.isInteger(targetIndex) || targetIndex > hitIndex) return leg;
+        return {
+          ...leg,
+          status: 'CLOSED',
+          lots: 0,
+          closedAt: leg.closedAt ?? Number(nowMs),
+        };
+      });
+      if (!next.legs.some((leg) => ['OPEN', 'PENDING', 'PLANNED'].includes(String(leg.status).toUpperCase()))) {
+        next.status = 'CLOSED';
+      }
+    }
+  }
+
+  return next;
 }
 
 async function orchestrateMatchedManagement({
@@ -321,6 +343,20 @@ async function orchestrateMatchedManagement({
     }
 
     if (!Array.isArray(actions) || actions.length === 0) {
+      const protectionAlreadyApplied = ['TARGET_HIT', 'MOVE_SL_TO_BE'].includes(String(interpretation.management?.type || '').toUpperCase());
+      if (protectionAlreadyApplied) {
+        stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs, interpretation.management));
+        results.push({
+          accountId: account.id,
+          status: 'SKIPPED',
+          reason: interpretation.management?.type === 'TARGET_HIT'
+            ? 'TARGET_PROTECTION_ALREADY_APPLIED'
+            : 'BREAK_EVEN_ALREADY_APPLIED',
+          policy,
+          actions: [],
+        });
+        continue;
+      }
       results.push({
         accountId: account.id,
         status: 'BLOCKED',
@@ -331,7 +367,7 @@ async function orchestrateMatchedManagement({
       continue;
     }
 
-    stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs));
+    stagedGroups.push(managementAuditGroup(matchedGroup, event, nowMs, interpretation.management));
     results.push({
       accountId: account.id,
       status: 'READY',
