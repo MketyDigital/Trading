@@ -22,11 +22,11 @@ jobs:
         run: |
           test -n "$MKETY_TRADING_ADMIN_SECRET" || { echo "MKETY_TRADING_ADMIN_SECRET is missing"; exit 1; }
 
-      - name: Repair exact FBS LIVE GOLD group after production endpoint is ready
+      - name: Repair latest affected FBS LIVE GOLD group after production endpoint is ready
         shell: bash
         run: |
           set -euo pipefail
-          endpoint="https://trade.mkety.com/api/v1/mkety-admin/trade-repair/6f10d00f-7787-4f5b-8cf2-49b2215045cb"
+          endpoint="https://trade.mkety.com/api/v1/mkety-admin/trade-repair/a7863ecd-7742-466e-9145-5d374007ade1"
           payload='{"workspaceId":"5f63234c-20e9-426c-995f-56d129f51ece","confirmLive":true}'
           body="$RUNNER_TEMP/fbs-live-repair.json"
 
