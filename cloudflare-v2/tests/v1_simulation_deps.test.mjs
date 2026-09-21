@@ -267,11 +267,27 @@ test('real broker planning ignores static simulation price fixtures so they cann
   assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), undefined);
 });
 
-test('explicit simulation mode still uses configured simulation price fixtures', async () => {
+test('legacy simulation flag cannot leak static prices into real broker transport', async () => {
   const deps = await createV1SimulationDependencies({
     env: {
       ...baseEnv(),
       TRADING_V1_SIMULATION: 'true',
+      TRADING_EXECUTION_TRANSPORT_MODE: 'real',
+      TRADING_V1_SIMULATION_PRICES: JSON.stringify({ XAUUSD: 2500 }),
+    },
+    supabase: { from() { throw new Error('database should not be used for price fixture test'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), undefined);
+});
+
+test('explicit simulation transport still uses configured simulation price fixtures', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: {
+      ...baseEnv(),
+      TRADING_V1_SIMULATION: 'true',
+      TRADING_EXECUTION_TRANSPORT_MODE: 'simulation',
       TRADING_V1_SIMULATION_PRICES: JSON.stringify({ XAUUSD: 2500 }),
     },
     supabase: { from() { throw new Error('database should not be used for price fixture test'); } },
