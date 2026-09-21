@@ -740,3 +740,38 @@ Migration boundary remains:
 - No repository visibility mutation, trading gate change, broker route change, account-control change, DNS change, or new real-money trade was performed during this final verification.
 - Next-session infrastructure task agreed with owner: provision an isolated Azure Ubuntu self-hosted GitHub Actions runner, target roughly 2 vCPU / 1 GiB, register at `MketyDigital` organization level with labels such as `self-hosted, linux, x64, mkety-ci`. Keep it isolated from production OCI services. Use it selectively for lightweight CI/deploy work; GitHub-hosted runners remain available for memory-heavy jobs.
 - After the observation period, private conversion sequence remains: verify authenticated Coolify source -> change GitHub visibility once -> run private checkout/deploy acceptance -> verify gateway health/WebSockets/sessions -> keep repo private permanently. Do not oscillate public/private for routine development.
+
+### Permanent fast-to-full planning/root-cause audit — 2026-09-21
+
+Newest affected production sequence:
+- Fast source event `telegram:-1004387586337:952` (`GOLD SELL`) opened one FBS LIVE XAUUSD market position.
+- Full source event `telegram:-1004387586337:953` parsed correctly with SELL range 4357-4367, SL 4371 and TPs 4353/4347/4327, and correlated as `FAST_ENTRY_COMPLETION`.
+- Production execution emitted only one `MODIFY_POSITION` action for the existing leg and opened no target-2/target-3 legs.
+- Root cause was not FBS rejection: legacy static simulation price state could still feed the planning layer when `TRADING_V1_SIMULATION=true`, even though real broker transport was active. A stale XAUUSD fixture around 2500 made the SELL SL at 4371 appear valid while every TP near 4353/4347/4327 appeared invalid, so reconciliation stripped every TP open before broker dispatch.
+- RED proof on PR #126: real transport + legacy simulation flag returned the static 2500 fixture instead of no fixture.
+
+Permanent production fix already merged on main as `cc72f8929348fd419eee0bcfce4f9c3245a042ae`:
+- Static planning prices are isolated to explicit `TRADING_EXECUTION_TRANSPORT_MODE=simulation` only.
+- Production Wrangler pins `TRADING_EXECUTION_TRANSPORT_MODE=real` and `TRADING_V1_SIMULATION=false`.
+- Real MT5 planning now loads authenticated connector identity + current broker tick before completion planning.
+- Real cTrader planning now authenticates the account and loads broker quotes before completion planning.
+- Live repair now selects the latest complete matching source intent rather than accidentally anchoring to an earlier incomplete fast event.
+- Trading V1 CI and Production Cloudflare Deploy passed on the merged commit.
+
+Account sizing audit:
+- Both MT5 account rows had drifted to fixed lot `0.99`. No operation-journal entry exists that identifies who/what changed them.
+- The dashboard/API only mutate fixed lots through the explicit per-account fixed-lot action; no repository code contains an automatic `0.99` sizing rule.
+- Both MT5 DEMO `213921698` and FBS LIVE `110664480` were restored to fixed lot `0.01` on 2026-09-21. cTrader DEMO remains `0.01`.
+- Do not infer the historical actor that changed 0.01 -> 0.99 without audit evidence.
+
+Production-probe cleanup:
+- Production Connection Readiness had a stale assertion that LIVE must always be disabled. This conflicts with the owner's current persisted LIVE-enabled posture and created a false-red workflow.
+- Production Frontend E2E had a stale assertion for removed DOM control `showAdvancedMt5BridgeBtn`, creating another false-red workflow.
+- PR #128 updates both probes to validate current contracts rather than historical assumptions.
+- PR #128 also retargets the existing one-time, broker-aware repair workflow to the newest affected FBS group `a7863ecd-7742-466e-9145-5d374007ade1`. The repair endpoint re-checks live broker identity/current price/SL/targets before any action and safely skips when the original signal is no longer valid.
+
+Current intended TP protection progression remains:
+- TP1 hit -> remaining SL to original entry / break-even.
+- TP2 hit -> remaining SL to TP1.
+- TP3 hit -> remaining SL to TP2.
+- Continue the same progression for later targets.
