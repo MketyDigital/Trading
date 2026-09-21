@@ -252,3 +252,31 @@ test('routed cTrader account hydrates a missing broker catalog before planning',
   assert.equal(updates.length, 1);
   assert.deepEqual(updates[0].provider_config.symbolCatalog, hydratedCatalog);
 });
+
+
+test('real broker planning ignores static simulation price fixtures so they cannot suppress valid TP legs', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: {
+      ...baseEnv(),
+      TRADING_V1_SIMULATION_PRICES: JSON.stringify({ XAUUSD: 2500 }),
+    },
+    supabase: { from() { throw new Error('database should not be used for price fixture test'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), undefined);
+});
+
+test('explicit simulation mode still uses configured simulation price fixtures', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: {
+      ...baseEnv(),
+      TRADING_V1_SIMULATION: 'true',
+      TRADING_V1_SIMULATION_PRICES: JSON.stringify({ XAUUSD: 2500 }),
+    },
+    supabase: { from() { throw new Error('database should not be used for price fixture test'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  assert.equal(await deps.marketPriceProvider({}, { symbol: { canonical: 'XAUUSD' } }), 2500);
+});

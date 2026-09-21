@@ -48,6 +48,7 @@ function statusForSimulation(simulation = {}) {
 function statusForExecution(execution = {}) {
   const status = String(execution?.status ?? '').toUpperCase();
   if (['EXECUTED', 'SUCCEEDED', 'PARTIAL_SUCCESS'].includes(status)) return 'SUCCEEDED';
+  if (status === 'PARTIAL' || status === 'PARTIAL_FAILURE') return status === 'PARTIAL_FAILURE' ? 'FAILED' : 'INFO';
   if (status.includes('DISABLED') || status === 'BLOCKED') return 'BLOCKED';
   if (status.includes('RETRY') || status.includes('UNCERTAIN')) return 'RETRYABLE';
   if (status === 'FAILED') return 'FAILED';
@@ -254,7 +255,24 @@ export function buildV1LifecycleEvidence({
         status: execution?.status ?? null,
         executionEnabled: execution?.executionEnabled ?? null,
         succeeded: execution?.succeeded ?? null,
+        partial: execution?.partial ?? null,
         failed: execution?.failed ?? null,
+        blocked: execution?.blocked ?? null,
+        accounts: Array.isArray(execution?.accounts)
+          ? execution.accounts.map((account) => ({
+              accountId: account?.accountId ?? null,
+              status: account?.status ?? null,
+              reason: account?.reason ?? null,
+              actions: Array.isArray(account?.actions)
+                ? account.actions.map((action) => ({
+                    status: action?.status ?? null,
+                    legId: action?.legId ?? null,
+                    reason: action?.reason ?? null,
+                    reconciledClosed: action?.reconciledClosed === true,
+                  }))
+                : [],
+            }))
+          : [],
       },
     }));
   }

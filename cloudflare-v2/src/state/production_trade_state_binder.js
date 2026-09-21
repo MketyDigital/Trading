@@ -1,6 +1,8 @@
 function text(value) { return String(value ?? '').trim(); }
 
 function lifecycleStatus(binding = {}) {
+  const explicit = text(binding.status).toUpperCase();
+  if (explicit === 'CLOSED' || explicit === 'CANCELLED' || explicit === 'FAILED') return explicit;
   const actionType = text(binding.actionType).toUpperCase();
   if (actionType === 'CLOSE_POSITION') return 'CLOSED';
   if (actionType === 'CANCEL_PENDING') return 'CANCELLED';

@@ -63,3 +63,44 @@ test('partial close uses the persisted broker symbol volume step instead of assu
   assert.equal(actions.length, 1);
   assert.equal(actions[0].lots, 0.05);
 });
+
+
+test('reconciled broker closure binds CLOSED even for a MODIFY_POSITION management action', async () => {
+  const bindings = [];
+  const action = { type: 'MODIFY_POSITION', symbol: 'XAUUSD', brokerPositionId: 'p1', stopLoss: 2500, legId: 'leg-1', idempotencyKey: 'k3' };
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-3', brokerExecutionEnabled: true, accountPlans: [plan(action)],
+  }, {
+    accountLoader: async () => account(),
+    dispatchAction: async () => ({ reconciledClosed: true, positionClosed: true, brokerPositionId: 'p1' }),
+    stateBinder: async (binding) => bindings.push(binding),
+  });
+
+  assert.equal(summary.status, 'SUCCEEDED');
+  assert.equal(bindings.length, 1);
+  assert.equal(bindings[0].status, 'CLOSED');
+});
+
+test('one successful action plus blocked sibling actions reports PARTIAL instead of false success', async () => {
+  const actions = [
+    { type: 'MODIFY_POSITION', symbol: 'XAUUSD', brokerPositionId: 'p1', stopLoss: 2500, legId: 'leg-1', idempotencyKey: 'partial-1' },
+    { type: 'OPEN_POSITION', symbol: 'XAUUSD', side: 'BUY', lots: 0.01, legId: 'leg-2', idempotencyKey: 'partial-2' },
+    { type: 'OPEN_POSITION', symbol: 'XAUUSD', side: 'BUY', lots: 0.01, legId: 'leg-3', idempotencyKey: 'partial-3' },
+  ];
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-4', brokerExecutionEnabled: true,
+    accountPlans: [{ accountId: 'acct-a', groupId: 'group-a', actions }],
+  }, {
+    accountLoader: async () => account(),
+    riskMaterializer: async ({ action }) => action.legId === 'leg-1'
+      ? { allowed: true, action }
+      : { allowed: false, reason: 'TEST_BLOCK' },
+    dispatchAction: async () => ({ brokerPositionId: 'p1' }),
+    stateBinder: async () => {},
+  });
+
+  assert.equal(summary.status, 'PARTIAL');
+  assert.equal(summary.partial, 1);
+  assert.equal(summary.accounts[0].status, 'PARTIAL');
+  assert.equal(summary.accounts[0].actions.filter((item) => item.status === 'BLOCKED').length, 2);
+});

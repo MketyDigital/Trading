@@ -4,6 +4,7 @@ import {
   ctraderEndpoint,
   buildApplicationAuthMessage,
   buildAccountAuthMessage,
+  buildReconcileMessage,
   buildNewOrderMessage,
   buildSymbolsListMessage,
   buildSymbolByIdMessage,
@@ -56,4 +57,13 @@ test('builds cTrader new order using symbolId and protocol volume', () => {
   assert.equal(msg.payload.limitPrice, 2526.5);
   assert.equal(msg.payload.stopLoss, 2518);
   assert.equal(msg.payload.takeProfit, 2535);
+});
+
+
+test('builds broker-authoritative cTrader reconcile request', () => {
+  assert.deepEqual(buildReconcileMessage({ clientMsgId: 'r1', accountId: 123 }), {
+    clientMsgId: 'r1',
+    payloadType: 2124,
+    payload: { ctidTraderAccountId: 123, returnProtectionOrders: false },
+  });
 });
