@@ -31,6 +31,13 @@ function preservedTakeProfit(leg) {
   return value == null ? {} : { takeProfit: value };
 }
 
+function sameProtectionPrice(left, right) {
+  const a = finiteProtection(left);
+  const b = finiteProtection(right);
+  if (a == null || b == null) return a === b;
+  return Math.abs(a - b) <= Math.max(1e-9, Math.abs(a) * 1e-10, Math.abs(b) * 1e-10);
+}
+
 const COMPOUND_PROTECTION_TYPES = new Set([
   'MOVE_SL_TO_BE',
   'MOVE_SL',
@@ -217,6 +224,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
 
   return group.legs
     .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
+    .filter((leg) => !sameProtectionPrice(currentStopLoss(group, leg), protectedStop))
     .map((leg) => ({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
@@ -260,18 +268,20 @@ export function buildManagementActions(group, management) {
   }
   if (management?.type === 'MOVE_SL_TO_BE') {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for break-even');
-    return openLegs.map((leg) => ({
-      type: 'MODIFY_POSITION',
-      managementType: 'MOVE_SL_TO_BE',
-      legId: leg.legId,
-      targetIndex: leg.targetIndex,
-      brokerPositionId: leg.brokerPositionId,
-      symbol: group.symbol,
-      side: group.side,
-      entryPrice: Number(group.entryPrice),
-      stopLoss: Number(group.entryPrice),
-      ...preservedTakeProfit(leg),
-    }));
+    return openLegs
+      .filter((leg) => !sameProtectionPrice(currentStopLoss(group, leg), Number(group.entryPrice)))
+      .map((leg) => ({
+        type: 'MODIFY_POSITION',
+        managementType: 'MOVE_SL_TO_BE',
+        legId: leg.legId,
+        targetIndex: leg.targetIndex,
+        brokerPositionId: leg.brokerPositionId,
+        symbol: group.symbol,
+        side: group.side,
+        entryPrice: Number(group.entryPrice),
+        stopLoss: Number(group.entryPrice),
+        ...preservedTakeProfit(leg),
+      }));
   }
   if (management?.type === 'MOVE_SL') {
     const stopLoss = Number(management.stopLoss);
