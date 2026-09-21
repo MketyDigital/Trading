@@ -93,12 +93,12 @@ test('when enabled TP1 hit moves only remaining TP legs to break-even', async ()
     stopLoss: action.stopLoss,
     simulated: action.simulated,
   })), [
+    { type: 'CLOSE_POSITION', brokerPositionId: 'pos-1', stopLoss: undefined, simulated: true },
     { type: 'MODIFY_POSITION', brokerPositionId: 'pos-2', stopLoss: 2500, simulated: true },
     { type: 'MODIFY_POSITION', brokerPositionId: 'pos-3', stopLoss: 2500, simulated: true },
   ]);
   assert.equal(persisted.sourceEventIds.includes('tp-hit-1'), true);
-  assert.equal(persisted.legs[0].status, 'CLOSED');
-  assert.equal(persisted.legs[0].lots, 0);
+  assert.equal(persisted.legs[0].status, 'OPEN', 'planner must not claim a broker close before broker acknowledgement');
   assert.equal(persisted.legs[1].status, 'OPEN');
   assert.equal(persisted.legs[2].status, 'OPEN');
 });
@@ -116,11 +116,13 @@ test('when enabled TP2 hit moves only later remaining legs to TP1 price', async 
     instrumentProvider: async () => { throw new Error('target-hit protection must not require market metadata'); },
   });
 
-  assert.deepEqual(result.accounts[0].actions.map((action) => [action.brokerPositionId, action.stopLoss]), [
-    ['pos-3', 2510],
+  assert.deepEqual(result.accounts[0].actions.map((action) => [action.type, action.brokerPositionId, action.stopLoss]), [
+    ['CLOSE_POSITION', 'pos-1', undefined],
+    ['CLOSE_POSITION', 'pos-2', undefined],
+    ['MODIFY_POSITION', 'pos-3', 2510],
   ]);
-  assert.equal(persisted.legs[0].status, 'CLOSED');
-  assert.equal(persisted.legs[1].status, 'CLOSED');
+  assert.equal(persisted.legs[0].status, 'OPEN');
+  assert.equal(persisted.legs[1].status, 'OPEN');
   assert.equal(persisted.legs[2].status, 'OPEN');
 });
 
