@@ -136,6 +136,8 @@ export async function executeMt5ConnectorAction(action, {
       brokerDealId: body.dealId != null ? String(body.dealId) : body.deal_id != null ? String(body.deal_id) : null,
       fillPrice: Number.isFinite(fillPrice) ? fillPrice : null,
       platformSymbol: resolved?.platformSymbol ?? null,
+      reconciledClosed: body.reconciledClosed === true,
+      positionClosed: body.positionClosed === true,
       response: body,
     };
     await deliveryStore.complete(action.idempotencyKey, result);
