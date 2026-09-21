@@ -208,6 +208,8 @@ def command_result(result):
         'retcode': result.get('retcode'),
         'comment': result.get('comment'),
         'recovered': bool(result.get('recovered', False)),
+        'reconciledClosed': bool(result.get('reconciled_closed', False)),
+        'positionClosed': bool(result.get('position_closed', False)),
     }
 
 
