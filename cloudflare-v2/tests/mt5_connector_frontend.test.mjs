@@ -72,6 +72,6 @@ test('production readiness validates persisted LIVE switch consistency instead o
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-connection-readiness.yml'), 'utf8');
   assert.doesNotMatch(workflow, /LIVE broker execution must remain disabled/);
   assert.match(workflow, /effectiveLiveBrokerExecutionEnabled/);
-  assert.match(workflow, /liveBrokerExecutionCapabilityEnabled/);
+  assert.match(workflow, /tradingAccessEnabled/);
   assert.match(workflow, /expectedEffectiveLive/);
 });
