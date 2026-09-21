@@ -16,6 +16,7 @@ import { handleTradingViewWebhookRequest } from './http/tradingview_webhook.js';
 import { handleTradingAccessCodeRedeemRequest } from './http/v1_access_codes.js';
 import { handleMketyAdminAccessCodesRequest } from './http/v1_mkety_admin_access_codes.js';
 import { handleMketyAdminOperationsRequest } from './http/v1_mkety_admin_operations.js';
+import { handleMketyAdminTradeRepairRequest } from './http/v1_mkety_admin_trade_repair.js';
 import { validateStagingReadiness } from './config/staging_readiness.js';
 import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
@@ -153,6 +154,7 @@ export function createTradingV1Entrypoint({
   accessCodeRedeemHandler = handleTradingAccessCodeRedeemRequest,
   mketyAdminAccessCodesHandler = handleMketyAdminAccessCodesRequest,
   mketyAdminOperationsHandler = handleMketyAdminOperationsRequest,
+  mketyAdminTradeRepairHandler = handleMketyAdminTradeRepairRequest,
   publicBrandingHandler = handlePublicBrandingRequest,
   customHostnameRouteProofHandler = handleCustomHostnameRouteProofRequest,
   queueRuntime = null,
@@ -185,6 +187,7 @@ export function createTradingV1Entrypoint({
       if (['/api/v1/access/redeem', '/api/v1/access/session', '/api/v1/access/logout'].includes(url.pathname)) return accessCodeRedeemHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/access/')) return notFoundResponse();
       if (url.pathname === '/api/v1/mkety-admin/operations') return mketyAdminOperationsHandler(request, env, { ctx });
+      if (url.pathname.startsWith('/api/v1/mkety-admin/trade-repair/')) return mketyAdminTradeRepairHandler(request, env, { ctx });
       if (url.pathname === '/api/v1/mkety-admin/access-codes' || url.pathname.startsWith('/api/v1/mkety-admin/access-codes/') || url.pathname.startsWith('/api/v1/mkety-admin/test-workspaces/') || url.pathname === '/api/v1/mkety-admin/runtime-controls') return mketyAdminAccessCodesHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/mkety-admin/')) return notFoundResponse();
       if (/^\/api\/v1\/external\/mtproto\/[^/]+\/[^/]+$/.test(url.pathname)) {
