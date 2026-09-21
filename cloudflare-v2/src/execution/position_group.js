@@ -222,7 +222,18 @@ export function buildTargetProtectionActions(group, targetIndex) {
     protectedStop = Number(previousLeg.takeProfit);
   }
 
-  return group.legs
+  const reached = group.legs
+    .filter((leg) => Number(leg.targetIndex) <= index && leg.status === 'OPEN' && leg.brokerPositionId)
+    .map((leg) => ({
+      type: 'CLOSE_POSITION',
+      legId: leg.legId,
+      brokerPositionId: leg.brokerPositionId,
+      symbol: group.symbol,
+      lots: leg.lots,
+      targetIndex: leg.targetIndex,
+    }));
+
+  const protectRemaining = group.legs
     .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
     .filter((leg) => !sameProtectionPrice(currentStopLoss(group, leg), protectedStop))
     .map((leg) => ({
@@ -234,6 +245,8 @@ export function buildTargetProtectionActions(group, targetIndex) {
       ...preservedTakeProfit(leg),
       targetIndex: leg.targetIndex,
     }));
+
+  return [...reached, ...protectRemaining];
 }
 
 export function buildManagementActions(group, management) {
