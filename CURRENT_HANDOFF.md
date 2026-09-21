@@ -761,8 +761,9 @@ Permanent production fix already merged on main as `cc72f8929348fd419eee0bcfce4f
 Account sizing audit:
 - Both MT5 account rows had drifted to fixed lot `0.99`. No operation-journal entry exists that identifies who/what changed them.
 - The dashboard/API only mutate fixed lots through the explicit per-account fixed-lot action; no repository code contains an automatic `0.99` sizing rule.
-- Both MT5 DEMO `213921698` and FBS LIVE `110664480` were restored to fixed lot `0.01` on 2026-09-21. cTrader DEMO remains `0.01`.
-- Do not infer the historical actor that changed 0.01 -> 0.99 without audit evidence.
+- Both MT5 DEMO `213921698` and FBS LIVE `110664480` are user-configured at fixed lot `0.99`. Do not change user-selected lot sizing unless the user explicitly instructs a lot-size change.
+- cTrader DEMO remains `0.01`.
+- Do not infer the historical actor or reason for any lot-size change without audit evidence.
 
 Production-probe cleanup:
 - Production Connection Readiness had a stale assertion that LIVE must always be disabled. This conflicts with the owner's current persisted LIVE-enabled posture and created a false-red workflow.
