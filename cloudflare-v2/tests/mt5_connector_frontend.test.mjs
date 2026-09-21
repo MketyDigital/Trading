@@ -57,7 +57,7 @@ test('connected MT5 connector cards show connected state and refresh is recovery
 
 test('production browser release gate verifies the shipped MT5 Connector contract without authenticating or clicking setup controls', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-frontend-e2e.yml'), 'utf8');
-  assert.match(workflow, /showAdvancedMt5BridgeBtn/);
+  assert.doesNotMatch(workflow, /showAdvancedMt5BridgeBtn/);
   assert.match(workflow, /MT5 Connector — Recommended/);
   assert.match(workflow, /createMt5ConnectorBtn/);
   assert.ok(workflow.includes('assert.match(shippedScripts, /MketyMT5Connector\\.exe/);'));
@@ -65,4 +65,13 @@ test('production browser release gate verifies the shipped MT5 Connector contrac
   assert.doesNotMatch(workflow, /showMt5CloudBtn[^\n]*isVisible\(\)[^\n]*true/);
   assert.doesNotMatch(workflow, /showMt5BridgeBtn[^\n]*\.click\(/);
   assert.doesNotMatch(workflow, /accessCode[^\n]*\.fill\(/);
+});
+
+
+test('production readiness validates persisted LIVE switch consistency instead of forcing LIVE off', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-connection-readiness.yml'), 'utf8');
+  assert.doesNotMatch(workflow, /LIVE broker execution must remain disabled/);
+  assert.match(workflow, /effectiveLiveBrokerExecutionEnabled/);
+  assert.match(workflow, /tradingAccessEnabled/);
+  assert.match(workflow, /expectedEffectiveLive/);
 });

@@ -55,10 +55,17 @@ jobs:
           const body = JSON.parse(process.env.RUNTIME_BODY || '{}');
           if (body.ok !== true) throw new Error('runtime controls unavailable');
           if (body.brokerExecutionCapabilityEnabled !== true) throw new Error('broker execution capability is unavailable');
-          if (body.liveBrokerExecutionEnabled !== false) throw new Error('LIVE broker execution must remain disabled');
-          if (body.effectiveLiveBrokerExecutionEnabled !== false) throw new Error('effective LIVE broker execution must remain disabled');
+          if (typeof body.tradingAccessEnabled !== 'boolean') throw new Error('trading access state is invalid');
+          if (typeof body.brokerExecutionEnabled !== 'boolean') throw new Error('broker execution state is invalid');
+          if (typeof body.liveBrokerExecutionEnabled !== 'boolean') throw new Error('LIVE broker execution state is invalid');
+          if (typeof body.effectiveBrokerExecutionEnabled !== 'boolean') throw new Error('effective broker execution state is invalid');
+          if (typeof body.effectiveLiveBrokerExecutionEnabled !== 'boolean') throw new Error('effective LIVE broker execution state is invalid');
+          const expectedEffectiveBroker = body.tradingAccessEnabled && body.brokerExecutionEnabled;
+          const expectedEffectiveLive = expectedEffectiveBroker && body.liveBrokerExecutionEnabled;
+          if (body.effectiveBrokerExecutionEnabled !== expectedEffectiveBroker) throw new Error('effective broker execution state is inconsistent');
+          if (body.effectiveLiveBrokerExecutionEnabled !== expectedEffectiveLive) throw new Error('effective LIVE broker execution state is inconsistent');
           console.log('BROKER_EXECUTION_CAPABILITY=PASS');
-          console.log('LIVE_EXECUTION=DISABLED');
+          console.log(`LIVE_EXECUTION_STATE=${body.liveBrokerExecutionEnabled ? 'ENABLED' : 'DISABLED'}`);
           NODE
 
       - name: Verify staff API remains private
