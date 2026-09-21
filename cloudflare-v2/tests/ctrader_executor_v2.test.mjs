@@ -135,3 +135,62 @@ test('executes canonical cTrader partial close through same idempotent service',
   assert.equal(sent.payload.positionId, 456);
   assert.equal(result.brokerPositionId, 456);
 });
+
+
+test('cTrader management reconciles POSITION_NOT_FOUND as already closed only when broker reconcile confirms absence', async () => {
+  const sent = [];
+  const store = deliveryStore();
+  const notFound = new Error('POSITION_NOT_FOUND: Position not found with id 456');
+  notFound.code = 'POSITION_NOT_FOUND';
+  notFound.deliveryFailureClass = 'TERMINAL';
+
+  const result = await executeCTraderAction({
+    type: 'MODIFY_POSITION', brokerPositionId: 456, symbol: 'XAUUSD',
+    stopLoss: 2526, takeProfit: 2540, idempotencyKey: 'modify-stale',
+  }, {
+    session: {
+      request: async (message) => {
+        sent.push(message);
+        if (message.payloadType === 2110) throw notFound;
+        if (message.payloadType === 2124) {
+          return { payloadType: 2125, payload: { position: [{ positionId: 999 }], order: [] } };
+        }
+        throw new Error('unexpected request');
+      },
+    },
+    accountId: 77, catalog: [symbol], deliveryStore: store,
+  });
+
+  assert.deepEqual(sent.map((message) => message.payloadType), [2110, 2124]);
+  assert.equal(result.reconciledClosed, true);
+  assert.equal(result.positionClosed, true);
+  assert.equal(result.brokerPositionId, '456');
+  assert.equal(store.completed.length, 1);
+  assert.equal(store.failed.length, 0);
+});
+
+test('cTrader management preserves POSITION_NOT_FOUND failure when reconcile says position is still open', async () => {
+  const store = deliveryStore();
+  const notFound = new Error('POSITION_NOT_FOUND: Position not found with id 456');
+  notFound.code = 'POSITION_NOT_FOUND';
+  notFound.deliveryFailureClass = 'TERMINAL';
+
+  await assert.rejects(() => executeCTraderAction({
+    type: 'MODIFY_POSITION', brokerPositionId: 456, symbol: 'XAUUSD',
+    stopLoss: 2526, idempotencyKey: 'modify-still-open',
+  }, {
+    session: {
+      request: async (message) => {
+        if (message.payloadType === 2110) throw notFound;
+        if (message.payloadType === 2124) {
+          return { payloadType: 2125, payload: { position: [{ positionId: 456 }], order: [] } };
+        }
+        throw new Error('unexpected request');
+      },
+    },
+    accountId: 77, catalog: [symbol], deliveryStore: store,
+  }), (error) => error?.code === 'POSITION_NOT_FOUND');
+
+  assert.equal(store.completed.length, 0);
+  assert.equal(store.failed.length, 1);
+});
