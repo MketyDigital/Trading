@@ -75,6 +75,142 @@ function isCTraderOauthAccount(account = {}) {
     && text(account?.provider_mode ?? account?.providerMode).toLowerCase() === 'ctrader_oauth';
 }
 
+function isMt5ConnectorAccount(account = {}) {
+  return text(account?.platform).toLowerCase() === 'mt5'
+    && text(account?.provider_mode ?? account?.providerMode).toLowerCase() === 'mt5_connector';
+}
+
+function executionSidePrice(intent = {}, tick = {}) {
+  const side = text(intent?.side).toUpperCase();
+  const preferred = side === 'BUY' ? tick.ask : side === 'SELL' ? tick.bid : null;
+  for (const value of [preferred, tick.last, tick.ask, tick.bid]) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return undefined;
+}
+
+function cleanHttpsBase(value) {
+  const raw = text(value).replace(/\/+$/, '');
+  const parsed = new URL(raw);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('broker gateway URL must use clean https');
+  }
+  return parsed.toString().replace(/\/$/, '');
+}
+
+async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
+  const masterKey = text(env.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  if (!masterKey || !ciphertext) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning credentials unavailable');
+  const credentials = await decryptConnectionCredentials('mt5_connector', ciphertext, masterKey);
+  const baseUrl = cleanHttpsBase(credentials.gatewayUrl);
+  const controlSecret = text(credentials.controlSecret);
+  if (!controlSecret) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning control credential unavailable');
+
+  const rowId = text(account?.id);
+  const identityResponse = await fetchFn(`${baseUrl}/v1/mt5-connections/${encodeURIComponent(rowId)}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  const identity = await identityResponse.json().catch(() => ({}));
+  if (!identityResponse.ok || identity?.online !== true || text(identity.accountRowId) !== rowId) {
+    throw codedError('MT5_CONNECTOR_OFFLINE', 'MT5 connector is unavailable for broker-authoritative planning');
+  }
+  if (text(identity?.identity?.accountNumber) !== text(account?.account_id ?? account?.accountId)) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker account identity mismatch');
+  }
+  const expectedServer = text(account?.server_name ?? account?.serverName);
+  if (expectedServer && text(identity?.identity?.serverName) !== expectedServer) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker server identity mismatch');
+  }
+  if (text(account?.environment).toLowerCase() === 'live' && identity?.identity?.isLive !== true) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker environment mismatch');
+  }
+
+  const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
+  const liveCatalog = Array.isArray(identity?.identity?.symbols) && identity.identity.symbols.length
+    ? identity.identity.symbols
+    : persisted.catalog;
+  const candidates = [canonicalSymbol(intent), text(intent?.symbol?.source)].filter(Boolean);
+  let resolved = null;
+  for (const candidate of [...new Set(candidates)]) {
+    const result = resolveAccountSymbol(candidate, liveCatalog, persisted.aliases);
+    if (result.ok) { resolved = result; break; }
+  }
+  if (!resolved) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning symbol resolution failed');
+
+  const contextResponse = await fetchFn(
+    `${baseUrl}/v1/mt5-context/${encodeURIComponent(rowId)}?symbol=${encodeURIComponent(resolved.platformSymbol)}`,
+    {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+      signal: AbortSignal.timeout(7000),
+    },
+  );
+  const body = await contextResponse.json().catch(() => ({}));
+  if (!contextResponse.ok || body?.ok !== true || text(body.accountRowId) !== rowId) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker market context unavailable');
+  }
+  const price = executionSidePrice(intent, body?.context?.tick || {});
+  if (!(price > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker tick unavailable');
+  return price;
+}
+
+async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
+  const masterKey = text(env.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  const accountId = Number(account?.account_id ?? account?.accountId);
+  const environment = text(account?.environment).toLowerCase();
+  if (!masterKey || !ciphertext || !Number.isInteger(accountId) || !['demo', 'live'].includes(environment)) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader planning credentials unavailable');
+  }
+
+  const credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey);
+  const session = new CTraderJsonSession({
+    endpoint: ctraderEndpoint(environment, 'json'),
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+  });
+  try {
+    await session.open();
+    await session.authenticateAccount(accountId, credentials.accessToken);
+    const marketData = new CTraderMarketData({ session, accountId });
+    const brokerAccount = await marketData.loadAccount();
+    if (!brokerAccount?.canOpenTrades) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader account cannot open trades');
+    marketData.catalog = await marketData.loadCatalog();
+    const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
+    const candidates = [canonicalSymbol(intent), text(intent?.symbol?.source)].filter(Boolean);
+    let resolved = null;
+    for (const candidate of [...new Set(candidates)]) {
+      const result = resolveAccountSymbol(candidate, marketData.catalog, persisted.aliases);
+      if (result.ok) { resolved = result; break; }
+    }
+    if (!resolved || !Number.isInteger(Number(resolved.platformId))) {
+      throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader planning symbol resolution failed');
+    }
+    const symbolId = Number(resolved.platformId);
+    await marketData.subscribeQuotes([symbolId]);
+    const spot = await session.waitForEvent(
+      (message) => Number(message?.payloadType) === 2131 && Number(message?.payload?.symbolId) === symbolId,
+      { timeoutMs: 5000 },
+    );
+    marketData.handleSpotEvent(spot);
+    const price = marketData.marketPriceFor(resolved.platformSymbol, intent?.side);
+    if (!(Number(price) > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader broker tick unavailable');
+    return Number(price);
+  } finally {
+    session.close?.();
+  }
+}
+
+async function defaultBrokerPlanningMarketPrice(account, intent, env = {}) {
+  if (isMt5ConnectorAccount(account)) return defaultMt5PlanningMarketPrice(account, intent, env);
+  if (isCTraderOauthAccount(account)) return defaultCTraderPlanningMarketPrice(account, intent, env);
+  return undefined;
+}
+
 function hasAuthoritativeCatalog(account = {}) {
   return accountSymbolCatalogFromProviderConfig(providerConfigOf(account)).catalog.length > 0;
 }
@@ -236,7 +372,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -298,15 +434,20 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
 
       throw new Error(`simulation instrument metadata is not configured for ${symbol || 'UNKNOWN'}`);
     },
-    async marketPriceProvider(_account, intent) {
-      // Static prices belong only to the explicit simulation transport. Legacy
-      // simulation flags may survive old deployments and must never influence
-      // planning when real broker transport is selected.
+    async marketPriceProvider(account, intent) {
+      // Static prices belong only to explicit simulation transport. Real
+      // planning asks the broker path for a current quote so fast-completion
+      // target validity cannot be decided by stale fixtures.
       const transportMode = String(env.TRADING_EXECUTION_TRANSPORT_MODE ?? 'real').trim().toLowerCase();
-      if (transportMode !== 'simulation') return undefined;
-      const symbol = canonicalSymbol(intent);
-      const price = Number(prices[symbol]);
-      return Number.isFinite(price) ? price : undefined;
+      if (transportMode === 'simulation') {
+        const symbol = canonicalSymbol(intent);
+        const price = Number(prices[symbol]);
+        return Number.isFinite(price) ? price : undefined;
+      }
+      const loader = typeof brokerMarketPriceLoader === 'function'
+        ? brokerMarketPriceLoader
+        : (candidateAccount, candidateIntent) => defaultBrokerPlanningMarketPrice(candidateAccount, candidateIntent, env);
+      return loader(account, intent);
     },
     async exposureProvider(account) {
       const configured = exposures[String(account?.id || '')];
