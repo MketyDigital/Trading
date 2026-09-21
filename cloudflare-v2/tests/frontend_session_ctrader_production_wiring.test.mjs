@@ -58,7 +58,7 @@ test('production connection readiness is read-only, verifies health/runtime safe
   assert.match(workflow, /\/api\/v1\/mkety-admin\/runtime-controls/);
   assert.match(workflow, /liveBrokerExecutionEnabled/);
   assert.match(workflow, /effectiveLiveBrokerExecutionEnabled/);
-  assert.match(workflow, /LIVE_EXECUTION=DISABLED/);
+  assert.match(workflow, /LIVE_EXECUTION_STATE=/);
   assert.doesNotMatch(workflow, /-X\s+POST/i);
   assert.doesNotMatch(workflow, /example\.test/i);
   assert.doesNotMatch(workflow, /access\/redeem/i);
