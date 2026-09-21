@@ -139,6 +139,27 @@ async function loadMt5ConnectorContext({ env, account, symbol }) {
   return { ...body.context, platformSymbol: resolved.platformSymbol };
 }
 
+export function selectCompletedRepairEvent(events = [], { symbol = null, side = null } = {}) {
+  const expectedSymbol = text(symbol).toUpperCase();
+  const expectedSide = text(side).toUpperCase();
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => {
+      const intent = event?.canonical_intent;
+      if (!intent || intent.incomplete === true) return false;
+      const eventSymbol = text(intent?.symbol?.canonical ?? intent?.symbol).toUpperCase();
+      const eventSide = text(intent?.side).toUpperCase();
+      const targets = Array.isArray(intent?.takeProfits) ? intent.takeProfits.filter((value) => finite(value) != null) : [];
+      if (expectedSymbol && eventSymbol !== expectedSymbol) return false;
+      if (expectedSide && eventSide !== expectedSide) return false;
+      return finite(intent?.stopLoss) != null && targets.length > 0;
+    })
+    .sort((left, right) => {
+      const a = Date.parse(left?.created_at || '') || 0;
+      const b = Date.parse(right?.created_at || '') || 0;
+      return b - a;
+    })[0] || null;
+}
+
 async function loadGroupIntentAndAccount(supabase, workspaceId, groupId) {
   const select = 'id,runtime_group_id,workspace_id,trade_account_id,source_event_id,source_event_ids,canonical_symbol,side,stop_loss,status';
   let lookup = await supabase
@@ -167,21 +188,32 @@ async function loadGroupIntentAndAccount(supabase, workspaceId, groupId) {
     .maybeSingle();
   if (accountError || !account) throw new Error('TRADE_ACCOUNT_NOT_FOUND');
 
-  let event = null;
+  const events = [];
   if (groupRow.source_event_id) {
     const result = await supabase.from('trading_events')
       .select('id,external_event_id,canonical_intent,raw_text,created_at')
       .eq('id', String(groupRow.source_event_id)).maybeSingle();
-    if (!result.error) event = result.data;
+    if (!result.error && result.data) events.push(result.data);
   }
-  if (!event?.canonical_intent && Array.isArray(groupRow.source_event_ids) && groupRow.source_event_ids.length) {
-    const external = String(groupRow.source_event_ids[groupRow.source_event_ids.length - 1]);
+
+  const sourceEventIds = Array.isArray(groupRow.source_event_ids)
+    ? [...new Set(groupRow.source_event_ids.map(String).filter(Boolean))]
+    : [];
+  if (sourceEventIds.length) {
     const result = await supabase.from('trading_events')
       .select('id,external_event_id,canonical_intent,raw_text,created_at')
-      .eq('external_event_id', external).maybeSingle();
-    if (!result.error) event = result.data;
+      .in('external_event_id', sourceEventIds);
+    if (result.error) throw new Error('COMPLETED_SIGNAL_EVENT_LOOKUP_FAILED');
+    for (const item of (result.data || [])) {
+      if (!events.some((existing) => String(existing?.id) === String(item?.id))) events.push(item);
+    }
   }
-  if (!event?.canonical_intent) throw new Error('COMPLETED_SIGNAL_INTENT_NOT_FOUND');
+
+  const event = selectCompletedRepairEvent(events, {
+    symbol: groupRow.canonical_symbol,
+    side: groupRow.side,
+  });
+  if (!event) throw new Error('COMPLETED_SIGNAL_INTENT_NOT_FOUND');
   return { groupRow, account, event, intent: event.canonical_intent, runtimeGroupId: String(groupRow.runtime_group_id) };
 }
 

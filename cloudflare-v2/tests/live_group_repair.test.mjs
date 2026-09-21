@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLiveRepairDecision } from '../src/execution/live_group_repair.js';
+import { buildLiveRepairDecision, selectCompletedRepairEvent } from '../src/execution/live_group_repair.js';
 
 const group = {
   id: 'g1',
@@ -50,4 +50,36 @@ test('BUY repair mirrors target and stop geometry correctly', () => {
   assert.equal(afterTp2.passedCount, 2);
   assert.equal(afterTp2.protectionStop, 105);
   assert.equal(buildLiveRepairDecision({ group: buyGroup, intent: buyIntent, marketPrice: 94, lotValue: 0.01 }).reason, 'SIGNAL_STOP_ALREADY_INVALIDATED');
+});
+
+
+test('live repair chooses the completed full signal over the original fast-entry event', () => {
+  const fast = {
+    id: 'fast-db',
+    external_event_id: 'telegram:-1001:952',
+    created_at: '2026-09-21T12:54:00Z',
+    canonical_intent: {
+      side: 'SELL',
+      symbol: { canonical: 'XAUUSD' },
+      incomplete: true,
+      stopLoss: null,
+      takeProfits: [],
+    },
+  };
+  const full = {
+    id: 'full-db',
+    external_event_id: 'telegram:-1001:953',
+    created_at: '2026-09-21T12:55:00Z',
+    canonical_intent: {
+      side: 'SELL',
+      symbol: { canonical: 'XAUUSD' },
+      incomplete: false,
+      stopLoss: 4371,
+      takeProfits: [4353, 4347, 4327],
+    },
+  };
+
+  assert.equal(selectCompletedRepairEvent([fast, full])?.id, 'full-db');
+  assert.equal(selectCompletedRepairEvent([full, fast])?.id, 'full-db');
+  assert.equal(selectCompletedRepairEvent([fast]), null);
 });
