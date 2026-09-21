@@ -178,6 +178,34 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
         self.assertEqual(second['deal_id'], 9002)
         self.assertEqual(len(mt5.sent), 1)
 
+    def test_close_missing_position_reconciles_as_already_closed_without_order_send(self):
+        mt5 = ReconcilingFakeMT5(positions=[])
+        engine = MT5Engine(mt5)
+        result = engine.execute({
+            'action': 'CLOSE_POSITION', 'symbol': 'XAUUSD',
+            'positionId': 7001, 'volume': 0.01,
+        }, 'close-missing')
+
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['reconciled_closed'])
+        self.assertTrue(result['position_closed'])
+        self.assertEqual(result['position_id'], 7001)
+        self.assertEqual(mt5.sent, [])
+
+    def test_modify_missing_position_reconciles_as_already_closed_without_order_send(self):
+        mt5 = ReconcilingFakeMT5(positions=[])
+        engine = MT5Engine(mt5)
+        result = engine.execute({
+            'action': 'MODIFY_POSITION', 'symbol': 'XAUUSD',
+            'positionId': 7001, 'stopLoss': 2500, 'takeProfit': 2550,
+        }, 'modify-missing')
+
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['reconciled_closed'])
+        self.assertTrue(result['position_closed'])
+        self.assertEqual(result['position_id'], 7001)
+        self.assertEqual(mt5.sent, [])
+
 
 if __name__ == '__main__':
     unittest.main()
