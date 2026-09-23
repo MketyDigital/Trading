@@ -362,3 +362,53 @@ test('Telegram message-is-not-modified edit response is accepted as idempotent s
   assert.equal(result.edited, false);
   assert.equal(result.alreadyCurrent, true);
 });
+
+
+test('clean_ai_fallback unresolved edit mapping fails open to one standalone send without changing other modes', async () => {
+  const supabase = lineageSupabase({ mappedMessageId: null });
+  let sent = 0;
+  let edited = 0;
+  const result = await runV1DestinationDeliveryAcceptanceStage({
+    workspaceId: 'ws-1',
+    sourceId: 'source-1',
+    event: {
+      external_event_id: 'telegram:-1001:24',
+      text: 'Updated analysis\n@sourcebrand',
+      thread: { edited_event_id: 'telegram:-1001:24' },
+      metadata: { telegram_update_kind: 'edited_message', native_identity: { chat_id: '-1001', message_id: '24' } },
+    },
+    interpretation: { status: 'NEEDS_REVIEW', reason: 'non-trading update' },
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    supabase,
+    destinationStore: {
+      async listRoutedDestinations() {
+        return [{
+          id: 'dest-1', workspace_id: 'ws-1', destination_type: 'telegram', destination_ref: '-1002', is_active: true,
+          credential_ciphertext: 'cipher',
+          settings: { formattingMode: 'clean_ai_fallback' },
+          template: {
+            formatting_mode: 'clean_ai_fallback',
+            parse_mode: 'plain',
+            cleanup_rules: { removeLinePatterns: ['^\\s*@\\w+\\s*$'] },
+          },
+          route_filters: {},
+        }];
+      },
+      async recordDestinationOutcome() {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'token' } }),
+    sendTelegram: async ({ text }) => {
+      sent += 1;
+      assert.equal(text, 'Updated analysis');
+      return { ok: true, status: 200, messageId: 102 };
+    },
+    editTelegram: async () => { edited += 1; return { ok: true, status: 200, messageId: 99, edited: true }; },
+    aiFormatterFactory: async () => null,
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.equal(sent, 1);
+  assert.equal(edited, 0);
+  assert.equal(supabase.journalRow.status, 'SUCCEEDED');
+});

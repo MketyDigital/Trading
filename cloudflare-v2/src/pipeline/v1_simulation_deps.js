@@ -215,6 +215,39 @@ function hasAuthoritativeCatalog(account = {}) {
   return accountSymbolCatalogFromProviderConfig(providerConfigOf(account)).catalog.length > 0;
 }
 
+async function defaultMt5AccountCatalogLoader(account, env = {}, fetchFn = fetch) {
+  if (!isMt5ConnectorAccount(account)) return null;
+  const masterKey = text(env?.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  const rowId = text(account?.id);
+  if (!masterKey || !ciphertext || !rowId) return null;
+
+  const credentials = await decryptConnectionCredentials('mt5_connector', ciphertext, masterKey);
+  const baseUrl = cleanHttpsBase(credentials.gatewayUrl);
+  const controlSecret = text(credentials.controlSecret);
+  if (!controlSecret) return null;
+
+  const response = await fetchFn(`${baseUrl}/v1/mt5-connections/${encodeURIComponent(rowId)}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body?.online !== true || text(body.accountRowId) !== rowId) return null;
+
+  const identity = body?.identity || {};
+  if (text(identity.accountNumber) !== text(account?.account_id ?? account?.accountId)) return null;
+  const expectedServer = text(account?.server_name ?? account?.serverName);
+  if (expectedServer && text(identity.serverName) !== expectedServer) return null;
+  const expectedEnvironment = text(account?.environment).toLowerCase();
+  if (expectedEnvironment === 'live' && identity.isLive !== true) return null;
+  if (expectedEnvironment === 'demo' && identity.isLive !== false) return null;
+
+  const catalog = Array.isArray(identity.symbols) ? identity.symbols : [];
+  if (!catalog.length) return null;
+  return { catalog, aliases: providerConfigOf(account).symbolAliases || {} };
+}
+
 async function defaultCTraderAccountCatalogLoader(account, env = {}) {
   if (!isCTraderOauthAccount(account)) return null;
   const masterKey = text(env?.TRADING_MASTER_KEY);
@@ -276,10 +309,15 @@ async function persistAccountCatalog(supabase, account, hydrated = {}) {
 async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountCatalogLoader } = {}) {
   const loader = typeof accountCatalogLoader === 'function'
     ? accountCatalogLoader
-    : (account) => defaultCTraderAccountCatalogLoader(account, env);
+    : (account) => {
+      if (isCTraderOauthAccount(account)) return defaultCTraderAccountCatalogLoader(account, env);
+      if (isMt5ConnectorAccount(account)) return defaultMt5AccountCatalogLoader(account, env);
+      return null;
+    };
 
   return Promise.all((accounts || []).map(async (account) => {
-    if (!isCTraderOauthAccount(account) || hasAuthoritativeCatalog(account)) return account;
+    const supportsHydration = isCTraderOauthAccount(account) || isMt5ConnectorAccount(account);
+    if (!supportsHydration || hasAuthoritativeCatalog(account)) return account;
 
     let hydrated;
     try {
