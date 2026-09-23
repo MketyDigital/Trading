@@ -160,7 +160,20 @@ export async function editTelegramDestination({
     });
 
     const status = Number(response?.status || 0);
-    if (!response?.ok) return telegramRejection(response, status, 'TELEGRAM_EDIT_REJECTED');
+    if (!response?.ok) {
+      const rejected = await telegramRejection(response, status, 'TELEGRAM_EDIT_REJECTED');
+      const description = String(rejected?.providerDescription || '').toLowerCase();
+      if (status === 400 && description.includes('message is not modified')) {
+        return {
+          ok: true,
+          messageId: editMessageId,
+          status,
+          edited: false,
+          alreadyCurrent: true,
+        };
+      }
+      return rejected;
+    }
 
     let payload;
     try {
