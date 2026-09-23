@@ -1,5 +1,7 @@
 const DESTINATION_FORMAT_PROMPT = `Return JSON only with this exact shape: {"text":"formatted Telegram message","canonicalEcho":{"side":...,"symbol":...,"entry":...,"stopLoss":...,"takeProfits":[...]}}. You are formatting presentation only. Preserve every canonical trading value exactly. Do not invent or remove symbol, side, entry, stop loss or take profits. You may improve spacing, labels, emoji, header/footer and branding. If the input is a management/follow-up message, preserve the deterministic management instruction exactly in meaning.`;
 
+const PRESERVE_ALL_FORMAT_PROMPT = `Return JSON only with this exact shape: {"text":"formatted Telegram message","canonicalEcho":{"side":...,"symbol":...,"entry":...,"stopLoss":...,"takeProfits":[...]}}. Re-present the supplied Telegram text without summarizing it. Preserve every meaningful non-branding statement and every canonical trading value exactly. Remove only source branding, promotional handles, source-only headers/footers, and links already identified for cleanup. Do not invent facts, signals, prices, targets, or management instructions. Keep non-trading, commentary, analysis, and mixed content present. If unsure whether text is branding or meaningful content, keep it.`;
+
 function cleanJson(text) {
   const value = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
   return JSON.parse(value);
@@ -29,7 +31,8 @@ export function createTelegramDestinationAiFormatter(aiRouter) {
       canonical,
     });
 
-    const ai = await aiRouter.processSignal(payload, DESTINATION_FORMAT_PROMPT, {
+    const systemPrompt = presentation.preserveAllContent === true ? PRESERVE_ALL_FORMAT_PROMPT : DESTINATION_FORMAT_PROMPT;
+    const ai = await aiRouter.processSignal(payload, systemPrompt, {
       timeoutMs,
       purpose: 'destination_ai',
     });
