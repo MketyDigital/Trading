@@ -343,7 +343,7 @@ async function updateTemplate(request, authorization, supabase, id) {
   for (const [camel, snake] of map) if (hasOwn(body, camel) || hasOwn(body, snake)) patch[snake] = text(body[camel] ?? body[snake]);
   if (hasOwn(patch, 'template_name') && !patch.template_name) return json({ ok: false, reason: 'TEMPLATE_NAME_REQUIRED' }, 400);
   const format = patch.formatting_mode ?? current.formatting_mode;
-  if (!['none', 'clean', 'template', 'ai_then_fallback'].includes(format)) return json({ ok: false, reason: 'FORMAT_MODE_UNSUPPORTED' }, 400);
+  if (!['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback'].includes(format)) return json({ ok: false, reason: 'FORMAT_MODE_UNSUPPORTED' }, 400);
   const parseMode = patch.parse_mode ?? current.parse_mode;
   if (!['HTML', 'Markdown', 'MarkdownV2', 'plain'].includes(parseMode)) return json({ ok: false, reason: 'PARSE_MODE_UNSUPPORTED' }, 400);
   if (hasOwn(body, 'cleanupRules') || hasOwn(body, 'cleanup_rules')) patch.cleanup_rules = safeObject(body.cleanupRules ?? body.cleanup_rules);
