@@ -194,10 +194,11 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
         } catch {
           result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
         }
-        if (!result && !replyToMessageId && destinationFormattingMode(destination) === 'none') {
+        if (!result && !replyToMessageId) {
+          // A reply is a distinct source event. If its mapped parent is absent,
+          // preserve delivery as a standalone message rather than dropping it.
+          // The destination/event idempotency key still guarantees one send.
           replyParentFallback = true;
-        } else if (!result && !replyToMessageId) {
-          result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_UNRESOLVED' };
         }
       }
       if (!result) {

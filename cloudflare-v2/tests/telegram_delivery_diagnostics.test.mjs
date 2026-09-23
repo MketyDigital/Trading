@@ -291,3 +291,74 @@ test('Telegram Bot reply resolves parent delivery across equivalent telegram-pre
   assert.equal(result.status, 'DELIVERED');
   assert.equal(sent.replyToMessageId, 77);
 });
+
+
+test('unresolved Telegram reply parent falls back to one standalone send with the same event identity', async () => {
+  const supabase = lineageSupabase({ mappedMessageId: null });
+  let sends = 0;
+  let sent = null;
+  const result = await runV1DestinationDeliveryAcceptanceStage({
+    workspaceId: 'ws-1',
+    sourceId: 'source-1',
+    event: {
+      external_event_id: 'telegram:-1001:23',
+      text: 'TP2 HIT',
+      thread: { reply_to_event_id: 'telegram:-1001:21' },
+      metadata: { native_identity: { chat_id: '-1001', message_id: '23' } },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 2 } },
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    supabase,
+    destinationStore: {
+      async listRoutedDestinations() {
+        return [{
+          id: 'dest-1', workspace_id: 'ws-1', destination_type: 'telegram', destination_ref: '-1002', is_active: true,
+          credential_ciphertext: 'cipher',
+          settings: { formattingMode: 'template' },
+          template: { formatting_mode: 'template', parse_mode: 'HTML' },
+          route_filters: {},
+        }];
+      },
+      async recordDestinationOutcome() {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'token' } }),
+    formatTelegram: () => ({ ok: true, text: 'TP2 HIT', parseMode: 'plain' }),
+    sendTelegram: async (input) => {
+      sends += 1;
+      sent = input;
+      return { ok: true, status: 200, messageId: 101 };
+    },
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.equal(sends, 1);
+  assert.equal(sent.replyToMessageId, undefined);
+  assert.equal(supabase.journalRow.status, 'SUCCEEDED');
+  assert.equal(supabase.journalRow.response_payload.replyParentFallback, true);
+});
+
+test('Telegram message-is-not-modified edit response is accepted as idempotent success', async () => {
+  const result = await editTelegramDestination({
+    botToken: '123456:secret',
+    chatId: '-1002',
+    messageId: 99,
+    text: 'unchanged',
+    fetchFn: async () => ({
+      ok: false,
+      status: 400,
+      async json() {
+        return {
+          ok: false,
+          error_code: 400,
+          description: 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+        };
+      },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.messageId, 99);
+  assert.equal(result.edited, false);
+  assert.equal(result.alreadyCurrent, true);
+});
