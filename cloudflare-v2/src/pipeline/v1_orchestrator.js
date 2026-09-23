@@ -508,6 +508,23 @@ async function loadMatchedFastGroups(correlation, stateStore) {
   return { ok: true, groups };
 }
 
+function needsPlanningMarketPrice(account = {}, intent = {}) {
+  const sizingMode = String(account?.sizingMode ?? '').trim().toUpperCase();
+  const takeProfits = Array.isArray(intent?.takeProfits) ? intent.takeProfits : [];
+  const bareFastMarket = intent?.fastEntry === true
+    && intent?.incomplete === true
+    && String(intent?.entry?.kind || '').toUpperCase() === 'MARKET'
+    && intent?.stopLoss == null
+    && takeProfits.length === 0;
+
+  // A fixed-lot bare fast entry has no price-dependent protection or risk
+  // geometry. Requiring a broker quote here creates an unnecessary single
+  // point of failure and can prevent the durable fast group from existing for
+  // the full follow-up. Protected/range/risk-sized trades still require the
+  // broker-authoritative market context.
+  return !(bareFastMarket && sizingMode === 'FIXED_LOTS');
+}
+
 export async function orchestrateTradingEventSimulation({
   event = {},
   interpretation = {},
@@ -598,7 +615,9 @@ export async function orchestrateTradingEventSimulation({
       instrument = await instrumentProvider(account, interpretation.intent, event);
       if (!instrument) throw new Error('instrument metadata unavailable');
       exposure = await exposureProvider(account, interpretation.intent, event) || {};
-      currentMarketPrice = await marketPriceProvider(account, interpretation.intent, instrument, event);
+      currentMarketPrice = needsPlanningMarketPrice(account, interpretation.intent)
+        ? await marketPriceProvider(account, interpretation.intent, instrument, event)
+        : undefined;
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', error: error.message, actions: [] });
       continue;
