@@ -129,6 +129,76 @@ function recordSuccess(circuitBreaker, key) {
   try { circuitBreaker.recordSuccess(key); } catch {}
 }
 
+
+export async function renderTelegramRawPreservingDestination({
+  canonicalEvent = {},
+  rawText = '',
+  destination = {},
+  aiFormatter,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  workspaceId,
+  aiProviderId,
+  circuitBreaker,
+} = {}) {
+  const presentation = destination?.presentation && typeof destination.presentation === 'object'
+    ? destination.presentation
+    : {};
+  const deterministicText = String(rawText ?? '').trim();
+  if (!deterministicText) return { text: '', mode: 'DETERMINISTIC', fallbackReason: 'EMPTY_CLEAN_TEXT' };
+
+  const useAi = presentation.useAi === true;
+  if (!useAi || typeof aiFormatter !== 'function') {
+    return {
+      text: deterministicText,
+      mode: 'DETERMINISTIC',
+      fallbackReason: useAi ? 'AI_UNAVAILABLE' : null,
+    };
+  }
+
+  const circuitKey = breakerKey(workspaceId, aiProviderId);
+  if (!canAttempt(circuitBreaker, circuitKey)) {
+    return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_CIRCUIT_OPEN' };
+  }
+
+  const canonical = canonicalProjection(canonicalEvent);
+  try {
+    const result = await runAiFormatter(aiFormatter, {
+      deterministicText,
+      brandName: presentation.brandName ?? null,
+      presentation: { ...presentation, preserveAllContent: true },
+      canonical: {
+        side: canonical.side,
+        symbol: canonical.symbol,
+        entry: canonical.entry,
+        stopLoss: canonical.stopLoss,
+        takeProfits: [...canonical.takeProfits],
+      },
+    }, boundedTimeout(timeoutMs));
+
+    if (!result?.success) {
+      recordFailure(circuitBreaker, circuitKey);
+      return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_FAILED' };
+    }
+    recordSuccess(circuitBreaker, circuitKey);
+
+    if (typeof result.text !== 'string' || !result.text.trim() || !result.canonicalEcho) {
+      return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_INVALID_OUTPUT' };
+    }
+    if (!sameCanonical(canonical, result.canonicalEcho)) {
+      return { text: deterministicText, mode: 'DETERMINISTIC', fallbackReason: 'AI_CANONICAL_MISMATCH' };
+    }
+
+    return { text: result.text.trim(), mode: 'AI', fallbackReason: null };
+  } catch (error) {
+    recordFailure(circuitBreaker, circuitKey);
+    return {
+      text: deterministicText,
+      mode: 'DETERMINISTIC',
+      fallbackReason: error?.code === 'AI_TIMEOUT' || error?.message === 'AI_TIMEOUT' ? 'AI_TIMEOUT' : 'AI_FAILED',
+    };
+  }
+}
+
 export async function renderTelegramDestination({
   canonicalEvent,
   destination = {},
