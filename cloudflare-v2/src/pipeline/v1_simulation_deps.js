@@ -280,12 +280,36 @@ async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountC
 
   return Promise.all((accounts || []).map(async (account) => {
     if (!isCTraderOauthAccount(account) || hasAuthoritativeCatalog(account)) return account;
+
+    let hydrated;
     try {
-      const hydrated = await loader(account);
-      if (!Array.isArray(hydrated?.catalog) || hydrated.catalog.length === 0) return account;
-      return await persistAccountCatalog(supabase, account, hydrated);
+      hydrated = await loader(account);
     } catch {
       return account;
+    }
+    if (!Array.isArray(hydrated?.catalog) || hydrated.catalog.length === 0) return account;
+
+    const currentConfig = providerConfigOf(account);
+    const aliases = hydrated?.aliases && typeof hydrated.aliases === 'object' && !Array.isArray(hydrated.aliases)
+      ? hydrated.aliases
+      : (currentConfig.symbolAliases || {});
+    const inMemoryAccount = {
+      ...account,
+      provider_config: {
+        ...currentConfig,
+        symbolCatalog: hydrated.catalog,
+        symbolAliases: aliases,
+        symbolCatalogUpdatedAt: new Date().toISOString(),
+      },
+    };
+
+    // Persistence is only a cache optimization. A successful broker catalog
+    // load is authoritative for this execution and must not be discarded just
+    // because the cache write is temporarily unavailable.
+    try {
+      return await persistAccountCatalog(supabase, account, hydrated);
+    } catch {
+      return inMemoryAccount;
     }
   }));
 }
