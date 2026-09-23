@@ -180,3 +180,62 @@ test('MT5 connector terminal rejection persists the broker reason/body for diagn
     reason: 'order_check failed: retcode=10027 AutoTrading disabled by client',
   });
 });
+
+
+test('MT5 connector treats broker retcode 10025 No changes as idempotent success for modify actions', async () => {
+  const completed = [];
+  const failures = [];
+  const deliveryStore = {
+    async reserve() { return { ok: true, duplicate: false }; },
+    async complete(_key, result) { completed.push(result); },
+    async fail(_key, failure) { failures.push(failure); },
+  };
+  let call = 0;
+  const fetchFn = async (_url, options = {}) => {
+    call += 1;
+    if (!options.method || options.method === 'GET') {
+      return response({
+        online: true,
+        accountRowId: 'acct-1',
+        identity: {
+          accountNumber: '50123456',
+          serverName: 'Broker-Demo',
+          isLive: false,
+          symbols: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+        },
+      });
+    }
+    return response({
+      ok: false,
+      type: 'result',
+      reason: 'order_check failed: retcode=10025 No changes last_error=1 Success',
+      positionId: '12345',
+    }, { ok: false, status: 409 });
+  };
+
+  const result = await executeMt5ConnectorAction({
+    type: 'MODIFY_POSITION',
+    symbol: 'XAUUSD',
+    brokerPositionId: '12345',
+    stopLoss: 2500,
+    takeProfit: 2550,
+    idempotencyKey: 'event-2:acct-1:modify:1',
+  }, {
+    workspaceId: 'ws1',
+    accountRowId: 'acct-1',
+    gatewayUrl: 'https://gateway.example',
+    controlSecret: 'secret',
+    expectedBrokerAccountId: '50123456',
+    expectedServerName: 'Broker-Demo',
+    expectedEnvironment: 'demo',
+    symbolCatalog: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+    deliveryStore,
+    fetchFn,
+  });
+
+  assert.equal(call, 2);
+  assert.equal(result.alreadyCurrent, true);
+  assert.equal(result.brokerPositionId, '12345');
+  assert.equal(completed.length, 1);
+  assert.equal(failures.length, 0);
+});
