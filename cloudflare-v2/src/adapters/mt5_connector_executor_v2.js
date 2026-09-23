@@ -124,6 +124,20 @@ export async function executeMt5ConnectorAction(action, {
     let body = {}; try { body = await response.json(); } catch { throw classifiedError('MT5 connector response unreadable', { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN' }); }
     if (!response.ok || body?.ok === false) {
       const reason = String(body?.reason || body?.error || `HTTP_${response.status}`);
+      if (action.type === 'MODIFY_POSITION' && /retcode=10025\b/i.test(reason)) {
+        const result = {
+          duplicate: false,
+          alreadyCurrent: true,
+          brokerPositionId: action.brokerPositionId != null ? String(action.brokerPositionId) : null,
+          brokerOrderId: null,
+          brokerDealId: null,
+          fillPrice: null,
+          platformSymbol: resolved?.platformSymbol ?? null,
+          response: body,
+        };
+        await deliveryStore.complete(action.idempotencyKey, result);
+        return result;
+      }
       if (reason === 'MT5_CONNECTOR_OFFLINE') throw classifiedError(reason, { code: reason, failureClass: 'RETRYABLE', result: body });
       if (reason === 'MT5_RESULT_TIMEOUT') throw classifiedError(reason, { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN', result: body });
       throw classifiedError(reason, { code: 'MT5_CONNECTOR_REJECTED', failureClass: 'TERMINAL', result: body });
