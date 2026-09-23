@@ -142,3 +142,107 @@ test('ai_then_fallback can still forward cleaned raw text when canonical intent 
   assert.equal(result.status, 'DELIVERED');
   assert.match(sentText, /Gold looking good/);
 });
+
+test('clean_ai_fallback strips source branding and preserves mixed raw content when AI is unavailable', async () => {
+  let sentText = null;
+  const row = destination('clean_ai_fallback');
+  row.template.cleanup_rules = {
+    removeLinks: true,
+    removeLinePatterns: [
+      '^\\s*[A-Z0-9 ._-]{2,40}\\s+(?:VIP\\s+)?SIGNALS?\\s*$',
+      '^\\s*#\\w+\\s*$',
+      '^\\s*@\\w+\\s*$',
+    ],
+  };
+  const mixedText = [
+    'QAS VIP SIGNAL',
+    'BUY XAUUSD NOW',
+    'SL 2490',
+    'TP1 2510',
+    'Why this buy: momentum recovered from support.',
+    '#OldBrand',
+    '@oldbrand',
+    'https://example.com',
+  ].join('\n');
+
+  const result = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-1',
+    event: { text: mixedText },
+    interpretation,
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    destinationStore: store(row),
+    decryptCredentials: async () => decrypt(),
+    aiFormatterFactory: async () => null,
+    sendTelegram: async ({ text }) => { sentText = text; return { ok: true, status: 200, messageId: 12 }; },
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.doesNotMatch(sentText, /QAS VIP SIGNAL/i);
+  assert.doesNotMatch(sentText, /OldBrand/i);
+  assert.doesNotMatch(sentText, /example\.com/i);
+  assert.match(sentText, /BUY XAUUSD NOW/);
+  assert.match(sentText, /SL 2490/);
+  assert.match(sentText, /TP1 2510/);
+  assert.match(sentText, /momentum recovered from support/);
+});
+
+test('clean_ai_fallback forwards non-trading content instead of requiring canonical intent', async () => {
+  let sentText = null;
+  const row = destination('clean_ai_fallback');
+  row.template.cleanup_rules = { removeLinePatterns: ['^\\s*@\\w+\\s*$'] };
+
+  const result = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-1',
+    event: { text: 'Market update for everyone\nNo manipulation, nothing fabricated\n@sourcebrand' },
+    interpretation: { status: 'NEEDS_REVIEW', reason: 'unsupported AI event type' },
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    destinationStore: store(row),
+    decryptCredentials: async () => decrypt(),
+    aiFormatterFactory: async () => null,
+    sendTelegram: async ({ text }) => { sentText = text; return { ok: true, status: 200, messageId: 13 }; },
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.match(sentText, /Market update for everyone/);
+  assert.match(sentText, /No manipulation/);
+  assert.doesNotMatch(sentText, /sourcebrand/i);
+});
+
+test('clean_ai_fallback AI path receives the cleaned full text and must echo canonical trade values', async () => {
+  let sentText = null;
+  let seenDeterministic = null;
+  let seenPreserveAll = false;
+  const row = destination('clean_ai_fallback');
+  row.template.cleanup_rules = { removeLinePatterns: ['^QAS VIP SIGNAL$'] };
+
+  const result = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-1',
+    event: { text: 'QAS VIP SIGNAL\nBUY XAUUSD NOW\nSL 2490\nTP1 2510\nCommentary stays here' },
+    interpretation,
+    env: { TRADING_MASTER_KEY: 'master' },
+  }, {
+    destinationStore: store(row),
+    decryptCredentials: async () => decrypt(),
+    aiFormatterFactory: async () => async ({ deterministicText, canonical, presentation }) => {
+      seenDeterministic = deterministicText;
+      seenPreserveAll = presentation.preserveAllContent === true;
+      return {
+        success: true,
+        text: 'BUY XAUUSD NOW\nSL 2490\nTP1 2510\nTP2 2520\nCommentary stays here',
+        canonicalEcho: canonical,
+      };
+    },
+    sendTelegram: async ({ text }) => { sentText = text; return { ok: true, status: 200, messageId: 14 }; },
+  });
+
+  assert.equal(result.status, 'DELIVERED');
+  assert.equal(seenPreserveAll, true);
+  assert.doesNotMatch(seenDeterministic, /QAS VIP SIGNAL/i);
+  assert.match(seenDeterministic, /Commentary stays here/);
+  assert.match(sentText, /Commentary stays here/);
+});

@@ -87,3 +87,28 @@ test('semantic guard rejects changed trade meaning', () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'SIDE_CHANGED');
 });
+
+
+test('clean formatting supports case-insensitive regex line cleanup without touching meaningful content', () => {
+  const result = formatTelegramDestinationMessage({
+    mode: 'clean',
+    rawText: 'QAS VIP SIGNAL\nPAIR: Volatility 75 Index\nTP1: 44850\n#PrecisionSniperr\n@guntherfx\nAnalysis: resistance is holding',
+    interpretation,
+  }, {
+    cleanupRules: {
+      removeLinePatterns: [
+        '^\\s*[A-Z0-9 ._-]{2,40}\\s+(?:VIP\\s+)?SIGNALS?\\s*$',
+        '^\\s*#\\w+\\s*$',
+        '^\\s*@\\w+\\s*$',
+      ],
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.doesNotMatch(result.text, /QAS VIP SIGNAL/i);
+  assert.doesNotMatch(result.text, /PrecisionSniperr/i);
+  assert.doesNotMatch(result.text, /guntherfx/i);
+  assert.match(result.text, /PAIR: Volatility 75 Index/);
+  assert.match(result.text, /TP1: 44850/);
+  assert.match(result.text, /Analysis: resistance is holding/);
+});

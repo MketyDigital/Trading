@@ -3,7 +3,7 @@ import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
 import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
 import { formatTelegramDestinationMessage } from './formatting.js';
 import { evaluateRouteFilters } from './route_filters.js';
-import { renderTelegramDestination } from './telegram_presentation.js';
+import { renderTelegramDestination, renderTelegramRawPreservingDestination } from './telegram_presentation.js';
 import { sendTelegramDestination } from './telegram_destination.js';
 
 const DESTINATION_SELECT = [
@@ -17,7 +17,7 @@ const TEMPLATE_SELECT = [
 ].join(',');
 
 const WEBHOOK_MODES = new Set(['mkety_signed', 'raw_text', 'raw_json']);
-const TELEGRAM_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
+const TELEGRAM_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback']);
 
 function text(value) {
   return String(value ?? '').trim();
@@ -365,6 +365,7 @@ function templatePresentation(template = {}) {
     emojiStyle: template.emoji_style ?? null,
     aiInstructions: text(layout.aiInstructions ?? layout.ai_instructions) || null,
     aiTimeoutMs: Number(layout.aiTimeoutMs ?? layout.ai_timeout_ms ?? 500),
+    preserveAllContent: layout.preserveAllContent === true || layout.preserve_all_content === true,
   };
 }
 
@@ -385,6 +386,38 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
   const mode = TELEGRAM_FORMAT_MODES.has(requestedMode)
     ? requestedMode
     : (text(template.formatting_mode ?? template.formattingMode) || 'template');
+
+  if (mode === 'clean_ai_fallback') {
+    const raw = cleanRawFallback(event, template, deps);
+    if (!text(raw.text)) return { ok: false, reason: 'DESTINATION_FORMAT_EMPTY_AFTER_CLEANUP' };
+
+    let aiFormatter = null;
+    if (typeof deps.aiFormatterFactory === 'function') {
+      try {
+        aiFormatter = await deps.aiFormatterFactory({ destination, template, interpretation });
+      } catch {
+        aiFormatter = null;
+      }
+    }
+
+    const presentation = { ...templatePresentation(template), preserveAllContent: true };
+    const rendered = await deps.renderRawTelegram({
+      canonicalEvent: interpretation || {},
+      rawText: raw.text,
+      destination: { ...destination, presentation },
+      aiFormatter,
+      timeoutMs: presentation.aiTimeoutMs,
+      workspaceId: destinationWorkspace(destination),
+      circuitBreaker: deps.aiCircuitBreaker,
+    });
+    return {
+      ok: Boolean(text(rendered?.text)),
+      text: text(rendered?.text) || raw.text,
+      parseMode: 'plain',
+      presentationMode: rendered?.mode ?? 'DETERMINISTIC',
+      fallbackReason: rendered?.fallbackReason ?? null,
+    };
+  }
 
   if (mode !== 'ai_then_fallback') {
     const formatted = deps.formatTelegram({ mode, rawText: event?.text ?? '', interpretation }, template);
@@ -573,6 +606,7 @@ export async function runV1DestinationDeliveryStage({
   sendRawWebhook = sendRawWebhookDestination,
   formatTelegram = formatTelegramDestinationMessage,
   renderTelegram = renderTelegramDestination,
+  renderRawTelegram = renderTelegramRawPreservingDestination,
   aiFormatterFactory = null,
   aiCircuitBreaker = null,
   fetchFn = globalThis.fetch,
@@ -617,6 +651,7 @@ export async function runV1DestinationDeliveryStage({
         sendRawWebhook,
         formatTelegram,
         renderTelegram,
+        renderRawTelegram,
         aiFormatterFactory,
         aiCircuitBreaker,
         fetchFn,

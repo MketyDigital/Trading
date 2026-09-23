@@ -1,7 +1,7 @@
 import { runV1DestinationDeliveryStage } from './v1_destination_delivery_stage.js';
 import { sendTelegramDestination, editTelegramDestination } from './telegram_destination.js';
 
-const READY_MADE_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
+const READY_MADE_FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback']);
 
 function text(value) { return String(value ?? '').trim(); }
 
@@ -160,8 +160,9 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
       const rows = await baseStore.listRoutedDestinations(...args);
       return (rows || []).map((row) => {
         if (String(row?.destination_type ?? row?.destinationType ?? '').toLowerCase() !== 'telegram') return row;
-        routedByChatId.set(text(row.destination_ref ?? row.destinationRef), row);
-        return withDestinationFormattingMode(row);
+        const resolved = withDestinationFormattingMode(row);
+        routedByChatId.set(text(row.destination_ref ?? row.destinationRef), resolved);
+        return resolved;
       });
     },
   } : baseStore;
@@ -175,17 +176,26 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
     let replyParentFallback = false;
 
     if (sourceEditedExternalEventId && destination) {
+      const failOpenStandalone = destinationFormattingMode(destination) === 'clean_ai_fallback';
       let mappedMessageId = null;
       try {
         mappedMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, sourceEditedExternalEventId);
       } catch {
-        result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_LOOKUP_FAILED' };
+        if (!failOpenStandalone) {
+          result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_LOOKUP_FAILED' };
+        }
       }
-      if (!result && !mappedMessageId) {
+      if (!result && !mappedMessageId && !failOpenStandalone) {
         result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_UNRESOLVED' };
       }
-      if (!result) {
+      if (!result && mappedMessageId) {
         result = await baseEditTelegram({ ...sendInput, messageId: mappedMessageId });
+      } else if (!result && failOpenStandalone) {
+        // Preserve the source event even when an edited parent was never mapped
+        // to this destination. This is opt-in to the preserve-all Mkay mode and
+        // cannot change threading behavior for existing templates.
+        result = await baseSendTelegram(sendInput);
+        if (result && typeof result === 'object') result = { ...result, editParentFallback: true };
       }
     } else {
       if (parentExternalEventId && destination) {
