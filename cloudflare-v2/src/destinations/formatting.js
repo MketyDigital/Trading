@@ -59,6 +59,14 @@ function cleanRawText(rawText, cleanupRules = {}) {
   if (blocked.length) {
     lines = lines.filter((line) => !blocked.some((needle) => line.includes(needle)));
   }
+
+  const patterns = Array.isArray(cleanupRules.removeLinePatterns) ? cleanupRules.removeLinePatterns.map(asText).filter(Boolean) : [];
+  if (patterns.length) {
+    const compiled = patterns.flatMap((pattern) => {
+      try { return [new RegExp(pattern, 'i')]; } catch { return []; }
+    });
+    if (compiled.length) lines = lines.filter((line) => !compiled.some((pattern) => pattern.test(line)));
+  }
   let text = lines.join('\n').trim();
   if (cleanupRules.removeLinks === true) {
     text = text.replace(/https?:\/\/\S+/gi, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
