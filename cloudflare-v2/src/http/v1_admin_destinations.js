@@ -18,7 +18,7 @@ const ROUTE_SELECT = [
 ].join(',');
 
 const DESTINATION_TYPES = new Set(['telegram', 'broker_account', 'internal_webhook', 'audit_only']);
-const FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback']);
+const FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback']);
 const PARSE_MODES = new Set(['HTML', 'Markdown', 'MarkdownV2', 'plain']);
 
 function json(body, status = 200, extraHeaders = {}) {
