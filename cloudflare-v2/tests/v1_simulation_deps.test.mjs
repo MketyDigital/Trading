@@ -387,3 +387,65 @@ test('routed cTrader account keeps a freshly loaded broker catalog in memory whe
   assert.equal(instrument.platformSymbol, 'Volatility 75 Index');
   assert.deepEqual(routed.provider_config.symbolCatalog, hydratedCatalog);
 });
+
+
+test('new routed MT5 connector account hydrates its own broker catalog before planning', async () => {
+  const account = {
+    id: 'acct-mt5-demo',
+    workspace_id: 'workspace-1',
+    account_id: '50123456',
+    platform: 'mt5',
+    provider_mode: 'mt5_connector',
+    environment: 'demo',
+    server_name: 'Broker-Demo',
+    lot_sizing_type: 'fixed',
+    lot_value: 0.2,
+    is_active: true,
+    provider_config: {},
+  };
+  const updates = [];
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') {
+        return {
+          select() { return this; }, eq() { return this; }, order: async () => ({ data: [{ destination_id: 'dest-mt5', priority: 1 }], error: null }),
+        };
+      }
+      if (table === 'trading_destinations') {
+        return {
+          select() { return this; }, eq() { return this; }, in: async () => ({ data: [{ id: 'dest-mt5', destination_ref: 'acct-mt5-demo', destination_type: 'broker_account', is_active: true }], error: null }),
+        };
+      }
+      if (table === 'trade_accounts') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          in: async () => ({ data: [account], error: null }),
+          update(value) { updates.push(value); return { eq() { return this; }, select: async () => ({ data: null, error: null }) }; },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+  const hydratedCatalog = [
+    { platformSymbol: 'XAUUSD.r', tradable: true, minLots: 0.01, maxLots: 100, stepLots: 0.01 },
+  ];
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+    accountCatalogLoader: async (candidate) => {
+      assert.equal(candidate.id, 'acct-mt5-demo');
+      return { catalog: hydratedCatalog, aliases: {} };
+    },
+  });
+
+  const [routed] = await deps.accountProvider();
+  const instrument = await deps.instrumentProvider(routed, { symbol: { canonical: 'XAUUSD', source: 'Gold' } });
+
+  assert.equal(instrument.platformSymbol, 'XAUUSD.r');
+  assert.equal(routed.lot_value, 0.2);
+  assert.deepEqual(routed.provider_config.symbolCatalog, hydratedCatalog);
+  assert.equal(updates.length, 1);
+});
