@@ -301,3 +301,60 @@ test('skip-invalid protection remains visible on the orchestrated account result
     value: 4350,
   }]);
 });
+
+
+test('bare fast market entry does not require a broker quote before creating the executable group', async () => {
+  const fast = {
+    status: 'READY',
+    intent: {
+      side: 'BUY',
+      orderType: 'MARKET',
+      symbol: { canonical: 'DERIV:VOLATILITY_75', source: 'V75 index' },
+      entry: { kind: 'MARKET' },
+      stopLoss: null,
+      takeProfits: [],
+      fastEntry: true,
+      incomplete: true,
+    },
+  };
+  const derivInstrument = {
+    canonical: 'DERIV:VOLATILITY_75',
+    platformSymbol: 'Volatility 75 Index',
+    minLots: 0.01,
+    maxLots: 50,
+    stepLots: 0.01,
+  };
+  let quoteCalls = 0;
+  let persisted = null;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'telegram:-1001822170589:24446' },
+    interpretation: fast,
+    eventId: 'db-v75-fast',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => { persisted = structuredClone(group); return group; } },
+    accountProvider: async () => [enabledAccount({
+      id: 'ctrader-demo',
+      fixedLots: 0.7,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.7,
+      platform: 'ctrader',
+      provider_mode: 'ctrader_oauth',
+      safety_policy: { enabled: true, killSwitch: false },
+    })],
+    instrumentProvider: async () => derivInstrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => {
+      quoteCalls += 1;
+      throw new Error('transient cTrader spot timeout');
+    },
+  });
+
+  assert.equal(quoteCalls, 0);
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions.length, 1);
+  assert.equal(result.accounts[0].actions[0].type, 'OPEN_POSITION');
+  assert.equal(result.accounts[0].actions[0].lots, 0.7);
+  assert.equal(persisted.incomplete, true);
+});
