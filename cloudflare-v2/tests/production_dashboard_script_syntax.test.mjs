@@ -9,7 +9,7 @@ import { withTelegramBotSource } from '../src/dashboard_telegram_bot_source.js';
 import { withGranularRoutingConsole } from '../src/dashboard_granular_routing.js';
 
 function scripts(html) {
-  return [...String(html).matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
+  return [...String(html).matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi)].map((match) => match[1]);
 }
 
 function assertScriptsParse(label, html) {
