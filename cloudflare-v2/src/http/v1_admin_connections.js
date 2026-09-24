@@ -318,38 +318,30 @@ async function handleAccountConnection(request, authorization, supabase, account
     if ('lotSizingConfig' in body || 'lot_sizing_config' in body) {
       const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
-      const legAllocation = String(config.legAllocation ?? 'per_target').trim().toLowerCase();
-      if (!['per_target','split_total'].includes(legAllocation)) {
-        return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_INVALID' }, 400);
-      }
       if (requestedType === 'adaptive_percent') {
         const percent = Number(config.percent);
         if (!(percent > 0 && percent <= 100)) {
           return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_INVALID' }, 400);
         }
-        update.lot_sizing_config = { percent, legAllocation };
+        update.lot_sizing_config = { percent };
       } else if (requestedType === 'symbol_equivalent') {
         const referenceSymbol = safeText(config.referenceSymbol);
         if (!referenceSymbol) {
           return json({ ok: false, reason: 'ACCOUNT_SYMBOL_EQUIVALENT_CONFIG_INVALID' }, 400);
         }
-        update.lot_sizing_config = { referenceSymbol, legAllocation };
+        update.lot_sizing_config = { referenceSymbol };
       } else if (requestedType === 'balance_percent') {
         const percent = Number(config.percent);
         if (!(percent > 0 && percent <= 100)) {
           return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_INVALID' }, 400);
         }
-        update.lot_sizing_config = { percent, legAllocation };
+        update.lot_sizing_config = { percent };
       } else {
-        update.lot_sizing_config = { legAllocation };
+        update.lot_sizing_config = {};
       }
     }
     const effectiveSizingType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
     const effectiveConfig = update.lot_sizing_config ?? safeObject(current.lot_sizing_config);
-    const effectiveLegAllocation = String(effectiveConfig.legAllocation ?? 'per_target').trim().toLowerCase();
-    if (!['per_target','split_total'].includes(effectiveLegAllocation)) {
-      return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_INVALID' }, 400);
-    }
     if (effectiveSizingType === 'adaptive_percent') {
       const percent = Number(effectiveConfig.percent);
       if (!(percent > 0 && percent <= 100)) {
