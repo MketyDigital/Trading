@@ -780,15 +780,13 @@ Current intended TP protection progression remains:
 
 ## Broker-aware lot sizing expansion — 2026-09-24
 
-- PR #134 merged/deployed adaptive_percent sizing and changed the universal legacy Starpips fallback label to Mkety.
-- Existing fixed-lot accounts were not changed by that deployment.
-- New follow-up PR #135 adds margin_equivalent sizing for cross-market economic exposure.
-- margin_equivalent uses a familiar reference symbol + reference lot and asks the broker for expected margin rather than assuming one lot means the same across FX, gold, crypto, indices, or Deriv synthetics.
-- Target lot is the largest executable broker lot at or below the reference margin budget. If broker minimum would exceed the budget, execution fails closed instead of oversizing.
-- A configurable maxMarginPercent also scales the budget down on smaller accounts.
-- This mode is independent of SL/TP and supports fast-entry signals where protection is added later.
-- cTrader OAuth uses ProtoOAExpectedMargin. MT5 uses order_calc_margin in the existing connector; no second VPS service/watchdog is introduced.
-- Existing fixed and adaptive_percent modes remain separate and unchanged.
-- No account is automatically switched to margin_equivalent. Explicit per-account selection is required.
-- MT5 margin_equivalent requires the new connector build to be installed before enabling this mode on that MT5 account.
-- Full semantics and operational behavior are documented in docs/LOT_SIZING_MODES.md.
+- PR #134 merged/deployed `adaptive_percent` as an additive option and changed the universal legacy frontend fallback label from Starpips to Mkety. Existing accounts remained fixed.
+- PR #135 is being corrected before merge so sizing concepts remain independent.
+- `symbol_equivalent`: owner's chosen `lot_value` is the ceiling/reference. Broker expected margin compares the configured reference symbol against the target symbol. Heavier targets are reduced; cheaper targets do not cause lot increases. The sole upward exception is an unavoidable target-symbol broker minimum.
+- `symbol_equivalent` does not use balance, equity, free margin, SL, or TP and therefore supports fast signals.
+- `balance_percent`: separate opt-in capacity mode. Uses selected percentage of broker-reported balance as an expected-margin budget while `lot_value` remains a maximum lot. It works on fast signals and fails closed when broker minimum exceeds the selected budget.
+- Existing SL-based `risk_percent` remains separate.
+- Leg allocation is separate from sizing: `per_target` preserves current behavior; optional `split_total` divides the sized lot across targets.
+- Existing accounts are never switched automatically. Current production account lot values, execution flags, LIVE flags, routes and runtime controls must remain unchanged.
+- cTrader uses broker expected-margin metadata. MT5 uses its own connected terminal and `order_calc_margin`. No cross-account or cross-workspace catalog/sizing data is reused.
+- MT5 broker-aware sizing requires the new connector build before an MT5 account is explicitly switched to one of the new broker-aware modes. Existing fixed execution remains backward compatible.
