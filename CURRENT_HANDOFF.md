@@ -776,3 +776,17 @@ Current intended TP protection progression remains:
 - TP2 hit -> remaining SL to TP1.
 - TP3 hit -> remaining SL to TP2.
 - Continue the same progression for later targets.
+
+
+## Broker-aware lot sizing expansion — 2026-09-24
+
+- PR #134 merged/deployed `adaptive_percent` as an additive option and changed the universal legacy frontend fallback label from Starpips to Mkety. Existing accounts remained fixed.
+- PR #135 is being corrected before merge so sizing concepts remain independent.
+- `symbol_equivalent`: owner's chosen `lot_value` is the ceiling/reference. Broker expected margin compares the configured reference symbol against the target symbol. Heavier targets are reduced; cheaper targets do not cause lot increases. The sole upward exception is an unavoidable target-symbol broker minimum.
+- `symbol_equivalent` does not use balance, equity, free margin, SL, or TP and therefore supports fast signals.
+- `balance_percent`: separate opt-in capacity mode. Uses selected percentage of broker-reported balance as an expected-margin budget while `lot_value` remains a maximum lot. It works on fast signals and fails closed when broker minimum exceeds the selected budget.
+- Existing SL-based `risk_percent` remains separate.
+- Leg allocation is intentionally NOT changed by PR #135. Existing per-target behavior remains. A future split-total option needs a separate fast-entry reconciliation design to avoid exposure drift when the full multi-TP signal arrives after an already-open fast position.
+- Existing accounts are never switched automatically. Current production account lot values, execution flags, LIVE flags, routes and runtime controls must remain unchanged.
+- cTrader uses broker expected-margin metadata. MT5 uses its own connected terminal and `order_calc_margin`. No cross-account or cross-workspace catalog/sizing data is reused.
+- MT5 broker-aware sizing requires the new connector build before an MT5 account is explicitly switched to one of the new broker-aware modes. Existing fixed execution remains backward compatible.

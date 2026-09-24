@@ -47,13 +47,32 @@ test('loads cTrader account type and trading access', async () => {
     nextClientMsgId() { return 'trader-1'; },
     async request(message) {
       assert.equal(message.payloadType, 2121);
-      return { payloadType: 2122, payload: { trader: { ctidTraderAccountId: 77, accountType: 0, accessRights: 0, isLimitedRisk: false } } };
+      return { payloadType: 2122, payload: { trader: { ctidTraderAccountId: 77, accountType: 0, accessRights: 0, isLimitedRisk: false, balance: 125000, moneyDigits: 2 } } };
     },
   };
   const account = await new CTraderMarketData({ session, accountId: 77 }).loadAccount();
   assert.equal(account.accountType, 'HEDGED');
   assert.equal(account.accessRights, 'FULL_ACCESS');
   assert.equal(account.canOpenTrades, true);
+  assert.equal(account.balance, 1250);
+  assert.equal(account.moneyDigits, 2);
+});
+
+test('requests and decodes broker expected margins in account currency', async () => {
+  let request;
+  const session = {
+    nextClientMsgId() { return 'margin-1'; },
+    async request(message) {
+      request = message;
+      return { payloadType:2140, payload:{ moneyDigits:2, margin:[
+        { volume:9000000, buyMargin:9000, sellMargin:9100 },
+      ] } };
+    },
+  };
+  const data = new CTraderMarketData({ session, accountId:77 });
+  const margins = await data.expectedMargins(42, [9000000]);
+  assert.equal(request.payloadType, 2139);
+  assert.deepEqual(margins, [{ protocolVolume:9000000, buyMargin:90, sellMargin:91 }]);
 });
 
 test('subscribes to quotes and uses ask for BUY and bid for SELL', async () => {

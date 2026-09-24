@@ -115,4 +115,34 @@ test('MT5 gateway accepts reusable pairing auth until expiry, issues instance re
   assert.equal(body.context.account.accountNumber, '50123456');
   assert.equal(body.context.symbol.platformSymbol, 'XAUUSD.r');
   assert.equal(body.context.tick.ask, 2500.5);
+
+  const sizingRequest = fetch(`${controlBase}/v1/mt5-broker-sizing/${accountRowId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'symbol_equivalent',
+      referenceSymbol: 'GBPUSD',
+      targetSymbol: 'Synthetic 75',
+      maximumLots: 0.9,
+      side: 'BUY',
+    }),
+  });
+  const sizingDelivered = await readMessage(reconnect);
+  assert.equal(sizingDelivered.type, 'sizing_request');
+  assert.equal(sizingDelivered.mode, 'symbol_equivalent');
+  assert.equal(sizingDelivered.maximumLots, 0.9);
+  assert.equal(sizingDelivered.side, 'BUY');
+  reconnect.send(JSON.stringify({
+    type: 'sizing_result', requestId: sizingDelivered.requestId, ok: true,
+    sizing: {
+      accountNumber: '50123456', serverName: 'Broker-Demo',
+      mode: 'symbol_equivalent', referenceSymbol: 'GBPUSD', targetSymbol: 'Synthetic 75',
+      referenceLots: 0.9, referenceMargin: 90, marginBudget: 90, lots: 0.3, expectedMargin: 90,
+    },
+  }));
+  const sizingResponse = await sizingRequest;
+  assert.equal(sizingResponse.status, 200);
+  const sizingBody = await sizingResponse.json();
+  assert.equal(sizingBody.ok, true);
+  assert.equal(sizingBody.sizing.lots, 0.3);
 });

@@ -1,4 +1,4 @@
-import { buildTraderMessage, buildSymbolsListMessage, buildSymbolByIdMessage, buildSubscribeSpotsMessage, decodeSpotEvent } from './ctrader_protocol.js';
+import { buildTraderMessage, buildSymbolsListMessage, buildSymbolByIdMessage, buildSubscribeSpotsMessage, buildExpectedMarginMessage, decodeSpotEvent } from './ctrader_protocol.js';
 import { fromCTraderSymbols } from '../normalization/symbol_catalog.js';
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
 
@@ -22,12 +22,17 @@ export class CTraderMarketData {
     const trader = response?.payload?.trader || response?.payload || {};
     const accountType = ACCOUNT_TYPES[Number(trader.accountType)] || 'UNKNOWN';
     const accessRights = ACCESS_RIGHTS[Number(trader.accessRights)] || 'UNKNOWN';
+    const moneyDigits = Number.isInteger(Number(trader.moneyDigits)) ? Number(trader.moneyDigits) : 2;
+    const balanceRaw = Number(trader.balance);
+    const balance = Number.isFinite(balanceRaw) ? balanceRaw / (10 ** moneyDigits) : null;
     this.account = {
       accountId: Number(trader.ctidTraderAccountId ?? this.accountId),
       accountType,
       accessRights,
       isLimitedRisk: Boolean(trader.isLimitedRisk),
       canOpenTrades: accessRights === 'FULL_ACCESS',
+      moneyDigits,
+      ...(Number.isFinite(balance) ? { balance } : {}),
       raw: trader,
     };
     return this.account;
@@ -46,6 +51,26 @@ export class CTraderMarketData {
     const fullById = new Map((details?.payload?.symbol || []).map((s) => [Number(s.symbolId), s]));
     this.catalog = fromCTraderSymbols(light.map((l) => ({ ...l, ...(fullById.get(Number(l.symbolId)) || {}) })));
     return this.catalog;
+  }
+
+
+  async expectedMargins(symbolId, protocolVolumes) {
+    const response = await this.session.request(buildExpectedMarginMessage({
+      clientMsgId: this.session.nextClientMsgId('expected-margin'),
+      accountId: this.accountId,
+      symbolId: Number(symbolId),
+      protocolVolumes,
+    }), { successPayloadTypes: [2140] });
+    const payload = response?.payload || {};
+    const moneyDigits = Number.isInteger(Number(payload.moneyDigits)) ? Number(payload.moneyDigits) : 2;
+    const divisor = 10 ** moneyDigits;
+    return (Array.isArray(payload.margin) ? payload.margin : []).map((row) => ({
+      protocolVolume: Number(row.volume),
+      buyMargin: Number(row.buyMargin) / divisor,
+      sellMargin: Number(row.sellMargin) / divisor,
+    })).filter((row) => Number.isFinite(row.protocolVolume) && row.protocolVolume > 0
+      && Number.isFinite(row.buyMargin) && row.buyMargin >= 0
+      && Number.isFinite(row.sellMargin) && row.sellMargin >= 0);
   }
 
   async subscribeQuotes(symbolIds) {

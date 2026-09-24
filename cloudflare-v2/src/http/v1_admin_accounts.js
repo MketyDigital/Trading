@@ -34,6 +34,23 @@ function safeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function sizingConfigFor(type, raw = {}) {
+  const config = safeObject(raw);
+  if (type === 'adaptive_percent') {
+    const percent = Number(config.percent);
+    return percent > 0 && percent <= 100 ? { percent } : null;
+  }
+  if (type === 'symbol_equivalent') {
+    const referenceSymbol = requiredText(config.referenceSymbol);
+    return referenceSymbol ? { referenceSymbol } : null;
+  }
+  if (type === 'balance_percent') {
+    const percent = Number(config.percent);
+    return percent > 0 && percent <= 100 ? { percent } : null;
+  }
+  return {};
+}
+
 function canonicalEntryZonePolicy(value) {
   const raw = safeObject(value);
   const mode = String(raw.mode ?? '').trim().toLowerCase();
@@ -107,14 +124,12 @@ function parseAccountCreation(body) {
   if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
   }
-  if (!['fixed', 'adaptive_percent'].includes(lotSizingType)) {
+  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
-  if (lotSizingType === 'adaptive_percent') {
-    const percent = Number(lotSizingConfig.percent);
-    if (!(percent > 0 && percent <= 100)) {
-      return { ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_REQUIRED' };
-    }
+  const normalizedSizingConfig = sizingConfigFor(lotSizingType, lotSizingConfig);
+  if (!normalizedSizingConfig) {
+    return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
   }
 
   try {
@@ -138,7 +153,7 @@ function parseAccountCreation(body) {
       serverName,
       lotSizingType,
       lotValue,
-      lotSizingConfig: lotSizingType === 'adaptive_percent' ? { percent: Number(lotSizingConfig.percent) } : {},
+      lotSizingConfig: normalizedSizingConfig,
       active: false,
       executionEnabled: false,
       safetyPolicy,
@@ -292,6 +307,38 @@ export function createAdminAccountStore(supabase) {
         .select(ACCOUNT_SELECT)
         .maybeSingle();
       if (error) throw new Error('ACCOUNT_ADAPTIVE_LOT_UPDATE_FAILED');
+      return data || null;
+    },
+
+    async setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol) {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({
+          lot_sizing_type: 'symbol_equivalent',
+          lot_value: lotValue,
+          lot_sizing_config: { referenceSymbol },
+        })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_SYMBOL_EQUIVALENT_UPDATE_FAILED');
+      return data || null;
+    },
+
+    async setBalancePercentLot(workspaceId, accountId, lotValue, percent) {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({
+          lot_sizing_type: 'balance_percent',
+          lot_value: lotValue,
+          lot_sizing_config: { percent },
+        })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED');
       return data || null;
     },
 
@@ -492,6 +539,34 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       });
     } catch {
       return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_LOT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'symbol-equivalent-lot') {
+    const lotValue = Number(body.lotValue);
+    const referenceSymbol = requiredText(body.referenceSymbol);
+    if (!(lotValue > 0)) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_LOT_REQUIRED' }, 400);
+    if (!referenceSymbol) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_SYMBOL_REQUIRED' }, 400);
+    try {
+      const account = await accountStore.setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_SYMBOL_EQUIVALENT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'balance-percent-lot') {
+    const lotValue = Number(body.lotValue);
+    const percent = Number(body.percent);
+    if (!(lotValue > 0)) return json({ ok: false, reason: 'BALANCE_PERCENT_MAX_LOT_REQUIRED' }, 400);
+    if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'BALANCE_PERCENT_RANGE_REQUIRED' }, 400);
+    try {
+      const account = await accountStore.setBalancePercentLot(workspaceId, accountId, lotValue, percent);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED' }, 503);
     }
   }
 

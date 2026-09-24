@@ -8,6 +8,8 @@ function normalizeAccount(account = {}) {
     const legacy = String(account.lot_sizing_type || '').toLowerCase();
     if (legacy === 'fixed') return 'FIXED_LOTS';
     if (legacy === 'adaptive_percent') return 'ADAPTIVE_PERCENT';
+    if (legacy === 'symbol_equivalent') return 'SYMBOL_EQUIVALENT';
+    if (legacy === 'balance_percent') return 'BALANCE_PERCENT';
     if (legacy === 'risk_percent') return 'RISK_PERCENT';
     if (legacy === 'fixed_risk') return 'FIXED_RISK';
     return undefined;
@@ -17,7 +19,7 @@ function normalizeAccount(account = {}) {
     ...account,
     sizingMode,
     fixedLots: account.fixedLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'fixed' ? account.lot_value : undefined),
-    referenceLots: account.referenceLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'adaptive_percent' ? account.lot_value : undefined),
+    referenceLots: account.referenceLots ?? (['adaptive_percent','symbol_equivalent','balance_percent'].includes(String(account.lot_sizing_type || '').toLowerCase()) ? account.lot_value : undefined),
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
     riskPercent: account.riskPercent ?? account.risk_percent,
     riskAmount: account.riskAmount ?? account.risk_amount,
@@ -525,7 +527,7 @@ function needsPlanningMarketPrice(account = {}, intent = {}) {
   // point of failure and can prevent the durable fast group from existing for
   // the full follow-up. Protected/range/risk-sized trades still require the
   // broker-authoritative market context.
-  return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT'));
+  return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT' || sizingMode === 'MARGIN_EQUIVALENT'));
 }
 
 export async function orchestrateTradingEventSimulation({

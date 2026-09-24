@@ -76,6 +76,11 @@ class FakeMT5:
     def symbol_info_tick(self, name):
         return SimpleNamespace(ask=2500.5, bid=2500.4, last=2500.45)
 
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        # Gold: 100 account-currency margin per lot. Synthetic: 300 per lot.
+        rate = 100.0 if symbol == 'XAUUSD.r' else 300.0
+        return float(volume) * rate
+
     def order_check(self, request):
         return SimpleNamespace(retcode=0, comment='ok')
 
@@ -226,6 +231,43 @@ class ConnectorTests(unittest.TestCase):
             self.assertTrue(response['ok'])
             self.assertEqual(response['context']['account']['equity'], 9950.0)
             self.assertEqual(response['context']['symbol']['tickValueLoss'], 1.2)
+
+
+    def test_symbol_equivalent_reduces_heavier_symbol_without_using_account_capacity(self):
+        sizing = module.terminal_broker_sizing(
+            FakeMT5(), 'symbol_equivalent', 'Synthetic 75', 0.9, 'BUY',
+            reference_symbol_name='XAUUSD.r',
+        )
+        self.assertEqual(sizing['referenceLots'], 0.9)
+        self.assertEqual(sizing['referenceMargin'], 90.0)
+        self.assertEqual(sizing['lots'], 0.3)
+        self.assertEqual(sizing['expectedMargin'], 90.0)
+        self.assertNotIn('accountCapacity', sizing)
+
+    def test_balance_percent_uses_balance_as_separate_fast_safe_budget(self):
+        sizing = module.terminal_broker_sizing(
+            FakeMT5(), 'balance_percent', 'Synthetic 75', 1.0, 'BUY', percent=1,
+        )
+        self.assertEqual(sizing['accountBalance'], 10000.0)
+        self.assertEqual(sizing['marginBudget'], 100.0)
+        self.assertEqual(sizing['lots'], 0.333)
+
+    def test_sizing_request_returns_result_without_protection_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
+                'gateway_url': module.DEFAULT_GATEWAY,
+                'connection_token': 'token',
+                'connector_instance_id': 'i',
+            }, ledger_path=Path(td) / 'ledger.sqlite')
+            response = connector.handle_message({
+                'type': 'sizing_request', 'requestId': 'sizing-1',
+                'mode': 'symbol_equivalent',
+                'referenceSymbol': 'XAUUSD.r', 'targetSymbol': 'Synthetic 75',
+                'maximumLots': 0.9, 'side': 'SELL',
+            })
+            self.assertEqual(response['type'], 'sizing_result')
+            self.assertTrue(response['ok'])
+            self.assertEqual(response['sizing']['lots'], 0.3)
 
 
 if __name__ == '__main__':
