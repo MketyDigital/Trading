@@ -197,6 +197,136 @@ def terminal_context(mt5, symbol_name):
     return {'account': account, 'symbol': symbol, 'tick': tick}
 
 
+def _volume_decimals(step):
+    text = f"{float(step):.12f}".rstrip('0').rstrip('.')
+    return len(text.split('.')[1]) if '.' in text else 0
+
+
+def _volume_constraints(symbol):
+    step = _finite(getattr(symbol, 'volume_step', None))
+    minimum = _finite(getattr(symbol, 'volume_min', None))
+    maximum = _finite(getattr(symbol, 'volume_max', None))
+    if not (step and step > 0 and minimum and minimum > 0 and maximum and maximum >= minimum):
+        raise RuntimeError('BROKER_VOLUME_CONSTRAINTS_INVALID')
+    min_index = int((minimum / step) - 1e-12)
+    if min_index * step + 1e-12 < minimum:
+        min_index += 1
+    max_index = int((maximum / step) + 1e-12)
+    if max_index < min_index:
+        raise RuntimeError('BROKER_VOLUME_CONSTRAINTS_INVALID')
+    return step, min_index, max_index, _volume_decimals(step)
+
+
+def _normalized_reference_lots(symbol, requested):
+    wanted = _finite(requested)
+    if not (wanted and wanted > 0):
+        raise RuntimeError('REFERENCE_LOTS_INVALID')
+    step, min_index, max_index, precision = _volume_constraints(symbol)
+    wanted_index = int((wanted / step) + 1e-12)
+    index = min(max(wanted_index, min_index), max_index)
+    return round(index * step, precision)
+
+
+def _side_order_type(mt5, side):
+    return mt5.ORDER_TYPE_SELL if str(side or '').strip().upper() == 'SELL' else mt5.ORDER_TYPE_BUY
+
+
+def _margin_price(mt5, symbol_name, side):
+    tick = mt5.symbol_info_tick(symbol_name)
+    if tick is None:
+        raise RuntimeError('BROKER_TICK_UNAVAILABLE')
+    keys = ('bid', 'last', 'ask') if str(side or '').strip().upper() == 'SELL' else ('ask', 'last', 'bid')
+    for key in keys:
+        value = _finite(getattr(tick, key, None))
+        if value is not None and value > 0:
+            return value
+    raise RuntimeError('BROKER_TICK_UNAVAILABLE')
+
+
+def _estimated_margin(mt5, symbol_name, side, lots):
+    price = _margin_price(mt5, symbol_name, side)
+    margin = _finite(mt5.order_calc_margin(_side_order_type(mt5, side), symbol_name, float(lots), price))
+    if margin is None or margin < 0:
+        raise RuntimeError('BROKER_EXPECTED_MARGIN_UNAVAILABLE')
+    return margin
+
+
+def terminal_margin_equivalent(mt5, reference_symbol_name, target_symbol_name, reference_lots, side, max_margin_percent=10):
+    account_info = mt5.account_info()
+    if account_info is None:
+        raise RuntimeError('MT5 account is not available')
+    reference_symbol = mt5.symbol_info(str(reference_symbol_name or '').strip())
+    target_symbol = mt5.symbol_info(str(target_symbol_name or '').strip())
+    if reference_symbol is None or target_symbol is None:
+        raise RuntimeError('SYMBOL_NOT_FOUND')
+
+    percent = _finite(max_margin_percent)
+    if percent is None or not (0 < percent <= 100):
+        raise RuntimeError('MAX_MARGIN_PERCENT_INVALID')
+
+    ref_lots = _normalized_reference_lots(reference_symbol, reference_lots)
+    reference_margin = _estimated_margin(mt5, reference_symbol.name, side, ref_lots)
+    if not (reference_margin > 0):
+        raise RuntimeError('REFERENCE_MARGIN_UNAVAILABLE')
+
+    capacity = None
+    for attr in ('margin_free', 'equity', 'balance'):
+        value = _finite(getattr(account_info, attr, None))
+        if value is not None and value > 0:
+            capacity = value
+            break
+    margin_budget = min(reference_margin, capacity * percent / 100 if capacity else reference_margin)
+    if not (margin_budget > 0):
+        raise RuntimeError('MARGIN_BUDGET_UNAVAILABLE')
+
+    step, min_index, max_index, precision = _volume_constraints(target_symbol)
+
+    def lots_for(index):
+        return round(index * step, precision)
+
+    checked = {}
+
+    def margin_for(index):
+        if index not in checked:
+            checked[index] = _estimated_margin(mt5, target_symbol.name, side, lots_for(index))
+        return checked[index]
+
+    minimum_margin = margin_for(min_index)
+    if minimum_margin > margin_budget + 1e-9:
+        raise RuntimeError('MARGIN_EQUIVALENT_BELOW_BROKER_MINIMUM')
+
+    maximum_margin = margin_for(max_index)
+    if maximum_margin <= margin_budget + 1e-9:
+        best_index = max_index
+    else:
+        low, high, best_index = min_index, max_index, min_index
+        iterations = 0
+        while low <= high and iterations < 64:
+            iterations += 1
+            mid = (low + high) // 2
+            if margin_for(mid) <= margin_budget + 1e-9:
+                best_index = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+
+    lots = lots_for(best_index)
+    target_margin = margin_for(best_index)
+    return {
+        'accountNumber': str(getattr(account_info, 'login', '') or ''),
+        'serverName': str(getattr(account_info, 'server', '') or ''),
+        'referenceSymbol': reference_symbol.name,
+        'targetSymbol': target_symbol.name,
+        'referenceLots': ref_lots,
+        'referenceMargin': reference_margin,
+        'accountCapacity': capacity,
+        'maxMarginPercent': percent,
+        'marginBudget': margin_budget,
+        'lots': lots,
+        'expectedMargin': target_margin,
+    }
+
+
 def command_result(result):
     return {
         'ok': bool(result.get('ok', True)),
@@ -321,6 +451,20 @@ class MketyMt5Connector:
                 return {'type': 'context_result', 'requestId': request_id, 'ok': True, 'context': context}
             except Exception as exc:
                 return {'type': 'context_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
+        if kind == 'margin_request':
+            request_id = str(message.get('requestId') or '')
+            try:
+                sizing = terminal_margin_equivalent(
+                    self.mt5,
+                    message.get('referenceSymbol'),
+                    message.get('targetSymbol'),
+                    message.get('referenceLots'),
+                    message.get('side'),
+                    message.get('maxMarginPercent', 10),
+                )
+                return {'type': 'margin_result', 'requestId': request_id, 'ok': True, 'sizing': sizing}
+            except Exception as exc:
+                return {'type': 'margin_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
         return None
 
     def run_forever(self):
