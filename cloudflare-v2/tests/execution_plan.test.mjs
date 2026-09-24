@@ -258,3 +258,48 @@ test('margin-equivalent sizing still obeys aggregate max-lots safety policy', ()
   assert.equal(plan.status, 'BLOCKED');
   assert.deepEqual(plan.actions, []);
 });
+
+
+test('symbol-equivalent uses broker-derived per-target lot on a fast signal without SL or TP', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY',orderType:'MARKET',symbol:{canonical:'DERIV:VOLATILITY_75'},entry:{kind:'MARKET'},stopLoss:null,takeProfits:[],fastEntry:true,incomplete:true,
+  }, {
+    account:{sizingMode:'SYMBOL_EQUIVALENT',referenceLots:0.9,legAllocation:'per_target',safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01,symbolEquivalentLots:0.3},
+  });
+  assert.equal(plan.status,'READY');
+  assert.equal(plan.actions[0].lots,0.3);
+});
+
+test('balance-percent uses broker-derived capped lot on a fast signal without SL or TP', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL',orderType:'MARKET',symbol:{canonical:'BTCUSD'},entry:{kind:'MARKET'},stopLoss:null,takeProfits:[],fastEntry:true,incomplete:true,
+  }, {
+    account:{sizingMode:'BALANCE_PERCENT',referenceLots:1,legAllocation:'per_target',safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01,balancePercentLots:0.25},
+  });
+  assert.equal(plan.status,'READY');
+  assert.equal(plan.actions[0].lots,0.25);
+});
+
+test('per-target allocation preserves current one-sized-lot-per-TP behavior', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY',orderType:'MARKET',symbol:{canonical:'XAUUSD'},entry:{kind:'MARKET'},stopLoss:2400,takeProfits:[2510,2520,2530],
+  }, {
+    account:{sizingMode:'SYMBOL_EQUIVALENT',referenceLots:0.09,legAllocation:'per_target',safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01,symbolEquivalentLots:0.09},
+    currentMarketPrice:2500,
+  });
+  assert.deepEqual(plan.actions.map((action)=>action.lots),[0.09,0.09,0.09]);
+});
+
+test('split-total allocation is independent and divides the sized lot across TP legs', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY',orderType:'MARKET',symbol:{canonical:'XAUUSD'},entry:{kind:'MARKET'},stopLoss:2400,takeProfits:[2510,2520,2530],
+  }, {
+    account:{sizingMode:'SYMBOL_EQUIVALENT',referenceLots:0.09,legAllocation:'split_total',safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01,symbolEquivalentLots:0.09},
+    currentMarketPrice:2500,
+  });
+  assert.deepEqual(plan.actions.map((action)=>action.lots),[0.03,0.03,0.03]);
+});
