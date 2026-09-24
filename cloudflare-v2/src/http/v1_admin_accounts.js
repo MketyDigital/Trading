@@ -97,14 +97,24 @@ function parseAccountCreation(body) {
   const label = requiredText(body.label ?? body.accountLabel ?? body.account_label);
   const accountId = requiredText(body.accountId ?? body.account_id);
   const serverName = requiredText(body.serverName ?? body.server_name);
-  const lotSizingType = requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed';
+  const lotSizingType = (requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed').toLowerCase();
   const lotValue = optionalNumber(body.lotValue ?? body.lot_value);
+  const lotSizingConfig = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
 
   if (!platform || !SUPPORTED_BROKER_PLATFORMS.has(platform)) {
     return { ok: false, reason: 'ACCOUNT_PLATFORM_UNSUPPORTED' };
   }
-  if (!label || !accountId || lotValue === undefined) {
+  if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
+  }
+  if (!['fixed', 'adaptive_percent'].includes(lotSizingType)) {
+    return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
+  }
+  if (lotSizingType === 'adaptive_percent') {
+    const percent = Number(lotSizingConfig.percent);
+    if (!(percent > 0 && percent <= 100)) {
+      return { ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_REQUIRED' };
+    }
   }
 
   try {
@@ -128,6 +138,7 @@ function parseAccountCreation(body) {
       serverName,
       lotSizingType,
       lotValue,
+      lotSizingConfig: lotSizingType === 'adaptive_percent' ? { percent: Number(lotSizingConfig.percent) } : {},
       active: false,
       executionEnabled: false,
       safetyPolicy,
@@ -196,6 +207,7 @@ export function createAdminAccountStore(supabase) {
         server_name: input.serverName ?? null,
         lot_sizing_type: input.lotSizingType ?? 'fixed',
         lot_value: input.lotValue ?? null,
+        lot_sizing_config: safeObject(input.lotSizingConfig),
         is_active: false,
         execution_enabled: false,
         safety_policy: { ...safeObject(input.safetyPolicy), killSwitch: true },
@@ -264,6 +276,22 @@ export function createAdminAccountStore(supabase) {
         .select(ACCOUNT_SELECT)
         .maybeSingle();
       if (error) throw new Error('ACCOUNT_FIXED_LOT_UPDATE_FAILED');
+      return data || null;
+    },
+
+    async setAdaptiveLot(workspaceId, accountId, lotValue, percent) {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({
+          lot_sizing_type: 'adaptive_percent',
+          lot_value: lotValue,
+          lot_sizing_config: { percent },
+        })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_ADAPTIVE_LOT_UPDATE_FAILED');
       return data || null;
     },
 
@@ -445,6 +473,25 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       });
     } catch {
       return json({ ok: false, reason: 'ACCOUNT_FIXED_LOT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'adaptive-lot') {
+    const lotValue = Number(body.lotValue);
+    const percent = Number(body.percent);
+    if (!(lotValue > 0)) return json({ ok: false, reason: 'ADAPTIVE_REFERENCE_LOT_POSITIVE_NUMBER_REQUIRED' }, 400);
+    if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'ADAPTIVE_PERCENT_RANGE_REQUIRED' }, 400);
+    try {
+      const account = await accountStore.setAdaptiveLot(workspaceId, accountId, lotValue, percent);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({
+        ok: true,
+        workspaceId,
+        masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env),
+        account: publicAccount(account),
+      });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_LOT_UPDATE_FAILED' }, 503);
     }
   }
 
