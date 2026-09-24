@@ -451,21 +451,21 @@ test('new routed MT5 connector account hydrates its own broker catalog before pl
 });
 
 
-test('margin-equivalent instrument planning delegates to broker-authoritative sizing without SL or TP', async () => {
+test('symbol-equivalent planning delegates to broker-authoritative sizing without SL or TP', async () => {
   const calls = [];
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
-    supabase: { from() { throw new Error('database should not be used for margin-equivalent instrument test'); } },
+    supabase: { from() { throw new Error('database should not be used for broker sizing instrument test'); } },
     event: { workspace_hint: 'workspace-1' },
-    brokerMarginSizingLoader: async (account, intent, resolved) => {
+    brokerSizingLoader: async (account, intent, resolved) => {
       calls.push({ account, intent, resolved });
       return { lots:0.3, referenceMargin:90, expectedMargin:90, marginBudget:90 };
     },
   });
   const account = {
     id:'acct-1', platform:'ctrader', provider_mode:'ctrader_oauth', environment:'demo',
-    lot_sizing_type:'margin_equivalent', lot_value:0.9,
-    lot_sizing_config:{referenceSymbol:'GBPUSD',maxMarginPercent:10},
+    lot_sizing_type:'symbol_equivalent', lot_value:0.9,
+    lot_sizing_config:{referenceSymbol:'GBPUSD',legAllocation:'per_target'},
     provider_config:{symbolCatalog:[{
       platformSymbol:'Volatility 75 Index', platformId:75, tradable:true,
       minLots:0.01,maxLots:100,stepLots:0.01,protocolLotSize:100,
@@ -473,8 +473,30 @@ test('margin-equivalent instrument planning delegates to broker-authoritative si
   };
   const intent = { side:'BUY', symbol:{canonical:'DERIV:VOLATILITY_75',source:'V75'}, entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[] };
   const instrument = await deps.instrumentProvider(account, intent);
-  assert.equal(instrument.marginEquivalentLots,0.3);
-  assert.equal(instrument.marginSizing.referenceMargin,90);
+  assert.equal(instrument.symbolEquivalentLots,0.3);
+  assert.equal(instrument.brokerSizing.referenceMargin,90);
   assert.equal(calls.length,1);
   assert.equal(calls[0].resolved.platformSymbol,'Volatility 75 Index');
+});
+
+test('balance-percent planning delegates to broker-authoritative sizing without SL or TP', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for broker sizing instrument test'); } },
+    event: { workspace_hint: 'workspace-1' },
+    brokerSizingLoader: async () => ({ lots:0.25, percent:2, accountBalance:10000, marginBudget:200 }),
+  });
+  const account = {
+    id:'acct-1', platform:'ctrader', provider_mode:'ctrader_oauth', environment:'demo',
+    lot_sizing_type:'balance_percent', lot_value:1,
+    lot_sizing_config:{percent:2,legAllocation:'per_target'},
+    provider_config:{symbolCatalog:[{
+      platformSymbol:'Volatility 75 Index', platformId:75, tradable:true,
+      minLots:0.01,maxLots:100,stepLots:0.01,protocolLotSize:100,
+    }]},
+  };
+  const intent = { side:'SELL', symbol:{canonical:'DERIV:VOLATILITY_75',source:'V75'}, entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[] };
+  const instrument = await deps.instrumentProvider(account, intent);
+  assert.equal(instrument.balancePercentLots,0.25);
+  assert.equal(instrument.brokerSizing.percent,2);
 });
