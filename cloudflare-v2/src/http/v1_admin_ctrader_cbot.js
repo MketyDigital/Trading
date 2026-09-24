@@ -5,7 +5,7 @@ import { decryptConnectionCredentials, encryptConnectionCredentials } from '../s
 import { createCTraderCbotConnectionToken } from '../adapters/ctrader_cbot_protocol.js';
 import { providerConfigWithSymbolCatalog } from '../execution/account_symbol_catalog.js';
 
-const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
+const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
 const DEFAULT_CONNECTION_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -93,6 +93,7 @@ function publicAccount(row = {}) {
     credentialConfigured: Boolean(row.credential_ciphertext),
     lotSizingType: row.lot_sizing_type ?? 'fixed',
     lotValue: row.lot_value ?? null,
+    lotSizingConfig: { ...safeObject(row.lot_sizing_config) },
     createdAt: row.created_at ?? null,
   };
 }
