@@ -8,6 +8,7 @@ function normalizeAccount(account = {}) {
     const legacy = String(account.lot_sizing_type || '').toLowerCase();
     if (legacy === 'fixed') return 'FIXED_LOTS';
     if (legacy === 'adaptive_percent') return 'ADAPTIVE_PERCENT';
+    if (legacy === 'margin_equivalent') return 'MARGIN_EQUIVALENT';
     if (legacy === 'risk_percent') return 'RISK_PERCENT';
     if (legacy === 'fixed_risk') return 'FIXED_RISK';
     return undefined;
@@ -525,7 +526,7 @@ function needsPlanningMarketPrice(account = {}, intent = {}) {
   // point of failure and can prevent the durable fast group from existing for
   // the full follow-up. Protected/range/risk-sized trades still require the
   // broker-authoritative market context.
-  return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT'));
+  return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT' || sizingMode === 'MARGIN_EQUIVALENT'));
 }
 
 export async function orchestrateTradingEventSimulation({
