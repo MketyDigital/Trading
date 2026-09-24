@@ -76,6 +76,11 @@ class FakeMT5:
     def symbol_info_tick(self, name):
         return SimpleNamespace(ask=2500.5, bid=2500.4, last=2500.45)
 
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        # Gold: 100 account-currency margin per lot. Synthetic: 300 per lot.
+        rate = 100.0 if symbol == 'XAUUSD.r' else 300.0
+        return float(volume) * rate
+
     def order_check(self, request):
         return SimpleNamespace(retcode=0, comment='ok')
 
@@ -226,6 +231,41 @@ class ConnectorTests(unittest.TestCase):
             self.assertTrue(response['ok'])
             self.assertEqual(response['context']['account']['equity'], 9950.0)
             self.assertEqual(response['context']['symbol']['tickValueLoss'], 1.2)
+
+
+    def test_margin_equivalent_sizing_uses_broker_margin_without_sl_or_tp(self):
+        sizing = module.terminal_margin_equivalent(
+            FakeMT5(), 'XAUUSD.r', 'Synthetic 75', 0.9, 'BUY', 100,
+        )
+        self.assertEqual(sizing['referenceLots'], 0.9)
+        self.assertEqual(sizing['referenceMargin'], 90.0)
+        self.assertEqual(sizing['lots'], 0.3)
+        self.assertEqual(sizing['expectedMargin'], 90.0)
+
+    def test_margin_equivalent_sizing_caps_by_free_margin_percentage(self):
+        sizing = module.terminal_margin_equivalent(
+            FakeMT5(), 'XAUUSD.r', 'Synthetic 75', 0.9, 'BUY', 1,
+        )
+        # Free margin is 9000, so 1% = 90; same as the reference margin.
+        self.assertEqual(sizing['marginBudget'], 90.0)
+        self.assertEqual(sizing['lots'], 0.3)
+
+    def test_margin_request_returns_sizing_without_protection_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
+                'gateway_url': module.DEFAULT_GATEWAY,
+                'connection_token': 'token',
+                'connector_instance_id': 'i',
+            }, ledger_path=Path(td) / 'ledger.sqlite')
+            response = connector.handle_message({
+                'type': 'margin_request', 'requestId': 'margin-1',
+                'referenceSymbol': 'XAUUSD.r', 'targetSymbol': 'Synthetic 75',
+                'referenceLots': 0.9, 'side': 'SELL', 'maxMarginPercent': 100,
+            })
+            self.assertEqual(response['type'], 'margin_result')
+            self.assertTrue(response['ok'])
+            self.assertEqual(response['sizing']['lots'], 0.3)
+
 
 
 if __name__ == '__main__':
