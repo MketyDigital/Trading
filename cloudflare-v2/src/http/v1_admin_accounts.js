@@ -34,6 +34,31 @@ function safeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function legAllocationFromConfig(value) {
+  const config = safeObject(value);
+  const mode = String(config.legAllocation ?? 'per_target').trim().toLowerCase();
+  return ['per_target', 'split_total'].includes(mode) ? mode : null;
+}
+
+function sizingConfigFor(type, raw = {}) {
+  const config = safeObject(raw);
+  const legAllocation = legAllocationFromConfig(config);
+  if (!legAllocation) return null;
+  if (type === 'adaptive_percent') {
+    const percent = Number(config.percent);
+    return percent > 0 && percent <= 100 ? { percent, legAllocation } : null;
+  }
+  if (type === 'symbol_equivalent') {
+    const referenceSymbol = requiredText(config.referenceSymbol);
+    return referenceSymbol ? { referenceSymbol, legAllocation } : null;
+  }
+  if (type === 'balance_percent') {
+    const percent = Number(config.percent);
+    return percent > 0 && percent <= 100 ? { percent, legAllocation } : null;
+  }
+  return { legAllocation };
+}
+
 function canonicalEntryZonePolicy(value) {
   const raw = safeObject(value);
   const mode = String(raw.mode ?? '').trim().toLowerCase();
@@ -107,21 +132,12 @@ function parseAccountCreation(body) {
   if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
   }
-  if (!['fixed', 'adaptive_percent', 'margin_equivalent'].includes(lotSizingType)) {
+  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
-  if (lotSizingType === 'adaptive_percent') {
-    const percent = Number(lotSizingConfig.percent);
-    if (!(percent > 0 && percent <= 100)) {
-      return { ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_REQUIRED' };
-    }
-  }
-  if (lotSizingType === 'margin_equivalent') {
-    const referenceSymbol = requiredText(lotSizingConfig.referenceSymbol);
-    const maxMarginPercent = Number(lotSizingConfig.maxMarginPercent ?? 10);
-    if (!referenceSymbol || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
-      return { ok: false, reason: 'ACCOUNT_MARGIN_EQUIVALENT_CONFIG_REQUIRED' };
-    }
+  const normalizedSizingConfig = sizingConfigFor(lotSizingType, lotSizingConfig);
+  if (!normalizedSizingConfig) {
+    return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
   }
 
   try {
@@ -145,11 +161,7 @@ function parseAccountCreation(body) {
       serverName,
       lotSizingType,
       lotValue,
-      lotSizingConfig: lotSizingType === 'adaptive_percent'
-        ? { percent: Number(lotSizingConfig.percent) }
-        : lotSizingType === 'margin_equivalent'
-          ? { referenceSymbol: requiredText(lotSizingConfig.referenceSymbol), maxMarginPercent: Number(lotSizingConfig.maxMarginPercent ?? 10) }
-          : {},
+      lotSizingConfig: normalizedSizingConfig,
       active: false,
       executionEnabled: false,
       safetyPolicy,
@@ -306,19 +318,50 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
-    async setMarginEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, maxMarginPercent) {
+    async setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, legAllocation = 'per_target') {
       const { data, error } = await supabase
         .from('trade_accounts')
         .update({
-          lot_sizing_type: 'margin_equivalent',
+          lot_sizing_type: 'symbol_equivalent',
           lot_value: lotValue,
-          lot_sizing_config: { referenceSymbol, maxMarginPercent },
+          lot_sizing_config: { referenceSymbol, legAllocation },
         })
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
         .select(ACCOUNT_SELECT)
         .maybeSingle();
-      if (error) throw new Error('ACCOUNT_MARGIN_EQUIVALENT_UPDATE_FAILED');
+      if (error) throw new Error('ACCOUNT_SYMBOL_EQUIVALENT_UPDATE_FAILED');
+      return data || null;
+    },
+
+    async setBalancePercentLot(workspaceId, accountId, lotValue, percent, legAllocation = 'per_target') {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({
+          lot_sizing_type: 'balance_percent',
+          lot_value: lotValue,
+          lot_sizing_config: { percent, legAllocation },
+        })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED');
+      return data || null;
+    },
+
+    async setLegAllocation(workspaceId, accountId, legAllocation) {
+      const account = await getAccount(workspaceId, accountId);
+      if (!account) return null;
+      const current = safeObject(account.lot_sizing_config);
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .update({ lot_sizing_config: { ...current, legAllocation } })
+        .eq('workspace_id', String(workspaceId))
+        .eq('id', String(accountId))
+        .select(ACCOUNT_SELECT)
+        .maybeSingle();
+      if (error) throw new Error('ACCOUNT_LEG_ALLOCATION_UPDATE_FAILED');
       return data || null;
     },
 
@@ -522,26 +565,47 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
     }
   }
 
-  if (action === 'margin-equivalent-lot') {
+  if (action === 'symbol-equivalent-lot') {
     const lotValue = Number(body.lotValue);
     const referenceSymbol = requiredText(body.referenceSymbol);
-    const maxMarginPercent = Number(body.maxMarginPercent ?? 10);
-    if (!(lotValue > 0)) return json({ ok: false, reason: 'MARGIN_EQUIVALENT_REFERENCE_LOT_REQUIRED' }, 400);
-    if (!referenceSymbol) return json({ ok: false, reason: 'MARGIN_EQUIVALENT_REFERENCE_SYMBOL_REQUIRED' }, 400);
-    if (!(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
-      return json({ ok: false, reason: 'MARGIN_EQUIVALENT_MAX_MARGIN_PERCENT_INVALID' }, 400);
-    }
+    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
+    if (!(lotValue > 0)) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_LOT_REQUIRED' }, 400);
+    if (!referenceSymbol) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_SYMBOL_REQUIRED' }, 400);
+    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
     try {
-      const account = await accountStore.setMarginEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, maxMarginPercent);
+      const account = await accountStore.setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, legAllocation);
       if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
-      return json({
-        ok: true,
-        workspaceId,
-        masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env),
-        account: publicAccount(account),
-      });
+      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
     } catch {
-      return json({ ok: false, reason: 'ACCOUNT_MARGIN_EQUIVALENT_UPDATE_FAILED' }, 503);
+      return json({ ok: false, reason: 'ACCOUNT_SYMBOL_EQUIVALENT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'balance-percent-lot') {
+    const lotValue = Number(body.lotValue);
+    const percent = Number(body.percent);
+    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
+    if (!(lotValue > 0)) return json({ ok: false, reason: 'BALANCE_PERCENT_MAX_LOT_REQUIRED' }, 400);
+    if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'BALANCE_PERCENT_RANGE_REQUIRED' }, 400);
+    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
+    try {
+      const account = await accountStore.setBalancePercentLot(workspaceId, accountId, lotValue, percent, legAllocation);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED' }, 503);
+    }
+  }
+
+  if (action === 'leg-allocation') {
+    const legAllocation = String(body.legAllocation ?? '').trim().toLowerCase();
+    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
+    try {
+      const account = await accountStore.setLegAllocation(workspaceId, accountId, legAllocation);
+      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
+      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
+    } catch {
+      return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_UPDATE_FAILED' }, 503);
     }
   }
 
