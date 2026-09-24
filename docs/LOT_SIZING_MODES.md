@@ -25,7 +25,6 @@ Recommended when one connected account trades different products or asset classe
 Configuration:
 - `lot_value`: the owner's chosen/reference lot.
 - `lot_sizing_config.referenceSymbol`: the familiar symbol on which that lot is considered normal.
-- `lot_sizing_config.legAllocation`: independent leg allocation option.
 
 Rules:
 1. Ask the broker for expected margin of the reference symbol at the owner's chosen lot.
@@ -45,7 +44,6 @@ Separate opt-in account-capacity sizing.
 Configuration:
 - `lot_value`: owner-selected maximum lot per target before optional leg splitting.
 - `lot_sizing_config.percent`: percent of broker-reported account balance available as the expected-margin budget.
-- `lot_sizing_config.legAllocation`: independent leg allocation option.
 
 Rules:
 1. Compute budget = broker-reported balance × selected percentage.
@@ -58,14 +56,11 @@ Rules:
 
 The existing SL-based risk engine remains a separate sizing approach. It requires reliable risk geometry and does not replace symbol-equivalent or balance-percent sizing.
 
-## Leg allocation is independent
+## Leg allocation
 
-`lot_sizing_config.legAllocation` is independent of the sizing mode:
+Current Mkety behavior remains unchanged: the sized lot applies **per target leg**.
 
-- `per_target` (default): the sized lot applies to each TP leg. This preserves existing Mkety behavior.
-- `split_total`: the sized lot is treated as the total and split across TP legs using broker volume step rules.
-
-No existing account is changed automatically. Accounts without `legAllocation` continue as `per_target`.
+A future split-total mode must be implemented as a separate feature because fast-entry signals open before the final number of TP legs is known. Enabling split-total without explicit fast->full rebalancing could accidentally increase exposure, so PR #135 intentionally does not add that behavior.
 
 ## Broker authority
 
