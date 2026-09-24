@@ -613,7 +613,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerMarginSizingLoader } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -654,7 +654,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
 
       const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
       const lotValue = Number(account?.lot_value);
-      if (['fixed', 'adaptive_percent', 'margin_equivalent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
+      if (['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
         const brokerMinLots = Number(resolvedSymbol.minLots ?? resolvedSymbol.minVolume);
         const brokerMaxLots = Number(resolvedSymbol.maxLots ?? resolvedSymbol.maxVolume);
         const brokerStepLots = Number(resolvedSymbol.stepLots ?? resolvedSymbol.stepVolume);
@@ -671,14 +671,15 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
           ...(Number.isFinite(Number(resolvedSymbol.contractSize)) ? { contractSize: Number(resolvedSymbol.contractSize) } : {}),
           ...(Number.isFinite(Number(resolvedSymbol.digits)) ? { digits: Number(resolvedSymbol.digits) } : {}),
         };
-        if (lotSizingType === 'margin_equivalent') {
-          const loader = typeof brokerMarginSizingLoader === 'function'
-            ? brokerMarginSizingLoader
-            : (candidateAccount, candidateIntent, candidateResolved) => defaultBrokerMarginEquivalentSizing(candidateAccount, candidateIntent, candidateResolved, env);
+        if (['symbol_equivalent', 'balance_percent'].includes(lotSizingType)) {
+          const loader = typeof brokerSizingLoader === 'function'
+            ? brokerSizingLoader
+            : (candidateAccount, candidateIntent, candidateResolved) => defaultBrokerSizing(candidateAccount, candidateIntent, candidateResolved, env);
           const sizing = await loader(account, intent, resolvedSymbol);
-          if (!(Number(sizing?.lots) > 0)) throw new Error('broker margin-equivalent sizing unavailable');
-          result.marginEquivalentLots = Number(sizing.lots);
-          result.marginSizing = sizing;
+          if (!(Number(sizing?.lots) > 0)) throw new Error('broker-aware sizing unavailable');
+          if (lotSizingType === 'symbol_equivalent') result.symbolEquivalentLots = Number(sizing.lots);
+          else result.balancePercentLots = Number(sizing.lots);
+          result.brokerSizing = sizing;
         }
         return result;
       }
