@@ -73,8 +73,9 @@ CREATE TABLE IF NOT EXISTS public.trade_accounts (
     account_id TEXT NOT NULL,
     api_token_encrypted TEXT,
     server_name TEXT,
-    lot_sizing_type TEXT DEFAULT 'fixed' CHECK (lot_sizing_type IN ('fixed', 'multiplier', 'risk_percent')),
+    lot_sizing_type TEXT DEFAULT 'fixed' CHECK (lot_sizing_type IN ('fixed', 'adaptive_percent', 'multiplier', 'risk_percent')),
     lot_value NUMERIC DEFAULT 0.01,
+    lot_sizing_config JSONB DEFAULT '{}'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
