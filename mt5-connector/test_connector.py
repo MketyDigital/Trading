@@ -233,24 +233,26 @@ class ConnectorTests(unittest.TestCase):
             self.assertEqual(response['context']['symbol']['tickValueLoss'], 1.2)
 
 
-    def test_margin_equivalent_sizing_uses_broker_margin_without_sl_or_tp(self):
-        sizing = module.terminal_margin_equivalent(
-            FakeMT5(), 'XAUUSD.r', 'Synthetic 75', 0.9, 'BUY', 100,
+    def test_symbol_equivalent_reduces_heavier_symbol_without_using_account_capacity(self):
+        sizing = module.terminal_broker_sizing(
+            FakeMT5(), 'symbol_equivalent', 'Synthetic 75', 0.9, 'BUY',
+            reference_symbol_name='XAUUSD.r',
         )
         self.assertEqual(sizing['referenceLots'], 0.9)
         self.assertEqual(sizing['referenceMargin'], 90.0)
         self.assertEqual(sizing['lots'], 0.3)
         self.assertEqual(sizing['expectedMargin'], 90.0)
+        self.assertNotIn('accountCapacity', sizing)
 
-    def test_margin_equivalent_sizing_caps_by_free_margin_percentage(self):
-        sizing = module.terminal_margin_equivalent(
-            FakeMT5(), 'XAUUSD.r', 'Synthetic 75', 0.9, 'BUY', 1,
+    def test_balance_percent_uses_balance_as_separate_fast_safe_budget(self):
+        sizing = module.terminal_broker_sizing(
+            FakeMT5(), 'balance_percent', 'Synthetic 75', 1.0, 'BUY', percent=1,
         )
-        # Free margin is 9000, so 1% = 90; same as the reference margin.
-        self.assertEqual(sizing['marginBudget'], 90.0)
-        self.assertEqual(sizing['lots'], 0.3)
+        self.assertEqual(sizing['accountBalance'], 10000.0)
+        self.assertEqual(sizing['marginBudget'], 100.0)
+        self.assertEqual(sizing['lots'], 0.333)
 
-    def test_margin_request_returns_sizing_without_protection_fields(self):
+    def test_sizing_request_returns_result_without_protection_fields(self):
         with tempfile.TemporaryDirectory() as td:
             connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None, {
                 'gateway_url': module.DEFAULT_GATEWAY,
@@ -258,14 +260,14 @@ class ConnectorTests(unittest.TestCase):
                 'connector_instance_id': 'i',
             }, ledger_path=Path(td) / 'ledger.sqlite')
             response = connector.handle_message({
-                'type': 'margin_request', 'requestId': 'margin-1',
+                'type': 'sizing_request', 'requestId': 'sizing-1',
+                'mode': 'symbol_equivalent',
                 'referenceSymbol': 'XAUUSD.r', 'targetSymbol': 'Synthetic 75',
-                'referenceLots': 0.9, 'side': 'SELL', 'maxMarginPercent': 100,
+                'maximumLots': 0.9, 'side': 'SELL',
             })
-            self.assertEqual(response['type'], 'margin_result')
+            self.assertEqual(response['type'], 'sizing_result')
             self.assertTrue(response['ok'])
             self.assertEqual(response['sizing']['lots'], 0.3)
-
 
 
 if __name__ == '__main__':
