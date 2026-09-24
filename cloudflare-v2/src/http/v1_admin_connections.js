@@ -305,7 +305,7 @@ async function handleAccountConnection(request, authorization, supabase, account
     if ('providerConfig' in body || 'provider_config' in body) update.provider_config = sanitizeConnectionConfig(safeObject(body.providerConfig ?? body.provider_config));
     if ('lotSizingType' in body || 'lot_sizing_type' in body) {
       const sizingType = safeText(body.lotSizingType ?? body.lot_sizing_type)?.toLowerCase();
-      if (!['fixed', 'adaptive_percent', 'margin_equivalent'].includes(sizingType)) {
+      if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(sizingType)) {
         return json({ ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' }, 400);
       }
       update.lot_sizing_type = sizingType;
@@ -318,37 +318,52 @@ async function handleAccountConnection(request, authorization, supabase, account
     if ('lotSizingConfig' in body || 'lot_sizing_config' in body) {
       const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
+      const legAllocation = String(config.legAllocation ?? 'per_target').trim().toLowerCase();
+      if (!['per_target','split_total'].includes(legAllocation)) {
+        return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_INVALID' }, 400);
+      }
       if (requestedType === 'adaptive_percent') {
         const percent = Number(config.percent);
         if (!(percent > 0 && percent <= 100)) {
           return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_INVALID' }, 400);
         }
-        update.lot_sizing_config = { percent };
-      } else if (requestedType === 'margin_equivalent') {
+        update.lot_sizing_config = { percent, legAllocation };
+      } else if (requestedType === 'symbol_equivalent') {
         const referenceSymbol = safeText(config.referenceSymbol);
-        const maxMarginPercent = Number(config.maxMarginPercent ?? 10);
-        if (!referenceSymbol || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
-          return json({ ok: false, reason: 'ACCOUNT_MARGIN_EQUIVALENT_CONFIG_INVALID' }, 400);
+        if (!referenceSymbol) {
+          return json({ ok: false, reason: 'ACCOUNT_SYMBOL_EQUIVALENT_CONFIG_INVALID' }, 400);
         }
-        update.lot_sizing_config = { referenceSymbol, maxMarginPercent };
+        update.lot_sizing_config = { referenceSymbol, legAllocation };
+      } else if (requestedType === 'balance_percent') {
+        const percent = Number(config.percent);
+        if (!(percent > 0 && percent <= 100)) {
+          return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_INVALID' }, 400);
+        }
+        update.lot_sizing_config = { percent, legAllocation };
       } else {
-        update.lot_sizing_config = {};
+        update.lot_sizing_config = { legAllocation };
       }
     }
     const effectiveSizingType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
+    const effectiveConfig = update.lot_sizing_config ?? safeObject(current.lot_sizing_config);
+    const effectiveLegAllocation = String(effectiveConfig.legAllocation ?? 'per_target').trim().toLowerCase();
+    if (!['per_target','split_total'].includes(effectiveLegAllocation)) {
+      return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_INVALID' }, 400);
+    }
     if (effectiveSizingType === 'adaptive_percent') {
-      const config = update.lot_sizing_config ?? safeObject(current.lot_sizing_config);
-      const percent = Number(config.percent);
+      const percent = Number(effectiveConfig.percent);
       if (!(percent > 0 && percent <= 100)) {
         return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_REQUIRED' }, 400);
       }
     }
-    if (effectiveSizingType === 'margin_equivalent') {
-      const config = update.lot_sizing_config ?? safeObject(current.lot_sizing_config);
-      const referenceSymbol = safeText(config.referenceSymbol);
-      const maxMarginPercent = Number(config.maxMarginPercent ?? 10);
-      if (!referenceSymbol || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
-        return json({ ok: false, reason: 'ACCOUNT_MARGIN_EQUIVALENT_CONFIG_REQUIRED' }, 400);
+    if (effectiveSizingType === 'symbol_equivalent') {
+      const referenceSymbol = safeText(effectiveConfig.referenceSymbol);
+      if (!referenceSymbol) return json({ ok: false, reason: 'ACCOUNT_SYMBOL_EQUIVALENT_CONFIG_REQUIRED' }, 400);
+    }
+    if (effectiveSizingType === 'balance_percent') {
+      const percent = Number(effectiveConfig.percent);
+      if (!(percent > 0 && percent <= 100)) {
+        return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_REQUIRED' }, 400);
       }
     }
     if (!Object.keys(update).length) return json({ ok: false, reason: 'ACCOUNT_UPDATE_EMPTY' }, 400);
