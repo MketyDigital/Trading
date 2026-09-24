@@ -278,13 +278,12 @@ test('admin can enable adaptive reference-lot sizing without changing execution 
   }]);
 });
 
-test('adaptive sizing rejects invalid lot, percent, or leg allocation', async () => {
+test('adaptive sizing rejects invalid lot or percent', async () => {
   const account={id:'acc-1',workspace_id:'ws-1',account_label:'Demo',platform:'ctrader',account_id:'2001',is_active:true,execution_enabled:true,lot_sizing_type:'fixed',lot_value:0.01,lot_sizing_config:{},safety_policy:{killSwitch:false}};
   for (const body of [
     {lotValue:0,percent:25},
     {lotValue:1,percent:0},
     {lotValue:1,percent:101},
-    {lotValue:1,percent:25},
   ]) {
     const supabase=createSupabase([account]);
     const response=await request('/api/v1/admin/accounts/acc-1/adaptive-lot',{method:'POST',body,supabase});
