@@ -78,15 +78,6 @@ function normalizeAdaptiveLots(referenceLots, percent, instrument) {
   return normalizeFixedLots(reference * (scale / 100), instrument);
 }
 
-function totalLotsForAllocation(lotsPerTarget, targetCount, volumeStep, allocationMode = 'per_target') {
-  const base = Number(lotsPerTarget);
-  const mode = String(allocationMode || 'per_target').trim().toLowerCase();
-  if (!(base > 0)) throw new TypeError('positive lots required');
-  if (mode === 'split_total') return Number(base.toFixed(decimals(volumeStep)));
-  if (mode !== 'per_target') throw new TypeError('unsupported leg allocation mode');
-  return Number((base * targetCount).toFixed(decimals(volumeStep)));
-}
-
 function openActionsFromGroup(group) {
   return group.legs.map((leg) => ({
     type: 'OPEN_POSITION', legId: leg.legId, targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
@@ -144,24 +135,22 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   let totalLots;
   let riskEntryPrice = null;
 
-  const legAllocation = account.legAllocation ?? account.leg_allocation ?? 'per_target';
-
   if (sizingMode === 'FIXED_LOTS') {
     const fixedLotsPerTarget = normalizeFixedLots(account.fixedLots, instrument);
-    totalLots = totalLotsForAllocation(fixedLotsPerTarget, targetCount, volumeStep, legAllocation);
+    totalLots = Number((fixedLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'ADAPTIVE_PERCENT') {
     const adaptiveLotsPerTarget = normalizeAdaptiveLots(account.referenceLots, account.adaptivePercent, instrument);
-    totalLots = totalLotsForAllocation(adaptiveLotsPerTarget, targetCount, volumeStep, legAllocation);
+    totalLots = Number((adaptiveLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'SYMBOL_EQUIVALENT') {
     const brokerEquivalentLots = Number(instrument.symbolEquivalentLots);
     if (!(brokerEquivalentLots > 0)) throw new TypeError('broker-authoritative symbol-equivalent lot sizing required');
     const lotsPerTarget = normalizeFixedLots(brokerEquivalentLots, instrument);
-    totalLots = totalLotsForAllocation(lotsPerTarget, targetCount, volumeStep, legAllocation);
+    totalLots = Number((lotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'BALANCE_PERCENT') {
     const brokerBalanceLots = Number(instrument.balancePercentLots);
     if (!(brokerBalanceLots > 0)) throw new TypeError('broker-authoritative balance-percent lot sizing required');
     const lotsPerTarget = normalizeFixedLots(brokerBalanceLots, instrument);
-    totalLots = totalLotsForAllocation(lotsPerTarget, targetCount, volumeStep, legAllocation);
+    totalLots = Number((lotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);
