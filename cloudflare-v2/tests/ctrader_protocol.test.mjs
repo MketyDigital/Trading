@@ -9,6 +9,7 @@ import {
   buildSymbolsListMessage,
   buildSymbolByIdMessage,
   buildSubscribeSpotsMessage,
+  buildExpectedMarginMessage,
   decodeSpotEvent,
 } from '../src/adapters/ctrader_protocol.js';
 
@@ -65,5 +66,15 @@ test('builds broker-authoritative cTrader reconcile request', () => {
     clientMsgId: 'r1',
     payloadType: 2124,
     payload: { ctidTraderAccountId: 123, returnProtectionOrders: false },
+  });
+});
+
+
+test('builds cTrader expected-margin request with protocol volumes', () => {
+  assert.deepEqual(buildExpectedMarginMessage({
+    clientMsgId:'margin-1', accountId:77, symbolId:42, protocolVolumes:[9000000, 3000],
+  }), {
+    clientMsgId:'margin-1', payloadType:2139,
+    payload:{ctidTraderAccountId:77,symbolId:42,volume:[9000000,3000]},
   });
 });
