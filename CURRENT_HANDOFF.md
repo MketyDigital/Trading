@@ -776,3 +776,19 @@ Current intended TP protection progression remains:
 - TP2 hit -> remaining SL to TP1.
 - TP3 hit -> remaining SL to TP2.
 - Continue the same progression for later targets.
+
+
+## Broker-aware lot sizing expansion — 2026-09-24
+
+- PR #134 merged/deployed adaptive_percent sizing and changed the universal legacy Starpips fallback label to Mkety.
+- Existing fixed-lot accounts were not changed by that deployment.
+- New follow-up PR #135 adds margin_equivalent sizing for cross-market economic exposure.
+- margin_equivalent uses a familiar reference symbol + reference lot and asks the broker for expected margin rather than assuming one lot means the same across FX, gold, crypto, indices, or Deriv synthetics.
+- Target lot is the largest executable broker lot at or below the reference margin budget. If broker minimum would exceed the budget, execution fails closed instead of oversizing.
+- A configurable maxMarginPercent also scales the budget down on smaller accounts.
+- This mode is independent of SL/TP and supports fast-entry signals where protection is added later.
+- cTrader OAuth uses ProtoOAExpectedMargin. MT5 uses order_calc_margin in the existing connector; no second VPS service/watchdog is introduced.
+- Existing fixed and adaptive_percent modes remain separate and unchanged.
+- No account is automatically switched to margin_equivalent. Explicit per-account selection is required.
+- MT5 margin_equivalent requires the new connector build to be installed before enabling this mode on that MT5 account.
+- Full semantics and operational behavior are documented in docs/LOT_SIZING_MODES.md.
