@@ -34,29 +34,21 @@ function safeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function legAllocationFromConfig(value) {
-  const config = safeObject(value);
-  const mode = String(config.legAllocation ?? 'per_target').trim().toLowerCase();
-  return ['per_target', 'split_total'].includes(mode) ? mode : null;
-}
-
 function sizingConfigFor(type, raw = {}) {
   const config = safeObject(raw);
-  const legAllocation = legAllocationFromConfig(config);
-  if (!legAllocation) return null;
   if (type === 'adaptive_percent') {
     const percent = Number(config.percent);
-    return percent > 0 && percent <= 100 ? { percent, legAllocation } : null;
+    return percent > 0 && percent <= 100 ? { percent } : null;
   }
   if (type === 'symbol_equivalent') {
     const referenceSymbol = requiredText(config.referenceSymbol);
-    return referenceSymbol ? { referenceSymbol, legAllocation } : null;
+    return referenceSymbol ? { referenceSymbol } : null;
   }
   if (type === 'balance_percent') {
     const percent = Number(config.percent);
-    return percent > 0 && percent <= 100 ? { percent, legAllocation } : null;
+    return percent > 0 && percent <= 100 ? { percent } : null;
   }
-  return { legAllocation };
+  return {};
 }
 
 function canonicalEntryZonePolicy(value) {
@@ -302,13 +294,13 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
-    async setAdaptiveLot(workspaceId, accountId, lotValue, percent, legAllocation = 'per_target') {
+    async setAdaptiveLot(workspaceId, accountId, lotValue, percent) {
       const { data, error } = await supabase
         .from('trade_accounts')
         .update({
           lot_sizing_type: 'adaptive_percent',
           lot_value: lotValue,
-          lot_sizing_config: { percent, legAllocation },
+          lot_sizing_config: { percent },
         })
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
@@ -318,13 +310,13 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
-    async setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, legAllocation = 'per_target') {
+    async setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol) {
       const { data, error } = await supabase
         .from('trade_accounts')
         .update({
           lot_sizing_type: 'symbol_equivalent',
           lot_value: lotValue,
-          lot_sizing_config: { referenceSymbol, legAllocation },
+          lot_sizing_config: { referenceSymbol },
         })
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
@@ -334,34 +326,19 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
-    async setBalancePercentLot(workspaceId, accountId, lotValue, percent, legAllocation = 'per_target') {
+    async setBalancePercentLot(workspaceId, accountId, lotValue, percent) {
       const { data, error } = await supabase
         .from('trade_accounts')
         .update({
           lot_sizing_type: 'balance_percent',
           lot_value: lotValue,
-          lot_sizing_config: { percent, legAllocation },
+          lot_sizing_config: { percent },
         })
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
         .select(ACCOUNT_SELECT)
         .maybeSingle();
       if (error) throw new Error('ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED');
-      return data || null;
-    },
-
-    async setLegAllocation(workspaceId, accountId, legAllocation) {
-      const account = await getAccount(workspaceId, accountId);
-      if (!account) return null;
-      const current = safeObject(account.lot_sizing_config);
-      const { data, error } = await supabase
-        .from('trade_accounts')
-        .update({ lot_sizing_config: { ...current, legAllocation } })
-        .eq('workspace_id', String(workspaceId))
-        .eq('id', String(accountId))
-        .select(ACCOUNT_SELECT)
-        .maybeSingle();
-      if (error) throw new Error('ACCOUNT_LEG_ALLOCATION_UPDATE_FAILED');
       return data || null;
     },
 
@@ -551,10 +528,8 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
     const percent = Number(body.percent);
     if (!(lotValue > 0)) return json({ ok: false, reason: 'ADAPTIVE_REFERENCE_LOT_POSITIVE_NUMBER_REQUIRED' }, 400);
     if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'ADAPTIVE_PERCENT_RANGE_REQUIRED' }, 400);
-    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
-    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
     try {
-      const account = await accountStore.setAdaptiveLot(workspaceId, accountId, lotValue, percent, legAllocation);
+      const account = await accountStore.setAdaptiveLot(workspaceId, accountId, lotValue, percent);
       if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
       return json({
         ok: true,
@@ -570,12 +545,10 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
   if (action === 'symbol-equivalent-lot') {
     const lotValue = Number(body.lotValue);
     const referenceSymbol = requiredText(body.referenceSymbol);
-    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
     if (!(lotValue > 0)) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_LOT_REQUIRED' }, 400);
     if (!referenceSymbol) return json({ ok: false, reason: 'SYMBOL_EQUIVALENT_REFERENCE_SYMBOL_REQUIRED' }, 400);
-    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
     try {
-      const account = await accountStore.setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol, legAllocation);
+      const account = await accountStore.setSymbolEquivalentLot(workspaceId, accountId, lotValue, referenceSymbol);
       if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
       return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
     } catch {
@@ -586,28 +559,14 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
   if (action === 'balance-percent-lot') {
     const lotValue = Number(body.lotValue);
     const percent = Number(body.percent);
-    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
     if (!(lotValue > 0)) return json({ ok: false, reason: 'BALANCE_PERCENT_MAX_LOT_REQUIRED' }, 400);
     if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'BALANCE_PERCENT_RANGE_REQUIRED' }, 400);
-    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
     try {
-      const account = await accountStore.setBalancePercentLot(workspaceId, accountId, lotValue, percent, legAllocation);
+      const account = await accountStore.setBalancePercentLot(workspaceId, accountId, lotValue, percent);
       if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
       return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
     } catch {
       return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_UPDATE_FAILED' }, 503);
-    }
-  }
-
-  if (action === 'leg-allocation') {
-    const legAllocation = String(body.legAllocation ?? '').trim().toLowerCase();
-    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
-    try {
-      const account = await accountStore.setLegAllocation(workspaceId, accountId, legAllocation);
-      if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
-      return json({ ok: true, workspaceId, masterBrokerExecutionEnabled: masterBrokerExecutionEnabled(env), account: publicAccount(account) });
-    } catch {
-      return json({ ok: false, reason: 'ACCOUNT_LEG_ALLOCATION_UPDATE_FAILED' }, 503);
     }
   }
 
