@@ -263,28 +263,28 @@ test('admin can enable adaptive reference-lot sizing without changing execution 
   }]);
 
   const response = await request('/api/v1/admin/accounts/acc-1/adaptive-lot', {
-    method:'POST', body:{lotValue:1,percent:25,legAllocation:'per_target'}, supabase,
+    method:'POST', body:{lotValue:1,percent:25}, supabase,
   });
   assert.equal(response.status,200);
   const body = await response.json();
   assert.equal(body.account.lotSizingType,'adaptive_percent');
   assert.equal(body.account.lotValue,1);
-  assert.deepEqual(body.account.lotSizingConfig,{percent:25,legAllocation:'per_target'});
+  assert.deepEqual(body.account.lotSizingConfig,{percent:25});
   assert.equal(body.account.executionEnabled,true);
   assert.equal(body.account.killSwitch,false);
   assert.deepEqual(supabase.updates,[{
     id:'acc-1',workspaceId:'ws-1',
-    value:{lot_sizing_type:'adaptive_percent',lot_value:1,lot_sizing_config:{percent:25,legAllocation:'per_target'}},
+    value:{lot_sizing_type:'adaptive_percent',lot_value:1,lot_sizing_config:{percent:25}},
   }]);
 });
 
 test('adaptive sizing rejects invalid lot, percent, or leg allocation', async () => {
   const account={id:'acc-1',workspace_id:'ws-1',account_label:'Demo',platform:'ctrader',account_id:'2001',is_active:true,execution_enabled:true,lot_sizing_type:'fixed',lot_value:0.01,lot_sizing_config:{},safety_policy:{killSwitch:false}};
   for (const body of [
-    {lotValue:0,percent:25,legAllocation:'per_target'},
-    {lotValue:1,percent:0,legAllocation:'per_target'},
-    {lotValue:1,percent:101,legAllocation:'per_target'},
-    {lotValue:1,percent:25,legAllocation:'bad'},
+    {lotValue:0,percent:25},
+    {lotValue:1,percent:0},
+    {lotValue:1,percent:101},
+    {lotValue:1,percent:25},
   ]) {
     const supabase=createSupabase([account]);
     const response=await request('/api/v1/admin/accounts/acc-1/adaptive-lot',{method:'POST',body,supabase});
@@ -301,13 +301,13 @@ test('admin can enable symbol-equivalent sizing without changing execution or sa
     safety_policy:{enabled:true,killSwitch:false,maxLotsPerTrade:5},
   }]);
   const response=await request('/api/v1/admin/accounts/acc-1/symbol-equivalent-lot',{
-    method:'POST',body:{lotValue:0.9,referenceSymbol:'XAUUSD',legAllocation:'per_target'},supabase,
+    method:'POST',body:{lotValue:0.9,referenceSymbol:'XAUUSD'},supabase,
   });
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.account.lotSizingType,'symbol_equivalent');
   assert.equal(body.account.lotValue,0.9);
-  assert.deepEqual(body.account.lotSizingConfig,{referenceSymbol:'XAUUSD',legAllocation:'per_target'});
+  assert.deepEqual(body.account.lotSizingConfig,{referenceSymbol:'XAUUSD'});
   assert.equal(body.account.executionEnabled,true);
   assert.equal(body.account.killSwitch,false);
 });
@@ -320,29 +320,14 @@ test('admin can enable balance-percent sizing without changing execution or safe
     safety_policy:{enabled:true,killSwitch:false,maxLotsPerTrade:5},
   }]);
   const response=await request('/api/v1/admin/accounts/acc-1/balance-percent-lot',{
-    method:'POST',body:{lotValue:1,percent:2,legAllocation:'per_target'},supabase,
+    method:'POST',body:{lotValue:1,percent:2},supabase,
   });
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.account.lotSizingType,'balance_percent');
   assert.equal(body.account.lotValue,1);
-  assert.deepEqual(body.account.lotSizingConfig,{percent:2,legAllocation:'per_target'});
+  assert.deepEqual(body.account.lotSizingConfig,{percent:2});
   assert.equal(body.account.executionEnabled,true);
   assert.equal(body.account.killSwitch,false);
 });
 
-test('leg allocation can be changed independently without changing sizing mode or lot value', async () => {
-  const supabase=createSupabase([{
-    id:'acc-1',workspace_id:'ws-1',account_label:'Demo',platform:'ctrader',account_id:'2001',
-    is_active:true,execution_enabled:true,lot_sizing_type:'fixed',lot_value:0.09,
-    lot_sizing_config:{legAllocation:'per_target'},safety_policy:{killSwitch:false},
-  }]);
-  const response=await request('/api/v1/admin/accounts/acc-1/leg-allocation',{
-    method:'POST',body:{legAllocation:'split_total'},supabase,
-  });
-  assert.equal(response.status,200);
-  const body=await response.json();
-  assert.equal(body.account.lotSizingType,'fixed');
-  assert.equal(body.account.lotValue,0.09);
-  assert.deepEqual(body.account.lotSizingConfig,{legAllocation:'split_total'});
-});
