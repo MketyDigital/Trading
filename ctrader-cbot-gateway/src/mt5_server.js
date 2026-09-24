@@ -21,6 +21,7 @@ if (!signingKey || !controlSecret) {
 const sessions = new Map();
 const pending = new Map();
 const pendingContext = new Map();
+const pendingMargin = new Map();
 const delivered = new Map();
 
 function json(response, status, body) {
@@ -34,6 +35,7 @@ function authorizedControl(request) {
 }
 function commandKey(accountRowId, commandId) { return `${accountRowId}:${commandId}`; }
 function contextKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
+function marginKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function pruneDelivered(now = Date.now()) { for (const [key, expiresAt] of delivered.entries()) if (expiresAt < now) delivered.delete(key); }
 function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
@@ -163,6 +165,20 @@ wsServer.on('connection', (socket) => {
       if (!context) return waiter.resolve({ ok: false, reason: 'MT5_CONTEXT_IDENTITY_INVALID' });
       return waiter.resolve({ ok: true, context });
     }
+    if (message?.type === 'margin_result' && message.requestId) {
+      const key = marginKey(socket.mketyAccountRowId, message.requestId);
+      const waiter = pendingMargin.get(key);
+      if (!waiter) return;
+      pendingMargin.delete(key);
+      clearTimeout(waiter.timer);
+      if (message.ok === false) return waiter.resolve({ ok: false, reason: String(message.reason || 'MT5_MARGIN_FAILED') });
+      const sizing = message.sizing && typeof message.sizing === 'object' && !Array.isArray(message.sizing) ? message.sizing : null;
+      if (!sizing || String(sizing.accountNumber || '') !== String(session?.identity?.accountNumber || '')
+          || String(sizing.serverName || '') !== String(session?.identity?.serverName || '')) {
+        return waiter.resolve({ ok: false, reason: 'MT5_MARGIN_IDENTITY_INVALID' });
+      }
+      return waiter.resolve({ ok: true, sizing });
+    }
     if (message?.type === 'result' && message.commandId) {
       const key = commandKey(socket.mketyAccountRowId, message.commandId);
       const waiter = pending.get(key);
@@ -204,6 +220,43 @@ const controlServer = http.createServer(async (request, response) => {
       return json(response, 504, { ok: false, reason: error.message || 'MT5_CONTEXT_TIMEOUT' });
     }
   }
+  const marginMatch = url.pathname.match(/^\/v1\/mt5-margin-equivalent\/([^/]+)$/);
+  if (request.method === 'POST' && marginMatch) {
+    const id = decodeURIComponent(marginMatch[1]);
+    let raw = '';
+    for await (const chunk of request) {
+      raw += chunk;
+      if (raw.length > 64 * 1024) return json(response, 413, { ok: false, reason: 'BODY_TOO_LARGE' });
+    }
+    let body;
+    try { body = JSON.parse(raw || '{}'); } catch { return json(response, 400, { ok: false, reason: 'INVALID_JSON' }); }
+    const referenceSymbol = String(body.referenceSymbol || '').trim();
+    const targetSymbol = String(body.targetSymbol || '').trim();
+    const referenceLots = Number(body.referenceLots);
+    const side = String(body.side || '').trim().toUpperCase();
+    const maxMarginPercent = Number(body.maxMarginPercent ?? 10);
+    if (!referenceSymbol || !targetSymbol || !(referenceLots > 0) || !['BUY','SELL'].includes(side)
+        || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
+      return json(response, 400, { ok: false, reason: 'MARGIN_REQUEST_INVALID' });
+    }
+    const session = sessions.get(id);
+    if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 404, { ok: false, reason: 'MT5_CONNECTOR_OFFLINE' });
+    const requestId = crypto.randomUUID();
+    const key = marginKey(id, requestId);
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pendingMargin.delete(key); reject(new Error('MT5_MARGIN_TIMEOUT')); }, contextTimeoutMs);
+        pendingMargin.set(key, { resolve, reject, timer });
+        session.socket.send(JSON.stringify({
+          type: 'margin_request', requestId, referenceSymbol, targetSymbol, referenceLots, side, maxMarginPercent,
+        }));
+      });
+      return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
+    } catch (error) {
+      return json(response, 504, { ok: false, reason: error.message || 'MT5_MARGIN_TIMEOUT' });
+    }
+  }
+
   const commandMatch = url.pathname.match(/^\/v1\/mt5-commands\/([^/]+)$/);
   if (request.method === 'POST' && commandMatch) {
     const id = decodeURIComponent(commandMatch[1]);
