@@ -302,13 +302,13 @@ export function createAdminAccountStore(supabase) {
       return data || null;
     },
 
-    async setAdaptiveLot(workspaceId, accountId, lotValue, percent) {
+    async setAdaptiveLot(workspaceId, accountId, lotValue, percent, legAllocation = 'per_target') {
       const { data, error } = await supabase
         .from('trade_accounts')
         .update({
           lot_sizing_type: 'adaptive_percent',
           lot_value: lotValue,
-          lot_sizing_config: { percent },
+          lot_sizing_config: { percent, legAllocation },
         })
         .eq('workspace_id', String(workspaceId))
         .eq('id', String(accountId))
@@ -551,8 +551,10 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
     const percent = Number(body.percent);
     if (!(lotValue > 0)) return json({ ok: false, reason: 'ADAPTIVE_REFERENCE_LOT_POSITIVE_NUMBER_REQUIRED' }, 400);
     if (!(percent > 0 && percent <= 100)) return json({ ok: false, reason: 'ADAPTIVE_PERCENT_RANGE_REQUIRED' }, 400);
+    const legAllocation = String(body.legAllocation ?? 'per_target').trim().toLowerCase();
+    if (!['per_target','split_total'].includes(legAllocation)) return json({ ok: false, reason: 'LEG_ALLOCATION_INVALID' }, 400);
     try {
-      const account = await accountStore.setAdaptiveLot(workspaceId, accountId, lotValue, percent);
+      const account = await accountStore.setAdaptiveLot(workspaceId, accountId, lotValue, percent, legAllocation);
       if (!account) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
       return json({
         ok: true,
