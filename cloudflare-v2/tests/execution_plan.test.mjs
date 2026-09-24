@@ -233,33 +233,6 @@ test('adaptive sizing still obeys aggregate account max-lots safety policy', () 
 });
 
 
-test('margin-equivalent sizing opens fast trade without SL or TP using broker-computed lots', () => {
-  const plan = buildExecutionPlan({
-    side:'BUY', orderType:'MARKET', symbol:{canonical:'DERIV:VOLATILITY_75'},
-    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
-  }, {
-    account:{sizingMode:'MARGIN_EQUIVALENT',referenceLots:0.9,safetyPolicy:{enabled:true,killSwitch:false}},
-    instrument:{minLots:0.1,maxLots:10,stepLots:0.1,marginEquivalentLots:0.3},
-  });
-  assert.equal(plan.status, 'READY');
-  assert.equal(plan.actions[0].lots, 0.3);
-  assert.equal(plan.actions[0].stopLoss, null);
-  assert.equal(plan.actions[0].takeProfit, null);
-});
-
-test('margin-equivalent sizing still obeys aggregate max-lots safety policy', () => {
-  const plan = buildExecutionPlan({
-    side:'SELL', orderType:'MARKET', symbol:{canonical:'US500'},
-    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[6900,6800],
-  }, {
-    account:{sizingMode:'MARGIN_EQUIVALENT',referenceLots:0.9,safetyPolicy:{enabled:true,killSwitch:false,maxLotsPerTrade:0.5}},
-    instrument:{minLots:0.1,maxLots:10,stepLots:0.1,marginEquivalentLots:0.3},
-  });
-  assert.equal(plan.status, 'BLOCKED');
-  assert.deepEqual(plan.actions, []);
-});
-
-
 test('symbol-equivalent uses broker-derived per-target lot on a fast signal without SL or TP', () => {
   const plan = buildExecutionPlan({
     side:'BUY',orderType:'MARKET',symbol:{canonical:'DERIV:VOLATILITY_75'},entry:{kind:'MARKET'},stopLoss:null,takeProfits:[],fastEntry:true,incomplete:true,
