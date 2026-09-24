@@ -6,7 +6,7 @@ import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { ctraderEndpoint, buildAccountsByAccessTokenMessage } from '../adapters/ctrader_protocol.js';
 
 const SOURCE_SECRET_KEY_PATTERN = /(secret|cipher|session|token|password|api[_-]?hash|api[_-]?key|access[_-]?key|refresh[_-]?key|credential|authorization|private[_-]?key)/i;
-const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
+const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const SOURCE_SELECT = 'id,workspace_id,source_type,source_instance_id,display_name,is_active,source_family,provider_type,is_default,priority,external_identity,public_source_handle,config,provider_secret_ciphertext,health_status,last_heartbeat_at,last_event_at,last_connected_at,last_disconnected_at,restart_count,last_error_code';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
 
@@ -112,6 +112,7 @@ function publicAccount(row = {}) {
     credentialConfigured: Boolean(row.credential_ciphertext ?? row.credentialCiphertext),
     lotSizingType: row.lot_sizing_type ?? row.lotSizingType ?? 'fixed',
     lotValue: row.lot_value ?? row.lotValue ?? null,
+    lotSizingConfig: safeObject(row.lot_sizing_config ?? row.lotSizingConfig),
     createdAt: row.created_at ?? row.createdAt ?? null,
   };
 }
@@ -302,10 +303,33 @@ async function handleAccountConnection(request, authorization, supabase, account
     }
     if ('roles' in body) update.roles = normalizeConnectionRoles(body.roles, []);
     if ('providerConfig' in body || 'provider_config' in body) update.provider_config = sanitizeConnectionConfig(safeObject(body.providerConfig ?? body.provider_config));
+    if ('lotSizingType' in body || 'lot_sizing_type' in body) {
+      const sizingType = safeText(body.lotSizingType ?? body.lot_sizing_type)?.toLowerCase();
+      if (!['fixed', 'adaptive_percent'].includes(sizingType)) {
+        return json({ ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' }, 400);
+      }
+      update.lot_sizing_type = sizingType;
+    }
     if ('lotValue' in body || 'lot_value' in body) {
       const lot = Number(body.lotValue ?? body.lot_value);
       if (!(lot > 0)) return json({ ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' }, 400);
       update.lot_value = lot;
+    }
+    if ('lotSizingConfig' in body || 'lot_sizing_config' in body) {
+      const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
+      const percent = Number(config.percent);
+      if (!(percent > 0 && percent <= 100)) {
+        return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_INVALID' }, 400);
+      }
+      update.lot_sizing_config = { percent };
+    }
+    const effectiveSizingType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
+    if (effectiveSizingType === 'adaptive_percent') {
+      const config = update.lot_sizing_config ?? safeObject(current.lot_sizing_config);
+      const percent = Number(config.percent);
+      if (!(percent > 0 && percent <= 100)) {
+        return json({ ok: false, reason: 'ACCOUNT_ADAPTIVE_PERCENT_REQUIRED' }, 400);
+      }
     }
     if (!Object.keys(update).length) return json({ ok: false, reason: 'ACCOUNT_UPDATE_EMPTY' }, 400);
     const { data, error } = await supabase.from('trade_accounts').update(update).eq('workspace_id', workspaceId).eq('id', accountRowId).select(ACCOUNT_SELECT).maybeSingle();
