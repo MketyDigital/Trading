@@ -115,4 +115,31 @@ test('MT5 gateway accepts reusable pairing auth until expiry, issues instance re
   assert.equal(body.context.account.accountNumber, '50123456');
   assert.equal(body.context.symbol.platformSymbol, 'XAUUSD.r');
   assert.equal(body.context.tick.ask, 2500.5);
+
+  const marginRequest = fetch(`${controlBase}/v1/mt5-margin-equivalent/${accountRowId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      referenceSymbol: 'GBPUSD', targetSymbol: 'Synthetic 75', referenceLots: 0.9,
+      side: 'BUY', maxMarginPercent: 10,
+    }),
+  });
+  const marginDelivered = await readMessage(reconnect);
+  assert.equal(marginDelivered.type, 'margin_request');
+  assert.equal(marginDelivered.referenceLots, 0.9);
+  assert.equal(marginDelivered.side, 'BUY');
+  reconnect.send(JSON.stringify({
+    type: 'margin_result', requestId: marginDelivered.requestId, ok: true,
+    sizing: {
+      accountNumber: '50123456', serverName: 'Broker-Demo',
+      referenceSymbol: 'GBPUSD', targetSymbol: 'Synthetic 75',
+      referenceLots: 0.9, referenceMargin: 90, accountCapacity: 9000,
+      maxMarginPercent: 10, marginBudget: 90, lots: 0.3, expectedMargin: 90,
+    },
+  }));
+  const marginResponse = await marginRequest;
+  assert.equal(marginResponse.status, 200);
+  const marginBody = await marginResponse.json();
+  assert.equal(marginBody.ok, true);
+  assert.equal(marginBody.sizing.lots, 0.3);
 });
