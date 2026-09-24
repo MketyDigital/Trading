@@ -6,6 +6,7 @@ import { ctraderEndpoint } from '../adapters/ctrader_protocol.js';
 import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
 import { evaluateRouteFilters } from '../destinations/route_filters.js';
 import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
+import { buildMarginEquivalentSizing } from '../execution/margin_equivalent_sizing.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -69,6 +70,41 @@ function providerConfigOf(account = {}) {
   const config = account?.provider_config ?? account?.providerConfig;
   return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
 }
+
+function lotSizingConfigOf(account = {}) {
+  const config = account?.lot_sizing_config ?? account?.lotSizingConfig;
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+}
+
+function lotInstrumentFromResolved(resolvedSymbol = {}, fallbackLot = 0.01) {
+  const minLots = Number(resolvedSymbol.minLots ?? resolvedSymbol.minVolume);
+  const maxLots = Number(resolvedSymbol.maxLots ?? resolvedSymbol.maxVolume);
+  const stepLots = Number(resolvedSymbol.stepLots ?? resolvedSymbol.stepVolume);
+  return {
+    minLots: Number.isFinite(minLots) && minLots > 0 ? minLots : Number(fallbackLot),
+    maxLots: Number.isFinite(maxLots) && maxLots > 0 ? maxLots : Number(fallbackLot),
+    stepLots: Number.isFinite(stepLots) && stepLots > 0 ? stepLots : Number(fallbackLot),
+  };
+}
+
+function cTraderProtocolVolumeForLots(symbol = {}, lots) {
+  const protocolLotSize = Number(symbol.protocolLotSize);
+  const value = Number(lots);
+  if (!(protocolLotSize > 0) || !(value > 0)) throw new Error('cTrader lot-size metadata unavailable');
+  const protocolVolume = Math.round(value * protocolLotSize);
+  if (!(protocolVolume > 0)) throw new Error('cTrader protocol volume unavailable');
+  return protocolVolume;
+}
+
+async function cTraderMarginForLots(marketData, symbol, lots, side) {
+  const rows = await marketData.expectedMargins(Number(symbol.platformId), [cTraderProtocolVolumeForLots(symbol, lots)]);
+  const row = rows[0];
+  if (!row) throw new Error('cTrader expected margin unavailable');
+  const margin = String(side || '').toUpperCase() === 'SELL' ? Number(row.sellMargin) : Number(row.buyMargin);
+  if (!(Number.isFinite(margin) && margin >= 0)) throw new Error('cTrader expected margin unavailable');
+  return margin;
+}
+
 
 function isCTraderOauthAccount(account = {}) {
   return text(account?.platform).toLowerCase() === 'ctrader'
@@ -210,6 +246,129 @@ async function defaultBrokerPlanningMarketPrice(account, intent, env = {}) {
   if (isCTraderOauthAccount(account)) return defaultCTraderPlanningMarketPrice(account, intent, env);
   return undefined;
 }
+
+async function defaultMt5MarginEquivalentSizing(account, intent, targetResolved, env = {}, fetchFn = fetch) {
+  const masterKey = text(env.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  const rowId = text(account?.id);
+  if (!masterKey || !ciphertext || !rowId) throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'MT5 margin credentials unavailable');
+
+  const config = lotSizingConfigOf(account);
+  const referenceSymbol = text(config.referenceSymbol);
+  const referenceLots = Number(account?.lot_value ?? account?.lotValue);
+  const maxMarginPercent = Number(config.maxMarginPercent ?? 10);
+  if (!referenceSymbol || !(referenceLots > 0) || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
+    throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'MT5 margin-equivalent sizing configuration invalid');
+  }
+
+  const credentials = await decryptConnectionCredentials('mt5_connector', ciphertext, masterKey);
+  const baseUrl = cleanHttpsBase(credentials.gatewayUrl);
+  const controlSecret = text(credentials.controlSecret);
+  if (!controlSecret) throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'MT5 margin control credential unavailable');
+
+  const identityResponse = await fetchFn(`${baseUrl}/v1/mt5-connections/${encodeURIComponent(rowId)}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  const identity = await identityResponse.json().catch(() => ({}));
+  if (!identityResponse.ok || identity?.online !== true || text(identity.accountRowId) !== rowId) {
+    throw codedError('MT5_CONNECTOR_OFFLINE', 'MT5 connector is unavailable for margin-equivalent sizing');
+  }
+  if (text(identity?.identity?.accountNumber) !== text(account?.account_id ?? account?.accountId)) {
+    throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'MT5 broker account identity mismatch');
+  }
+  const expectedServer = text(account?.server_name ?? account?.serverName);
+  if (expectedServer && text(identity?.identity?.serverName) !== expectedServer) {
+    throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'MT5 broker server identity mismatch');
+  }
+
+  const liveCatalog = Array.isArray(identity?.identity?.symbols) ? identity.identity.symbols : [];
+  const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
+  const catalog = liveCatalog.length ? liveCatalog : persisted.catalog;
+  const referenceResolved = resolveAccountSymbol(referenceSymbol, catalog, persisted.aliases);
+  if (!referenceResolved.ok) throw codedError('REFERENCE_SYMBOL_NOT_SUPPORTED', 'reference symbol is not supported by this MT5 account');
+
+  const response = await fetchFn(`${baseUrl}/v1/mt5-margin-equivalent/${encodeURIComponent(rowId)}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${controlSecret}` },
+    body: JSON.stringify({
+      referenceSymbol: referenceResolved.platformSymbol,
+      targetSymbol: targetResolved.platformSymbol,
+      referenceLots,
+      side: String(intent?.side || '').toUpperCase(),
+      maxMarginPercent,
+    }),
+    signal: AbortSignal.timeout(7000),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body?.ok !== true || !(Number(body?.sizing?.lots) > 0)) {
+    const reason = text(body?.reason) || 'MT5 margin-equivalent sizing unavailable';
+    throw codedError(reason, reason);
+  }
+  return body.sizing;
+}
+
+async function defaultCTraderMarginEquivalentSizing(account, intent, targetResolved, env = {}) {
+  const masterKey = text(env.TRADING_MASTER_KEY);
+  const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
+  const accountId = Number(account?.account_id ?? account?.accountId);
+  const environment = text(account?.environment).toLowerCase();
+  const config = lotSizingConfigOf(account);
+  const referenceSymbol = text(config.referenceSymbol);
+  const referenceLots = Number(account?.lot_value ?? account?.lotValue);
+  const maxMarginPercent = Number(config.maxMarginPercent ?? 10);
+
+  if (!masterKey || !ciphertext || !Number.isInteger(accountId) || !['demo','live'].includes(environment)
+      || !referenceSymbol || !(referenceLots > 0) || !(maxMarginPercent > 0 && maxMarginPercent <= 100)) {
+    throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'cTrader margin-equivalent sizing configuration invalid');
+  }
+
+  const credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey);
+  const session = new CTraderJsonSession({
+    endpoint: ctraderEndpoint(environment, 'json'),
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+  });
+
+  try {
+    await session.open();
+    await session.authenticateAccount(accountId, credentials.accessToken);
+    const marketData = new CTraderMarketData({ session, accountId });
+    const brokerAccount = await marketData.loadAccount();
+    if (!brokerAccount?.canOpenTrades) throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'cTrader account cannot open trades');
+    marketData.catalog = await marketData.loadCatalog();
+    const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
+    const referenceResolved = resolveAccountSymbol(referenceSymbol, marketData.catalog, persisted.aliases);
+    if (!referenceResolved.ok || !Number.isInteger(Number(referenceResolved.platformId))) {
+      throw codedError('REFERENCE_SYMBOL_NOT_SUPPORTED', 'reference symbol is not supported by this cTrader account');
+    }
+
+    const liveTarget = resolveAccountSymbol(targetResolved.platformSymbol, marketData.catalog, persisted.aliases);
+    if (!liveTarget.ok || !Number.isInteger(Number(liveTarget.platformId))) {
+      throw codedError('DESTINATION_SYMBOL_NOT_SUPPORTED', 'target symbol is not supported by this cTrader account');
+    }
+
+    return buildMarginEquivalentSizing({
+      referenceLots,
+      referenceInstrument: lotInstrumentFromResolved(referenceResolved, referenceLots),
+      targetInstrument: lotInstrumentFromResolved(liveTarget, referenceLots),
+      maxMarginPercent,
+      accountCapacity: brokerAccount.balance,
+      estimateReferenceMargin: (lots) => cTraderMarginForLots(marketData, referenceResolved, lots, intent?.side),
+      estimateTargetMargin: (lots) => cTraderMarginForLots(marketData, liveTarget, lots, intent?.side),
+    });
+  } finally {
+    session.close?.();
+  }
+}
+
+async function defaultBrokerMarginEquivalentSizing(account, intent, targetResolved, env = {}) {
+  if (isMt5ConnectorAccount(account)) return defaultMt5MarginEquivalentSizing(account, intent, targetResolved, env);
+  if (isCTraderOauthAccount(account)) return defaultCTraderMarginEquivalentSizing(account, intent, targetResolved, env);
+  throw codedError('BROKER_MARGIN_CONTEXT_UNAVAILABLE', 'margin-equivalent sizing is not supported by this broker connection mode');
+}
+
 
 function hasAuthoritativeCatalog(account = {}) {
   return accountSymbolCatalogFromProviderConfig(providerConfigOf(account)).catalog.length > 0;
@@ -434,7 +593,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerMarginSizingLoader } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -475,11 +634,11 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
 
       const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
       const lotValue = Number(account?.lot_value);
-      if (['fixed', 'adaptive_percent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
+      if (['fixed', 'adaptive_percent', 'margin_equivalent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
         const brokerMinLots = Number(resolvedSymbol.minLots ?? resolvedSymbol.minVolume);
         const brokerMaxLots = Number(resolvedSymbol.maxLots ?? resolvedSymbol.maxVolume);
         const brokerStepLots = Number(resolvedSymbol.stepLots ?? resolvedSymbol.stepVolume);
-        return {
+        const result = {
           canonical: symbol,
           platformSymbol: resolvedSymbol.platformSymbol,
           minLots: Number.isFinite(brokerMinLots) && brokerMinLots > 0 ? brokerMinLots : lotValue,
@@ -492,6 +651,16 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
           ...(Number.isFinite(Number(resolvedSymbol.contractSize)) ? { contractSize: Number(resolvedSymbol.contractSize) } : {}),
           ...(Number.isFinite(Number(resolvedSymbol.digits)) ? { digits: Number(resolvedSymbol.digits) } : {}),
         };
+        if (lotSizingType === 'margin_equivalent') {
+          const loader = typeof brokerMarginSizingLoader === 'function'
+            ? brokerMarginSizingLoader
+            : (candidateAccount, candidateIntent, candidateResolved) => defaultBrokerMarginEquivalentSizing(candidateAccount, candidateIntent, candidateResolved, env);
+          const sizing = await loader(account, intent, resolvedSymbol);
+          if (!(Number(sizing?.lots) > 0)) throw new Error('broker margin-equivalent sizing unavailable');
+          result.marginEquivalentLots = Number(sizing.lots);
+          result.marginSizing = sizing;
+        }
+        return result;
       }
 
       throw new Error(`simulation instrument metadata is not configured for ${symbol || 'UNKNOWN'}`);
