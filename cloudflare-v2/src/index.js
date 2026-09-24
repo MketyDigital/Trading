@@ -340,7 +340,7 @@ async function handleProcessSignal(request, env, supabase) {
                     localizedHtml = `<b>${settings.custom_header}</b>\n\n${localizedHtml}`;
                 }
 
-                const fullText = `${localizedHtml}\n\n${route.custom_footer || '~~~ \n<b>Starpips Forex</b>'}`;
+                const fullText = `${localizedHtml}\n\n${route.custom_footer || '~~~ \n<b>Mkety</b>'}`;
 
                 // Type A: Copy formatted HTML to Telegram VIP Channels
                 if (route.destination_type === 'telegram_vip' && route.destination_chat_id) {

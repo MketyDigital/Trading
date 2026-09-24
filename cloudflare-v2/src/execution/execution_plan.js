@@ -69,6 +69,15 @@ function normalizeFixedLots(value, instrument) {
   return Number(executable.toFixed(precision));
 }
 
+function normalizeAdaptiveLots(referenceLots, percent, instrument) {
+  const reference = Number(referenceLots);
+  const scale = Number(percent);
+  if (!(reference > 0) || !(scale > 0) || !(scale <= 100)) {
+    throw new TypeError('adaptive reference lots and percent between 0 and 100 required');
+  }
+  return normalizeFixedLots(reference * (scale / 100), instrument);
+}
+
 function openActionsFromGroup(group) {
   return group.legs.map((leg) => ({
     type: 'OPEN_POSITION', legId: leg.legId, targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
@@ -129,6 +138,9 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   if (sizingMode === 'FIXED_LOTS') {
     const fixedLotsPerTarget = normalizeFixedLots(account.fixedLots, instrument);
     totalLots = Number((fixedLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
+  } else if (sizingMode === 'ADAPTIVE_PERCENT') {
+    const adaptiveLotsPerTarget = normalizeAdaptiveLots(account.referenceLots, account.adaptivePercent, instrument);
+    totalLots = Number((adaptiveLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);

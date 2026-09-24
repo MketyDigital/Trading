@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS public.signal_routes (
     source_chat_id BIGINT NOT NULL,
     destination_chat_id BIGINT,
     destination_type TEXT NOT NULL CHECK (destination_type IN ('telegram_vip', 'deriv_ws', 'ctrader_ws', 'mt5_webhook')),
-    custom_footer TEXT DEFAULT '~~~ \n<b>Starpips Forex</b>',
+    custom_footer TEXT DEFAULT '~~~ \n<b>Mkety</b>',
     transform_ai BOOLEAN DEFAULT TRUE,
     route_settings JSONB DEFAULT '{}'::jsonb, -- Custom branding, header, and single entry adjustments per-destination
     is_active BOOLEAN DEFAULT TRUE,
@@ -73,8 +73,9 @@ CREATE TABLE IF NOT EXISTS public.trade_accounts (
     account_id TEXT NOT NULL,
     api_token_encrypted TEXT,
     server_name TEXT,
-    lot_sizing_type TEXT DEFAULT 'fixed' CHECK (lot_sizing_type IN ('fixed', 'multiplier', 'risk_percent')),
+    lot_sizing_type TEXT DEFAULT 'fixed' CHECK (lot_sizing_type IN ('fixed', 'adaptive_percent', 'multiplier', 'risk_percent')),
     lot_value NUMERIC DEFAULT 0.01,
+    lot_sizing_config JSONB DEFAULT '{}'::jsonb,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

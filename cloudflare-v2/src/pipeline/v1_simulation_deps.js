@@ -475,7 +475,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
 
       const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
       const lotValue = Number(account?.lot_value);
-      if (lotSizingType === 'fixed' && Number.isFinite(lotValue) && lotValue > 0) {
+      if (['fixed', 'adaptive_percent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
         const brokerMinLots = Number(resolvedSymbol.minLots ?? resolvedSymbol.minVolume);
         const brokerMaxLots = Number(resolvedSymbol.maxLots ?? resolvedSymbol.maxVolume);
         const brokerStepLots = Number(resolvedSymbol.stepLots ?? resolvedSymbol.stepVolume);

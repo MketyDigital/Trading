@@ -16,6 +16,11 @@ export function withSimplifiedAccountControls(html) {
     "+esc(x.active?'Active':'Inactive')+'</div>'+accountButtons(x)",
   );
 
+  output = output.replace(
+    "+esc(x.active?'Active':'Inactive')+' • '+esc(x.executionEnabled?'Execution flag ON':'Execution flag OFF')+' • '+esc(x.killSwitch?'Kill switch ON':'Kill switch OFF')+'</div>'+accountSizingMeta(x)+accountButtons(x)",
+    "+esc(x.active?'Active':'Inactive')+'</div>'+accountSizingMeta(x)+accountButtons(x)",
+  );
+
   const removeAccount = "async function removeAccount(id){if(!confirm('Remove this trading account connection?'))return;try{await api('/api/v1/admin/connections/accounts/'+encodeURIComponent(id),{method:'DELETE'});msg('Trading account removed.','success');await refreshManagers()}catch(e){msg('Account removal failed: '+String(e.message||e),'error')}}\n";
   const controls = removeAccount
     + "async function toggleAccountTrading(id,enabled){try{await api('/api/v1/admin/connections/accounts/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({tradingEnabled:!enabled})});msg('Account trading '+(!enabled?'enabled.':'disabled.'),'success');await refreshManagers()}catch(e){msg('Account trading update failed: '+String(e.message||e),'error')}}\n"

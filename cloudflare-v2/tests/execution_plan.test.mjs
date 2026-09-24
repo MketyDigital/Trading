@@ -165,3 +165,69 @@ test('fixed lots above broker maximum are capped at the broker executable maximu
   assert.equal(plan.status, 'READY');
   assert.equal(plan.actions[0].lots, 10);
 });
+
+
+test('adaptive sizing scales the user reference lot by percent per target', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[2510,2520], fastEntry:true, incomplete:false,
+  }, {
+    account:{sizingMode:'ADAPTIVE_PERCENT',referenceLots:1,adaptivePercent:25,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    currentMarketPrice:2500,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.25,0.25]);
+});
+
+test('adaptive sizing raises a scaled lot to the broker minimum when that symbol requires more', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'DERIV:VOLATILITY_75'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'ADAPTIVE_PERCENT',referenceLots:1,adaptivePercent:25,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.5,maxLots:100,stepLots:0.5},
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.5);
+});
+
+test('adaptive sizing floors to broker step and never exceeds the scaled preference unless minimum requires it', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'MARKET', symbol:{canonical:'BTCUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'ADAPTIVE_PERCENT',referenceLots:1,adaptivePercent:33,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.1,maxLots:10,stepLots:0.1},
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.3);
+});
+
+test('adaptive sizing caps at the broker executable maximum', () => {
+  const plan = buildExecutionPlan({
+    side:'SELL', orderType:'MARKET', symbol:{canonical:'US500'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'ADAPTIVE_PERCENT',referenceLots:20,adaptivePercent:75,safetyPolicy:{enabled:true,killSwitch:false}},
+    instrument:{minLots:0.1,maxLots:10,stepLots:0.1},
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 10);
+});
+
+test('adaptive sizing still obeys aggregate account max-lots safety policy', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[2510,2520,2530],
+  }, {
+    account:{
+      sizingMode:'ADAPTIVE_PERCENT',referenceLots:1,adaptivePercent:25,
+      safetyPolicy:{enabled:true,killSwitch:false,maxLotsPerTrade:0.5},
+    },
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    currentMarketPrice:2500,
+  });
+  assert.equal(plan.status, 'BLOCKED');
+  assert.deepEqual(plan.actions, []);
+});
