@@ -297,3 +297,48 @@ test('adaptive sizing update rejects invalid reference lots and percentages', as
     assert.equal(supabase.updates.length, 0);
   }
 });
+
+
+test('admin can enable margin-equivalent sizing without changing execution or safety controls', async () => {
+  const supabase = createSupabase([{
+    id:'acc-1', workspace_id:'ws-1', account_label:'Equivalent Demo', platform:'ctrader', account_id:'2001',
+    credential_ciphertext:'cipher-secret', is_active:true, execution_enabled:true,
+    lot_sizing_type:'fixed', lot_value:0.9, lot_sizing_config:{},
+    safety_policy:{enabled:true,killSwitch:false,maxLotsPerTrade:5},
+  }]);
+
+  const response = await request('/api/v1/admin/accounts/acc-1/margin-equivalent-lot', {
+    method:'POST', body:{lotValue:0.9,referenceSymbol:'GBPUSD',maxMarginPercent:10}, supabase,
+  });
+  assert.equal(response.status,200);
+  const body = await response.json();
+  assert.equal(body.account.lotSizingType,'margin_equivalent');
+  assert.equal(body.account.lotValue,0.9);
+  assert.deepEqual(body.account.lotSizingConfig,{referenceSymbol:'GBPUSD',maxMarginPercent:10});
+  assert.equal(body.account.executionEnabled,true);
+  assert.equal(body.account.killSwitch,false);
+  assert.deepEqual(supabase.updates,[{
+    id:'acc-1', workspaceId:'ws-1',
+    value:{lot_sizing_type:'margin_equivalent',lot_value:0.9,lot_sizing_config:{referenceSymbol:'GBPUSD',maxMarginPercent:10}},
+  }]);
+});
+
+test('margin-equivalent settings reject missing reference symbol and invalid margin cap', async () => {
+  const account = {
+    id:'acc-1',workspace_id:'ws-1',account_label:'Demo',platform:'ctrader',account_id:'2001',
+    is_active:true,execution_enabled:true,lot_sizing_type:'fixed',lot_value:0.9,lot_sizing_config:{},
+    safety_policy:{killSwitch:false},
+  };
+  for (const payload of [
+    {lotValue:0.9,referenceSymbol:'',maxMarginPercent:10},
+    {lotValue:0.9,referenceSymbol:'GBPUSD',maxMarginPercent:0},
+    {lotValue:0.9,referenceSymbol:'GBPUSD',maxMarginPercent:101},
+  ]) {
+    const supabase = createSupabase([account]);
+    const response = await request('/api/v1/admin/accounts/acc-1/margin-equivalent-lot',{
+      method:'POST',body:payload,supabase,
+    });
+    assert.equal(response.status,400);
+    assert.equal(supabase.updates.length,0);
+  }
+});
