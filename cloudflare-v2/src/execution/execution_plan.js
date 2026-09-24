@@ -141,6 +141,11 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   } else if (sizingMode === 'ADAPTIVE_PERCENT') {
     const adaptiveLotsPerTarget = normalizeAdaptiveLots(account.referenceLots, account.adaptivePercent, instrument);
     totalLots = Number((adaptiveLotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
+  } else if (sizingMode === 'MARGIN_EQUIVALENT') {
+    const brokerEquivalentLots = Number(instrument.marginEquivalentLots);
+    if (!(brokerEquivalentLots > 0)) throw new TypeError('broker-authoritative margin-equivalent lot sizing required');
+    const lotsPerTarget = normalizeFixedLots(brokerEquivalentLots, instrument);
+    totalLots = Number((lotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
   } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);
