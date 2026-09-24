@@ -8,7 +8,7 @@ function constraints(instrument = {}) {
   const min = Number(instrument.minLots ?? step);
   const max = Number(instrument.maxLots ?? Number.POSITIVE_INFINITY);
   if (!(step > 0) || !(min > 0) || !(max >= min) || !Number.isFinite(max)) {
-    throw new TypeError('finite broker volume constraints required for margin-equivalent sizing');
+    throw new TypeError('finite broker volume constraints required for broker-aware sizing');
   }
   const minIndex = Math.ceil((min / step) - 1e-12);
   const maxIndex = Math.floor((max / step) + 1e-12);
@@ -29,6 +29,9 @@ export async function largestLotsWithinMargin({
   instrument = {},
   marginBudget,
   estimateMargin,
+  maximumLots,
+  allowBrokerMinimumFloor = false,
+  belowMinimumCode = 'SIZING_BELOW_BROKER_MINIMUM',
   maxIterations = 64,
 } = {}) {
   const budget = Number(marginBudget);
@@ -37,6 +40,8 @@ export async function largestLotsWithinMargin({
   }
 
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
+  const normalizedMaximum = normalizeReferenceLots(maximumLots ?? instrument.maxLots, instrument);
+  const capIndex = Math.min(maxIndex, Math.max(minIndex, Math.floor((normalizedMaximum / step) + 1e-12)));
   const lotsFor = (index) => Number((index * step).toFixed(precision));
   const checked = new Map();
 
@@ -51,21 +56,36 @@ export async function largestLotsWithinMargin({
 
   const minMargin = await marginFor(minIndex);
   if (minMargin > budget + 1e-9) {
-    const error = new RangeError('broker minimum volume exceeds margin-equivalent budget');
-    error.code = 'MARGIN_EQUIVALENT_BELOW_BROKER_MINIMUM';
+    if (allowBrokerMinimumFloor) {
+      return {
+        lots: lotsFor(minIndex),
+        expectedMargin: minMargin,
+        marginBudget: budget,
+        minimumFloorApplied: true,
+        exceededBudget: true,
+      };
+    }
+    const error = new RangeError('broker minimum volume exceeds configured sizing budget');
+    error.code = belowMinimumCode;
     error.minimumLots = lotsFor(minIndex);
     error.minimumMargin = minMargin;
     error.marginBudget = budget;
     throw error;
   }
 
-  const maxMargin = await marginFor(maxIndex);
-  if (maxMargin <= budget + 1e-9) {
-    return { lots: lotsFor(maxIndex), expectedMargin: maxMargin, marginBudget: budget };
+  const capMargin = await marginFor(capIndex);
+  if (capMargin <= budget + 1e-9) {
+    return {
+      lots: lotsFor(capIndex),
+      expectedMargin: capMargin,
+      marginBudget: budget,
+      minimumFloorApplied: false,
+      exceededBudget: false,
+    };
   }
 
   let low = minIndex;
-  let high = maxIndex;
+  let high = capIndex;
   let bestIndex = minIndex;
   let iterations = 0;
   while (low <= high && iterations < maxIterations) {
@@ -81,20 +101,22 @@ export async function largestLotsWithinMargin({
   }
 
   const expectedMargin = await marginFor(bestIndex);
-  return { lots: lotsFor(bestIndex), expectedMargin, marginBudget: budget };
+  return {
+    lots: lotsFor(bestIndex),
+    expectedMargin,
+    marginBudget: budget,
+    minimumFloorApplied: false,
+    exceededBudget: false,
+  };
 }
 
-export async function buildMarginEquivalentSizing({
+export async function buildSymbolEquivalentSizing({
   referenceLots,
   referenceInstrument,
   targetInstrument,
-  maxMarginPercent = 10,
-  accountCapacity,
   estimateReferenceMargin,
   estimateTargetMargin,
 } = {}) {
-  const percent = Number(maxMarginPercent);
-  if (!(percent > 0 && percent <= 100)) throw new TypeError('maxMarginPercent must be between 0 and 100');
   if (typeof estimateReferenceMargin !== 'function' || typeof estimateTargetMargin !== 'function') {
     throw new TypeError('broker margin estimators required');
   }
@@ -103,24 +125,98 @@ export async function buildMarginEquivalentSizing({
   const referenceMargin = Number(await estimateReferenceMargin(normalizedReferenceLots));
   if (!(referenceMargin > 0)) throw new Error('reference symbol expected margin unavailable');
 
-  const capacity = Number(accountCapacity);
-  const capacityBudget = Number.isFinite(capacity) && capacity > 0 ? capacity * percent / 100 : Number.POSITIVE_INFINITY;
-  const marginBudget = Math.min(referenceMargin, capacityBudget);
-  if (!(marginBudget > 0)) throw new Error('margin-equivalent budget unavailable');
+  // The owner's chosen lot is a ceiling/reference, not a target to maximize.
+  // Target products may be reduced when the same lot is heavier, but are never
+  // increased above the chosen lot merely because their margin is cheaper.
+  // The only upward exception is an unavoidable broker minimum.
+  const targetRequestedLots = normalizeReferenceLots(referenceLots, targetInstrument);
+  const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
+  if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
+    throw new Error('target symbol expected margin unavailable');
+  }
+
+  if (targetRequestedMargin <= referenceMargin + 1e-9) {
+    return {
+      referenceLots: normalizedReferenceLots,
+      referenceMargin,
+      requestedLots: targetRequestedLots,
+      lots: targetRequestedLots,
+      expectedMargin: targetRequestedMargin,
+      marginBudget: referenceMargin,
+      minimumFloorApplied: targetRequestedLots > Number(referenceLots) + 1e-12,
+      reduced: false,
+    };
+  }
 
   const target = await largestLotsWithinMargin({
     instrument: targetInstrument,
-    marginBudget,
+    marginBudget: referenceMargin,
     estimateMargin: estimateTargetMargin,
+    maximumLots: targetRequestedLots,
+    allowBrokerMinimumFloor: true,
+    belowMinimumCode: 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM',
   });
 
   return {
     referenceLots: normalizedReferenceLots,
     referenceMargin,
-    maxMarginPercent: percent,
-    accountCapacity: Number.isFinite(capacity) && capacity > 0 ? capacity : null,
-    marginBudget,
+    requestedLots: targetRequestedLots,
     lots: target.lots,
     expectedMargin: target.expectedMargin,
+    marginBudget: referenceMargin,
+    minimumFloorApplied: target.minimumFloorApplied === true,
+    reduced: target.lots < targetRequestedLots - 1e-12,
+  };
+}
+
+export async function buildBalancePercentSizing({
+  maximumLots,
+  percent,
+  accountBalance,
+  targetInstrument,
+  estimateTargetMargin,
+} = {}) {
+  const balance = Number(accountBalance);
+  const scale = Number(percent);
+  if (!(balance > 0)) throw new TypeError('positive broker account balance required');
+  if (!(scale > 0 && scale <= 100)) throw new TypeError('balance percent must be between 0 and 100');
+  if (typeof estimateTargetMargin !== 'function') throw new TypeError('broker margin estimator required');
+
+  const marginBudget = balance * scale / 100;
+  const targetRequestedLots = normalizeReferenceLots(maximumLots, targetInstrument);
+  const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
+  if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
+    throw new Error('target symbol expected margin unavailable');
+  }
+
+  if (targetRequestedMargin <= marginBudget + 1e-9) {
+    return {
+      percent: scale,
+      accountBalance: balance,
+      marginBudget,
+      requestedLots: targetRequestedLots,
+      lots: targetRequestedLots,
+      expectedMargin: targetRequestedMargin,
+      reduced: false,
+    };
+  }
+
+  const target = await largestLotsWithinMargin({
+    instrument: targetInstrument,
+    marginBudget,
+    estimateMargin: estimateTargetMargin,
+    maximumLots: targetRequestedLots,
+    allowBrokerMinimumFloor: false,
+    belowMinimumCode: 'BALANCE_PERCENT_BELOW_BROKER_MINIMUM',
+  });
+
+  return {
+    percent: scale,
+    accountBalance: balance,
+    marginBudget,
+    requestedLots: targetRequestedLots,
+    lots: target.lots,
+    expectedMargin: target.expectedMargin,
+    reduced: target.lots < targetRequestedLots - 1e-12,
   };
 }
