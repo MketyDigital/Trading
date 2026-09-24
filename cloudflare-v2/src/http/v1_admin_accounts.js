@@ -6,7 +6,7 @@ import {
 
 const ACCOUNT_SELECT = [
   'id', 'workspace_id', 'account_label', 'platform', 'account_id', 'server_name',
-  'lot_sizing_type', 'lot_value', 'is_active', 'execution_enabled', 'safety_policy',
+  'lot_sizing_type', 'lot_value', 'lot_sizing_config', 'is_active', 'execution_enabled', 'safety_policy',
   'fast_entry_policy', 'entry_zone_policy', 'credential_ciphertext', 'created_at',
 ].join(',');
 
@@ -60,6 +60,7 @@ function publicAccount(account = {}) {
     autoTpProtection: safetyPolicy?.autoTpProtection === true,
     lotSizingType: account.lot_sizing_type ?? account.lotSizingType ?? null,
     lotValue: account.lot_value ?? account.lotValue ?? null,
+    lotSizingConfig: { ...safeObject(account.lot_sizing_config ?? account.lotSizingConfig) },
     fastEntryPolicy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
     entryZonePolicy: canonicalEntryZonePolicy(account.entry_zone_policy ?? account.entryZonePolicy),
     credentialConfigured,
