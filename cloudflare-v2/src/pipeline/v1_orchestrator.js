@@ -18,7 +18,7 @@ function normalizeAccount(account = {}) {
     ...account,
     sizingMode,
     fixedLots: account.fixedLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'fixed' ? account.lot_value : undefined),
-    referenceLots: account.referenceLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'adaptive_percent' ? account.lot_value : undefined),
+    referenceLots: account.referenceLots ?? (['adaptive_percent','margin_equivalent'].includes(String(account.lot_sizing_type || '').toLowerCase()) ? account.lot_value : undefined),
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
     riskPercent: account.riskPercent ?? account.risk_percent,
     riskAmount: account.riskAmount ?? account.risk_amount,
