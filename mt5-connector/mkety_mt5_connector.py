@@ -251,81 +251,144 @@ def _estimated_margin(mt5, symbol_name, side, lots):
     return margin
 
 
-def terminal_margin_equivalent(mt5, reference_symbol_name, target_symbol_name, reference_lots, side, max_margin_percent=10):
-    account_info = mt5.account_info()
-    if account_info is None:
-        raise RuntimeError('MT5 account is not available')
-    reference_symbol = mt5.symbol_info(str(reference_symbol_name or '').strip())
-    target_symbol = mt5.symbol_info(str(target_symbol_name or '').strip())
-    if reference_symbol is None or target_symbol is None:
-        raise RuntimeError('SYMBOL_NOT_FOUND')
+def _lots_for_index(step, precision, index):
+    return round(index * step, precision)
 
-    percent = _finite(max_margin_percent)
-    if percent is None or not (0 < percent <= 100):
-        raise RuntimeError('MAX_MARGIN_PERCENT_INVALID')
 
-    ref_lots = _normalized_reference_lots(reference_symbol, reference_lots)
-    reference_margin = _estimated_margin(mt5, reference_symbol.name, side, ref_lots)
-    if not (reference_margin > 0):
-        raise RuntimeError('REFERENCE_MARGIN_UNAVAILABLE')
-
-    capacity = None
-    for attr in ('margin_free', 'equity', 'balance'):
-        value = _finite(getattr(account_info, attr, None))
-        if value is not None and value > 0:
-            capacity = value
-            break
-    margin_budget = min(reference_margin, capacity * percent / 100 if capacity else reference_margin)
-    if not (margin_budget > 0):
+def _largest_lots_within_margin(mt5, target_symbol, side, budget, maximum_lots, allow_minimum_floor=False):
+    if not (budget and budget > 0):
         raise RuntimeError('MARGIN_BUDGET_UNAVAILABLE')
-
     step, min_index, max_index, precision = _volume_constraints(target_symbol)
-
-    def lots_for(index):
-        return round(index * step, precision)
-
+    cap_lots = _normalized_reference_lots(target_symbol, maximum_lots)
+    cap_index = min(max_index, max(min_index, int((cap_lots / step) + 1e-12)))
     checked = {}
 
     def margin_for(index):
         if index not in checked:
-            checked[index] = _estimated_margin(mt5, target_symbol.name, side, lots_for(index))
+            checked[index] = _estimated_margin(mt5, target_symbol.name, side, _lots_for_index(step, precision, index))
         return checked[index]
 
     minimum_margin = margin_for(min_index)
-    if minimum_margin > margin_budget + 1e-9:
-        raise RuntimeError('MARGIN_EQUIVALENT_BELOW_BROKER_MINIMUM')
+    if minimum_margin > budget + 1e-9:
+        if allow_minimum_floor:
+            return {
+                'lots': _lots_for_index(step, precision, min_index),
+                'expectedMargin': minimum_margin,
+                'minimumFloorApplied': True,
+                'exceededBudget': True,
+            }
+        raise RuntimeError('BALANCE_PERCENT_BELOW_BROKER_MINIMUM')
 
-    maximum_margin = margin_for(max_index)
-    if maximum_margin <= margin_budget + 1e-9:
-        best_index = max_index
-    else:
-        low, high, best_index = min_index, max_index, min_index
-        iterations = 0
-        while low <= high and iterations < 64:
-            iterations += 1
-            mid = (low + high) // 2
-            if margin_for(mid) <= margin_budget + 1e-9:
-                best_index = mid
-                low = mid + 1
-            else:
-                high = mid - 1
+    cap_margin = margin_for(cap_index)
+    if cap_margin <= budget + 1e-9:
+        return {
+            'lots': _lots_for_index(step, precision, cap_index),
+            'expectedMargin': cap_margin,
+            'minimumFloorApplied': False,
+            'exceededBudget': False,
+        }
 
-    lots = lots_for(best_index)
-    target_margin = margin_for(best_index)
+    low, high, best_index = min_index, cap_index, min_index
+    iterations = 0
+    while low <= high and iterations < 64:
+        iterations += 1
+        mid = (low + high) // 2
+        if margin_for(mid) <= budget + 1e-9:
+            best_index = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+
     return {
-        'accountNumber': str(getattr(account_info, 'login', '') or ''),
-        'serverName': str(getattr(account_info, 'server', '') or ''),
-        'referenceSymbol': reference_symbol.name,
-        'targetSymbol': target_symbol.name,
-        'referenceLots': ref_lots,
-        'referenceMargin': reference_margin,
-        'accountCapacity': capacity,
-        'maxMarginPercent': percent,
-        'marginBudget': margin_budget,
-        'lots': lots,
-        'expectedMargin': target_margin,
+        'lots': _lots_for_index(step, precision, best_index),
+        'expectedMargin': margin_for(best_index),
+        'minimumFloorApplied': False,
+        'exceededBudget': False,
     }
 
+
+def terminal_broker_sizing(mt5, mode, target_symbol_name, maximum_lots, side, reference_symbol_name=None, percent=None):
+    account_info = mt5.account_info()
+    if account_info is None:
+        raise RuntimeError('MT5 account is not available')
+    target_symbol = mt5.symbol_info(str(target_symbol_name or '').strip())
+    if target_symbol is None:
+        raise RuntimeError('SYMBOL_NOT_FOUND')
+
+    mode_value = str(mode or '').strip().lower()
+    requested_lots = _normalized_reference_lots(target_symbol, maximum_lots)
+
+    if mode_value == 'symbol_equivalent':
+        reference_symbol = mt5.symbol_info(str(reference_symbol_name or '').strip())
+        if reference_symbol is None:
+            raise RuntimeError('REFERENCE_SYMBOL_NOT_SUPPORTED')
+        reference_lots = _normalized_reference_lots(reference_symbol, maximum_lots)
+        reference_margin = _estimated_margin(mt5, reference_symbol.name, side, reference_lots)
+        if not (reference_margin > 0):
+            raise RuntimeError('REFERENCE_MARGIN_UNAVAILABLE')
+        requested_margin = _estimated_margin(mt5, target_symbol.name, side, requested_lots)
+        if requested_margin <= reference_margin + 1e-9:
+            target = {
+                'lots': requested_lots,
+                'expectedMargin': requested_margin,
+                'minimumFloorApplied': requested_lots > float(maximum_lots) + 1e-12,
+                'exceededBudget': False,
+            }
+        else:
+            target = _largest_lots_within_margin(
+                mt5, target_symbol, side, reference_margin, requested_lots, allow_minimum_floor=True
+            )
+        return {
+            'mode': mode_value,
+            'accountNumber': str(getattr(account_info, 'login', '') or ''),
+            'serverName': str(getattr(account_info, 'server', '') or ''),
+            'referenceSymbol': reference_symbol.name,
+            'targetSymbol': target_symbol.name,
+            'referenceLots': reference_lots,
+            'referenceMargin': reference_margin,
+            'requestedLots': requested_lots,
+            'marginBudget': reference_margin,
+            'lots': target['lots'],
+            'expectedMargin': target['expectedMargin'],
+            'minimumFloorApplied': bool(target.get('minimumFloorApplied', False)),
+            'reduced': target['lots'] < requested_lots - 1e-12,
+        }
+
+    if mode_value == 'balance_percent':
+        scale = _finite(percent)
+        balance = _finite(getattr(account_info, 'balance', None))
+        if scale is None or not (0 < scale <= 100):
+            raise RuntimeError('BALANCE_PERCENT_INVALID')
+        if balance is None or not (balance > 0):
+            raise RuntimeError('BROKER_ACCOUNT_BALANCE_UNAVAILABLE')
+        budget = balance * scale / 100
+        requested_margin = _estimated_margin(mt5, target_symbol.name, side, requested_lots)
+        if requested_margin <= budget + 1e-9:
+            target = {
+                'lots': requested_lots,
+                'expectedMargin': requested_margin,
+                'minimumFloorApplied': False,
+                'exceededBudget': False,
+            }
+        else:
+            target = _largest_lots_within_margin(
+                mt5, target_symbol, side, budget, requested_lots, allow_minimum_floor=False
+            )
+        return {
+            'mode': mode_value,
+            'accountNumber': str(getattr(account_info, 'login', '') or ''),
+            'serverName': str(getattr(account_info, 'server', '') or ''),
+            'targetSymbol': target_symbol.name,
+            'percent': scale,
+            'accountBalance': balance,
+            'requestedLots': requested_lots,
+            'marginBudget': budget,
+            'lots': target['lots'],
+            'expectedMargin': target['expectedMargin'],
+            'reduced': target['lots'] < requested_lots - 1e-12,
+        }
+
+    raise RuntimeError('BROKER_SIZING_MODE_UNSUPPORTED')
 
 def command_result(result):
     return {
@@ -451,20 +514,21 @@ class MketyMt5Connector:
                 return {'type': 'context_result', 'requestId': request_id, 'ok': True, 'context': context}
             except Exception as exc:
                 return {'type': 'context_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
-        if kind == 'margin_request':
+        if kind == 'sizing_request':
             request_id = str(message.get('requestId') or '')
             try:
-                sizing = terminal_margin_equivalent(
+                sizing = terminal_broker_sizing(
                     self.mt5,
-                    message.get('referenceSymbol'),
+                    message.get('mode'),
                     message.get('targetSymbol'),
-                    message.get('referenceLots'),
+                    message.get('maximumLots'),
                     message.get('side'),
-                    message.get('maxMarginPercent', 10),
+                    reference_symbol_name=message.get('referenceSymbol'),
+                    percent=message.get('percent'),
                 )
-                return {'type': 'margin_result', 'requestId': request_id, 'ok': True, 'sizing': sizing}
+                return {'type': 'sizing_result', 'requestId': request_id, 'ok': True, 'sizing': sizing}
             except Exception as exc:
-                return {'type': 'margin_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
+                return {'type': 'sizing_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
         return None
 
     def run_forever(self):
