@@ -786,7 +786,7 @@ Current intended TP protection progression remains:
 - `symbol_equivalent` does not use balance, equity, free margin, SL, or TP and therefore supports fast signals.
 - `balance_percent`: separate opt-in capacity mode. Uses selected percentage of broker-reported balance as an expected-margin budget while `lot_value` remains a maximum lot. It works on fast signals and fails closed when broker minimum exceeds the selected budget.
 - Existing SL-based `risk_percent` remains separate.
-- Leg allocation is separate from sizing: `per_target` preserves current behavior; optional `split_total` divides the sized lot across targets.
+- Leg allocation is intentionally NOT changed by PR #135. Existing per-target behavior remains. A future split-total option needs a separate fast-entry reconciliation design to avoid exposure drift when the full multi-TP signal arrives after an already-open fast position.
 - Existing accounts are never switched automatically. Current production account lot values, execution flags, LIVE flags, routes and runtime controls must remain unchanged.
 - cTrader uses broker expected-margin metadata. MT5 uses its own connected terminal and `order_calc_margin`. No cross-account or cross-workspace catalog/sizing data is reused.
 - MT5 broker-aware sizing requires the new connector build before an MT5 account is explicitly switched to one of the new broker-aware modes. Existing fixed execution remains backward compatible.
