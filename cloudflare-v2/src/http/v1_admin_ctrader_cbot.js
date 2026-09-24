@@ -7,6 +7,10 @@ import { providerConfigWithSymbolCatalog } from '../execution/account_symbol_cat
 
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
+
+function safeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
 const DEFAULT_CONNECTION_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 function json(body, status = 200, extraHeaders = {}) {
