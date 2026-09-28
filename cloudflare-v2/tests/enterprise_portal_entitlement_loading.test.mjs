@@ -1,3 +1,15 @@
+
+test('enterprise portal bounds authenticated requests and suppresses overlapping workspace loads', () => {
+  const html = renderEnterpriseTradingPortal({
+    TRADING_ACCESS_ENABLED: 'true',
+    BROKER_EXECUTION_ENABLED: 'true',
+  });
+  assert.match(html, /AbortController/);
+  assert.match(html, /PORTAL_REQUEST_TIMEOUT/);
+  assert.match(html, /if\(loadAllPromise\)return loadAllPromise/);
+  assert.match(html, /finally\{loadAllPromise=null\}/);
+});
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
