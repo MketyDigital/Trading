@@ -86,7 +86,7 @@ function renderDeterministic(canonicalEvent = {}, presentation = {}) {
 function boundedTimeout(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TIMEOUT_MS;
-  return Math.max(1, Math.min(parsed, 5000));
+  return Math.max(1, Math.min(parsed, 12000));
 }
 
 async function runAiFormatter(aiFormatter, input, timeoutMs) {

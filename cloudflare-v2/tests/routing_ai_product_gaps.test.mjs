@@ -72,6 +72,24 @@ test('Telegram presentation AI receives user rebranding instructions as presenta
   assert.match(seenSystemPrompt, /Preserve every canonical trading value exactly/i);
 });
 
+test('Telegram presentation AI forwards a configured 12 second timeout to the provider', async () => {
+  let seenTimeout = null;
+  const formatter = createTelegramDestinationAiFormatter({
+    async processSignal(_payload, _systemPrompt, options) {
+      seenTimeout = options?.timeoutMs ?? null;
+      return { success: true, text: JSON.stringify({ text: 'formatted', canonicalEcho: { side: 'BUY', symbol: 'XAUUSD', entry: 2500, stopLoss: 2490, takeProfits: [2510] } }) };
+    },
+  });
+
+  await formatter({
+    deterministicText: 'BUY XAUUSD',
+    presentation: { aiTimeoutMs: 12000 },
+    canonical: { side: 'BUY', symbol: 'XAUUSD', entry: 2500, stopLoss: 2490, takeProfits: [2510] },
+  });
+
+  assert.equal(seenTimeout, 12000);
+});
+
 test('enterprise workspace UI exposes route/destination removal and AI presentation instructions', () => {
   const html = withRoutingAiCompletion(withEnterpriseConnectionEnhancements('<html><body><div id="workspaceMessage"></div></body></html>'));
   assert.match(html, /data-route-remove/);
