@@ -287,7 +287,7 @@ function concisePrefixSymbol(before) {
 }
 
 function labeledInstrument(text) {
-  const match = String(text ?? '').match(/\bINSTRUMENT\s*:\s*([^\n]+)/i);
+  const match = String(text ?? '').match(/\b(?:INSTRUMENT|PAIR)\s*:\s*([^\n]+)/i);
   if (!match) return null;
   const candidate = cleanCandidate(match[1]);
   const synthetic = extractDerivSyntheticSymbol(candidate, { anchored: false });

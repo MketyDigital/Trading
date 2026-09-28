@@ -215,6 +215,32 @@ test('parses real labeled Deriv synthetic signal cards without AI', () => {
   assert.equal(plan.intent.incomplete, false);
 });
 
+test('parses PAIR-labeled Deriv synthetic signal cards as MARKET completion intents', () => {
+  const plan = buildMachinePlan({ text: `QAS VIP SIGNAL
+
+PAIR: Volatility 75 (1s) Index
+TIMEFRAME: M15
+DIRECTION: SELL 🟥
+
+ENTRY ZONE: 5680 - 5695
+
+TP1: 5660
+TP2: 5640
+TP3: 5610
+
+STOP LOSS: 5735` });
+
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.intent.side, 'SELL');
+  assert.equal(plan.intent.orderType, 'MARKET');
+  assert.equal(plan.intent.symbol.canonical, 'DERIV:VOLATILITY_75_1S');
+  assert.deepEqual(plan.intent.entry, { kind: 'RANGE', min: 5680, max: 5695 });
+  assert.equal(plan.intent.stopLoss, 5735);
+  assert.deepEqual(plan.intent.takeProfits, [5660, 5640, 5610]);
+  assert.equal(plan.intent.fastEntry, false);
+  assert.equal(plan.intent.incomplete, false);
+});
+
 test('accepts common Vxx Deriv shorthand as fast market commands', () => {
   for (const [text, side, canonical] of [
     ['V50(1s) Sell Now!!! 😡😡😡', 'SELL', 'DERIV:VOLATILITY_50_1S'],
