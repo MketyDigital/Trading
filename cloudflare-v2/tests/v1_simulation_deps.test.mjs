@@ -1,6 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createV1SimulationDependencies } from '../src/pipeline/v1_simulation_deps.js';
+import { createV1SimulationDependencies, waitForCTraderPlanningPrice } from '../src/pipeline/v1_simulation_deps.js';
+
+test('cTrader planning waits past a one-sided first spot event until the requested side quote is available', async () => {
+  const events = [
+    { payloadType: 2131, payload: { symbolId: 75, bid: 4368496000 } },
+    { payloadType: 2131, payload: { symbolId: 75, ask: 4368596000 } },
+  ];
+  const session = {
+    waitForEvent: async (predicate) => {
+      const next = events.shift();
+      assert.ok(next);
+      assert.equal(predicate(next), true);
+      return next;
+    },
+  };
+  const quote = {};
+  const marketData = {
+    handleSpotEvent(message) {
+      if (message.payload.bid != null) quote.bid = message.payload.bid / 100000;
+      if (message.payload.ask != null) quote.ask = message.payload.ask / 100000;
+    },
+    marketPriceFor(_symbol, side) {
+      return side === 'BUY' ? quote.ask ?? null : quote.bid ?? null;
+    },
+  };
+
+  const price = await waitForCTraderPlanningPrice({
+    session,
+    marketData,
+    symbolId: 75,
+    platformSymbol: 'Volatility 75 Index',
+    side: 'BUY',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(price, 43685.96);
+  assert.equal(events.length, 0);
+});
 
 function baseEnv() {
   return {
