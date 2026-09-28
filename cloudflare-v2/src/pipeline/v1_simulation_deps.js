@@ -194,6 +194,36 @@ async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn 
   return price;
 }
 
+export async function waitForCTraderPlanningPrice({
+  session,
+  marketData,
+  symbolId,
+  platformSymbol,
+  side,
+  timeoutMs = 5000,
+} = {}) {
+  const id = Number(symbolId);
+  const budget = Number(timeoutMs);
+  if (!session?.waitForEvent || !marketData?.handleSpotEvent || !marketData?.marketPriceFor
+      || !Number.isInteger(id) || !(budget > 0)) {
+    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader quote reader configuration is invalid');
+  }
+
+  const deadline = Date.now() + budget;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const spot = await session.waitForEvent(
+      (message) => Number(message?.payloadType) === 2131 && Number(message?.payload?.symbolId) === id,
+      { timeoutMs: remaining },
+    );
+    marketData.handleSpotEvent(spot);
+    const price = Number(marketData.marketPriceFor(platformSymbol, side));
+    if (price > 0) return price;
+  }
+
+  throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader broker side quote unavailable');
+}
+
 async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
   const masterKey = text(env.TRADING_MASTER_KEY);
   const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
@@ -228,14 +258,14 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
     }
     const symbolId = Number(resolved.platformId);
     await marketData.subscribeQuotes([symbolId]);
-    const spot = await session.waitForEvent(
-      (message) => Number(message?.payloadType) === 2131 && Number(message?.payload?.symbolId) === symbolId,
-      { timeoutMs: 5000 },
-    );
-    marketData.handleSpotEvent(spot);
-    const price = marketData.marketPriceFor(resolved.platformSymbol, intent?.side);
-    if (!(Number(price) > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader broker tick unavailable');
-    return Number(price);
+    return waitForCTraderPlanningPrice({
+      session,
+      marketData,
+      symbolId,
+      platformSymbol: resolved.platformSymbol,
+      side: intent?.side,
+      timeoutMs: 5000,
+    });
   } finally {
     session.close?.();
   }
