@@ -22,7 +22,9 @@ async function renewReturningOwner(){
 async function restoreReturningOwner(){if(sessionStorage.getItem('mketyTradingBearer'))return {ok:true,restored:false};try{return await renewReturningOwner()}catch(_){return null}}
 window.mketyTradingRestoreSession=restoreReturningOwner;window.mketyTradingSessionRestorePromise=restoreReturningOwner();
 window.fetch=async function(input,init){
-  var response=await nativeFetch(input,init);var requestUrl='';try{requestUrl=typeof input==='string'?new URL(input,location.href).pathname:new URL(input.url,location.href).pathname}catch(_){return response}if(!requestUrl.startsWith('/api/v1/admin/'))return response;
+  var requestUrl='';try{requestUrl=typeof input==='string'?new URL(input,location.href).pathname:new URL(input.url,location.href).pathname}catch(_){}
+  if(requestUrl.startsWith('/api/v1/admin/')&&window.mketyTradingSessionRestorePromise)await window.mketyTradingSessionRestorePromise;
+  var response=await nativeFetch(input,init);if(!requestUrl.startsWith('/api/v1/admin/'))return response;
   var body=null;try{body=await response.clone().json()}catch(_){}
   if(response.status===403&&body&&['ACCESS_SUBSCRIPTION_EXPIRED','ACCESS_SUBSCRIPTION_REVOKED','TRADING_WORKSPACE_DISABLED','TRADING_ACCESS_DISABLED'].includes(body.reason)){clearLocalSession();showAccessNotice(body.reason);return response}
   if(response.status!==401||!body||body.reason!=='TOKEN_EXPIRED')return response;
