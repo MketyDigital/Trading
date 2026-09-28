@@ -10,7 +10,7 @@ function cleanJson(text) {
 function bounded(value, fallback = 450) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) return fallback;
-  return Math.max(100, Math.min(1500, number));
+  return Math.max(100, Math.min(12000, number));
 }
 
 export function createTelegramDestinationAiFormatter(aiRouter) {
