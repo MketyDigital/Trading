@@ -30,6 +30,19 @@ test('editing a logical route preserves and submits the exact underlying route i
   assert.match(html, /previousRouteIds:state\.editingRouteOriginal&&state\.editingRouteOriginal\.routeIds\|\|\[\]/);
 });
 
+
+test('route editor renders primary route data before optional feed hydration and bounds admin fetches', () => {
+  const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
+  const primaryRender = html.indexOf('renderRoutes();renderSummary();renderDestinationSummary();renderTemplateSummary()');
+  const feedAwait = html.indexOf('await Promise.all(state.sources.map');
+  assert.ok(primaryRender >= 0, 'primary route render must exist');
+  assert.ok(feedAwait >= 0, 'feed hydration must exist');
+  assert.ok(primaryRender < feedAwait, 'existing routes must render before feed hydration can stall');
+  assert.match(html, /AbortController/);
+  assert.match(html, /ADMIN_REQUEST_TIMEOUT/);
+  assert.match(html, /if\(loadPromise\)return loadPromise/);
+});
+
 test('destination formatting UI exposes all four ready-made modes in plain language', () => {
   const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
   assert.match(html, /Forward as-is \(original\)/i);
