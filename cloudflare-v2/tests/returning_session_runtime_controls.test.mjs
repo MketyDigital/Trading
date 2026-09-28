@@ -104,6 +104,15 @@ test('enterprise browser transparently renews an expired bearer and retries the 
   assert.match(html, /Authorization/);
 });
 
+
+test('all admin fetches wait for returning-session restoration before the first request', () => {
+  const html = withReturningOwnerSession(renderEnterpriseTradingPortal({ TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' }));
+  assert.match(
+    html,
+    /window\.fetch=async function\(input,init\)\{[\s\S]*?requestUrl\.startsWith\('\/api\/v1\/admin\/'\)[\s\S]*?mketyTradingSessionRestorePromise[\s\S]*?await window\.mketyTradingSessionRestorePromise/,
+  );
+});
+
 test('broker execution fails closed when persisted Mkety owner switch is OFF even if deployment capability is ON', async () => {
   let executed = false;
   const execution = await runV1ProductionExecutionStage({
