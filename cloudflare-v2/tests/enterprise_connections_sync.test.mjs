@@ -143,3 +143,10 @@ test('enterprise AI provider selector exposes Azure OpenAI and Mkety AI explicit
   assert.match(html, /Azure Foundry\/OpenAI v1 base endpoint/i);
   assert.match(html, /mk_ai_live_/i);
 });
+
+
+test('enterprise AI provider list exposes the safe provider health-test action', async () => {
+  const html = await portalHtml();
+  assert.match(html, /data-ai-test/);
+  assert.match(html, /\/api\/v1\/admin\/ai-providers\/'\+encodeURIComponent\(testAi\)\+'\/test/);
+});
