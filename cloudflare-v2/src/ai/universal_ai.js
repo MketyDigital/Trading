@@ -385,12 +385,7 @@ export class UniversalAIRouter {
             providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'OpenAI credential is not configured.',
         });
         let baseUrl = provider.base_url || 'https://api.openai.com/v1';
-        baseUrl = baseUrl.replace(/\/+$/, '');
-        if (!baseUrl.endsWith('/responses')) {
-            baseUrl = baseUrl.endsWith('/openai/v1')
-                ? baseUrl + '/responses'
-                : baseUrl + '/openai/v1/responses';
-        }
+        if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
         const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
             method: 'POST',
@@ -421,7 +416,12 @@ export class UniversalAIRouter {
         if (!baseUrl) throw this.providerFailure('Azure OpenAI endpoint missing', {
             providerCode: 'AI_ENDPOINT_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Azure OpenAI endpoint is not configured.',
         });
-        if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
+        baseUrl = baseUrl.replace(/\/+$/, '');
+        if (!baseUrl.endsWith('/responses')) {
+            baseUrl = baseUrl.endsWith('/openai/v1')
+                ? baseUrl + '/responses'
+                : baseUrl + '/openai/v1/responses';
+        }
         const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
             method: 'POST',
