@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS public.listener_nodes (
 CREATE TABLE IF NOT EXISTS public.ai_providers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     workspace_id UUID REFERENCES public.workspaces(id) ON DELETE CASCADE,
-    provider_name TEXT NOT NULL CHECK (provider_name IN ('gemini', 'openai', 'cloudflare_ai', 'vertex_ai', 'aws_bedrock', 'deepseek', 'groq', 'custom')),
+    provider_name TEXT NOT NULL CHECK (provider_name IN ('gemini', 'google', 'openai', 'azure_openai', 'mkety_ai', 'cloudflare_ai', 'workers_ai', 'vertex_ai', 'aws_bedrock', 'deepseek', 'groq', 'custom')),
     api_key TEXT NOT NULL,
     base_url TEXT,
     model_name TEXT NOT NULL,
