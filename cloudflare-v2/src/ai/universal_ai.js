@@ -385,7 +385,12 @@ export class UniversalAIRouter {
             providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'OpenAI credential is not configured.',
         });
         let baseUrl = provider.base_url || 'https://api.openai.com/v1';
-        if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
+        baseUrl = baseUrl.replace(/\/+$/, '');
+        if (!baseUrl.endsWith('/responses')) {
+            baseUrl = baseUrl.endsWith('/openai/v1')
+                ? baseUrl + '/responses'
+                : baseUrl + '/openai/v1/responses';
+        }
         const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
             method: 'POST',
