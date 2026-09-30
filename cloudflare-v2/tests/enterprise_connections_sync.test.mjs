@@ -135,3 +135,11 @@ test('enterprise AI setup requires explicit provider model IDs and contains no s
   assert.doesNotMatch(html, /deepseek-chat/i);
   assert.doesNotMatch(html, /llama-3\.3-70b-instruct/i);
 });
+
+test('enterprise AI provider selector exposes Azure OpenAI and Mkety AI explicitly', async () => {
+  const html = await portalHtml();
+  assert.match(html, /value="azure_openai">Azure OpenAI/);
+  assert.match(html, /value="mkety_ai">Mkety AI/);
+  assert.match(html, /Azure Foundry\/OpenAI v1 base endpoint/i);
+  assert.match(html, /mk_ai_live_/i);
+});
