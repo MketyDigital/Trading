@@ -71,6 +71,57 @@ test('Azure OpenAI is first-class and uses Azure v1 Responses API with api-key a
   assert.equal(payload.input, 'BUY GOLD');
 });
 
+test('Azure OpenAI accepts an Azure Foundry project endpoint and appends the OpenAI v1 Responses path', async () => {
+  let url;
+  const router = new UniversalAIRouter([
+    {
+      provider_name: 'azure_openai',
+      api_key: 'azure-key',
+      model_name: 'gpt-5.6-sol-1',
+      base_url: 'https://hello-3399-resource.services.ai.azure.com/api/projects/hello-3399',
+      is_active: true,
+    },
+  ], {
+    fetchFn: async (requestedUrl) => {
+      url = String(requestedUrl);
+      return okJson({ output_text: 'READY' });
+    },
+  });
+
+  const result = await router.processSignal('BUY GOLD', 'interpret safely', { timeoutMs: 100 });
+  assert.equal(result.success, true);
+  assert.equal(url, 'https://hello-3399-resource.services.ai.azure.com/api/projects/hello-3399/openai/v1/responses');
+});
+
+test('Mkety AI uses bearer auth, required idempotency and the OpenAI-compatible chat contract', async () => {
+  let url;
+  let options;
+  const router = new UniversalAIRouter([
+    {
+      provider_name: 'mkety_ai',
+      api_key: 'mk_ai_test_example',
+      model_name: 'mkety-smart',
+      is_active: true,
+    },
+  ], {
+    fetchFn: async (requestedUrl, requestedOptions) => {
+      url = String(requestedUrl);
+      options = requestedOptions;
+      return okJson({ choices: [{ message: { content: 'READY' } }] });
+    },
+  });
+
+  const result = await router.processSignal('BUY GOLD', 'interpret safely', { timeoutMs: 100 });
+  const payload = JSON.parse(options.body);
+  assert.equal(result.success, true);
+  assert.equal(url, 'https://api.mkety.com/v1/ai/chat/completions');
+  assert.equal(options.headers.Authorization, 'Bearer mk_ai_test_example');
+  assert.match(options.headers['Idempotency-Key'], /^trading-ai-/);
+  assert.equal(payload.model, 'mkety-smart');
+  assert.equal(payload.messages[0].role, 'system');
+  assert.equal(payload.messages[1].content, 'BUY GOLD');
+});
+
 test('Vertex AI is first-class using DB project/location config and OAuth bearer credential', async () => {
   let url;
   let options;
