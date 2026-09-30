@@ -5,6 +5,7 @@ import { UniversalAIRouter } from '../ai/universal_ai.js';
 const PROVIDERS = new Set([
   'openai',
   'azure_openai',
+  'mkety_ai',
   'gemini',
   'google',
   'vertex_ai',
@@ -26,6 +27,10 @@ async function body(request) { try { const v = await request.json(); return v &&
 
 function safeProviderConfig(providerName, input = {}) {
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  if (providerName === 'mkety_ai') {
+    const projectId = text(source.projectId ?? source.project_id);
+    return projectId ? { project_id: projectId } : {};
+  }
   if (providerName === 'vertex_ai') {
     const projectId = text(source.projectId ?? source.project_id);
     const location = text(source.location);

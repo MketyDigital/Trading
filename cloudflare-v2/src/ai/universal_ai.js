@@ -331,6 +331,7 @@ export class UniversalAIRouter {
     async executeProviderCall(provider, rawText, systemPrompt, signal) {
         const pType = String(provider.provider_name || '').toLowerCase();
         if (pType === 'azure_openai') return this.callAzureOpenAIResponses(provider, rawText, systemPrompt, signal);
+        if (pType === 'mkety_ai') return this.callMketyAI(provider, rawText, systemPrompt, signal);
         if (pType === 'vertex_ai') return this.callVertexAI(provider, rawText, systemPrompt, signal);
         if (pType === 'aws_bedrock') return this.callBedrock(provider, rawText, systemPrompt, signal);
         if (pType === 'gemini' || pType === 'google') return this.callGemini(provider, rawText, systemPrompt, signal);
@@ -415,7 +416,12 @@ export class UniversalAIRouter {
         if (!baseUrl) throw this.providerFailure('Azure OpenAI endpoint missing', {
             providerCode: 'AI_ENDPOINT_MISSING', errorClass: 'CONFIG', sanitizedMessage: 'Azure OpenAI endpoint is not configured.',
         });
-        if (!baseUrl.endsWith('/responses')) baseUrl = baseUrl.replace(/\/+$/, '') + '/responses';
+        baseUrl = baseUrl.replace(/\/+$/, '');
+        if (!baseUrl.endsWith('/responses')) {
+            baseUrl = baseUrl.endsWith('/openai/v1')
+                ? baseUrl + '/responses'
+                : baseUrl + '/openai/v1/responses';
+        }
         const model = this.requireModel(provider);
         const res = await this.fetchFn(baseUrl, {
             method: 'POST',
@@ -466,6 +472,45 @@ export class UniversalAIRouter {
         if (!res.ok) throw await this.responseFailure(res, provider, 'Vertex AI');
         const data = await res.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
+    }
+
+    async callMketyAI(provider, rawText, systemPrompt, signal) {
+        const key = provider.resolved_api_key;
+        if (!key) throw this.providerFailure('Mkety AI credential missing', {
+            providerCode: 'AI_CREDENTIAL_MISSING', errorClass: 'CREDENTIAL', sanitizedMessage: 'Mkety AI API key is not configured.',
+        });
+        let baseUrl = String(provider.base_url || 'https://api.mkety.com/v1/ai').trim();
+        if (!baseUrl.endsWith('/chat/completions')) {
+            baseUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+        }
+        const model = this.requireModel(provider);
+        const config = this.providerConfig(provider);
+        const projectId = String(config.project_id ?? config.projectId ?? '').trim();
+        const idempotencyKey = 'trading-ai-' + crypto.randomUUID();
+        const headers = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+            'Idempotency-Key': idempotencyKey,
+        };
+        if (projectId) headers['X-Mkety-Project-Id'] = projectId;
+        const res = await this.fetchFn(baseUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: rawText },
+                ],
+                temperature: Number(provider.temperature ?? 0.1),
+                max_completion_tokens: Number(provider.max_output_tokens ?? 1000),
+            }),
+            signal,
+        });
+        if (!res.ok) throw await this.responseFailure(res, provider, 'Mkety AI');
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || '';
         return { success: Boolean(text), text, httpStatus: Number(res.status) || 200 };
     }
 
