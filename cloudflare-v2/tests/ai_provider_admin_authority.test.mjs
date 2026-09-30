@@ -67,13 +67,19 @@ test('Vertex AI admin create persists only safe DB config and encrypted credenti
   assert.equal(JSON.stringify(payload).includes('oauth-access-token'), false);
 });
 
-test('Azure OpenAI and AWS Bedrock are accepted as first-class admin provider types', async () => {
+test('Azure OpenAI, Mkety AI and AWS Bedrock are accepted as first-class admin provider types', async () => {
   for (const input of [
     {
       providerName: 'azure_openai',
       modelName: 'trading-deployment',
       baseUrl: 'https://mkety.openai.azure.com/openai/v1',
       apiKey: 'azure-key',
+    },
+    {
+      providerName: 'mkety_ai',
+      modelName: 'mkety-smart',
+      apiKey: 'mk_ai_test_example',
+      providerConfig: { projectId: 'project-123', secret: 'must-not-persist' },
     },
     {
       providerName: 'aws_bedrock',
@@ -101,5 +107,13 @@ test('migration 0040 adds provider_config and reconciles the provider-name const
   assert.match(sql, /vertex_ai/i);
   assert.match(sql, /aws_bedrock/i);
   assert.match(sql, /cloudflare_ai/i);
+  assert.match(sql, /CHECK\s*\(\s*provider_name\s+IN/i);
+});
+
+
+test('migration 0047 adds Mkety AI to the provider-name constraint', async () => {
+  const sql = await readFile(new URL('../db/migrations/0047_mkety_ai_provider.sql', import.meta.url), 'utf8');
+  assert.match(sql, /mkety_ai/i);
+  assert.match(sql, /azure_openai/i);
   assert.match(sql, /CHECK\s*\(\s*provider_name\s+IN/i);
 });
