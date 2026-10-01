@@ -92,8 +92,17 @@ test('Telegram presentation AI forwards a configured 12 second timeout to the pr
 
 test('enterprise workspace UI exposes route/destination removal and AI presentation instructions', () => {
   const html = withRoutingAiCompletion(withEnterpriseConnectionEnhancements('<html><body><div id="workspaceMessage"></div></body></html>'));
-  assert.match(html, /data-route-remove/);
+  assert.match(html, /data-logical-route-remove/);
   assert.match(html, /data-destination-remove/);
   assert.match(html, /aiPresentationPrompt/);
   assert.match(html, /AI rebranding\/formatting instructions/i);
+});
+
+
+test('route lifecycle controls operate on logical route groups instead of individual feed rows', () => {
+  const html = withRoutingAiCompletion(withEnterpriseConnectionEnhancements('<html><body><div id="workspaceMessage"></div><div id="enterpriseDestinationControlRows"></div><div id="enterpriseRouteControlRows"></div></body></html>'));
+  assert.match(html, /\/api\/v1\/admin\/logical-routes/);
+  assert.match(html, /data-completion-logical-route-toggle/);
+  assert.match(html, /data-logical-route-remove/);
+  assert.match(html, /previousRouteIds/);
 });
