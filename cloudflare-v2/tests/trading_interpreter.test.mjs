@@ -186,3 +186,19 @@ test('understands invalid SELL SL geometry deterministically before execution va
   assert.deepEqual(result.intent.takeProfits, []);
   assert.equal(result.intent.incomplete, true);
 });
+
+
+test('AI prompt explicitly forbids inferring pending orders from entry prices or ranges', async () => {
+  let seenPrompt = '';
+  await interpretTradingEvent({ text: 'buy gold somehow' }, {
+    aiRouter: {
+      processSignal: async (_text, prompt) => {
+        seenPrompt = String(prompt);
+        return { success: false, error: 'stop-after-prompt' };
+      },
+    },
+  });
+  assert.match(seenPrompt, /entry price or entry range does NOT by itself make an order pending/i);
+  assert.match(seenPrompt, /Use LIMIT, STOP, or STOP_LIMIT only when the raw message explicitly instructs/i);
+  assert.match(seenPrompt, /Never infer a pending order from current price/i);
+});
