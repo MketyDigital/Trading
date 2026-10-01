@@ -1,9 +1,3 @@
-function inferPendingType(side, entryPrice, currentPrice) {
-  if (side === 'BUY') return entryPrice < currentPrice ? 'LIMIT' : 'STOP';
-  if (side === 'SELL') return entryPrice > currentPrice ? 'LIMIT' : 'STOP';
-  throw new TypeError('BUY or SELL side required');
-}
-
 function chooseRangePrice(entry, mode) {
   if (mode === 'LOWER') return Number(entry.min);
   if (mode === 'UPPER') return Number(entry.max);
@@ -29,26 +23,43 @@ export function materializeExecutionEntry(intent, { currentPrice, rangeMode = 'M
   }
 
   if (entry.kind !== 'RANGE') throw new TypeError(`unsupported entry kind: ${entry.kind}`);
-  if (!Number.isFinite(Number(currentPrice))) throw new Error('current price is required to execute an entry range');
 
-  const market = Number(currentPrice);
   const min = Number(entry.min);
   const max = Number(entry.max);
   if (!(Number.isFinite(min) && Number.isFinite(max) && min <= max)) throw new TypeError('valid entry range required');
 
+  const declaredOrderType = String(intent.orderType || 'MARKET').toUpperCase();
+
+  // A reference entry/range on an immediate MARKET signal must never silently
+  // become a LIMIT/STOP order because of the current quote. Pending semantics
+  // are authoritative only when the interpreted/raw signal explicitly declared
+  // a pending order type.
+  if (declaredOrderType === 'MARKET') {
+    const market = Number(currentPrice);
+    return {
+      orderType: 'MARKET',
+      entry: Number.isFinite(market)
+        ? { kind: 'MARKET', referencePrice: market }
+        : { kind: 'MARKET' },
+    };
+  }
+
+  if (!['LIMIT', 'STOP', 'STOP_LIMIT'].includes(declaredOrderType)) {
+    throw new TypeError(`unsupported order type for entry range: ${declaredOrderType}`);
+  }
+
+  const market = Number(currentPrice);
   const mode = String(rangeMode).toUpperCase();
-  if (mode === 'MARKET_ALWAYS') {
-    return { orderType: 'MARKET', entry: { kind: 'MARKET', referencePrice: market } };
+  let price;
+  if (mode === 'LOWER' || mode === 'UPPER' || mode === 'MIDPOINT') {
+    price = chooseRangePrice(entry, mode);
+  } else if (Number.isFinite(market)) {
+    // For an explicitly pending order, choose a deterministic boundary but
+    // preserve the declared pending type. Do not infer a different one.
+    price = market > max ? max : market < min ? min : (min + max) / 2;
+  } else {
+    price = (min + max) / 2;
   }
 
-  if (mode === 'MARKET_IF_IN_RANGE') {
-    if (market >= min && market <= max) {
-      return { orderType: 'MARKET', entry: { kind: 'MARKET', referencePrice: market } };
-    }
-    const price = market > max ? max : min;
-    return { orderType: inferPendingType(intent.side, price, market), entry: { kind: 'PRICE', value: price } };
-  }
-
-  const price = chooseRangePrice(entry, mode);
-  return { orderType: inferPendingType(intent.side, price, market), entry: { kind: 'PRICE', value: price } };
+  return { orderType: declaredOrderType, entry: { kind: 'PRICE', value: price } };
 }
