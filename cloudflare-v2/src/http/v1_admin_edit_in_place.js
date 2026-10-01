@@ -1,5 +1,6 @@
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { reconcileTelegramSourceFeeds } from '../sources/source_feed_reconcile.js';
 
 function text(value) {
   const result = String(value ?? '').trim();
@@ -81,54 +82,6 @@ function validateSourceConfig(providerType, config) {
     return { ok: true, config: { ...safe, [key]: ids } };
   }
   return { ok: true, config: safe };
-}
-
-function desiredFeedIds(providerType, config = {}) {
-  if (providerType === 'external_mtproto') {
-    if ((text(config.chat_acceptance_mode) || 'allowlist') === 'all_visible') return null;
-    return normalizeIds(config.allowed_chat_ids ?? []) || [];
-  }
-  if (['cloudflare_container_mtproto', 'cloudflare_do_mtproto'].includes(providerType)) {
-    return normalizeIds(config.chat_ids ?? []) || [];
-  }
-  if (providerType === 'telegram_bot_api') {
-    return normalizeIds(config.allowed_chat_ids ?? config.chat_ids ?? []) || [];
-  }
-  return null;
-}
-
-async function reconcileTelegramFeeds(supabase, workspaceId, sourceId, providerType, config) {
-  const desired = desiredFeedIds(providerType, config);
-  if (desired === null) return;
-  if (desired.length) {
-    const rows = desired.map((providerFeedId) => ({
-      workspace_id: workspaceId,
-      source_connection_id: sourceId,
-      provider_feed_id: providerFeedId,
-      feed_type: 'telegram_chat',
-      is_active: true,
-      updated_at: new Date().toISOString(),
-    }));
-    const { error } = await supabase.from('source_feeds').upsert(rows, {
-      onConflict: 'workspace_id,source_connection_id,provider_feed_id',
-    });
-    if (error) throw new Error('SOURCE_FEED_RECONCILE_FAILED');
-  }
-  const { data: existing, error: readError } = await supabase
-    .from('source_feeds')
-    .select('id,provider_feed_id,is_active')
-    .eq('workspace_id', workspaceId)
-    .eq('source_connection_id', sourceId);
-  if (readError) throw new Error('SOURCE_FEED_RECONCILE_FAILED');
-  const wanted = new Set(desired);
-  const deactivate = (existing || []).filter((row) => !wanted.has(text(row.provider_feed_id))).map((row) => row.id);
-  if (deactivate.length) {
-    const { error } = await supabase.from('source_feeds')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('workspace_id', workspaceId)
-      .in('id', deactivate);
-    if (error) throw new Error('SOURCE_FEED_RECONCILE_FAILED');
-  }
 }
 
 function sourcePublic(row = {}) {
@@ -275,7 +228,7 @@ async function updateSource(request, authorization, supabase, sourceId) {
     .eq('workspace_id', workspaceId).eq('id', sourceId).select('*').maybeSingle();
   if (error || !updated) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
   if (hasOwn(patch, 'config') && updated.source_family === 'telegram') {
-    try { await reconcileTelegramFeeds(supabase, workspaceId, sourceId, updated.provider_type, updated.config || {}); }
+    try { await reconcileTelegramSourceFeeds(supabase, workspaceId, sourceId, updated.provider_type, updated.config || {}); }
     catch { return json({ ok: false, reason: 'SOURCE_FEED_RECONCILE_FAILED' }, 503); }
   }
   return json({ ok: true, workspaceId, source: sourcePublic(updated) });
