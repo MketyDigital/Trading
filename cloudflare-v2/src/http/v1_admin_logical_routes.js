@@ -270,6 +270,37 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   return json({ ok: true, workspaceId, logicalRoute });
 }
 
+async function deleteLogicalRoute(request, authorization, supabase) {
+  const workspaceId = String(authorization.workspace.id);
+  const body = await readJson(request);
+  if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+
+  const sourceConnectionId = text(body.sourceConnectionId ?? body.source_connection_id);
+  const destinationId = text(body.destinationId ?? body.destination_id);
+  const previousRouteIds = arrayOfIds(body.previousRouteIds ?? body.previous_route_ids);
+  if (!sourceConnectionId) return json({ ok: false, reason: 'SOURCE_CONNECTION_REQUIRED' }, 400);
+  if (!destinationId) return json({ ok: false, reason: 'DESTINATION_REQUIRED' }, 400);
+  if (!previousRouteIds.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
+
+  let pairRows;
+  try { pairRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId); }
+  catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
+
+  const found = new Set(pairRows.map((row) => text(row.id)).filter(Boolean));
+  const missing = previousRouteIds.filter((id) => !found.has(id));
+  if (missing.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_STALE_EDIT', missingRouteIds: missing }, 409);
+
+  const { error } = await supabase.from('source_destination_routes')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('source_connection_id', sourceConnectionId)
+    .eq('destination_id', destinationId)
+    .in('id', previousRouteIds);
+  if (error) return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503);
+
+  return json({ ok: true, workspaceId, deleted: true, routeIds: previousRouteIds });
+}
+
 export function isLogicalRouteAdminRequest(request) {
   const url = new URL(request.url);
   return url.pathname === '/api/v1/admin/logical-routes'
@@ -297,8 +328,9 @@ export async function handleV1AdminLogicalRoutesRequest(request, env = {}, {
     }
   }
 
-  if (url.pathname === '/api/v1/admin/logical-routes/reconcile' && ['POST', 'PUT', 'PATCH'].includes(request.method)) {
+  if (url.pathname === '/api/v1/admin/logical-routes/reconcile' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
     if (!permission(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+    if (request.method === 'DELETE') return deleteLogicalRoute(request, authorization, supabase);
     return reconcileLogicalRoute(request, authorization, supabase);
   }
 
