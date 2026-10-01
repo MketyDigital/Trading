@@ -143,3 +143,26 @@ test('creating a selective route for a pair with an all-channels route requires 
   assert.equal((await response.json()).reason, 'LOGICAL_ROUTE_DEFAULT_EXISTS_EDIT_INSTEAD');
   assert.equal(supabase.tables.source_destination_routes.length, 1);
 });
+
+test('deleting a logical route removes every underlying selected-feed row together', async () => {
+  const supabase = makeSupabase();
+  supabase.tables.source_destination_routes = [
+    { id: 'route-a', workspace_id: 'ws-1', source_connection_id: 'source-main', source_feed_id: 'feed-a', destination_id: 'dest-mt5', route_name: 'Both', priority: 100, is_active: true, filters: {} },
+    { id: 'route-b', workspace_id: 'ws-1', source_connection_id: 'source-main', source_feed_id: 'feed-b', destination_id: 'dest-mt5', route_name: 'Both', priority: 100, is_active: true, filters: {} },
+  ];
+  const response = await handleV1AdminLogicalRoutesRequest(
+    new Request('https://trade.mkety.com/api/v1/admin/logical-routes/reconcile', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceConnectionId: 'source-main',
+        destinationId: 'dest-mt5',
+        previousRouteIds: ['route-a', 'route-b'],
+      }),
+    }),
+    {},
+    { supabaseFactory: async () => supabase, authorizeFn: async () => authorization() },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(supabase.tables.source_destination_routes.length, 0);
+});
