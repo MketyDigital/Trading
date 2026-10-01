@@ -143,3 +143,35 @@ test('creating a selective route for a pair with an all-channels route requires 
   assert.equal((await response.json()).reason, 'LOGICAL_ROUTE_DEFAULT_EXISTS_EDIT_INSTEAD');
   assert.equal(supabase.tables.source_destination_routes.length, 1);
 });
+
+test('editing a selective route replaces a removed feed row instead of leaving stale routing authority', async () => {
+  const supabase = makeSupabase();
+  supabase.tables.source_destination_routes = [{
+    id: 'route-old', workspace_id: 'ws-1', source_connection_id: 'source-main', source_feed_id: 'feed-a',
+    destination_id: 'dest-mt5', route_name: 'FBS signals', priority: 100, is_active: true, filters: {},
+  }];
+
+  const response = await handleV1AdminLogicalRoutesRequest(
+    jsonRequest({
+      sourceConnectionId: 'source-main',
+      destinationId: 'dest-mt5',
+      previousSourceConnectionId: 'source-main',
+      previousDestinationId: 'dest-mt5',
+      previousRouteIds: ['route-old'],
+      mode: 'selective',
+      selectedFeedIds: ['feed-b'],
+      routeName: 'FBS signals',
+      priority: 100,
+      filters: {},
+      enabled: true,
+    }),
+    {},
+    { supabaseFactory: async () => supabase, authorizeFn: async () => authorization() },
+  );
+
+  assert.equal(response.status, 200);
+  const active = supabase.tables.source_destination_routes.filter((row) => row.is_active !== false);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].source_feed_id, 'feed-b');
+  assert.equal(active.some((row) => row.source_feed_id === 'feed-a'), false);
+});

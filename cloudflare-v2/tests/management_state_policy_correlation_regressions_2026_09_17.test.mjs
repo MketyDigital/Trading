@@ -176,7 +176,7 @@ test('real enterprise account frontend exposes auto TP and entry-zone controls w
   assert.match(html, /\/entry-zone-policy/);
 });
 
-test('entry-zone policy mode is honored for range execution', () => {
+test('entry-zone policy never changes explicitly declared pending semantics', () => {
   const intent = {
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'EURUSD' },
     entry: { kind: 'RANGE', min: 1.10, max: 1.11 }, stopLoss: 1.09, takeProfits: [1.12], fastEntry: false, incomplete: false,
@@ -188,6 +188,24 @@ test('entry-zone policy mode is honored for range execution', () => {
       entryZonePolicy: { mode: 'market_if_inside' },
     },
     instrument: { stepLots: 0.01, minLots: 0.01, maxLots: 10 }, currentMarketPrice: 1.105, groupId: 'g-zone',
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].orderType, 'LIMIT');
+  assert.equal(plan.actions[0].entry.kind, 'PRICE');
+});
+
+test('entry-zone policy never converts a declared MARKET range into a pending order', () => {
+  const intent = {
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'EURUSD' },
+    entry: { kind: 'RANGE', min: 1.10, max: 1.11 }, stopLoss: 1.09, takeProfits: [1.12], fastEntry: false, incomplete: false,
+  };
+  const plan = buildExecutionPlan(intent, {
+    account: {
+      sizingMode: 'FIXED_LOTS', fixedLots: 0.01,
+      safetyPolicy: { enabled: true, killSwitch: false },
+      entryZonePolicy: { mode: 'market_if_inside' },
+    },
+    instrument: { stepLots: 0.01, minLots: 0.01, maxLots: 10 }, currentMarketPrice: 1.115, groupId: 'g-zone-market',
   });
   assert.equal(plan.status, 'READY');
   assert.equal(plan.actions[0].orderType, 'MARKET');
