@@ -4,6 +4,7 @@ import { hasTradingPermission } from '../security/trading_permissions.js';
 import { encryptConnectionCredentials } from '../security/connection_credentials.js';
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { ctraderEndpoint, buildAccountsByAccessTokenMessage } from '../adapters/ctrader_protocol.js';
+import { reconcileTelegramSourceFeeds } from '../sources/source_feed_reconcile.js';
 
 const SOURCE_SECRET_KEY_PATTERN = /(secret|cipher|session|token|password|api[_-]?hash|api[_-]?key|access[_-]?key|refresh[_-]?key|credential|authorization|private[_-]?key)/i;
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
@@ -259,7 +260,14 @@ async function handleSourceConnection(request, authorization, supabase, env, sou
     if ('config' in body) update.config = sanitizeConnectionConfig(safeObject(body.config));
     if (!Object.keys(update).length) return json({ ok: false, reason: 'SOURCE_UPDATE_EMPTY' }, 400);
     const { data, error } = await supabase.from('source_connections').update(update).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle();
-    if (error) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
+    if (error || !data) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
+    if (Object.prototype.hasOwnProperty.call(update, 'config') && data.source_family === 'telegram') {
+      try {
+        await reconcileTelegramSourceFeeds(supabase, workspaceId, sourceId, data.provider_type, data.config || {});
+      } catch {
+        return json({ ok: false, reason: 'SOURCE_FEED_RECONCILE_FAILED' }, 503);
+      }
+    }
     return json({ ok: true, source: publicSource(data, env, request.url) });
   }
 

@@ -75,3 +75,10 @@ test('unified account persistence is fail-closed for broker execution', () => {
   assert.doesNotMatch(source, /execution_enabled:\s*true/);
   assert.doesNotMatch(source, /is_active:\s*true/);
 });
+
+
+test('unified source edit path reconciles Telegram child feeds after config changes', () => {
+  const source = fs.readFileSync(path.resolve(here, '../src/http/v1_admin_connections.js'), 'utf8');
+  assert.match(source, /reconcileTelegramSourceFeeds/);
+  assert.match(source, /SOURCE_FEED_RECONCILE_FAILED/);
+});
