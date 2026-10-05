@@ -358,3 +358,88 @@ test('bare fast market entry does not require a broker quote before creating the
   assert.equal(result.accounts[0].actions[0].lots, 0.7);
   assert.equal(persisted.incomplete, true);
 });
+
+
+test('explicit price pending LIMIT plans without a separate current quote and preserves pending semantics', async () => {
+  const pending = {
+    status: 'READY',
+    intent: {
+      side: 'SELL',
+      orderType: 'LIMIT',
+      symbol: { canonical: 'AUDCHF', source: 'AUDCHF' },
+      entry: { kind: 'PRICE', value: 0.58068 },
+      stopLoss: 0.58302,
+      takeProfits: [0.57863, 0.57572, 0.57325],
+      fastEntry: false,
+      incomplete: false,
+    },
+  };
+  const pendingInstrument = {
+    canonical: 'AUDCHF',
+    platformSymbol: 'AUDCHF',
+    minLots: 0.01,
+    maxLots: 100,
+    stepLots: 0.01,
+    tickSize: 0.00001,
+  };
+  let quoteCalls = 0;
+  let persisted = null;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'telegram:-1001888176046:10161' },
+    interpretation: pending,
+    eventId: 'db-audchf-limit',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => { persisted = structuredClone(group); return group; } },
+    accountProvider: async () => [enabledAccount({
+      id: 'fbs-live',
+      fixedLots: 0.59,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.59,
+      platform: 'mt5',
+      environment: 'live',
+      provider_mode: 'mt5_connector',
+      safety_policy: { enabled: true, killSwitch: false },
+    })],
+    instrumentProvider: async () => pendingInstrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => {
+      quoteCalls += 1;
+      throw new Error('MT5 connector quote should not be required for exact pending entry');
+    },
+  });
+
+  assert.equal(quoteCalls, 0);
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions.length, 3);
+  assert.equal(result.accounts[0].actions.every((action) => action.type === 'OPEN_POSITION'), true);
+  assert.equal(result.accounts[0].actions.every((action) => action.orderType === 'LIMIT'), true);
+  assert.equal(result.accounts[0].actions.every((action) => action.entry?.kind === 'PRICE' && action.entry?.value === 0.58068), true);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.takeProfit), [0.57863, 0.57572, 0.57325]);
+  assert.equal(persisted.orderType, 'LIMIT');
+  assert.deepEqual(persisted.entry, { kind: 'PRICE', value: 0.58068 });
+});
+
+test('protected MARKET planning still requires the broker-authoritative current quote', async () => {
+  let quoteCalls = 0;
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-protected-market' },
+    interpretation,
+    eventId: 'db-protected-market',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [enabledAccount()],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => {
+      quoteCalls += 1;
+      return 2500;
+    },
+  });
+
+  assert.equal(quoteCalls, 1);
+  assert.equal(result.accounts[0].status, 'READY');
+});

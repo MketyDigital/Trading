@@ -516,17 +516,32 @@ async function loadMatchedFastGroups(correlation, stateStore) {
 function needsPlanningMarketPrice(account = {}, intent = {}) {
   const sizingMode = String(account?.sizingMode ?? '').trim().toUpperCase();
   const takeProfits = Array.isArray(intent?.takeProfits) ? intent.takeProfits : [];
+  const declaredOrderType = String(intent?.orderType || 'MARKET').trim().toUpperCase();
+  const entryKind = String(intent?.entry?.kind || '').trim().toUpperCase();
+  const explicitPendingPrice = ['LIMIT', 'STOP', 'STOP_LIMIT'].includes(declaredOrderType)
+    && entryKind === 'PRICE'
+    && Number.isFinite(Number(intent?.entry?.value));
+
+  // Explicit pending orders already carry the exact broker entry price. Their
+  // SL/TP and sizing geometry is therefore anchored to that declared price,
+  // not to a transient current quote. The platform adapter/broker remains the
+  // final authority for whether the pending price is currently placeable.
+  // Avoiding this independent quote dependency prevents a valid pending order
+  // from disappearing in planning when a connector quote endpoint is briefly
+  // unavailable, while preserving all broker preflight and execution gates.
+  if (explicitPendingPrice) return false;
+
   const bareFastMarket = intent?.fastEntry === true
     && intent?.incomplete === true
-    && String(intent?.entry?.kind || '').toUpperCase() === 'MARKET'
+    && entryKind === 'MARKET'
     && intent?.stopLoss == null
     && takeProfits.length === 0;
 
   // A fixed-lot bare fast entry has no price-dependent protection or risk
   // geometry. Requiring a broker quote here creates an unnecessary single
   // point of failure and can prevent the durable fast group from existing for
-  // the full follow-up. Protected/range/risk-sized trades still require the
-  // broker-authoritative market context.
+  // the full follow-up. Protected/range/risk-sized MARKET trades still require
+  // the broker-authoritative market context.
   return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT' || sizingMode === 'MARGIN_EQUIVALENT'));
 }
 

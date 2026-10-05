@@ -174,6 +174,57 @@ test('V1 lifecycle evidence records protection skips and edit-management changes
   assert.equal(destination.details.outcomes[0].operation, 'edit');
 });
 
+
+test('broker planning evidence preserves per-account blocked reason and nested action count', () => {
+  const rows = buildV1LifecycleEvidence({
+    sourceId: 'src-1',
+    result: { ok: true, duplicate: false, eventId: 'db-event-1', event, interpretation },
+    simulation: {
+      status: 'SIMULATED',
+      executionEnabled: false,
+      actions: [],
+      correlation: { status: 'NEW_GROUP' },
+      accounts: [
+        {
+          accountId: 'acct-ready',
+          status: 'READY',
+          actions: [
+            { type: 'OPEN_POSITION', orderType: 'LIMIT' },
+            { type: 'OPEN_POSITION', orderType: 'LIMIT' },
+          ],
+        },
+        {
+          accountId: 'acct-offline',
+          status: 'BLOCKED',
+          reason: 'MARKET_CONTEXT_UNAVAILABLE',
+          error: 'MT5 connector is unavailable for broker-authoritative planning',
+          actions: [],
+        },
+      ],
+    },
+  });
+
+  const planning = rows.find((row) => row.stage === 'BROKER_PLANNING' && row.operation === 'plan_execution');
+  assert.ok(planning);
+  assert.equal(planning.details.actionCount, 2);
+  assert.deepEqual(planning.details.accounts, [
+    {
+      accountId: 'acct-ready',
+      status: 'READY',
+      reason: null,
+      actionCount: 2,
+      error: null,
+    },
+    {
+      accountId: 'acct-offline',
+      status: 'BLOCKED',
+      reason: 'MARKET_CONTEXT_UNAVAILABLE',
+      actionCount: 0,
+      error: 'MT5 connector is unavailable for broker-authoritative planning',
+    },
+  ]);
+});
+
 test('V1 handler writes lifecycle evidence without changing trading or destination results', async () => {
   const appended = [];
   const response = await handleV1EventsRequest(request(), {
