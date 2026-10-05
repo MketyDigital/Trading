@@ -187,8 +187,15 @@ export function buildV1LifecycleEvidence({
       details: {
         status: simulation?.status ?? null,
         executionEnabled: simulation?.executionEnabled ?? null,
-        actionCount: Array.isArray(simulation?.actions) ? simulation.actions.length : 0,
+        actionCount: flattenedSimulationActions(simulation).length,
         correlationReason: simulation?.correlation?.reason ?? null,
+        accounts: simulationAccounts(simulation).slice(0, 50).map((account) => ({
+          accountId: text(account?.accountId ?? account?.account_id),
+          status: account?.status ?? null,
+          reason: text(account?.reason),
+          actionCount: Array.isArray(account?.actions) ? account.actions.length : 0,
+          error: text(account?.error),
+        })),
       },
     }));
 
