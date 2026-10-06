@@ -29,6 +29,35 @@ function isDuplicateSourceEvent(groups, event) {
   return groups.some((group) => (group.sourceEventIds || []).map(String).includes(externalEventId));
 }
 
+function eventObservedAtMs(event = {}) {
+  for (const value of [
+    event?.occurred_at,
+    event?.occurredAt,
+    event?.received_at,
+    event?.receivedAt,
+    event?.created_at,
+    event?.createdAt,
+  ]) {
+    if (value == null || value === '') continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+    const parsed = Date.parse(String(value));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function freshUnmatchedRevisionCanOpen(event = {}, interpretation = {}, nowMs = Date.now(), windowMs = 120000) {
+  if (String(interpretation?.status || '').toUpperCase() !== 'READY' || !interpretation?.intent) return false;
+  const editedEventId = event?.thread?.edited_event_id == null ? '' : String(event.thread.edited_event_id);
+  const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
+  if (!editedEventId || !externalEventId || editedEventId !== externalEventId) return false;
+  const observedAt = eventObservedAtMs(event);
+  if (!(observedAt > 0)) return false;
+  const age = Number(nowMs) - observedAt;
+  return age >= -5000 && age <= Math.max(Number(windowMs) || 0, 120000);
+}
+
 function fastOriginId(group) {
   const first = Array.isArray(group?.sourceEventIds) ? group.sourceEventIds[0] : null;
   return first == null || String(first) === '' ? null : String(first);
@@ -250,6 +279,16 @@ export function correlateTradingEvent({
     const editMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(editedEventId));
     const target = matchedManagementTarget(editMatches, 'EDIT_TARGET', 'AMBIGUOUS_EDIT_TARGET');
     if (target) return target;
+
+    // A fresh source edit can be the first observation Mkety receives for an
+    // otherwise self-contained actionable signal (for example after source
+    // reconnect/catch-up races). If no active broker trade exists to mutate,
+    // treating that fresh self-edit as a new signal preserves execution without
+    // risking mutation of another trade. Stale edits and management edits remain
+    // fail-closed.
+    if (scoped.length === 0 && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs)) {
+      return { status: 'NEW_GROUP' };
+    }
     return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
   }
 
@@ -319,6 +358,9 @@ export function correlateTradingEvent({
     }
     const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
     if (target) return target;
+    if (scoped.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+      return { status: 'NEW_GROUP' };
+    }
     return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
   }
 
@@ -338,6 +380,9 @@ export function correlateTradingEvent({
     }
     const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
     if (target) return target;
+    if (scoped.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+      return { status: 'NEW_GROUP' };
+    }
     return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };
   }
 
