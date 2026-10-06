@@ -246,11 +246,12 @@ function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs =
 
 
 function isProtectedFastFollowupIntent(intent = {}) {
-  const stopLoss = Number(intent?.stopLoss);
+  if (intent?.stopLoss == null || intent?.stopLoss === '') return false;
+  const stopLoss = Number(intent.stopLoss);
   const takeProfits = Array.isArray(intent?.takeProfits)
-    ? intent.takeProfits.filter((value) => Number.isFinite(Number(value)))
+    ? intent.takeProfits.filter((value) => value != null && value !== '' && Number.isFinite(Number(value)))
     : [];
-  return Number.isFinite(stopLoss) && takeProfits.length > 0;
+  return Number.isFinite(stopLoss) && stopLoss > 0 && takeProfits.length > 0;
 }
 
 function isFastCompletionSignal(interpretation = {}) {
