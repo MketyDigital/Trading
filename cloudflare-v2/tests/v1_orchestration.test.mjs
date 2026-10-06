@@ -443,3 +443,111 @@ test('protected MARKET planning still requires the broker-authoritative current 
   assert.equal(quoteCalls, 1);
   assert.equal(result.accounts[0].status, 'READY');
 });
+
+
+test('unprotected exact-price MARKET starter does not require a quote for fixed-style sizing', async () => {
+  const starter = {
+    status: 'READY',
+    intent: {
+      side: 'SELL',
+      orderType: 'MARKET',
+      symbol: { canonical: 'GBPAUD', source: 'GBPAUD' },
+      entry: { kind: 'PRICE', value: 1.90235 },
+      stopLoss: null,
+      takeProfits: [],
+      fastEntry: false,
+      incomplete: true,
+    },
+  };
+  const gbpaudInstrument = {
+    canonical: 'GBPAUD',
+    platformSymbol: 'GBPAUD',
+    minLots: 0.01,
+    maxLots: 100,
+    stepLots: 0.01,
+    tickSize: 0.00001,
+  };
+  let quoteCalls = 0;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'telegram:-1001888176046:10171' },
+    interpretation: starter,
+    eventId: 'db-gbpaud-starter',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [enabledAccount({
+      id: 'mt5-fixed',
+      fixedLots: 0.59,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.59,
+      platform: 'mt5',
+      provider_mode: 'mt5_connector',
+      safety_policy: { enabled: true, killSwitch: false },
+    })],
+    instrumentProvider: async () => gbpaudInstrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => {
+      quoteCalls += 1;
+      throw new Error('quote prefetch should not be required');
+    },
+  });
+
+  assert.equal(quoteCalls, 0);
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].actions.length, 1);
+  assert.equal(result.accounts[0].actions[0].type, 'OPEN_POSITION');
+  assert.equal(result.accounts[0].actions[0].orderType, 'MARKET');
+});
+
+test('protected exact-price MARKET signal still requires broker-authoritative quote context', async () => {
+  const protectedSignal = {
+    status: 'READY',
+    intent: {
+      side: 'SELL',
+      orderType: 'MARKET',
+      symbol: { canonical: 'GBPAUD', source: 'GBPAUD' },
+      entry: { kind: 'PRICE', value: 1.90235 },
+      stopLoss: 1.90499,
+      takeProfits: [1.89982, 1.89869],
+      fastEntry: false,
+      incomplete: false,
+    },
+  };
+  const gbpaudInstrument = {
+    canonical: 'GBPAUD',
+    platformSymbol: 'GBPAUD',
+    minLots: 0.01,
+    maxLots: 100,
+    stepLots: 0.01,
+    tickSize: 0.00001,
+  };
+  let quoteCalls = 0;
+
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'telegram:-1001888176046:10172' },
+    interpretation: protectedSignal,
+    eventId: 'db-gbpaud-full',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [enabledAccount({
+      id: 'mt5-fixed',
+      fixedLots: 0.59,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.59,
+      platform: 'mt5',
+      provider_mode: 'mt5_connector',
+      safety_policy: { enabled: true, killSwitch: false },
+    })],
+    instrumentProvider: async () => gbpaudInstrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => {
+      quoteCalls += 1;
+      return 1.9024;
+    },
+  });
+
+  assert.equal(quoteCalls, 1);
+  assert.equal(result.accounts[0].status, 'READY');
+});

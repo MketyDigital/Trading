@@ -531,18 +531,20 @@ function needsPlanningMarketPrice(account = {}, intent = {}) {
   // unavailable, while preserving all broker preflight and execution gates.
   if (explicitPendingPrice) return false;
 
-  const bareFastMarket = intent?.fastEntry === true
+  const unprotectedImmediateMarket = declaredOrderType === 'MARKET'
     && intent?.incomplete === true
-    && entryKind === 'MARKET'
+    && ['MARKET', 'PRICE'].includes(entryKind)
     && intent?.stopLoss == null
     && takeProfits.length === 0;
 
-  // A fixed-lot bare fast entry has no price-dependent protection or risk
-  // geometry. Requiring a broker quote here creates an unnecessary single
-  // point of failure and can prevent the durable fast group from existing for
-  // the full follow-up. Protected/range/risk-sized MARKET trades still require
-  // the broker-authoritative market context.
-  return !(bareFastMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT' || sizingMode === 'MARGIN_EQUIVALENT'));
+  // An unprotected immediate entry has no price-dependent protection geometry.
+  // This includes both bare "BUY/SELL NOW" signals and an initial exact-price
+  // MARKET message that is followed by its full SL/TP signal. For sizing modes
+  // that already support quote-independent immediate entry, requiring a quote
+  // creates an unnecessary single point of failure before broker dispatch.
+  // Protected/range/risk-sized MARKET trades still require broker-authoritative
+  // market context.
+  return !(unprotectedImmediateMarket && (sizingMode === 'FIXED_LOTS' || sizingMode === 'ADAPTIVE_PERCENT' || sizingMode === 'MARGIN_EQUIVALENT'));
 }
 
 export async function orchestrateTradingEventSimulation({
