@@ -198,3 +198,121 @@ test('unthreaded bare management targets the only active open group even outside
   });
   assert.deepEqual(result, { status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: 'g1' });
 });
+
+
+test('fresh actionable self-edit with no active trade becomes a new group', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:500',
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { edited_event_id: 'telegram:-1001:500' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURCAD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.60439 },
+        fastEntry: false,
+        incomplete: true,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('stale unmatched actionable edit remains fail-closed', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:500',
+      occurred_at: new Date(now - 10 * 60 * 1000).toISOString(),
+      thread: { edited_event_id: 'telegram:-1001:500' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURCAD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.60439 },
+        fastEntry: false,
+        incomplete: true,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' });
+});
+
+test('fresh unmatched management edit remains fail-closed', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:501',
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { edited_event_id: 'telegram:-1001:501' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' });
+});
+
+test('self-contained READY reply with no active broker trade starts a new group', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:502',
+      thread: { reply_to_event_id: 'telegram:-1001:501' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.90235 },
+        stopLoss: 1.90499,
+        takeProfits: [1.89982, 1.89869],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('unmatched READY reply still fails closed when another active trade exists', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:503',
+      thread: { reply_to_event_id: 'telegram:-1001:missing' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.90235 },
+        stopLoss: 1.90499,
+        takeProfits: [1.89982, 1.89869],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group()],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
+});
