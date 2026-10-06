@@ -244,6 +244,23 @@ function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs =
   return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_MANAGEMENT_TARGET' };
 }
 
+
+function isProtectedFastFollowupIntent(intent = {}) {
+  if (intent?.stopLoss == null || intent?.stopLoss === '') return false;
+  const stopLoss = Number(intent.stopLoss);
+  const takeProfits = Array.isArray(intent?.takeProfits)
+    ? intent.takeProfits.filter((value) => value != null && value !== '' && Number.isFinite(Number(value)))
+    : [];
+  return Number.isFinite(stopLoss) && stopLoss > 0 && takeProfits.length > 0;
+}
+
+function isFastCompletionSignal(interpretation = {}) {
+  if (interpretation?.status !== 'READY' || !interpretation?.intent) return false;
+  const intent = interpretation.intent;
+  if (intent.fastEntry !== true && intent.incomplete === false) return true;
+  return isProtectedFastFollowupIntent(intent);
+}
+
 function recentFastDuplicateTarget(recent = [], intent = {}) {
   if (intent?.fastEntry !== true || intent?.incomplete !== true) return null;
   const symbol = String(intent?.symbol?.canonical ?? '').trim().toUpperCase();
@@ -337,10 +354,7 @@ export function correlateTradingEvent({
     return { status: 'NEEDS_REVIEW', reason: 'NO_MANAGEMENT_TARGET' };
   }
 
-  const completeSignal = interpretation.status === 'READY'
-    && interpretation.intent
-    && interpretation.intent.fastEntry !== true
-    && interpretation.intent.incomplete === false;
+  const completeSignal = isFastCompletionSignal(interpretation);
 
   if (replyId) {
     const replyMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId));
@@ -396,7 +410,7 @@ export function correlateTradingEvent({
       String(group.side ?? '') === side
     );
 
-    if (!interpretation.intent.fastEntry && interpretation.intent.incomplete === false) {
+    if (isFastCompletionSignal(interpretation)) {
       const continuityFastCompletion = sourceMessageContinuityFastCompletionTarget(
         fastEligible,
         event,

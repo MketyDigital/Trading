@@ -239,3 +239,95 @@ test('MT5 connector treats broker retcode 10025 No changes as idempotent success
   assert.equal(completed.length, 1);
   assert.equal(failures.length, 0);
 });
+
+
+test('protected QAS reply completes an existing fast trade even when wording keeps fast flags true', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001822170589:25101',
+      thread: { reply_to_event_id: 'telegram:-1001822170589:25100' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'DERIV:VOLATILITY_10_1S' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'RANGE', min: 9432, max: 9440 },
+        stopLoss: 9422,
+        takeProfits: [9448, 9458, 9468],
+        fastEntry: true,
+        incomplete: true,
+      },
+    },
+    activeGroups: [group({
+      id: 'g-v10',
+      symbol: 'DERIV:VOLATILITY_10_1S',
+      side: 'BUY',
+      sourceEventIds: ['telegram:-1001822170589:25100'],
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-v10' });
+});
+
+test('protected fast-style followup without reply can complete only the unique compatible recent trade', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001822170589:25113',
+      thread: {},
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'DERIV:VOLATILITY_75' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'RANGE', min: 47400, max: 47500 },
+        stopLoss: 47800,
+        takeProfits: [47250, 47050, 46850],
+        fastEntry: true,
+        incomplete: true,
+      },
+    },
+    activeGroups: [group({
+      id: 'g-v75',
+      symbol: 'DERIV:VOLATILITY_75',
+      side: 'SELL',
+      sourceEventIds: ['telegram:-1001822170589:25112'],
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-v75' });
+});
+
+test('fast-style message without both SL and TP remains an incomplete fast signal', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:103',
+      thread: { reply_to_event_id: 'telegram:-1001:100' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'XAUUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'RANGE', min: 4320, max: 4330 },
+        stopLoss: null,
+        takeProfits: [4340, 4350],
+        fastEntry: true,
+        incomplete: true,
+      },
+    },
+    activeGroups: [group()],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g1' });
+});
