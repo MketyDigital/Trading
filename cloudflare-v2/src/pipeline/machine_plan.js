@@ -63,6 +63,18 @@ function managementSymbol(text) {
   if (synthetic) return normalizeDetectedSymbol(synthetic);
 
   const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&().-]{1,24}/g) || [];
+
+  // Prefer explicit known instruments before generic compact-symbol heuristics.
+  // Management messages often contain ordinary prose ("absolutely", "running")
+  // around a real token such as V75(1s); choosing the first generic-looking
+  // word can turn commentary into a false money-moving symbol target.
+  for (const token of tokens) {
+    if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
+    if (DERIV_SHORT.test(token) || KNOWN_COMPACT_SYMBOL.test(token)) {
+      return normalizeDetectedSymbol(token);
+    }
+  }
+
   for (const token of tokens) {
     if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
     if (!isLikelyCompactSymbol(token)) continue;
