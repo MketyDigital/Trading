@@ -63,6 +63,18 @@ function managementSymbol(text) {
   if (synthetic) return normalizeDetectedSymbol(synthetic);
 
   const tokens = String(text ?? '').match(/[A-Za-z][A-Za-z0-9_./#&().-]{1,24}/g) || [];
+
+  // Prefer explicit known instruments before generic compact-symbol heuristics.
+  // Management messages often contain ordinary prose ("absolutely", "running")
+  // around a real token such as V75(1s); choosing the first generic-looking
+  // word can turn commentary into a false money-moving symbol target.
+  for (const token of tokens) {
+    if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
+    if (DERIV_SHORT.test(token) || KNOWN_COMPACT_SYMBOL.test(token)) {
+      return normalizeDetectedSymbol(token);
+    }
+  }
+
   for (const token of tokens) {
     if (MANAGEMENT_COMMAND_WORD.test(token)) continue;
     if (!isLikelyCompactSymbol(token)) continue;
@@ -92,7 +104,21 @@ function managementPlan(text) {
   if (informational) return informational;
 
   const upper = text.toUpperCase();
-  if (!isConfidentExecutionInstruction(text)) return null;
+  const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
+  const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
+    || new RegExp(`\\bMOVE\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)\\b(?:\\s+TO)?\\s+(?:BE|BREAK\\s+EVEN|BREAKEVEN)\\b`).test(upper)
+    || /\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
+    || /\bMAKE\s+SURE\s+(?:(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+)?BE\b/.test(upper);
+  const directManagement = closeHalfRequested || breakEvenRequested;
+  const managementUncertain = text.includes('?')
+    || /\b(?:DO\s+NOT|DONT|DON'T|NEVER)\s+(?:CLOSE|MOVE|SET|MAKE)\b/i.test(text)
+    || /\b(?:SHOULD|MAY|MIGHT|COULD|WOULD|CAN)\s+(?:WE\s+)?(?:CLOSE|MOVE|SET)\b/i.test(text);
+
+  // Explicit risk-reducing management may appear inside celebratory commentary
+  // containing words such as "can't". Do not let unrelated prose suppress a
+  // direct CLOSE HALF / BE instruction, while questions, direct negation and
+  // modal suggestions remain fail-closed.
+  if (!isConfidentExecutionInstruction(text) && !(directManagement && !managementUncertain)) return null;
   const containsTradeSide = /\b(?:BUY|SELL|LONG|SHORT)\b/.test(upper);
 
   const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s*(?:HIT\s*)?(?:✅+|[!.]+)?\s*$/u);
@@ -110,12 +136,6 @@ function managementPlan(text) {
     const targetIndex = removeTp[1] ? Number(removeTp[1]) : null;
     return withManagementSymbol(text, { type: 'REMOVE_TP', ...(targetIndex ? { targetIndex } : {}) });
   }
-
-  const closeHalfRequested = /\bSECURE\s+PROFITS\b|\bCLOSE\s+(?:HALF|50\s*%)\b|\b(?:HALF|50\s*%)\s+CLOSE\b/.test(upper);
-  const breakEvenRequested = /\b(?:RISK\s+FREE|SET\s+(?:SL\s+TO\s+)?(?:BE|BREAK\s+EVEN|BREAKEVEN))\b/.test(upper)
-    || new RegExp(`\\bMOVE\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+(?:SL|STOP)\\b(?:\\s+TO)?\\s+(?:BE|BREAK\\s+EVEN|BREAKEVEN)\\b`).test(upper)
-    || /\bBREAK\s+EVEN\b|\bBREAKEVEN\b/.test(upper)
-    || /\bMAKE\s+SURE\s+(?:(?:SL|STOP)\s+(?:IS\s+)?(?:AT|TO)\s+)?BE\b/.test(upper);
 
   if (closeHalfRequested && breakEvenRequested) {
     return withManagementSymbol(text, {

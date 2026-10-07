@@ -56,6 +56,10 @@ export function sanitizeAccountSymbolCatalog(input = []) {
       ...(typeof raw.tradable === 'boolean' ? { tradable: raw.tradable } : {}),
     };
     for (const [target, source] of [
+      // Preserve broker-native identifiers needed after symbol resolution.
+      // cTrader planning subscribes to quotes by platformId; stripping it here
+      // makes otherwise valid symbols impossible to quote after resolution.
+      ['platformId', raw.platformId ?? raw.symbolId ?? raw.raw?.symbolId],
       ['minVolume', raw.minVolume ?? raw.volumeMin ?? raw.volume_in_units_min],
       ['maxVolume', raw.maxVolume ?? raw.volumeMax ?? raw.volume_in_units_max],
       ['stepVolume', raw.stepVolume ?? raw.volumeStep ?? raw.volume_in_units_step],
@@ -63,7 +67,7 @@ export function sanitizeAccountSymbolCatalog(input = []) {
       ['maxLots', raw.maxLots ?? cTraderLotsFromProtocolVolume(raw, raw.maxVolume) ?? raw.maxVolume ?? raw.volumeMax],
       ['stepLots', raw.stepLots ?? cTraderLotsFromProtocolVolume(raw, raw.stepVolume) ?? raw.stepVolume ?? raw.volumeStep],
       ['lotSize', raw.lotSize],
-      ['protocolLotSize', raw.protocolLotSize],
+      ['protocolLotSize', raw.protocolLotSize ?? raw.raw?.lotSize],
       ['tickSize', raw.tickSize],
       ['tickValue', raw.tickValue ?? raw.tickValuePerLot],
       ['tickValueLoss', raw.tickValueLoss ?? raw.tickValueLossPerLot],

@@ -149,3 +149,34 @@ test('compound management fans out across account-specific groups of one logical
 test('negated compound language still fails closed', () => {
   assert.equal(buildMachinePlan({ text: "don't close half and don't move SL to BE" }).status, 'NEEDS_INTERPRETATION');
 });
+
+
+test('parses production-style celebratory close-half plus BE instruction', () => {
+  const plan = buildMachinePlan({
+    text: `We just can’t miss guys we absolutely aced it guys ❤️
+
+-Zero draw down!!!!!
+V75(1s) Buy Running 879 PIPS 🤑🤑🤑
+
+Close half layers now and make sure BE ❤️
+#PrecisionSniperr
+@guntherfx`,
+  });
+
+  assert.deepEqual(plan, {
+    status: 'MANAGEMENT',
+    management: {
+      type: 'COMPOUND',
+      actions: [
+        { type: 'CLOSE_PARTIAL', fraction: 0.5 },
+        { type: 'MOVE_SL_TO_BE' },
+      ],
+      symbol: { source: 'V75(1s)', canonical: 'DERIV:VOLATILITY_75_1S' },
+    },
+  });
+});
+
+test('modal or negated close-half suggestions remain fail-closed', () => {
+  assert.notEqual(buildMachinePlan({ text: 'Could we close half and make sure BE?' }).status, 'MANAGEMENT');
+  assert.notEqual(buildMachinePlan({ text: 'Do not close half, leave SL as is' }).status, 'MANAGEMENT');
+});
