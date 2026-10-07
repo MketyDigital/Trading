@@ -257,23 +257,21 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       if (!targetValid) mergedLeg.takeProfit = existingLeg.takeProfit ?? null;
       nextLegs.push(mergedLeg);
 
-      if (existingLeg.brokerPositionId) {
-        const modify = {
-          type: 'MODIFY_POSITION',
-          legId: existingLeg.legId,
-          brokerPositionId: existingLeg.brokerPositionId,
-          symbol: desired.symbol,
-          targetIndex,
-          idempotencyKey: `${existing.id}:leg:${targetIndex}:enrich:${updateIdentity}`,
-        };
-        if (stopValid && desiredLeg.stopLoss != null && Number(existingLeg.stopLoss) !== Number(desiredLeg.stopLoss)) {
-          modify.stopLoss = desiredLeg.stopLoss;
-        }
-        if (targetValid && desiredLeg.takeProfit != null && Number(existingLeg.takeProfit) !== Number(desiredLeg.takeProfit)) {
-          modify.takeProfit = desiredLeg.takeProfit;
-        }
-        if (Object.hasOwn(modify, 'stopLoss') || Object.hasOwn(modify, 'takeProfit')) actions.push(modify);
+      const modify = {
+        type: 'MODIFY_POSITION',
+        legId: existingLeg.legId,
+        brokerPositionId: existingLeg.brokerPositionId,
+        symbol: desired.symbol,
+        targetIndex,
+        idempotencyKey: `${existing.id}:leg:${targetIndex}:enrich:${updateIdentity}`,
+      };
+      if (stopValid && desiredLeg.stopLoss != null && Number(existingLeg.stopLoss) !== Number(desiredLeg.stopLoss)) {
+        modify.stopLoss = desiredLeg.stopLoss;
       }
+      if (targetValid && desiredLeg.takeProfit != null && Number(existingLeg.takeProfit) !== Number(desiredLeg.takeProfit)) {
+        modify.takeProfit = desiredLeg.takeProfit;
+      }
+      if (Object.hasOwn(modify, 'stopLoss') || Object.hasOwn(modify, 'takeProfit')) actions.push(modify);
       continue;
     }
 
