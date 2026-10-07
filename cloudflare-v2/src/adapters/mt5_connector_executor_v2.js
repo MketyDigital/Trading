@@ -9,6 +9,51 @@ function classifiedError(message, { code, failureClass, cause, result } = {}) {
   if (result && typeof result === 'object') error.result = result;
   return error;
 }
+function classifyMt5RejectedReason(reason = '', body = {}) {
+  const textReason = String(reason || '').trim();
+  const upper = textReason.toUpperCase();
+  const retcode = Number(textReason.match(/\bretcode\s*=\s*(\d+)/i)?.[1]);
+
+  // Terminal broker/account constraints. These should never be retried
+  // automatically because a later balance/configuration change could turn an
+  // old signal into an unexpected new position.
+  if (retcode === 10019 || /\bNO MONEY\b|NOT ENOUGH (?:MONEY|FUNDS|MARGIN)/i.test(textReason)) {
+    return { code: 'NOT_ENOUGH_MONEY', failureClass: 'TERMINAL' };
+  }
+  if (retcode === 10014 || /INVALID VOLUME/i.test(textReason)) {
+    return { code: 'INVALID_VOLUME', failureClass: 'TERMINAL' };
+  }
+  if (retcode === 10016 || /INVALID STOPS?/i.test(textReason)) {
+    return { code: 'INVALID_STOPS', failureClass: 'TERMINAL' };
+  }
+  if (retcode === 10018 || /MARKET CLOSED/i.test(textReason)) {
+    return { code: 'MARKET_CLOSED', failureClass: 'TERMINAL' };
+  }
+  if (retcode === 10015 || /INVALID PRICE/i.test(textReason)) {
+    return { code: 'INVALID_PRICE', failureClass: 'TERMINAL' };
+  }
+
+  // Short-lived market/transport conditions. These remain bounded by the
+  // destination retry runtime's age and live-price validity checks.
+  if (retcode === 10004 || /\bREQUOTE\b/i.test(textReason)) {
+    return { code: 'MT5_REQUOTE', failureClass: 'RETRYABLE' };
+  }
+  if (retcode === 10020 || /PRICE CHANGED/i.test(textReason)) {
+    return { code: 'MT5_PRICE_CHANGED', failureClass: 'RETRYABLE' };
+  }
+  if (retcode === 10021 || /PRICE OFF|NO QUOTES?/i.test(textReason)) {
+    return { code: 'MT5_PRICE_OFF', failureClass: 'RETRYABLE' };
+  }
+  if (retcode === 10024 || /TOO (?:MANY|FREQUENT) REQUESTS?/i.test(textReason)) {
+    return { code: 'MT5_TOO_FREQUENT_REQUESTS', failureClass: 'RETRYABLE' };
+  }
+  if (retcode === 10031 || /CONNECTION/i.test(textReason)) {
+    return { code: 'MT5_CONNECTION', failureClass: 'RETRYABLE' };
+  }
+
+  return { code: 'MT5_CONNECTOR_REJECTED', failureClass: 'TERMINAL', result: body };
+}
+
 function normalizeGatewayUrl(value) {
   const raw = String(value ?? '').trim().replace(/\/+$/, '');
   const url = new URL(raw);
@@ -140,7 +185,8 @@ export async function executeMt5ConnectorAction(action, {
       }
       if (reason === 'MT5_CONNECTOR_OFFLINE') throw classifiedError(reason, { code: reason, failureClass: 'RETRYABLE', result: body });
       if (reason === 'MT5_RESULT_TIMEOUT') throw classifiedError(reason, { code: 'MT5_CONNECTOR_RESULT_UNCERTAIN', failureClass: 'UNCERTAIN', result: body });
-      throw classifiedError(reason, { code: 'MT5_CONNECTOR_REJECTED', failureClass: 'TERMINAL', result: body });
+      const classified = classifyMt5RejectedReason(reason, body);
+      throw classifiedError(reason, { ...classified, result: body });
     }
     const fillPrice = Number(body.fillPrice ?? body.fill_price);
     const result = {
