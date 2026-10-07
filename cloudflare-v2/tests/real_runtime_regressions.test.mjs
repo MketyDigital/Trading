@@ -305,7 +305,7 @@ test('protected fast-style followup without reply can complete only the unique c
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-v75' });
 });
 
-test('fast-style message without both SL and TP remains an incomplete fast signal', () => {
+test('fast-style partial protection followup enriches the incomplete fast signal', () => {
   const result = correlateTradingEvent({
     event: {
       source: { instance_id: 'listener-1' },
@@ -329,5 +329,5 @@ test('fast-style message without both SL and TP remains an incomplete fast signa
     nowMs: now,
   });
 
-  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g1' });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g1' });
 });
