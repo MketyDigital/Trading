@@ -171,6 +171,31 @@ function protectionValueValidAtMarket(side, kind, value, currentMarketPrice) {
   return false;
 }
 
+function progressiveFastIntent(existing = {}, incoming = {}) {
+  const existingStopLoss = finitePositive(existing.stopLoss)
+    ?? finitePositive(existing.legs?.find((leg) => finitePositive(leg?.stopLoss) != null)?.stopLoss);
+  const incomingStopLoss = finitePositive(incoming?.stopLoss);
+
+  const existingTakeProfits = (existing.legs || [])
+    .slice()
+    .sort((a, b) => Number(a?.targetIndex ?? 0) - Number(b?.targetIndex ?? 0))
+    .map((leg) => finitePositive(leg?.takeProfit))
+    .filter((value) => value != null);
+  const incomingTakeProfits = Array.isArray(incoming?.takeProfits)
+    ? incoming.takeProfits.map(finitePositive).filter((value) => value != null)
+    : [];
+
+  const stopLoss = incomingStopLoss ?? existingStopLoss ?? null;
+  const takeProfits = incomingTakeProfits.length ? incomingTakeProfits : existingTakeProfits;
+
+  return {
+    ...incoming,
+    stopLoss,
+    takeProfits,
+    incomplete: !(stopLoss != null && takeProfits.length > 0),
+  };
+}
+
 function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
@@ -189,63 +214,93 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     ...(existing.sourceEventIds || []).map(String),
     ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
   ])];
-  desired.incomplete = false;
+  desired.incomplete = Boolean(plan.intent?.incomplete);
 
-  const existingFirst = existing.legs?.[0];
-  const desiredFirst = desired.legs?.[0];
-  if (!existingFirst || !desiredFirst) throw new Error('existing fast-entry leg is unavailable');
-
-  desired.legs[0] = {
-    ...existingFirst,
-    ...desiredFirst,
-    legId: existingFirst.legId,
-    brokerPositionId: existingFirst.brokerPositionId,
-    brokerOrderId: existingFirst.brokerOrderId,
-    status: existingFirst.status,
-  };
+  const existingByTarget = new Map(
+    (existing.legs || [])
+      .map((leg) => [Number(leg?.targetIndex ?? 0), leg])
+      .filter(([index]) => Number.isInteger(index) && index >= 1),
+  );
+  const plannedOpenByTarget = new Map(
+    (plan.actions || [])
+      .filter((action) => action?.type === 'OPEN_POSITION')
+      .map((action) => [Number(action?.targetIndex ?? 0), action])
+      .filter(([index]) => Number.isInteger(index) && index >= 1),
+  );
 
   const currentPrice = finitePositive(currentMarketPrice);
   const side = String(desired.side || '').toUpperCase();
-  const originalStopValid = desiredFirst.stopLoss == null
-    || protectionValueValidAtMarket(side, 'stopLoss', desiredFirst.stopLoss, currentPrice);
-  const originalTargetValid = desiredFirst.takeProfit == null
-    || protectionValueValidAtMarket(side, 'takeProfit', desiredFirst.takeProfit, currentPrice);
+  const updateIdentity = String(eventId || event?.external_event_id || nowMs || 'update');
+  const actions = [];
+  const nextLegs = [];
 
-  if (!originalStopValid) desired.legs[0].stopLoss = existingFirst.stopLoss ?? null;
-  if (!originalTargetValid) desired.legs[0].takeProfit = existingFirst.takeProfit ?? null;
+  for (const desiredLeg of desired.legs || []) {
+    const targetIndex = Number(desiredLeg?.targetIndex ?? 0);
+    if (!Number.isInteger(targetIndex) || targetIndex < 1) continue;
+    const existingLeg = existingByTarget.get(targetIndex) || null;
 
-  const modify = {
-    type: 'MODIFY_POSITION',
-    legId: existingFirst.legId,
-    brokerPositionId: existingFirst.brokerPositionId,
-    symbol: desired.symbol,
-    targetIndex: 1,
-    idempotencyKey: `${existing.id}:leg:1:complete`,
-  };
-  if (originalStopValid && desiredFirst.stopLoss != null) modify.stopLoss = desiredFirst.stopLoss;
-  if (originalTargetValid && desiredFirst.takeProfit != null) modify.takeProfit = desiredFirst.takeProfit;
+    const stopValid = desiredLeg.stopLoss == null
+      || protectionValueValidAtMarket(side, 'stopLoss', desiredLeg.stopLoss, currentPrice);
+    const targetValid = desiredLeg.takeProfit == null
+      || protectionValueValidAtMarket(side, 'takeProfit', desiredLeg.takeProfit, currentPrice);
 
-  const followupOpens = plan.actions.slice(1)
-    .filter((action) => {
-      const stopValid = action.stopLoss == null
-        || protectionValueValidAtMarket(side, 'stopLoss', action.stopLoss, currentPrice);
-      const targetValid = action.takeProfit == null
-        || protectionValueValidAtMarket(side, 'takeProfit', action.takeProfit, currentPrice);
-      return stopValid && targetValid;
-    })
-    .map((action) => ({
-      ...action,
-      idempotencyKey: `${existing.id}:leg:${action.targetIndex}`,
-    }));
+    if (existingLeg) {
+      const mergedLeg = {
+        ...existingLeg,
+        ...desiredLeg,
+        legId: existingLeg.legId,
+        brokerPositionId: existingLeg.brokerPositionId,
+        brokerOrderId: existingLeg.brokerOrderId,
+        status: existingLeg.status,
+      };
+      if (!stopValid) mergedLeg.stopLoss = existingLeg.stopLoss ?? null;
+      if (!targetValid) mergedLeg.takeProfit = existingLeg.takeProfit ?? null;
+      nextLegs.push(mergedLeg);
 
-  const allowedTargetIndexes = new Set([
-    Number(existingFirst.targetIndex ?? 1),
-    ...followupOpens.map((action) => Number(action.targetIndex)),
-  ]);
-  desired.legs = desired.legs.filter((leg) => allowedTargetIndexes.has(Number(leg.targetIndex)));
+      const modify = {
+        type: 'MODIFY_POSITION',
+        legId: existingLeg.legId,
+        brokerPositionId: existingLeg.brokerPositionId,
+        symbol: desired.symbol,
+        targetIndex,
+        idempotencyKey: `${existing.id}:leg:${targetIndex}:enrich:${updateIdentity}`,
+      };
+      if (stopValid && desiredLeg.stopLoss != null && Number(existingLeg.stopLoss) !== Number(desiredLeg.stopLoss)) {
+        modify.stopLoss = desiredLeg.stopLoss;
+      }
+      if (targetValid && desiredLeg.takeProfit != null && Number(existingLeg.takeProfit) !== Number(desiredLeg.takeProfit)) {
+        modify.takeProfit = desiredLeg.takeProfit;
+      }
+      if (Object.hasOwn(modify, 'stopLoss') || Object.hasOwn(modify, 'takeProfit')) actions.push(modify);
+      continue;
+    }
 
-  const hasModifyProtection = Object.hasOwn(modify, 'stopLoss') || Object.hasOwn(modify, 'takeProfit');
-  const actions = [...(hasModifyProtection ? [modify] : []), ...followupOpens];
+    const open = plannedOpenByTarget.get(targetIndex);
+    if (!open) continue;
+    const stopValidForOpen = open.stopLoss == null
+      || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
+    const targetValidForOpen = open.takeProfit == null
+      || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
+    if (!stopValidForOpen || !targetValidForOpen) continue;
+
+    nextLegs.push(desiredLeg);
+    actions.push({
+      ...open,
+      idempotencyKey: `${existing.id}:leg:${targetIndex}`,
+    });
+  }
+
+  // Never discard an already-live leg merely because a later partial update
+  // did not mention that target. Existing broker positions remain authoritative.
+  for (const existingLeg of existing.legs || []) {
+    const targetIndex = Number(existingLeg?.targetIndex ?? 0);
+    if (!Number.isInteger(targetIndex) || targetIndex < 1) continue;
+    if (!nextLegs.some((leg) => Number(leg?.targetIndex ?? 0) === targetIndex)) {
+      nextLegs.push({ ...existingLeg });
+    }
+  }
+  nextLegs.sort((a, b) => Number(a?.targetIndex ?? 0) - Number(b?.targetIndex ?? 0));
+  desired.legs = nextLegs;
 
   return { group: desired, actions };
 }
@@ -630,15 +685,19 @@ export async function orchestrateTradingEventSimulation({
       continue;
     }
 
+    const planningIntent = matchedGroup
+      ? progressiveFastIntent(matchedGroup, interpretation.intent)
+      : interpretation.intent;
+
     let instrument;
     let exposure;
     let currentMarketPrice;
     try {
-      instrument = await instrumentProvider(account, interpretation.intent, event);
+      instrument = await instrumentProvider(account, planningIntent, event);
       if (!instrument) throw new Error('instrument metadata unavailable');
-      exposure = await exposureProvider(account, interpretation.intent, event) || {};
-      currentMarketPrice = needsPlanningMarketPrice(account, interpretation.intent)
-        ? await marketPriceProvider(account, interpretation.intent, instrument, event)
+      exposure = await exposureProvider(account, planningIntent, event) || {};
+      currentMarketPrice = needsPlanningMarketPrice(account, planningIntent)
+        ? await marketPriceProvider(account, planningIntent, instrument, event)
         : undefined;
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', error: error.message, actions: [] });
@@ -648,7 +707,7 @@ export async function orchestrateTradingEventSimulation({
     let plan;
     const groupId = matchedGroup?.id || `${eventId || event.external_event_id || 'event'}:${account.id}`;
     try {
-      plan = buildExecutionPlan(interpretation.intent, {
+      plan = buildExecutionPlan(planningIntent, {
         account,
         instrument,
         currentMarketPrice,
@@ -679,7 +738,7 @@ export async function orchestrateTradingEventSimulation({
     if (matchedGroup) {
       let reconciliation;
       try {
-        reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: interpretation.intent }, {
+        reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: planningIntent }, {
           event,
           eventId,
           account,

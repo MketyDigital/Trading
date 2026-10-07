@@ -245,20 +245,29 @@ function activeLogicalTradeTarget(groups = [], { nowMs, windowMs, recencyGapMs =
 }
 
 
-function isProtectedFastFollowupIntent(intent = {}) {
-  if (intent?.stopLoss == null || intent?.stopLoss === '') return false;
-  const stopLoss = Number(intent.stopLoss);
+function fastFollowupProtection(intent = {}) {
+  const stopLoss = intent?.stopLoss == null || intent?.stopLoss === '' ? null : Number(intent.stopLoss);
   const takeProfits = Array.isArray(intent?.takeProfits)
-    ? intent.takeProfits.filter((value) => value != null && value !== '' && Number.isFinite(Number(value)))
+    ? intent.takeProfits
+      .filter((value) => value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) > 0)
+      .map(Number)
     : [];
-  return Number.isFinite(stopLoss) && stopLoss > 0 && takeProfits.length > 0;
+  return {
+    hasStopLoss: Number.isFinite(stopLoss) && stopLoss > 0,
+    takeProfits,
+  };
 }
 
 function isFastCompletionSignal(interpretation = {}) {
   if (interpretation?.status !== 'READY' || !interpretation?.intent) return false;
   const intent = interpretation.intent;
   if (intent.fastEntry !== true && intent.incomplete === false) return true;
-  return isProtectedFastFollowupIntent(intent);
+
+  // Fast trades are progressively enrichable. A genuine same-trade follow-up
+  // carrying only SL, only TP(s), or both is useful protection data and must
+  // attach to the existing incomplete trade instead of becoming a dead signal.
+  const protection = fastFollowupProtection(intent);
+  return protection.hasStopLoss || protection.takeProfits.length > 0;
 }
 
 function recentFastDuplicateTarget(recent = [], intent = {}) {
