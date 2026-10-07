@@ -182,6 +182,94 @@ test('MT5 connector terminal rejection persists the broker reason/body for diagn
 });
 
 
+test('MT5 connector classifies retcode 10019 No money as terminal NOT_ENOUGH_MONEY', async () => {
+  const failures = [];
+  const deliveryStore = {
+    async reserve() { return { ok: true, duplicate: false }; },
+    async complete() {},
+    async fail(_key, failure) { failures.push(failure); },
+    async markRetryable() { throw new Error('no-money must never be retryable'); },
+  };
+  let call = 0;
+  const fetchFn = async (_url, options = {}) => {
+    call += 1;
+    if (!options.method || options.method === 'GET') {
+      return response({
+        online: true,
+        accountRowId: 'acct-1',
+        identity: {
+          accountNumber: '50123456',
+          serverName: 'Broker-Demo',
+          isLive: false,
+          symbols: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+        },
+      });
+    }
+    return response({ ok: false, reason: 'order_check failed: retcode=10019 No money last_error=1 Success' }, { ok: false, status: 409 });
+  };
+
+  await assert.rejects(
+    executeMt5ConnectorAction({
+      type: 'OPEN_POSITION', symbol: 'XAUUSD', side: 'SELL', orderType: 'MARKET',
+      entry: { kind: 'MARKET' }, lots: 0.01, idempotencyKey: 'event-money:acct-1:leg:1',
+    }, {
+      workspaceId: 'ws1', accountRowId: 'acct-1', gatewayUrl: 'https://gateway.example',
+      controlSecret: 'secret', expectedBrokerAccountId: '50123456',
+      expectedServerName: 'Broker-Demo', expectedEnvironment: 'demo',
+      symbolCatalog: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+      deliveryStore, fetchFn,
+    }),
+    (error) => error?.code === 'NOT_ENOUGH_MONEY' && error?.failureClass === 'TERMINAL',
+  );
+  assert.equal(call, 2);
+  assert.equal(failures[0].code, 'NOT_ENOUGH_MONEY');
+});
+
+test('MT5 connector classifies requote as retryable for bounded retry runtime', async () => {
+  const retries = [];
+  const deliveryStore = {
+    async reserve() { return { ok: true, duplicate: false }; },
+    async complete() {},
+    async fail() { throw new Error('requote must not be terminal'); },
+    async markRetryable(_key, failure, options) { retries.push({ failure, options }); },
+  };
+  let call = 0;
+  const fetchFn = async (_url, options = {}) => {
+    call += 1;
+    if (!options.method || options.method === 'GET') {
+      return response({
+        online: true,
+        accountRowId: 'acct-1',
+        identity: {
+          accountNumber: '50123456',
+          serverName: 'Broker-Demo',
+          isLive: false,
+          symbols: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+        },
+      });
+    }
+    return response({ ok: false, reason: 'order_send failed: retcode=10004 Requote' }, { ok: false, status: 409 });
+  };
+
+  await assert.rejects(
+    executeMt5ConnectorAction({
+      type: 'OPEN_POSITION', symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
+      entry: { kind: 'MARKET' }, lots: 0.01, idempotencyKey: 'event-requote:acct-1:leg:1',
+    }, {
+      workspaceId: 'ws1', accountRowId: 'acct-1', gatewayUrl: 'https://gateway.example',
+      controlSecret: 'secret', expectedBrokerAccountId: '50123456',
+      expectedServerName: 'Broker-Demo', expectedEnvironment: 'demo',
+      symbolCatalog: [{ platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }],
+      deliveryStore, fetchFn, nowMs: 1_700_000_000_000, retryDelayMs: 15000,
+    }),
+    (error) => error?.code === 'MT5_REQUOTE' && error?.failureClass === 'RETRYABLE',
+  );
+  assert.equal(call, 2);
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].failure.code, 'MT5_REQUOTE');
+  assert.equal(retries[0].options.nextAttemptAt, new Date(1_700_000_015_000).toISOString());
+});
+
 test('MT5 connector treats broker retcode 10025 No changes as idempotent success for modify actions', async () => {
   const completed = [];
   const failures = [];

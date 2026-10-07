@@ -10,6 +10,7 @@ import { createContextualDeliveryStore } from './destination_retry_composition.j
 import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
 import { validateProductionRiskAction } from './production_risk_authority.js';
 import { createRuntimeExecutionSnapshotCache } from './runtime_execution_snapshot.js';
+import { evaluateRetrySignalValidity } from './retry_signal_validity.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -185,6 +186,17 @@ function tickPrice(body = {}) {
   return undefined;
 }
 
+function protectionExitPrice(body = {}, side = '') {
+  const normalized = String(side || '').trim().toUpperCase();
+  const bid = Number(body?.bid ?? body?.tick?.bid);
+  const ask = Number(body?.ask ?? body?.tick?.ask);
+  const last = Number(body?.last ?? body?.tick?.last);
+  if (normalized === 'BUY' && Number.isFinite(bid) && bid > 0) return bid;
+  if (normalized === 'SELL' && Number.isFinite(ask) && ask > 0) return ask;
+  if (Number.isFinite(last) && last > 0) return last;
+  return tickPrice(body);
+}
+
 async function defaultMt5ContextLoader({ bridgeUrl, bridgeSecret, accountId, serverName, fetchFn = fetch } = {}) {
   const baseUrl = normalizedBaseUrl(bridgeUrl);
   const secret = required(bridgeSecret, 'MT5_BRIDGE_SECRET');
@@ -238,6 +250,14 @@ async function defaultMt5ContextLoader({ bridgeUrl, bridgeSecret, accountId, ser
       const body = await request(`/v1/tick?symbol=${encodeURIComponent(symbol)}`, 'MT5 bridge tick');
       const price = tickPrice(body);
       if (!(price > 0)) throw new Error('MT5 bridge returned no reliable market price');
+      return price;
+    },
+    async protectionPriceFor(platformSymbol, side) {
+      const symbol = text(platformSymbol);
+      if (!symbol) throw new Error('MT5 protection-price symbol is required');
+      const body = await request(`/v1/tick?symbol=${encodeURIComponent(symbol)}`, 'MT5 bridge tick');
+      const price = protectionExitPrice(body, side);
+      if (!(price > 0)) throw new Error('MT5 bridge returned no reliable protection price');
       return price;
     },
   };
@@ -672,6 +692,81 @@ export function createProductionExecutionDependencies({
     throw new Error(`unsupported production broker platform: ${platform || 'unknown'}`);
   }
 
+  async function retryValidityValidator({ account, action } = {}) {
+    assertBoundAccount(account, boundWorkspaceId);
+    if (!action || typeof action !== 'object') throw new TypeError('canonical retry action is required');
+
+    if (String(action.type || '').toUpperCase() !== 'OPEN_POSITION') {
+      return { allowed: true, reason: 'NOT_OPEN_POSITION' };
+    }
+
+    const hasProtection = Number(action.stopLoss) > 0 || Number(action.takeProfit) > 0;
+    if (!hasProtection) return { allowed: true, reason: 'NO_PROTECTION_BOUNDARY' };
+
+    const platform = platformOf(account);
+    if (platform === 'mt5') {
+      const credentials = await loadAccountCredentials(account, 'mt5');
+      const bridgeUrl = required(credentials.bridgeUrl, 'trade account MT5 bridgeUrl');
+      const bridgeSecret = required(credentials.bridgeSecret, 'trade account MT5 bridgeSecret');
+      const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
+      const context = await mt5ContextLoader({
+        bridgeUrl,
+        bridgeSecret,
+        accountId: brokerAccountId,
+        serverName: text(account.server_name),
+        fetchFn,
+      });
+      const resolved = resolveSymbolAgainstCatalog(action.symbol, Array.isArray(context?.catalog) ? context.catalog : []);
+      if (!resolved.ok) return { allowed: false, code: 'RETRY_SYMBOL_UNAVAILABLE' };
+      const marketPrice = typeof context?.protectionPriceFor === 'function'
+        ? await context.protectionPriceFor(resolved.platformSymbol, action.side)
+        : await context.marketPriceFor(resolved.platformSymbol);
+      return evaluateRetrySignalValidity(action, marketPrice);
+    }
+
+    if (platform === 'ctrader' && providerModeOf(account) !== 'ctrader_cbot') {
+      const credentials = await loadAccountCredentials(account, 'ctrader');
+      const clientId = required(credentials.clientId, 'trade account cTrader clientId');
+      const clientSecret = required(credentials.clientSecret, 'trade account cTrader clientSecret');
+      const accessToken = required(credentials.accessToken, 'trade account cTrader accessToken');
+      const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
+      const numericAccountId = Number(brokerAccountId);
+      if (!Number.isInteger(numericAccountId)) return { allowed: false, code: 'RETRY_BROKER_ACCOUNT_INVALID' };
+
+      const runtime = await ctraderRuntimeFactory({
+        environment: environmentOf(account),
+        allowLiveTrading: environmentOf(account) === 'live',
+        clientId,
+        clientSecret,
+        accessToken,
+        accountId: numericAccountId,
+        deliveryStore: {
+          async reserve() { return { ok: true, duplicate: false }; },
+          async complete() {},
+          async fail() {},
+        },
+      });
+      try {
+        const resolved = resolveSymbolAgainstCatalog(action.symbol, Array.isArray(runtime?.catalog) ? runtime.catalog : []);
+        if (!resolved.ok) return { allowed: false, code: 'RETRY_SYMBOL_UNAVAILABLE' };
+        await runtime.marketData.subscribeQuotes([resolved.platformId]);
+        const spot = await runtime.session.waitForEvent((message) =>
+          Number(message?.payloadType) === 2131 &&
+          Number(message?.payload?.symbolId) === Number(resolved.platformId),
+        { timeoutMs: 5000 });
+        const quote = runtime.marketData.handleSpotEvent(spot) || runtime.marketData.quoteFor(resolved.platformId);
+        const side = String(action.side || '').toUpperCase();
+        const marketPrice = side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        return evaluateRetrySignalValidity(action, marketPrice);
+      } finally {
+        await closeCTraderRuntime(runtime);
+      }
+    }
+
+    // Unknown/no-quote execution modes fail closed for protected OPEN retries.
+    return { allowed: false, code: 'RETRY_MARKET_PRICE_UNAVAILABLE', retryable: true };
+  }
+
   async function stateBinder(binding = {}) {
     if (text(binding.workspaceId) !== boundWorkspaceId) {
       throw new Error('production execution workspace mismatch');
@@ -722,6 +817,7 @@ export function createProductionExecutionDependencies({
     authorityLoader,
     snapshotLoader,
     riskMaterializer,
+    retryValidityValidator,
     dispatchAction,
     stateBinder,
     finalizeExecutionBatch,
