@@ -42,6 +42,13 @@ async function defaultSupabaseFactory(env = {}) {
   return createClient(url, key);
 }
 
+function deliveryAgeMs(delivery = {}, now) {
+  const created = new Date(delivery.created_at ?? delivery.createdAt ?? 0).getTime();
+  const current = new Date(now).getTime();
+  if (!Number.isFinite(created) || !Number.isFinite(current) || created <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, current - created);
+}
+
 function storeKey(delivery = {}) {
   return `${text(delivery.workspace_id)}\u0000${text(delivery.idempotency_key)}`;
 }
@@ -145,6 +152,7 @@ export function createProductionDestinationRetryRuntime({
   leaseMs = 30000,
   maxAttempts = 5,
   retryDelayMs = 15000,
+  maxOpenRetryAgeMs = 3 * 60 * 1000,
 } = {}) {
   if (typeof supabaseFactory !== 'function') throw new TypeError('supabaseFactory is required');
   if (typeof listDueFn !== 'function') throw new TypeError('listDueFn is required');
@@ -153,6 +161,7 @@ export function createProductionDestinationRetryRuntime({
   if (typeof executeProductionFn !== 'function') throw new TypeError('executeProductionFn is required');
 
   const safeRetryDelayMs = Math.max(1000, Math.min(300000, Math.trunc(Number(retryDelayMs) || 15000)));
+  const safeMaxOpenRetryAgeMs = Math.max(30000, Math.min(10 * 60 * 1000, Math.trunc(Number(maxOpenRetryAgeMs) || (3 * 60 * 1000))));
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
     if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
@@ -197,6 +206,11 @@ export function createProductionDestinationRetryRuntime({
         const claimedStore = createClaimedDeliveryStore(baseStore, delivery);
         const deliveryStoreOverride = exactClaimedStoreFactory({ baseStore, claimedStore, delivery });
 
+        const actionType = text(payload?.action?.type).toUpperCase();
+        if (actionType === 'OPEN_POSITION' && deliveryAgeMs(delivery, now) > safeMaxOpenRetryAgeMs) {
+          return terminalFail(baseStore, delivery, 'RETRY_SIGNAL_STALE');
+        }
+
         let deps;
         let result;
         try {
@@ -208,6 +222,33 @@ export function createProductionDestinationRetryRuntime({
           }, {
             deliveryStoreFactory: deliveryStoreOverride,
           });
+
+          if (actionType === 'OPEN_POSITION' && typeof deps?.retryValidityValidator === 'function') {
+            const retryAccount = await deps.accountLoader(delivery.workspace_id, payload.accountId);
+            if (!retryAccount) return terminalFail(baseStore, delivery, 'RETRY_ACCOUNT_NOT_FOUND');
+
+            let validity;
+            try {
+              validity = await deps.retryValidityValidator({ account: retryAccount, action: payload.action });
+            } catch (error) {
+              await markRetryableFailure(baseStore, delivery, {
+                code: 'RETRY_VALIDITY_CHECK_UNAVAILABLE',
+                message: error instanceof Error ? error.message : String(error),
+              }, { now, retryDelayMs: safeRetryDelayMs });
+              return { status: 'FAILED' };
+            }
+
+            if (validity?.allowed !== true) {
+              if (validity?.retryable === true || validity?.code === 'RETRY_MARKET_PRICE_UNAVAILABLE') {
+                await markRetryableFailure(baseStore, delivery, {
+                  code: validity?.code || 'RETRY_VALIDITY_CHECK_UNAVAILABLE',
+                  message: 'broker price validation is temporarily unavailable',
+                }, { now, retryDelayMs: safeRetryDelayMs });
+                return { status: 'FAILED' };
+              }
+              return terminalFail(baseStore, delivery, validity?.code || 'RETRY_SIGNAL_NO_LONGER_VALID');
+            }
+          }
 
           let liveControl;
           try {
