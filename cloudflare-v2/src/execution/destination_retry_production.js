@@ -43,9 +43,11 @@ async function defaultSupabaseFactory(env = {}) {
 }
 
 function deliveryAgeMs(delivery = {}, now) {
-  const created = new Date(delivery.created_at ?? delivery.createdAt ?? 0).getTime();
+  const rawCreated = delivery.created_at ?? delivery.createdAt;
+  if (rawCreated == null || rawCreated === '') return null;
+  const created = new Date(rawCreated).getTime();
   const current = new Date(now).getTime();
-  if (!Number.isFinite(created) || !Number.isFinite(current) || created <= 0) return Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(created) || !Number.isFinite(current) || created <= 0) return null;
   return Math.max(0, current - created);
 }
 
@@ -207,7 +209,8 @@ export function createProductionDestinationRetryRuntime({
         const deliveryStoreOverride = exactClaimedStoreFactory({ baseStore, claimedStore, delivery });
 
         const actionType = text(payload?.action?.type).toUpperCase();
-        if (actionType === 'OPEN_POSITION' && deliveryAgeMs(delivery, now) > safeMaxOpenRetryAgeMs) {
+        const retryAgeMs = deliveryAgeMs(delivery, now);
+        if (actionType === 'OPEN_POSITION' && retryAgeMs != null && retryAgeMs > safeMaxOpenRetryAgeMs) {
           return terminalFail(baseStore, delivery, 'RETRY_SIGNAL_STALE');
         }
 
