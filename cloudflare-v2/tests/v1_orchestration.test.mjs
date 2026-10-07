@@ -551,3 +551,186 @@ test('protected exact-price MARKET signal still requires broker-authoritative qu
   assert.equal(quoteCalls, 1);
   assert.equal(result.accounts[0].status, 'READY');
 });
+
+
+test('fast trade accepts SL-only enrichment and remains manageable/incomplete', async () => {
+  const existing = {
+    id: 'fast-sl-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-fast'],
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    orderType: 'MARKET',
+    entryPrice: 2500,
+    entry: { kind: 'MARKET' },
+    stopLoss: null,
+    status: 'OPEN',
+    incomplete: true,
+    positionMode: 'HEDGED',
+    legs: [{ legId: 'fast-leg-1', targetIndex: 1, lots: 0.09, stopLoss: null, takeProfit: null, status: 'OPEN', brokerPositionId: 'p1' }],
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+  const partial = {
+    status: 'READY',
+    intent: {
+      side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD', source: 'GOLD' },
+      entry: { kind: 'MARKET' }, stopLoss: 2490, takeProfits: [], fastEntry: false, incomplete: true,
+    },
+  };
+  let persisted;
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-sl-only' },
+    interpretation: partial,
+    eventId: 'db-sl-only',
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: existing.id }) },
+    stateStore: {
+      getGroup: async () => structuredClone(existing),
+      putGroup: async (group) => { persisted = structuredClone(group); return group; },
+    },
+    accountProvider: async () => [enabledAccount({ fixedLots: 0.09 })],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((a) => a.type), ['MODIFY_POSITION']);
+  assert.equal(result.accounts[0].actions[0].stopLoss, 2490);
+  assert.equal(persisted.incomplete, true);
+  assert.equal(persisted.stopLoss, 2490);
+  assert.deepEqual(persisted.sourceEventIds, ['evt-fast', 'evt-sl-only']);
+  assert.equal(persisted.legs.length, 1);
+  assert.equal(persisted.legs[0].brokerPositionId, 'p1');
+});
+
+test('TP-only enrichment followed by SL-only enrichment does not reopen existing TP legs', async () => {
+  const existing = {
+    id: 'fast-progressive-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-fast'],
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    orderType: 'MARKET',
+    entryPrice: 2500,
+    entry: { kind: 'MARKET' },
+    stopLoss: null,
+    status: 'OPEN',
+    incomplete: true,
+    positionMode: 'HEDGED',
+    legs: [{ legId: 'fast-leg-1', targetIndex: 1, lots: 0.09, stopLoss: null, takeProfit: null, status: 'OPEN', brokerPositionId: 'p1' }],
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+  const tpOnly = {
+    status: 'READY',
+    intent: {
+      side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD', source: 'GOLD' },
+      entry: { kind: 'MARKET' }, stopLoss: null, takeProfits: [2510, 2520, 2530], fastEntry: false, incomplete: true,
+    },
+  };
+  let afterTp;
+  const first = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-tp-only' },
+    interpretation: tpOnly,
+    eventId: 'db-tp-only',
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: existing.id }) },
+    stateStore: {
+      getGroup: async () => structuredClone(existing),
+      putGroup: async (group) => { afterTp = structuredClone(group); return group; },
+    },
+    accountProvider: async () => [enabledAccount({ fixedLots: 0.09 })],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(first.accounts[0].status, 'READY');
+  assert.deepEqual(first.accounts[0].actions.map((a) => a.type), ['MODIFY_POSITION', 'OPEN_POSITION', 'OPEN_POSITION']);
+  assert.equal(afterTp.incomplete, true);
+  assert.deepEqual(afterTp.sourceEventIds, ['evt-fast', 'evt-tp-only']);
+
+  // Simulate broker binding of the newly-opened target legs before the next update.
+  afterTp.legs = afterTp.legs.map((leg, index) => ({
+    ...leg,
+    status: 'OPEN',
+    brokerPositionId: leg.brokerPositionId || `p${index + 1}`,
+  }));
+
+  const slOnly = {
+    status: 'READY',
+    intent: {
+      side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD', source: 'GOLD' },
+      entry: { kind: 'MARKET' }, stopLoss: 2490, takeProfits: [], fastEntry: false, incomplete: true,
+    },
+  };
+  let afterSl;
+  const second = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-sl-later' },
+    interpretation: slOnly,
+    eventId: 'db-sl-later',
+    nowMs: 3000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: existing.id }) },
+    stateStore: {
+      getGroup: async () => structuredClone(afterTp),
+      putGroup: async (group) => { afterSl = structuredClone(group); return group; },
+    },
+    accountProvider: async () => [enabledAccount({ fixedLots: 0.09 })],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(second.accounts[0].status, 'READY');
+  assert.equal(second.accounts[0].actions.filter((a) => a.type === 'OPEN_POSITION').length, 0);
+  assert.equal(second.accounts[0].actions.filter((a) => a.type === 'MODIFY_POSITION').length, 3);
+  assert.equal(second.accounts[0].actions.every((a) => a.stopLoss === 2490), true);
+  assert.equal(afterSl.incomplete, false);
+  assert.deepEqual(afterSl.sourceEventIds, ['evt-fast', 'evt-tp-only', 'evt-sl-later']);
+  assert.deepEqual(afterSl.legs.map((leg) => leg.takeProfit), [2510, 2520, 2530]);
+});
+
+test('management can target a fast-only trade before any full follow-up arrives', async () => {
+  const existing = {
+    id: 'fast-manage-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-fast'],
+    symbol: 'XAUUSD',
+    side: 'BUY',
+    orderType: 'MARKET',
+    entryPrice: 2500,
+    entry: { kind: 'MARKET' },
+    stopLoss: null,
+    status: 'OPEN',
+    incomplete: true,
+    positionMode: 'HEDGED',
+    legs: [{ legId: 'fast-leg-1', targetIndex: 1, lots: 0.09, stopLoss: null, takeProfit: null, status: 'OPEN', brokerPositionId: 'p1' }],
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-fast-close', thread: { reply_to_event_id: 'evt-fast' } },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    eventId: 'db-fast-close',
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupId: existing.id }) },
+    stateStore: { getGroup: async () => structuredClone(existing), putGroup: async (group) => group },
+    accountProvider: async () => [enabledAccount()],
+    instrumentProvider: async () => { throw new Error('management must not need instrument metadata'); },
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((a) => a.type), ['CLOSE_POSITION']);
+});
