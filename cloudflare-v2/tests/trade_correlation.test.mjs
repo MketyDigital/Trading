@@ -316,3 +316,68 @@ test('unmatched READY reply still fails closed when another active trade exists'
   });
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
 });
+
+
+test('SL-only READY reply enriches an existing incomplete fast trade', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:101',
+      thread: { reply_to_event_id: 'telegram:-1001:100' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'XAUUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'MARKET' },
+        stopLoss: 2490,
+        takeProfits: [],
+        fastEntry: false,
+        incomplete: true,
+      },
+    },
+    activeGroups: [group({
+      sourceEventIds: ['telegram:-1001:100'],
+      symbol: 'XAUUSD',
+      side: 'BUY',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+  assert.equal(result.status, 'MATCHED');
+  assert.equal(result.reason, 'FAST_ENTRY_COMPLETION');
+});
+
+test('TP-only READY reply enriches an existing incomplete fast trade', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:102',
+      thread: { reply_to_event_id: 'telegram:-1001:100' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'XAUUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'MARKET' },
+        stopLoss: null,
+        takeProfits: [2510, 2520],
+        fastEntry: false,
+        incomplete: true,
+      },
+    },
+    activeGroups: [group({
+      sourceEventIds: ['telegram:-1001:100'],
+      symbol: 'XAUUSD',
+      side: 'BUY',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+  assert.equal(result.status, 'MATCHED');
+  assert.equal(result.reason, 'FAST_ENTRY_COMPLETION');
+});
