@@ -248,3 +248,142 @@ test('destination/account mismatch fails closed before constructing execution de
   assert.equal(depsCalls, 0);
   assert.equal(result.failed, 1);
 });
+
+
+test('OPEN retry older than three minutes fails terminal without broker dispatch', async () => {
+  const row = retryRow({
+    created_at: '2026-09-03T09:56:00.000Z',
+    next_attempt_at: '2026-09-03T10:00:00.000Z',
+  });
+  const transitions = [];
+  let depsCalls = 0;
+  const baseStore = {
+    async claimRetry() { return { claimed: true, row: { ...row, status: 'PENDING', attempt_count: 2 } }; },
+    async reserve() {},
+    async complete() {},
+    async markRetryable() {},
+    async markUncertain() {},
+    async fail(key, failure) { transitions.push(['fail', key, failure]); },
+  };
+
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
+    listDueFn: async () => [row],
+    deliveryStoreFactory: () => baseStore,
+    executionDepsFactory: async () => { depsCalls += 1; return {}; },
+  });
+
+  const result = await runtime(
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { nowMs: Date.parse('2026-09-03T10:00:01.000Z') },
+  );
+
+  assert.equal(result.failed, 1);
+  assert.equal(depsCalls, 0);
+  assert.equal(transitions[0][2].code, 'RETRY_SIGNAL_STALE');
+});
+
+test('protected OPEN retry cancels terminally when broker price crossed target', async () => {
+  const row = retryRow({
+    created_at: '2026-09-03T09:59:00.000Z',
+    request_payload: {
+      destinationType: 'mt5',
+      accountId: 'acc-1',
+      groupId: 'g1',
+      action: {
+        type: 'OPEN_POSITION',
+        side: 'BUY',
+        symbol: 'XAUUSD',
+        stopLoss: 2490,
+        takeProfit: 2510,
+        legId: 'l1',
+        idempotencyKey: 'group:g1:leg:l1:open',
+      },
+    },
+  });
+  const transitions = [];
+  let executeCalls = 0;
+  const baseStore = {
+    async claimRetry() { return { claimed: true, row: { ...row, status: 'PENDING', attempt_count: 2 } }; },
+    async reserve() {},
+    async complete() {},
+    async markRetryable() {},
+    async markUncertain() {},
+    async fail(key, failure) { transitions.push(['fail', key, failure]); },
+  };
+
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
+    listDueFn: async () => [row],
+    deliveryStoreFactory: () => baseStore,
+    executionDepsFactory: async () => ({
+      accountLoader: async () => ({ id: 'acc-1', workspace_id: 'ws-1' }),
+      retryValidityValidator: async () => ({ allowed: false, code: 'RETRY_SIGNAL_TARGET_ALREADY_CROSSED' }),
+    }),
+    executeProductionFn: async () => { executeCalls += 1; return { accounts: [] }; },
+  });
+
+  const result = await runtime(
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { nowMs: Date.parse('2026-09-03T10:00:01.000Z') },
+  );
+
+  assert.equal(result.failed, 1);
+  assert.equal(executeCalls, 0);
+  assert.equal(transitions[0][2].code, 'RETRY_SIGNAL_TARGET_ALREADY_CROSSED');
+});
+
+test('protected OPEN retry proceeds when still fresh and broker price remains inside SL/TP boundaries', async () => {
+  const row = retryRow({
+    created_at: '2026-09-03T09:59:00.000Z',
+    request_payload: {
+      destinationType: 'mt5',
+      accountId: 'acc-1',
+      groupId: 'g1',
+      action: {
+        type: 'OPEN_POSITION',
+        side: 'BUY',
+        symbol: 'XAUUSD',
+        stopLoss: 2490,
+        takeProfit: 2510,
+        legId: 'l1',
+        idempotencyKey: 'group:g1:leg:l1:open',
+      },
+    },
+  });
+  const baseStore = {
+    async claimRetry() { return { claimed: true, row: { ...row, status: 'PENDING', attempt_count: 2 } }; },
+    async reserve() {},
+    async complete() {},
+    async fail() {},
+    async markRetryable() {},
+    async markUncertain() {},
+  };
+  let executeCalls = 0;
+
+  const runtime = createProductionDestinationRetryRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    brokerExecutionControlResolver: brokerOn,
+    liveBrokerExecutionControlResolver: liveOn,
+    listDueFn: async () => [row],
+    deliveryStoreFactory: () => baseStore,
+    executionDepsFactory: async () => ({
+      accountLoader: async () => ({ id: 'acc-1', workspace_id: 'ws-1' }),
+      retryValidityValidator: async () => ({ allowed: true, marketPrice: 2500 }),
+    }),
+    executeProductionFn: async () => {
+      executeCalls += 1;
+      return { status: 'SUCCEEDED', accounts: [{ accountId: 'acc-1', status: 'SUCCEEDED', actions: [] }] };
+    },
+  });
+
+  const result = await runtime(
+    { TRADING_ACCESS_ENABLED: 'true', BROKER_EXECUTION_ENABLED: 'true' },
+    { nowMs: Date.parse('2026-09-03T10:00:01.000Z') },
+  );
+
+  assert.equal(result.succeeded, 1);
+  assert.equal(executeCalls, 1);
+});
