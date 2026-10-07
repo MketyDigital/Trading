@@ -177,3 +177,44 @@ test('account alias merge normalizes alias keys and rejects empty targets', () =
     V75: 'Volatility 75 Index',
   });
 });
+
+
+test('cTrader platform identifier survives catalog sanitization and resolution for quote subscription', () => {
+  const raw = [{
+    platform: 'ctrader',
+    platformId: 2435,
+    platformSymbol: 'Volatility 75 (1s) Index',
+    canonical: 'DERIV:VOLATILITY_75_1S',
+    protocolLotSize: 100,
+    minVolume: 5,
+    maxVolume: 5000,
+    stepVolume: 1,
+    tradable: true,
+  }];
+
+  const safe = sanitizeAccountSymbolCatalog(raw);
+  assert.equal(safe.length, 1);
+  assert.equal(safe[0].platformId, 2435);
+  assert.equal(safe[0].protocolLotSize, 100);
+
+  const resolved = resolveAccountSymbol('DERIV:VOLATILITY_75_1S', safe, {});
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.platformId, 2435);
+  assert.equal(resolved.platformSymbol, 'Volatility 75 (1s) Index');
+});
+
+test('cTrader raw symbolId is normalized to platformId without preserving unknown raw fields', () => {
+  const safe = sanitizeAccountSymbolCatalog([{
+    platform: 'ctrader',
+    symbolId: 2429,
+    platformSymbol: 'Volatility 10 (1s) Index',
+    canonical: 'DERIV:VOLATILITY_10_1S',
+    raw: { symbolId: 9999, secret: 'never' },
+    token: 'never',
+  }]);
+
+  assert.equal(safe[0].platformId, 2429);
+  assert.equal('symbolId' in safe[0], false);
+  assert.equal('raw' in safe[0], false);
+  assert.equal('token' in safe[0], false);
+});
