@@ -306,16 +306,30 @@ export function correlateTradingEvent({
     const target = matchedManagementTarget(editMatches, 'EDIT_TARGET', 'AMBIGUOUS_EDIT_TARGET');
     if (target) return target;
 
-    // A fresh source edit can be the first observation Mkety receives for an
-    // otherwise self-contained actionable signal (for example after source
-    // reconnect/catch-up races). If no active broker trade exists to mutate,
-    // treating that fresh self-edit as a new signal preserves execution without
-    // risking mutation of another trade. Stale edits and management edits remain
-    // fail-closed.
-    if (scoped.length === 0 && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs)) {
-      return { status: 'NEW_GROUP' };
+    // Some source adapters mark a revised reply with its own event ID as the
+    // edit identity. That marker does not identify the fast trade being
+    // completed; keep a valid explicit reply relation available to the normal
+    // reply correlation path below.
+    const replyId = event?.thread?.reply_to_event_id != null ? String(event.thread.reply_to_event_id) : null;
+    const replyMatches = replyId
+      ? scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(replyId))
+      : [];
+    const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
+    const isSelfEditedReply = editedEventId === externalEventId && replyMatches.length > 0;
+    if (!isSelfEditedReply) {
+      // A fresh source edit can be the first observation Mkety receives for an
+      // otherwise self-contained actionable signal (for example after source
+      // reconnect/catch-up races). If no active broker trade exists to mutate,
+      // treating that fresh self-edit as a new signal preserves execution without
+      // risking mutation of another trade. Stale edits and management edits remain
+      // fail-closed.
+      if (scoped.length === 0 && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs)) {
+        return { status: 'NEW_GROUP' };
+      }
+      return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
     }
-    return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
+    // A reply whose own message was edited still resolves by the explicit reply
+    // target; edits to an existing source event were handled above.
   }
 
   if (isDuplicateSourceEvent(scoped, event)) {
