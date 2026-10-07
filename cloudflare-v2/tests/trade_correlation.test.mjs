@@ -381,3 +381,84 @@ test('TP-only READY reply enriches an existing incomplete fast trade', () => {
   assert.equal(result.status, 'MATCHED');
   assert.equal(result.reason, 'FAST_ENTRY_COMPLETION');
 });
+
+test('reply completion wins over a self-edit marker on the follow-up message', () => {
+  const sourceEventId = 'telegram:-1001888176046:10180';
+  const followupEventId = 'telegram:-1001888176046:10181';
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'main signal2' },
+      external_event_id: followupEventId,
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: {
+        reply_to_event_id: sourceEventId,
+        edited_event_id: followupEventId,
+      },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPCAD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.88191 },
+        stopLoss: 1.87851,
+        takeProfits: [1.88463, 1.88841],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group({
+      id: 'gbpcad-fast',
+      sourceInstanceId: 'main signal2',
+      sourceEventIds: [sourceEventId],
+      symbol: 'GBPCAD',
+      side: 'BUY',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'gbpcad-fast' });
+});
+
+test('management reply wins over a self-edit marker on the reply message', () => {
+  const sourceEventId = 'telegram:-1001:100';
+  const followupEventId = 'telegram:-1001:101';
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: followupEventId,
+      thread: {
+        reply_to_event_id: sourceEventId,
+        edited_event_id: followupEventId,
+      },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } },
+    activeGroups: [group({ sourceEventIds: [sourceEventId] })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'REPLY_TARGET', groupId: 'g1' });
+});
+
+test('an unresolved non-self edit marker cannot be overridden by a different reply target', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:101',
+      thread: {
+        reply_to_event_id: 'telegram:-1001:100',
+        edited_event_id: 'telegram:-1001:99',
+      },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: { symbol: { canonical: 'XAUUSD' }, side: 'BUY', fastEntry: false, incomplete: false },
+    },
+    activeGroups: [group({ sourceEventIds: ['telegram:-1001:100'] })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' });
+});
