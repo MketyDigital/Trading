@@ -200,7 +200,7 @@ function managementPlan(text, event = {}) {
   const replyToEventId = event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId;
   const contextualDeleteReply = replyToEventId != null
     && String(replyToEventId).trim() !== ''
-    && /^\\s*(?:(?:PLEASE|KINDLY)\\s+)?DELETE\\b/i.test(text);
+    && /^\s*(?:(?:PLEASE|KINDLY)\s+)?DELETE\b/i.test(text);
   const directPendingCancellation = /^\s*(?:DELETE|CANCEL|REMOVE)(?:\s+(?:(?:(?:THE|THIS|THAT|IT)(?:\s+(?:PENDING\s+)?ORDER)?)|PENDING(?:\s+ORDER)?|ORDER))?[!.]*\s*$/.test(upper);
   if (directPendingCancellation || contextualDeleteReply
     || new RegExp(`\\b(?:CANCEL|DELETE|REMOVE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
