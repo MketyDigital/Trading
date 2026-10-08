@@ -316,16 +316,13 @@ export function correlateTradingEvent({
       : [];
     const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
     const isSelfEditedReply = editedEventId === externalEventId && replyMatches.length > 0;
-    if (!isSelfEditedReply) {
-      // A fresh source edit can be the first observation Mkety receives for an
-      // otherwise self-contained actionable signal (for example after source
-      // reconnect/catch-up races). If no active broker trade exists to mutate,
-      // treating that fresh self-edit as a new signal preserves execution without
-      // risking mutation of another trade. Stale edits and management edits remain
-      // fail-closed.
-      if (scoped.length === 0 && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs)) {
-        return { status: 'NEW_GROUP' };
-      }
+    const isFreshSelfEditedSignal = editedEventId === externalEventId
+      && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs);
+    if (!isSelfEditedReply && !isFreshSelfEditedSignal) {
+      // Unmatched edits stay fail-closed unless this is a fresh, self-contained
+      // READY signal. Let that signal continue through normal correlation so an
+      // unrelated active trade cannot suppress it and a compatible fast trade
+      // can still be promoted.
       return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
     }
     // A reply whose own message was edited still resolves by the explicit reply
