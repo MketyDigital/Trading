@@ -30,6 +30,25 @@ test('standalone delete and delete order replies are normalized to pending cance
   }
 });
 
+test('delete reply with a channel footer cancels the replied-to pending order', () => {
+  const text = 'Delete ❌ LIMIT trade join 👇\n\n⭐️⭐️⭐️Become a VIP member => https://easyforexpips.com\n💻📱Our XAUUSD Channel👉 CLICK HERE';
+  const plan = buildMachinePlan({
+    text,
+    thread: { reply_to_event_id: 'telegram:-1001284268486:58957' },
+  });
+
+  assert.equal(plan.status, 'MANAGEMENT');
+  assert.equal(plan.management.type, 'CANCEL_PENDING');
+});
+
+test('delete wording without an explicit order reply does not become a pending cancellation', () => {
+  const plan = buildMachinePlan({
+    text: 'Delete ❌ LIMIT trade join 👇\n\n⭐️ Become a VIP member',
+  });
+
+  assert.notEqual(plan.status, 'MANAGEMENT');
+});
+
 test('close on a pending limit leg cancels the broker order instead of closing a position', () => {
   const actions = buildManagementActions({
     symbol: 'EURUSD',
