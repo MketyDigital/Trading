@@ -388,14 +388,34 @@ export function buildManagementActions(group, management) {
       }));
   }
   if (management?.type === 'CLOSE' || management?.type === 'CLOSE_ALL') {
-    return openLegs.map((leg) => ({
-      type: 'CLOSE_POSITION',
+    const potentiallyPending = (leg) => {
+      if (!leg.brokerOrderId) return false;
+      if (leg.status === 'PENDING') return true;
+      const pendingOrderType = ['LIMIT', 'STOP', 'STOP_LIMIT'].includes(String(group.orderType || '').toUpperCase());
+      return pendingOrderType
+        && !leg.brokerDealId
+        && !(Number.isFinite(Number(leg.fillPrice)) && Number(leg.fillPrice) > 0);
+    };
+    const pendingLegs = group.legs.filter(potentiallyPending);
+    const closeActions = openLegs
+      .filter((leg) => !potentiallyPending(leg))
+      .map((leg) => ({
+        type: 'CLOSE_POSITION',
+        legId: leg.legId,
+        targetIndex: leg.targetIndex,
+        brokerPositionId: leg.brokerPositionId,
+        brokerOrderId: leg.brokerOrderId ?? null,
+        symbol: group.symbol,
+        lots: leg.lots,
+      }));
+    const cancelActions = pendingLegs.map((leg) => ({
+      type: 'CANCEL_PENDING',
       legId: leg.legId,
       targetIndex: leg.targetIndex,
-      brokerPositionId: leg.brokerPositionId,
+      brokerOrderId: leg.brokerOrderId,
       symbol: group.symbol,
-      lots: leg.lots,
     }));
+    return [...closeActions, ...cancelActions];
   }
   return [];
 }
