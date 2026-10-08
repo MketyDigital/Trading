@@ -24,6 +24,22 @@ function entryZoneRangeMode(account = {}) {
 }
 
 function applyEntryZonePolicy(intent, account, currentMarketPrice) {
+  const declaredOrderType = String(intent?.orderType || 'MARKET').trim().toUpperCase();
+  const pendingOrder = ['LIMIT', 'STOP', 'STOP_LIMIT'].includes(declaredOrderType);
+  if (pendingOrder && intent?.entry?.kind !== 'RANGE') return intent;
+
+  const configuredMode = policyMode(account.entryZonePolicy ?? account.entry_zone_policy, 'MARKET_IF_IN_RANGE');
+  if (!pendingOrder && configuredMode === 'MARKET_ONLY') {
+    const price = Number(currentMarketPrice);
+    return {
+      ...intent,
+      orderType: 'MARKET',
+      entry: Number.isFinite(price) && price > 0
+        ? { kind: 'MARKET', referencePrice: price }
+        : { kind: 'MARKET' },
+    };
+  }
+
   if (intent?.entry?.kind !== 'RANGE') return intent;
   const price = Number(currentMarketPrice);
   if (!(Number.isFinite(price) && price > 0)) return intent;
