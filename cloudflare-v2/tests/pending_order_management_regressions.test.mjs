@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildManagementActions } from '../src/execution/position_group.js';
+import { buildMachinePlan } from '../src/pipeline/machine_plan.js';
 import { executeCTraderAction } from '../src/adapters/ctrader_executor_v2.js';
 import { executeMt5ConnectorAction } from '../src/adapters/mt5_connector_executor_v2.js';
 
@@ -20,6 +21,14 @@ function deliveryStore() {
     async fail(key, failure) { this.failed.push({ key, failure }); },
   };
 }
+
+test('standalone delete and delete order replies are normalized to pending cancellation', () => {
+  for (const text of ['Delete', 'Delete order', 'Cancel order']) {
+    const plan = buildMachinePlan({ text });
+    assert.equal(plan.status, 'MANAGEMENT');
+    assert.equal(plan.management.type, 'CANCEL_PENDING');
+  }
+});
 
 test('close on a pending limit leg cancels the broker order instead of closing a position', () => {
   const actions = buildManagementActions({
