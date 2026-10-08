@@ -189,11 +189,19 @@ export async function executeMt5ConnectorAction(action, {
       throw classifiedError(reason, { ...classified, result: body });
     }
     const fillPrice = Number(body.fillPrice ?? body.fill_price);
+    const brokerOrderId = body.orderId != null ? String(body.orderId) : body.order_id != null ? String(body.order_id) : null;
+    const brokerDealId = body.dealId != null ? String(body.dealId) : body.deal_id != null ? String(body.deal_id) : null;
+    const pending = action.type === 'OPEN_POSITION'
+      && action.orderType !== 'MARKET'
+      && Boolean(brokerOrderId)
+      && !brokerDealId
+      && !(Number.isFinite(fillPrice) && fillPrice > 0);
     const result = {
       duplicate: false,
-      brokerPositionId: body.positionId != null ? String(body.positionId) : body.position_id != null ? String(body.position_id) : null,
-      brokerOrderId: body.orderId != null ? String(body.orderId) : body.order_id != null ? String(body.order_id) : null,
-      brokerDealId: body.dealId != null ? String(body.dealId) : body.deal_id != null ? String(body.deal_id) : null,
+      ...(pending ? { status: 'PENDING' } : {}),
+      brokerPositionId: pending ? null : body.positionId != null ? String(body.positionId) : body.position_id != null ? String(body.position_id) : null,
+      brokerOrderId,
+      brokerDealId,
       fillPrice: Number.isFinite(fillPrice) ? fillPrice : null,
       platformSymbol: resolved?.platformSymbol ?? null,
       response: body,
