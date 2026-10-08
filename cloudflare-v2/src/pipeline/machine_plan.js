@@ -197,7 +197,8 @@ function managementPlan(text) {
     const lots = parsedNumber(closeLots[1]);
     if (lots != null && lots > 0) return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', lots });
   }
-  if (new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
+  if (/^\\s*(?:DELETE|CANCEL)(?:\\s+(?:THE\\s+)?ORDER)?[!.]*\\s*$/.test(upper)
+    || new RegExp(`\\b(?:CANCEL|DELETE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
   }
   if (/\bCLOSE\s+ALL\b/.test(upper)) return { status: 'MANAGEMENT', management: { type: 'CLOSE_ALL' } };
