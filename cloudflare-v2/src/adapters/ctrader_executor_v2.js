@@ -106,6 +106,12 @@ function reconciledOpenPositionIds(message = {}) {
   return new Set(positions.map((position) => String(position?.positionId ?? '')).filter(Boolean));
 }
 
+function reconciledActiveOrderIds(message = {}) {
+  if (Number(message?.payloadType) !== 2125) return new Set();
+  const orders = Array.isArray(message?.payload?.order) ? message.payload.order : [];
+  return new Set(orders.map((order) => String(order?.orderId ?? '')).filter(Boolean));
+}
+
 function isPositionNotFound(error) {
   const code = String(error?.code || '').toUpperCase();
   const message = String(error?.message || '').toUpperCase();
@@ -121,7 +127,11 @@ async function reconcileMissingManagementPosition(session, { accountId, action, 
     returnProtectionOrders: false,
   }), { successPayloadTypes: [2125] });
   const openIds = reconciledOpenPositionIds(reconcile);
-  return openIds.has(String(action.brokerPositionId))
+  const activeOrderIds = reconciledActiveOrderIds(reconcile);
+  const positionStillOpen = openIds.has(String(action.brokerPositionId));
+  const orderStillActive = action.brokerOrderId != null
+    && activeOrderIds.has(String(action.brokerOrderId));
+  return positionStillOpen || orderStillActive
     ? null
     : {
         duplicate: false,
@@ -236,10 +246,17 @@ export async function executeCTraderAction(action, {
         executionResponse = await resolveMarketFill(session, response, prepared.executableAction);
       }
 
-      const ids = extractBrokerIds(executionResponse);
+      const extractedIds = extractBrokerIds(executionResponse);
+      const ids = {
+        ...extractedIds,
+        brokerPositionId: isFilledExecution(executionResponse) ? extractedIds.brokerPositionId : null,
+      };
       const acceptedIds = extractBrokerIds(response);
       if (!ids.brokerOrderId && acceptedIds.brokerOrderId) ids.brokerOrderId = acceptedIds.brokerOrderId;
       const fillPrice = extractFillPrice(executionResponse);
+      const pending = prepared.executableAction.orderType !== 'MARKET'
+        && !isFilledExecution(executionResponse)
+        && Boolean(ids.brokerOrderId);
 
       if (prepared.executableAction.orderType === 'MARKET' && (prepared.executableAction.stopLoss != null || prepared.executableAction.takeProfit != null)) {
         if (!ids.brokerPositionId) {
@@ -265,6 +282,7 @@ export async function executeCTraderAction(action, {
 
       const result = {
         duplicate: false,
+        ...(pending ? { status: 'PENDING' } : {}),
         ...ids,
         fillPrice,
         executedLots: Number(prepared.executableAction.lots),
