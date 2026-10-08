@@ -99,7 +99,7 @@ function informationalManagementPlan(text) {
   return null;
 }
 
-function managementPlan(text) {
+function managementPlan(text, event = {}) {
   const informational = informationalManagementPlan(text);
   if (informational) return informational;
 
@@ -197,8 +197,12 @@ function managementPlan(text) {
     const lots = parsedNumber(closeLots[1]);
     if (lots != null && lots > 0) return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', lots });
   }
+  const replyToEventId = event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId;
+  const contextualDeleteReply = replyToEventId != null
+    && String(replyToEventId).trim() !== ''
+    && /^\\s*(?:(?:PLEASE|KINDLY)\\s+)?DELETE\\b/i.test(text);
   const directPendingCancellation = /^\s*(?:DELETE|CANCEL|REMOVE)(?:\s+(?:(?:(?:THE|THIS|THAT|IT)(?:\s+(?:PENDING\s+)?ORDER)?)|PENDING(?:\s+ORDER)?|ORDER))?[!.]*\s*$/.test(upper);
-  if (directPendingCancellation
+  if (directPendingCancellation || contextualDeleteReply
     || new RegExp(`\\b(?:CANCEL|DELETE|REMOVE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {
     return withManagementSymbol(text, { type: 'CANCEL_PENDING' });
   }
@@ -392,7 +396,7 @@ function isConciseFastMarketCommand(text, symbolToken) {
 export function buildMachinePlan(event = {}) {
   const text = normalizeSignalText(event.text);
   if (!text) return { status: 'NO_ACTION' };
-  const management = managementPlan(text);
+  const management = managementPlan(text, event);
   if (management) return management;
   const order = normalizeOrderIntent(text);
   const sideInfo = sideMatch(text);
