@@ -3,6 +3,142 @@ import assert from 'node:assert/strict';
 
 import { orchestrateTradingEventSimulation } from '../src/pipeline/v1_orchestrator.js';
 
+test('market_only uses the current quote instead of a single reference entry on a MARKET signal', async () => {
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'telegram:-1001:920',
+      workspace_hint: 'ws',
+      source: { instance_id: 'src' },
+      thread: {},
+    },
+    eventId: 'market-only-price-hint',
+    nowMs: 2000,
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.09 },
+        stopLoss: 1.08,
+        takeProfits: [1.12, 1.13],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async () => {} },
+    accountProvider: async () => [{
+      id: 'fbs-live',
+      workspace_id: 'ws',
+      execution_enabled: true,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.03,
+      safety_policy: { killSwitch: false, autoTpProtection: true },
+      entry_zone_policy: { mode: 'market_only' },
+    }],
+    instrumentProvider: async () => ({ canonical: 'EURUSD', platformSymbol: 'EURUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => 1.1,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map(({ orderType, entry }) => ({ orderType, entry })), [
+    { orderType: 'MARKET', entry: { kind: 'MARKET', referencePrice: 1.1 } },
+    { orderType: 'MARKET', entry: { kind: 'MARKET', referencePrice: 1.1 } },
+  ]);
+});
+
+test('market_only uses the current quote when a MARKET signal has no entry field', async () => {
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'telegram:-1001:922',
+      workspace_hint: 'ws',
+      source: { instance_id: 'src' },
+      thread: {},
+    },
+    eventId: 'market-only-no-entry',
+    nowMs: 2000,
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURUSD' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        stopLoss: 1.08,
+        takeProfits: [1.12],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async () => {} },
+    accountProvider: async () => [{
+      id: 'fbs-live',
+      workspace_id: 'ws',
+      execution_enabled: true,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.03,
+      safety_policy: { killSwitch: false, autoTpProtection: true },
+      entry_zone_policy: { mode: 'market_only' },
+    }],
+    instrumentProvider: async () => ({ canonical: 'EURUSD', platformSymbol: 'EURUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => 1.1,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map(({ orderType, entry }) => ({ orderType, entry })), [
+    { orderType: 'MARKET', entry: { kind: 'MARKET', referencePrice: 1.1 } },
+  ]);
+});
+
+test('market_only keeps an explicitly priced STOP pending order at its specified entry', async () => {
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'telegram:-1001:921',
+      workspace_hint: 'ws',
+      source: { instance_id: 'src' },
+      thread: {},
+    },
+    eventId: 'market-only-stop-pending',
+    nowMs: 2000,
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURUSD' },
+        side: 'BUY',
+        orderType: 'STOP',
+        entry: { kind: 'PRICE', value: 1.105 },
+        stopLoss: 1.09,
+        takeProfits: [1.12, 1.13],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async () => {} },
+    accountProvider: async () => [{
+      id: 'fbs-live',
+      workspace_id: 'ws',
+      execution_enabled: true,
+      lot_sizing_type: 'fixed',
+      lot_value: 0.03,
+      safety_policy: { killSwitch: false, autoTpProtection: true },
+      entry_zone_policy: { mode: 'market_only' },
+    }],
+    instrumentProvider: async () => ({ canonical: 'EURUSD', platformSymbol: 'EURUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => { throw new Error('explicit pending orders must not require a quote'); },
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map(({ orderType, entry }) => ({ orderType, entry })), [
+    { orderType: 'STOP', entry: { kind: 'PRICE', value: 1.105 } },
+    { orderType: 'STOP', entry: { kind: 'PRICE', value: 1.105 } },
+  ]);
+});
+
 test('fast completion survives crossed TP1 and keeps valid SL plus later targets without duplicating leg 1', async () => {
   const saved = [];
   const existing = {
