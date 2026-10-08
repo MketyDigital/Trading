@@ -404,7 +404,7 @@ export function buildManagementActions(group, management) {
         legId: leg.legId,
         targetIndex: leg.targetIndex,
         brokerPositionId: leg.brokerPositionId,
-        brokerOrderId: leg.brokerOrderId ?? null,
+        ...(leg.brokerOrderId != null ? { brokerOrderId: leg.brokerOrderId } : {}),
         symbol: group.symbol,
         lots: leg.lots,
       }));
