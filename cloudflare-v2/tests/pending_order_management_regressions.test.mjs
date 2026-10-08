@@ -23,7 +23,7 @@ function deliveryStore() {
 }
 
 test('standalone delete and delete order replies are normalized to pending cancellation', () => {
-  for (const text of ['Delete', 'Delete order', 'Cancel order']) {
+  for (const text of ['Delete', 'Delete order', 'Delete it', 'Delete this', 'Delete that', 'Cancel order', 'Cancel it', 'Cancel this', 'Remove order', 'Remove it', 'Remove this']) {
     const plan = buildMachinePlan({ text });
     assert.equal(plan.status, 'MANAGEMENT');
     assert.equal(plan.management.type, 'CANCEL_PENDING');
