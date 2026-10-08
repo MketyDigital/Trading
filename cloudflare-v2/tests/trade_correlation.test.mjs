@@ -225,6 +225,78 @@ test('fresh actionable self-edit with no active trade becomes a new group', () =
   assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
+test('fresh self-edited limit signal becomes a new group alongside an unrelated active trade', () => {
+  const externalEventId = 'telegram:-1001888176046:10186';
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'main signal2' },
+      external_event_id: externalEventId,
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { edited_event_id: externalEventId },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURAUD' },
+        side: 'SELL',
+        orderType: 'LIMIT',
+        entry: { kind: 'PRICE', value: 1.61273 },
+        stopLoss: 1.61523,
+        takeProfits: [1.61048, 1.60764, 1.605],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group({
+      sourceInstanceId: 'main signal2',
+      sourceEventIds: ['telegram:-1001888176046:10180'],
+      symbol: 'GBPCAD',
+      side: 'BUY',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('fresh self-edited full signal still promotes a compatible active fast trade', () => {
+  const fastEventId = 'telegram:-1001888176046:10185';
+  const externalEventId = 'telegram:-1001888176046:10186';
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'main signal2' },
+      external_event_id: externalEventId,
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { edited_event_id: externalEventId },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURAUD' },
+        side: 'SELL',
+        orderType: 'LIMIT',
+        entry: { kind: 'PRICE', value: 1.61273 },
+        stopLoss: 1.61523,
+        takeProfits: [1.61048, 1.60764, 1.605],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group({
+      id: 'euraud-fast',
+      sourceInstanceId: 'main signal2',
+      sourceEventIds: [fastEventId],
+      symbol: 'EURAUD',
+      side: 'SELL',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'euraud-fast' });
+});
+
 test('stale unmatched actionable edit remains fail-closed', () => {
   const result = correlateTradingEvent({
     event: {
