@@ -69,6 +69,7 @@ Persist child-leg relationships and observation/version data in a migration that
 - Position protection changes and partial closes target only confirmed filled execution legs.
 - `CANCEL_PENDING` / Delete targets only confirmed active pending-remainder children. It does not close filled execution legs.
 - `CLOSE` / `CLOSE_ALL` emits close actions for every confirmed filled execution leg and cancel actions for any active pending remainder. Each action is bound back to its child so partial success is persisted accurately and never causes a blind broker retry.
+- If the order is still entirely unfilled, Close emits only a pending-order cancellation. Once fully filled, Delete has no pending remainder to cancel and does not close the resulting position.
 - Existing behavior for groups without activation snapshots remains unchanged.
 - If broker/account mode cannot map a fill to a distinct manageable position without affecting unrelated exposure, the snapshot is rejected and the leg remains flagged for review; no guessed management action is emitted.
 
