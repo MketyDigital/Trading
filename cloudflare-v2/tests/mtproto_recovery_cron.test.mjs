@@ -6,7 +6,7 @@ import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 const RECOVERY_CRON = '* * * * *';
 const LEGACY_CRON = '*/15 * * * *';
 
-test('one-minute cron runs MTProto, destination retry, and state binding repair independently without multiplying legacy work', async () => {
+test('one-minute cron runs MTProto, destination retry, state binding repair, and pending lifecycle independently', async () => {
   let mtprotoCalls = 0;
   let destinationCalls = 0;
   let bindingRepairCalls = 0;
@@ -30,6 +30,7 @@ test('one-minute cron runs MTProto, destination retry, and state binding repair 
     mtprotoRecovery: 'fulfilled',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
+    pendingOrderLifecycle: 'fulfilled',
   });
   assert.equal(mtprotoCalls, 1);
   assert.equal(destinationCalls, 1);
@@ -54,6 +55,7 @@ test('one recovery failure cannot prevent sibling one-minute recovery runtimes',
     mtprotoRecovery: 'rejected',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
+    pendingOrderLifecycle: 'fulfilled',
   });
 });
 
@@ -74,6 +76,7 @@ test('state binding repair failure cannot prevent MTProto or destination retry r
     mtprotoRecovery: 'fulfilled',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'rejected',
+    pendingOrderLifecycle: 'fulfilled',
   });
 });
 
