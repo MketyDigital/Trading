@@ -39,7 +39,9 @@ function nextLegLots(currentLeg = {}, execution = {}) {
 }
 
 function aggregateGroupStatus(legs = [], currentStatus = 'PLANNED') {
-  const statuses = legs.map((leg) => String(leg?.status || '').toUpperCase()).filter(Boolean);
+  const allStatuses = legs.map((leg) => String(leg?.status || '').toUpperCase()).filter(Boolean);
+  const statuses = allStatuses.filter((status) => status !== 'SUPERSEDED');
+  if (statuses.length === 0 && allStatuses.includes('SUPERSEDED')) return 'CLOSED';
   if (statuses.includes('OPEN')) return 'OPEN';
   if (statuses.includes('PENDING')) return 'PENDING';
   if (statuses.length > 0 && statuses.every((status) => status === 'CLOSED')) return 'CLOSED';
@@ -180,6 +182,221 @@ export class TradeStateStore {
     group.status = aggregateGroupStatus(group.legs, group.status);
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);
+  }
+
+  async reconcilePendingOrderSnapshot(groupId, logicalLegId, {
+    tradeAccountId,
+    brokerOrderId,
+    snapshot = {},
+    nowMs = Date.now(),
+  } = {}) {
+    const group = await this.getGroup(groupId);
+    if (!group) return { outcome: 'NOT_FOUND', group: null };
+    if (this.workspaceId && String(group.workspaceId || '') !== this.workspaceId) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (!tradeAccountId || String(group.tradeAccountId || '') !== String(tradeAccountId)) {
+      return { outcome: 'MISMATCH', group };
+    }
+
+    const observedIndex = (group.legs || []).findIndex((leg) => String(leg.legId) === String(logicalLegId));
+    if (observedIndex < 0) return { outcome: 'NOT_FOUND', group };
+    const observedLeg = group.legs[observedIndex];
+    const rootLegId = String(observedLeg.parentLegId || logicalLegId);
+    const parentIndex = (group.legs || []).findIndex((leg) => String(leg.legId) === rootLegId);
+    const parent = parentIndex >= 0 ? group.legs[parentIndex] : observedLeg;
+    const currentOrderId = observedLeg.originatingOrderId ?? observedLeg.brokerOrderId;
+    if (!brokerOrderId || String(currentOrderId || '') !== String(brokerOrderId)) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (observedLeg.lifecycleTrackingEnabled !== true) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (!observedLeg.lifecycleRole && String(observedLeg.status || '').toUpperCase() !== 'PENDING') {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (observedLeg.lifecycleRole && !['PARENT', 'PENDING_REMAINDER'].includes(observedLeg.lifecycleRole)) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (observedLeg.lifecycleRole === 'PENDING_REMAINDER'
+      && (parentIndex < 0 || parent.lifecycleRole !== 'PARENT' || parent.status !== 'SUPERSEDED')) {
+      return { outcome: 'MISMATCH', group };
+    }
+
+    const status = String(snapshot.status || '').trim().toUpperCase();
+    if (status === 'UNRESOLVED') return { outcome: 'UNCHANGED', group };
+    if (!['PENDING', 'PARTIALLY_FILLED', 'FILLED', 'CANCELLED'].includes(status)) {
+      return { outcome: 'MISMATCH', group };
+    }
+    const remainingLots = Number(snapshot.remainingLots);
+    const observedAt = Number(snapshot.observedAt);
+    const requestedLots = Number(parent.requestedLots ?? parent.lots);
+    const fills = Array.isArray(snapshot.fills) ? snapshot.fills : null;
+    if (!fills || !Number.isFinite(remainingLots) || remainingLots < 0 || !Number.isFinite(observedAt)) {
+      return { outcome: 'MISMATCH', group };
+    }
+
+    const byPosition = new Map();
+    for (const fill of fills) {
+      const dealId = String(fill?.dealId ?? '').trim();
+      const positionId = String(fill?.positionId ?? '').trim();
+      const dealIds = Array.isArray(fill?.dealIds) ? fill.dealIds.map((id) => String(id).trim()).filter(Boolean) : (dealId ? [dealId] : []);
+      const lots = Number(fill?.lots);
+      const fillPrice = fill?.fillPrice == null ? undefined : Number(fill.fillPrice);
+      if (!positionId || (fill?.dealId != null && !dealId) || !(Number.isFinite(lots) && lots > 0)
+        || (fillPrice != null && !(Number.isFinite(fillPrice) && fillPrice > 0))) {
+        return { outcome: 'MISMATCH', group };
+      }
+      const prior = byPosition.get(positionId) || { positionId, lots: 0, dealIds: [], weightedPrice: 0, pricedLots: 0 };
+      prior.lots += lots;
+      prior.dealIds.push(...dealIds);
+      if (Number.isFinite(fillPrice)) {
+        prior.weightedPrice += fillPrice * lots;
+        prior.pricedLots += lots;
+      }
+      byPosition.set(positionId, prior);
+    }
+    const totalFilled = [...byPosition.values()].reduce((sum, fill) => sum + fill.lots, 0);
+    const tolerance = 1e-8;
+    if (status !== 'CANCELLED' && Number.isFinite(requestedLots) && requestedLots > 0
+      && Math.abs(totalFilled + remainingLots - requestedLots) > tolerance) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (Number.isFinite(requestedLots) && requestedLots > 0 && totalFilled - requestedLots > tolerance) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (status === 'PENDING' && (totalFilled > tolerance || Math.abs(remainingLots - requestedLots) > tolerance)) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (status === 'PARTIALLY_FILLED' && (!(totalFilled > 0) || !(remainingLots > 0))) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (status === 'FILLED' && (!(totalFilled > 0) || remainingLots > tolerance)) {
+      return { outcome: 'MISMATCH', group };
+    }
+    if (status === 'CANCELLED' && remainingLots > tolerance) return { outcome: 'MISMATCH', group };
+
+    const normalizedFills = [...byPosition.values()]
+      .sort((a, b) => a.positionId.localeCompare(b.positionId))
+      .map((fill) => ({
+        positionId: fill.positionId,
+        lots: Number(fill.lots.toFixed(12)),
+        dealIds: [...new Set(fill.dealIds)].sort(),
+        fillPrice: fill.pricedLots > 0 ? Number((fill.weightedPrice / fill.pricedLots).toFixed(12)) : undefined,
+      }));
+    const sourceVersion = snapshot.sourceVersion == null ? null : String(snapshot.sourceVersion);
+    const fingerprint = JSON.stringify({ status, remainingLots: Number(remainingLots.toFixed(12)), fills: normalizedFills });
+    const lastObservedAt = Number(observedLeg.lastBrokerObservedAt);
+    if (Number.isFinite(lastObservedAt)) {
+      if (observedAt < lastObservedAt) return { outcome: 'STALE', group };
+      if (observedAt === lastObservedAt) {
+        return observedLeg.lastBrokerSnapshotFingerprint === fingerprint
+          ? { outcome: 'UNCHANGED', group }
+          : { outcome: 'STALE', group };
+      }
+      if (['FILLED', 'CANCELLED'].includes(String(observedLeg.lastBrokerStatus || '').toUpperCase())) {
+        return { outcome: 'UNCHANGED', group };
+      }
+    }
+    if (status === 'PENDING') return { outcome: 'UNCHANGED', group };
+
+    let nextTargetIndex = Math.max(0, ...group.legs.map((leg) => Number(leg.targetIndex) || 0));
+    const parentTargetIndex = Number(parent.logicalTargetIndex ?? parent.targetIndex);
+    const nextLegs = group.legs.map((leg) => ({ ...leg }));
+    nextLegs[parentIndex] = {
+      ...parent,
+      status: 'SUPERSEDED',
+      lifecycleRole: 'PARENT',
+      lifecycleTrackingEnabled: true,
+      originatingOrderId: String(brokerOrderId),
+      lastBrokerObservedAt: observedAt,
+      lastBrokerSourceVersion: sourceVersion,
+      lastBrokerStatus: status,
+      lastBrokerSnapshotFingerprint: fingerprint,
+      logicalTargetIndex: parentTargetIndex,
+      brokerOrderId: undefined,
+      brokerPositionId: undefined,
+    };
+
+    for (const fill of normalizedFills) {
+      const legId = `${rootLegId}:fill:${encodeURIComponent(fill.positionId)}`;
+      const existingIndex = nextLegs.findIndex((leg) => String(leg.legId) === legId);
+      const existing = existingIndex >= 0 ? nextLegs[existingIndex] : null;
+      const child = {
+        ...(existing || {}),
+        legId,
+        parentLegId: rootLegId,
+        lifecycleRole: 'FILLED_POSITION',
+        lifecycleTrackingEnabled: true,
+        originatingOrderId: String(brokerOrderId),
+        targetIndex: existing?.targetIndex ?? ++nextTargetIndex,
+        logicalTargetIndex: parentTargetIndex,
+        lots: fill.lots,
+        requestedLots: fill.lots,
+        executedLots: fill.lots,
+        stopLoss: parent.stopLoss ?? group.stopLoss ?? null,
+        takeProfit: parent.takeProfit ?? null,
+        status: 'OPEN',
+        brokerPositionId: fill.positionId,
+        brokerOrderId: undefined,
+        brokerDealId: fill.dealIds.length === 1 ? fill.dealIds[0] : undefined,
+        brokerDealIds: fill.dealIds,
+        fillPrice: fill.fillPrice,
+        openedAt: existing?.openedAt ?? observedAt,
+        lastBrokerObservedAt: observedAt,
+        lastBrokerSourceVersion: sourceVersion,
+      };
+      if (existingIndex >= 0) nextLegs[existingIndex] = child;
+      else nextLegs.push(child);
+    }
+
+    const remainderId = `${rootLegId}:remainder`;
+    const previousRemainderIndex = nextLegs.findIndex((leg) => String(leg.legId) === remainderId);
+    const shouldRemainPending = status === 'PARTIALLY_FILLED' && remainingLots > tolerance;
+    if (shouldRemainPending) {
+      const existing = previousRemainderIndex >= 0 ? nextLegs[previousRemainderIndex] : null;
+      const remainder = {
+        ...(existing || {}),
+        legId: remainderId,
+        parentLegId: rootLegId,
+        lifecycleRole: 'PENDING_REMAINDER',
+        lifecycleTrackingEnabled: true,
+        originatingOrderId: String(brokerOrderId),
+        targetIndex: existing?.targetIndex ?? ++nextTargetIndex,
+        logicalTargetIndex: parentTargetIndex,
+        lots: Number(remainingLots.toFixed(12)),
+        requestedLots: Number(remainingLots.toFixed(12)),
+        stopLoss: parent.stopLoss ?? group.stopLoss ?? null,
+        takeProfit: parent.takeProfit ?? null,
+        status: 'PENDING',
+        brokerOrderId: String(brokerOrderId),
+        brokerPositionId: undefined,
+        lastBrokerObservedAt: observedAt,
+        lastBrokerSourceVersion: sourceVersion,
+        lastBrokerStatus: status,
+        lastBrokerSnapshotFingerprint: fingerprint,
+      };
+      if (previousRemainderIndex >= 0) nextLegs[previousRemainderIndex] = remainder;
+      else nextLegs.push(remainder);
+    } else if (previousRemainderIndex >= 0) {
+      const remainder = nextLegs[previousRemainderIndex];
+      nextLegs[previousRemainderIndex] = {
+        ...remainder,
+        lots: 0,
+        status: status === 'CANCELLED' ? 'CANCELLED' : 'FILLED',
+        brokerOrderId: undefined,
+        lastBrokerObservedAt: observedAt,
+        lastBrokerSourceVersion: sourceVersion,
+        lastBrokerStatus: status,
+        lastBrokerSnapshotFingerprint: fingerprint,
+      };
+    }
+
+    group.legs = nextLegs;
+    group.status = aggregateGroupStatus(group.legs, group.status);
+    group.updatedAt = Number(nowMs);
+    const saved = await this.putGroup(group);
+    return { outcome: 'APPLIED', group: saved };
   }
 
   async setGroupStatus(groupId, status, nowMs = Date.now()) {

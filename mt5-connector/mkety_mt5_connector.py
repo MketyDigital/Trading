@@ -529,6 +529,17 @@ class MketyMt5Connector:
                 return {'type': 'sizing_result', 'requestId': request_id, 'ok': True, 'sizing': sizing}
             except Exception as exc:
                 return {'type': 'sizing_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
+        if kind == 'order_status_request':
+            request_id = str(message.get('requestId') or '')
+            try:
+                result = self.engine.pending_order_status(message.get('brokerOrderId'))
+                identity = terminal_identity(self.mt5)
+                return {'type': 'order_status_result', 'requestId': request_id, 'ok': True,
+                        'snapshot': {**result, 'accountId': identity['accountNumber'],
+                                     'serverName': identity['serverName'], 'isLive': identity['isLive'],
+                                     'environment': 'live' if identity['isLive'] else 'demo'}}
+            except Exception as exc:
+                return {'type': 'order_status_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
         return None
 
     def run_forever(self):

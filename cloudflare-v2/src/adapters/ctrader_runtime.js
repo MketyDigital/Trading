@@ -1,5 +1,6 @@
 import { CTraderJsonSession } from './ctrader_session.js';
 import { CTraderMarketData } from './ctrader_market_data.js';
+import { readCTraderPendingOrderStatus } from './ctrader_pending_order_status.js';
 import { ctraderEndpoint } from './ctrader_protocol.js';
 import { executeCTraderAction } from './ctrader_executor_v2.js';
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
@@ -86,6 +87,32 @@ export async function createCTraderRuntime({
     marketData,
     account,
     catalog,
+    async readPendingOrderStatus({ accountRowId, brokerOrderId, symbol } = {}) {
+      const resolved = resolveSymbolAgainstCatalog(symbol, catalog);
+      if (!resolved.ok) {
+        return {
+          accountRowId: String(accountRowId || ''),
+          brokerAccountNumber: String(marketData.account?.accountId || accountId),
+          serverName: new URL(endpoint).hostname,
+          environment: mode,
+          isLive: mode === 'live',
+          snapshot: { status: 'UNRESOLVED', remainingLots: null, fills: [], observedAt: Date.now(), sourceVersion: null, reason: `SYMBOL_${resolved.reason}` },
+        };
+      }
+      return readCTraderPendingOrderStatus({
+        session,
+        accountRowId,
+        accountId: Number(accountId),
+        brokerAccountNumber: String(marketData.account?.accountId || accountId),
+        serverName: new URL(endpoint).hostname,
+        environment: mode,
+        isLive: mode === 'live',
+        brokerOrderId,
+        expectedPlatformSymbolId: resolved.platformId,
+        protocolLotSize: resolved.protocolLotSize ?? resolved.lotSize,
+        nowMs: Date.now(),
+      });
+    },
     async execute(action) {
       if (!action) throw new TypeError('canonical action is required');
       if (isBreakEvenAction(action)) {

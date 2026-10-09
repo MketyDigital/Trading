@@ -15,6 +15,33 @@ test('builds risk-sized three-leg plan from one canonical intent', () => {
   assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2510, 2520, 2530]);
 });
 
+test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510, 2520, 2530],
+  }, {
+    account: { equity: 10000, sizingMode: 'FIXED_RISK', riskAmount: 100 },
+    instrument,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskAmount, 100);
+  assert.equal(plan.risk.totalLots, 0.1);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.04, 0.03, 0.03]);
+});
+
+test('marks only newly planned pending order legs for future lifecycle tracking', () => {
+  const pending = buildExecutionPlan({
+    side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'EURUSD' }, entry: { kind: 'PRICE', value: 1.08 },
+    stopLoss: 1.07, takeProfits: [1.09],
+  }, { account: { equity: 10000, sizingMode: 'FIXED_LOTS', fixedLots: 0.1 }, instrument });
+  const market = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'EURUSD' }, entry: { kind: 'MARKET' },
+    stopLoss: 1.07, takeProfits: [1.09],
+  }, { account: { equity: 10000, sizingMode: 'FIXED_LOTS', fixedLots: 0.1 }, instrument, currentMarketPrice: 1.08 });
+  assert.equal(pending.group.legs[0].lifecycleTrackingEnabled, true);
+  assert.equal(market.group.legs[0].lifecycleTrackingEnabled, undefined);
+});
+
 test('preserves stable leg identity on every open-position action', () => {
   const plan = buildExecutionPlan({
     side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,

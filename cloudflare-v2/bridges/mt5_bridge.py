@@ -371,6 +371,63 @@ class MT5Engine:
             results[name] = tuple(records)
         return results
 
+    def pending_order_status(self, order_id):
+        """Read an exact order and its deal history. This method never sends orders."""
+        ticket = int(order_id)
+        if ticket <= 0:
+            raise RuntimeError('MT5_PENDING_ORDER_ID_INVALID')
+        active = self.mt5.orders_get(ticket=ticket)
+        if active is None:
+            raise RuntimeError('MT5_PENDING_ORDER_QUERY_UNCERTAIN')
+        history = self.mt5.history_orders_get(ticket=ticket)
+        if history is None:
+            raise RuntimeError('MT5_PENDING_ORDER_HISTORY_UNCERTAIN')
+        orders = [*active, *history]
+        exact = [order for order in orders if str(getattr(order, 'ticket', '')) == str(ticket)]
+        if not exact:
+            return {'status': 'UNRESOLVED', 'brokerOrderId': str(ticket), 'fills': []}
+        order = exact[-1]
+        setup_time = int(getattr(order, 'time_setup', 0) or getattr(order, 'time_setup_msc', 0) // 1000 or 0)
+        start = datetime.fromtimestamp(max(0, setup_time - 5), tz=timezone.utc)
+        end = datetime.now(timezone.utc) + timedelta(seconds=5)
+        deals = self.mt5.history_deals_get(start, end, ticket=ticket)
+        if deals is None:
+            raise RuntimeError('MT5_PENDING_ORDER_DEALS_UNCERTAIN')
+        fills = []
+        for deal in deals:
+            if str(getattr(deal, 'order', '')) != str(ticket):
+                continue
+            position_id = getattr(deal, 'position_id', None)
+            deal_ticket = getattr(deal, 'ticket', None)
+            lots = float(getattr(deal, 'volume', 0) or 0)
+            price = float(getattr(deal, 'price', 0) or 0)
+            if not position_id or not deal_ticket or lots <= 0 or price <= 0:
+                raise RuntimeError('MT5_PENDING_ORDER_DEAL_IDENTITY_UNCERTAIN')
+            fills.append({'dealId': str(deal_ticket), 'positionId': str(position_id), 'lots': lots, 'fillPrice': price})
+        filled = sum(row['lots'] for row in fills)
+        requested = float(getattr(order, 'volume_initial', 0) or 0)
+        remaining = float(getattr(order, 'volume_current', 0) or 0) if active else 0.0
+        state = int(getattr(order, 'state', -1))
+        filled_state = getattr(self.mt5, 'ORDER_STATE_FILLED', 4)
+        canceled_states = {getattr(self.mt5, 'ORDER_STATE_CANCELED', 2), getattr(self.mt5, 'ORDER_STATE_EXPIRED', 5), getattr(self.mt5, 'ORDER_STATE_REJECTED', 6)}
+        if state == filled_state:
+            status = 'FILLED'
+        elif state in canceled_states:
+            status = 'CANCELLED'
+        elif filled > 0:
+            status = 'PARTIALLY_FILLED'
+        elif active:
+            status = 'PENDING'
+        else:
+            return {'status': 'UNRESOLVED', 'brokerOrderId': str(ticket), 'fills': []}
+        if requested <= 0 or filled > requested + 1e-8 or (status == 'PENDING' and remaining <= 0):
+            raise RuntimeError('MT5_PENDING_ORDER_VOLUME_UNCERTAIN')
+        if status != 'CANCELLED' and abs(requested - filled - remaining) > 1e-7:
+            raise RuntimeError('MT5_PENDING_ORDER_VOLUME_UNCERTAIN')
+        return {'status': status, 'brokerOrderId': str(ticket), 'requestedLots': requested,
+                'remainingLots': max(0.0, remaining), 'fills': fills,
+                'observedAt': int(time.time() * 1000)}
+
     def _normalized_recovered_deal(self, deal):
         return {
             'ok': True,
@@ -503,7 +560,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == '/health':
             return self._json(200, {'ok': True})
-        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick'):
+        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick', '/v1/order-status'):
             return self._json(404, {'ok': False, 'error': 'not found'})
         if not self._metadata_authorized():
             return self._json(401, {'ok': False, 'error': 'invalid metadata signature'})
@@ -515,6 +572,19 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if parsed.path == '/v1/symbols':
             symbols = self.mt5.symbols_get() or []
             return self._json(200, {'ok': True, 'symbols': [symbol_snapshot(item) for item in symbols]})
+        if parsed.path == '/v1/order-status':
+            ticket = parse_qs(parsed.query).get('ticket', [None])[0]
+            try:
+                snapshot = self.engine.pending_order_status(ticket)
+                account = self.mt5.account_info()
+                if account is None:
+                    raise RuntimeError('MT5_ACCOUNT_UNAVAILABLE')
+                is_live = int(getattr(account, 'trade_mode', -1)) == int(getattr(self.mt5, 'ACCOUNT_TRADE_MODE_REAL', 2))
+                snapshot.update({'accountId': str(account.login), 'serverName': str(account.server),
+                                 'isLive': is_live, 'environment': 'live' if is_live else 'demo'})
+                return self._json(200, {'ok': True, 'snapshot': snapshot})
+            except Exception as exc:
+                return self._json(409, {'ok': False, 'error': str(exc)})
         symbol = parse_qs(parsed.query).get('symbol', [None])[0]
         tick = self.mt5.symbol_info_tick(symbol) if symbol else None
         return self._json(200 if tick else 404, {'ok': bool(tick), 'tick': tick._asdict() if tick else None})

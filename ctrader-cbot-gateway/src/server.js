@@ -18,6 +18,7 @@ if (!signingKey || !controlSecret) {
 
 const sessions = new Map();
 const pending = new Map();
+const pendingLifecycle = new Map();
 const delivered = new Map();
 
 function json(response, status, body) {
@@ -59,6 +60,7 @@ function clearSession(socket) {
 function commandKey(accountRowId, commandId) {
   return `${accountRowId}:${commandId}`;
 }
+function lifecycleKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 
 function pruneDelivered(now = Date.now()) {
   for (const [key, expiresAt] of delivered.entries()) {
@@ -162,6 +164,19 @@ wsServer.on('connection', (socket) => {
       clearTimeout(waiter.timer);
       waiter.resolve(message);
     }
+    if (message?.type === 'lifecycle_result' && message.requestId) {
+      const key = lifecycleKey(socket.mketyAccountRowId, message.requestId);
+      const waiter = pendingLifecycle.get(key);
+      if (!waiter) return;
+      pendingLifecycle.delete(key); clearTimeout(waiter.timer);
+      const snapshot = message.snapshot && typeof message.snapshot === 'object' ? message.snapshot : null;
+      if (message.ok !== true || !snapshot || String(snapshot.brokerOrderId || '') !== waiter.brokerOrderId
+        || String(snapshot.accountId || '') !== String(session?.identity?.accountNumber || '')
+        || typeof snapshot.isLive !== 'boolean') {
+        return waiter.resolve({ ok: false, reason: String(message.reason || 'CBOT_LIFECYCLE_IDENTITY_INVALID') });
+      }
+      waiter.resolve({ ok: true, snapshot });
+    }
   });
 
   socket.on('close', () => {
@@ -227,6 +242,26 @@ const controlServer = http.createServer(async (request, response) => {
     } catch (error) {
       return json(response, 504, { ok: false, reason: error.message || 'CBOT_RESULT_TIMEOUT' });
     }
+  }
+
+  const lifecycleMatch = url.pathname.match(/^\/v1\/order-lifecycle\/([^/]+)$/);
+  if (request.method === 'POST' && lifecycleMatch) {
+    const accountRowId = decodeURIComponent(lifecycleMatch[1]);
+    let body; try { body = await readJson(request); } catch (error) { return json(response, 400, { ok: false, reason: error.message }); }
+    const brokerOrderId = String(body.brokerOrderId || '').trim();
+    if (!/^[0-9]+$/.test(brokerOrderId)) return json(response, 400, { ok: false, reason: 'BROKER_ORDER_ID_INVALID' });
+    const session = sessions.get(accountRowId);
+    if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 409, { ok: false, reason: 'CBOT_OFFLINE' });
+    const requestId = crypto.randomUUID();
+    const key = lifecycleKey(accountRowId, requestId);
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pendingLifecycle.delete(key); reject(new Error('CBOT_LIFECYCLE_TIMEOUT')); }, commandTimeoutMs);
+        pendingLifecycle.set(key, { resolve, reject, timer, brokerOrderId });
+        session.socket.send(JSON.stringify({ type: 'lifecycle_request', requestId, brokerOrderId }));
+      });
+      return json(response, result.ok === true ? 200 : 409, { ...result, accountRowId });
+    } catch (error) { return json(response, 504, { ok: false, reason: error.message || 'CBOT_LIFECYCLE_TIMEOUT' }); }
   }
 
   return json(response, 404, { ok: false, reason: 'NOT_FOUND' });

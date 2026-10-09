@@ -22,6 +22,7 @@ import { createSourceQueueRuntime } from './sources/source_queue_runtime.js';
 import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime.js';
 import { createProductionDestinationRetryRuntime } from './execution/destination_retry_production.js';
 import { runScheduledBindingRepairs } from './execution/production_binding_repair.js';
+import { createProductionPendingOrderLifecycleRuntime } from './execution/pending_order_lifecycle_production.js';
 import { handleCustomHostnameRouteProofRequest } from './security/custom_hostname_route_proof.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
@@ -30,6 +31,7 @@ export { TradeStateNode } from './state/trade_state_node.js';
 export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js';
 
 const MTPROTO_RECOVERY_CRON = '* * * * *';
+const pendingOrderLifecycleRuntime = createProductionPendingOrderLifecycleRuntime();
 
 function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -225,8 +227,8 @@ export function createTradingV1Entrypoint({
         const mtprotoRuntime = recoveryRuntime || createMtprotoRecoveryRuntime();
         const retryRuntime = destinationRetryRuntime || createProductionDestinationRetryRuntime();
         const repairRuntime = bindingRepairRuntime || runScheduledBindingRepairs;
-        const [mtprotoResult, retryResult, bindingRepairResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx })]);
-        return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status };
+        const [mtprotoResult, retryResult, bindingRepairResult, pendingLifecycleResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }), pendingOrderLifecycleRuntime(env, { ctx })]);
+        return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status, pendingOrderLifecycle: pendingLifecycleResult.status };
       }
       if (typeof legacy.scheduled === 'function') return legacy.scheduled(event, env, ctx);
     },

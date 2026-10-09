@@ -327,6 +327,7 @@ export function createProductionExecutionDependencies({
   const mt5ContextMaxEntries = 64;
   const ctraderBatchRuntimes = new Map();
   const ctraderBatchMaxEntries = 32;
+  const ctraderLifecycleRuntimes = new Map();
 
   function mt5ActionContextKey(account, action) {
     const idempotencyKey = text(action?.idempotencyKey);
@@ -389,7 +390,9 @@ export function createProductionExecutionDependencies({
   async function finalizeExecutionBatch() {
     const entries = [...ctraderBatchRuntimes.values()];
     ctraderBatchRuntimes.clear();
-    await Promise.all(entries.map(async (entry) => closeCTraderRuntime(entry?.runtime)));
+    const lifecycleEntries = [...ctraderLifecycleRuntimes.values()];
+    ctraderLifecycleRuntimes.clear();
+    await Promise.all([...entries, ...lifecycleEntries].map(async (entry) => closeCTraderRuntime(entry?.runtime)));
   }
 
   async function loadAccountCredentials(account, expectedPlatform, credentialKind = expectedPlatform) {
@@ -678,6 +681,61 @@ export function createProductionExecutionDependencies({
     }
   }
 
+  async function readPendingOrderLifecycleStatus({ workspaceId: requestedWorkspaceId, account, brokerOrderId, symbol } = {}) {
+    if (text(requestedWorkspaceId) !== boundWorkspaceId) throw new Error('production execution workspace mismatch');
+    assertBoundAccount(account, boundWorkspaceId);
+    if (environmentOf(account) !== 'demo') return { status: 'UNRESOLVED' };
+    const orderId = required(brokerOrderId, 'broker order id');
+    let snapshot;
+    if (platformOf(account) === 'ctrader' && providerModeOf(account) === 'ctrader_cbot') {
+      const credentials = await loadAccountCredentials(account, 'ctrader', 'ctrader_cbot');
+      const url = `${String(required(credentials.gatewayUrl, 'cTrader cBot gatewayUrl')).replace(/\/+$/, '')}/v1/order-lifecycle/${encodeURIComponent(accountRef(account))}`;
+      const response = await fetchFn(url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${required(credentials.controlSecret, 'cTrader cBot controlSecret')}` }, body: JSON.stringify({ brokerOrderId: orderId }), signal: AbortSignal.timeout(8000) });
+      const body = await readJson(response, 'cTrader cBot order lifecycle');
+      if (String(body.accountRowId || '') !== accountRef(account)) throw new Error('cTrader cBot order lifecycle account mismatch');
+      snapshot = body.snapshot;
+    } else if (platformOf(account) === 'ctrader') {
+      const credentials = await loadAccountCredentials(account, 'ctrader');
+      const accountId = Number(brokerAccountIdOf(account));
+      if (!Number.isInteger(accountId)) throw new Error('cTrader account id must be an integer');
+      const cacheKey = `${accountRef(account)}|${accountId}|demo`;
+      let runtime = ctraderLifecycleRuntimes.get(cacheKey)?.runtime;
+      if (!runtime) {
+        runtime = await ctraderRuntimeFactory({
+          environment: 'demo', allowLiveTrading: false,
+          clientId: required(credentials.clientId, 'cTrader clientId'),
+          clientSecret: required(credentials.clientSecret, 'cTrader clientSecret'),
+          accessToken: required(credentials.accessToken, 'cTrader accessToken'), accountId,
+        });
+        ctraderLifecycleRuntimes.set(cacheKey, { runtime });
+      }
+      if (typeof runtime?.readPendingOrderStatus !== 'function') throw new Error('cTrader order lifecycle reader is unavailable');
+      try {
+        const result = await runtime.readPendingOrderStatus({ accountRowId: accountRef(account), accountId, brokerOrderId: orderId, symbol });
+        snapshot = result?.snapshot && typeof result.snapshot === 'object'
+          ? { ...result.snapshot, accountId: brokerAccountIdOf(account), serverName: result.serverName, environment: result.environment, isLive: result.isLive }
+          : result;
+      }
+      catch (error) {
+        if (ctraderLifecycleRuntimes.get(cacheKey)?.runtime === runtime) ctraderLifecycleRuntimes.delete(cacheKey);
+        await closeCTraderRuntime(runtime);
+        throw error;
+      }
+    } else if (platformOf(account) === 'mt5') {
+      const credentials = await loadAccountCredentials(account, 'mt5');
+      const bridgeUrl = normalizedBaseUrl(required(credentials.bridgeUrl, 'MT5 bridgeUrl'));
+      const path = `/v1/order-status?ticket=${encodeURIComponent(orderId)}`;
+      const timestamp = String(Date.now());
+      const signature = await signMT5MetadataRequest({ method: 'GET', target: path, timestamp, secret: required(credentials.bridgeSecret, 'MT5 bridgeSecret') });
+      const response = await fetchFn(`${bridgeUrl}${path}`, { method: 'GET', headers: { Accept: 'application/json', 'X-Mkety-Timestamp': timestamp, 'X-Mkety-Signature': signature }, signal: AbortSignal.timeout(8000) });
+      const body = await readJson(response, 'MT5 order lifecycle');
+      snapshot = body.snapshot;
+    } else throw new Error('pending order lifecycle platform is unsupported');
+    if (!snapshot || snapshot.isLive !== false || String(snapshot.accountId || '') !== brokerAccountIdOf(account)
+      || String(snapshot.brokerOrderId || '') !== orderId) return { status: 'UNRESOLVED' };
+    return snapshot;
+  }
+
   async function dispatchAction({ workspaceId: requestedWorkspaceId, groupId, account, action } = {}) {
     if (text(requestedWorkspaceId) !== boundWorkspaceId) {
       throw new Error('production execution workspace mismatch');
@@ -819,6 +877,7 @@ export function createProductionExecutionDependencies({
     riskMaterializer,
     retryValidityValidator,
     dispatchAction,
+    readPendingOrderLifecycleStatus,
     stateBinder,
     finalizeExecutionBatch,
   };

@@ -94,3 +94,44 @@ test('cancel pending fails closed for a PLANNED market-position group', async ()
   assert.deepEqual(result.accounts[0].actions, []);
   assert.equal(persisted.length, 0);
 });
+
+test('close refreshes a pending DEMO group before building actions so a just-filled position is included', async () => {
+  const existing = pendingGroup({
+    legs: [{ legId: 'pending-leg-1', targetIndex: 1, lots: 0.10, status: 'PENDING', brokerOrderId: 'order-1' }],
+  });
+  const refreshed = {
+    ...existing,
+    legs: [
+      { legId: 'pending-leg-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT' },
+      { legId: 'pending-leg-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.04 },
+      { legId: 'pending-leg-1:remainder', targetIndex: 3, logicalTargetIndex: 1, status: 'PENDING', lifecycleRole: 'PENDING_REMAINDER', brokerOrderId: 'order-1', lots: 0.06 },
+    ],
+  };
+  const persisted = [];
+  const dependencies = deps(existing, persisted);
+  let refreshedCount = 0;
+  dependencies.refreshPendingOrderLifecycle = async ({ group, account: selectedAccount }) => {
+    refreshedCount++;
+    assert.equal(group.id, existing.id);
+    assert.equal(selectedAccount.id, 'acct-1');
+    return refreshed;
+  };
+
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'close-just-filled',
+      workspace_hint: 'ws-1',
+      source: { instance_id: 'acceptance-harness' },
+      thread: { reply_to_event_id: 'pending-signal-1' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    eventId: 'db-close-just-filled',
+    nowMs: 3000,
+  }, dependencies);
+
+  assert.equal(refreshedCount, 1);
+  assert.equal(result.status, 'SIMULATED');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.type), ['CLOSE_POSITION', 'CANCEL_PENDING']);
+  assert.equal(result.accounts[0].actions[0].brokerPositionId, 'position-1');
+  assert.equal(result.accounts[0].actions[1].brokerOrderId, 'order-1');
+});

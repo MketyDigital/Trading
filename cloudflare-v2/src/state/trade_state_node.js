@@ -100,6 +100,21 @@ export class TradeStateNode {
     }
 
     const { store } = this.runtimeForWorkspace(headerWorkspaceId);
+    const pendingSnapshotMatch = path.match(/^\/groups\/([^/]+)\/legs\/([^/]+)\/pending-order-snapshot$/);
+    if (method === 'POST' && pendingSnapshotMatch) {
+      if (!headerWorkspaceId) return json({ error: 'workspace header required' }, 400);
+      const payload = await body(request) || {};
+      if (!payload.tradeAccountId || !payload.brokerOrderId || !payload.snapshot || typeof payload.snapshot !== 'object') {
+        return json({ error: 'tradeAccountId, brokerOrderId, and snapshot are required' }, 400);
+      }
+      const result = await store.reconcilePendingOrderSnapshot(
+        decodeURIComponent(pendingSnapshotMatch[1]),
+        decodeURIComponent(pendingSnapshotMatch[2]),
+        payload,
+      );
+      return json(result);
+    }
+
     const groupMatch = path.match(/^\/groups\/([^/]+)$/);
     if (method === 'GET' && groupMatch) {
       const group = await store.getGroup(decodeURIComponent(groupMatch[1]));

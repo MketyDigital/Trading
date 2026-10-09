@@ -10,6 +10,7 @@ import {
   buildSymbolByIdMessage,
   buildSubscribeSpotsMessage,
   buildExpectedMarginMessage,
+  buildOrderDetailsMessage,
   decodeSpotEvent,
 } from '../src/adapters/ctrader_protocol.js';
 
@@ -66,6 +67,13 @@ test('builds broker-authoritative cTrader reconcile request', () => {
     clientMsgId: 'r1',
     payloadType: 2124,
     payload: { ctidTraderAccountId: 123, returnProtectionOrders: false },
+  });
+});
+
+test('builds a distinct read-only cTrader order-details request', () => {
+  assert.deepEqual(buildOrderDetailsMessage({ clientMsgId: 'status-1', accountId: 123, orderId: 9001 }), {
+    clientMsgId: 'status-1', payloadType: 2181,
+    payload: { ctidTraderAccountId: 123, orderId: 9001 },
   });
 });
 

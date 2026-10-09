@@ -14,10 +14,12 @@ function node() {
   return new TradeStateNode({ storage: new MemoryStorage() }, { TRADE_STATE_INTERNAL_TOKEN: 'secret' });
 }
 
-function req(path, body, token='secret', method='POST') {
+function req(path, body, token='secret', method='POST', workspaceId) {
+  const headers = { 'content-type':'application/json', 'x-mkety-internal-token':token };
+  if (workspaceId) headers['x-mkety-workspace-id'] = workspaceId;
   return new Request(`https://state.internal${path}`, {
     method,
-    headers: { 'content-type':'application/json', 'x-mkety-internal-token':token },
+    headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
@@ -56,4 +58,50 @@ test('persists execution binding and source event update through internal api', 
   const group = await res.json();
   assert.deepEqual(group.sourceEventIds, ['100','101']);
   assert.equal(group.legs[0].brokerPositionId, 'p1');
+});
+
+test('binding a legacy pending order does not opt it into lifecycle tracking', async () => {
+  const n = node();
+  await n.fetch(req('/groups', { id:'g2',workspaceId:'ws1',tradeAccountId:'account-1',symbol:'EURUSD',side:'BUY',status:'PENDING',legs:[{legId:'leg-2',status:'PENDING',lots:0.1,brokerOrderId:'old-order'}] }));
+  const response = await n.fetch(req('/groups/g2/legs/leg-2/execution', { brokerOrderId:'new-order',status:'PENDING' }));
+  assert.equal(response.status, 200);
+  const group = await (await n.fetch(req('/groups/g2', undefined, 'secret', 'GET'))).json();
+  assert.equal(group.legs[0].lifecycleTrackingEnabled, undefined);
+});
+
+test('reconciles an exact-account pending order snapshot through its separate internal state route', async () => {
+  const n = node();
+  await n.fetch(req('/groups', {
+    id: 'group-1', workspaceId: 'ws1', tradeAccountId: 'account-1', symbol: 'EURUSD', side: 'BUY', orderType: 'LIMIT', status: 'PENDING',
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.10, requestedLots: 0.10, status: 'PENDING', brokerOrderId: 'order-1', lifecycleTrackingEnabled: true }],
+  }, 'secret', 'POST', 'ws1'));
+  const response = await n.fetch(req('/groups/group-1/legs/leg-1/pending-order-snapshot', {
+    tradeAccountId: 'account-1', brokerOrderId: 'order-1', nowMs: 200,
+    snapshot: { status: 'PARTIALLY_FILLED', remainingLots: 0.06, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.08 }], observedAt: 190, sourceVersion: 'v1' },
+  }, 'secret', 'POST', 'ws1'));
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.outcome, 'APPLIED');
+  assert.equal(payload.group.legs.find((leg) => leg.lifecycleRole === 'FILLED_POSITION').brokerPositionId, 'position-1');
+});
+
+test('pending order snapshot route rejects workspace mismatch without changing state', async () => {
+  const n = node();
+  await n.fetch(req('/groups', {
+    id: 'group-1', workspaceId: 'ws1', tradeAccountId: 'account-1', symbol: 'EURUSD', side: 'BUY', orderType: 'LIMIT', status: 'PENDING',
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.10, status: 'PENDING', brokerOrderId: 'order-1' }],
+  }, 'secret', 'POST', 'ws1'));
+  const response = await n.fetch(req('/groups/group-1/legs/leg-1/pending-order-snapshot', {
+    tradeAccountId: 'account-1', brokerOrderId: 'order-1',
+    snapshot: { status: 'FILLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.10 }], observedAt: 190 },
+  }, 'secret', 'POST', 'ws2'));
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.outcome, 'MISMATCH');
+  assert.equal((await n.fetch(req('/groups/group-1', undefined, 'secret', 'GET', 'ws1'))).status, 200);
+  const saved = await (await n.fetch(req('/groups/group-1', undefined, 'secret', 'GET', 'ws1'))).json();
+  assert.equal(saved.legs.length, 1);
+  assert.equal(saved.legs[0].status, 'PENDING');
 });
