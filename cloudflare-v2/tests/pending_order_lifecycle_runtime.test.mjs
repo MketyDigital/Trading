@@ -48,3 +48,14 @@ test('pending lifecycle never reads a production account', async () => {
   assert.equal(result.applied, 0);
   assert.equal(h.calls.some(([kind]) => kind === 'read'), false);
 });
+
+test('pending lifecycle leaves cTrader cBot accounts unchanged until active partial fills are observable', async () => {
+  const h = runtimeHarness({
+    account: { workspace_id: 'ws-1', account_id: 'acct-1', environment: 'demo', platform: 'ctrader', provider_mode: 'ctrader_cbot' },
+    snapshot: { status: 'FILLED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'demo', isLive: false, remainingLots: 0, fills: [], observedAt: 10 },
+  });
+  const result = await h.run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true' });
+  assert.equal(result.applied, 0);
+  assert.equal(h.applied.length, 0);
+  assert.equal(h.calls.some(([kind]) => kind === 'read'), false);
+});
