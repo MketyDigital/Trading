@@ -22,6 +22,9 @@ export function createPendingOrderLifecycleRuntime({
         if (!account || text(account.workspace_id ?? account.workspaceId) !== row.workspaceId) { skipped++; continue; }
         const environment = text(account.environment ?? account.server_name ?? account.serverName).toLowerCase();
         if (!['demo', 'practice'].includes(environment)) { skipped++; continue; }
+        const platform = text(account.platform).toLowerCase();
+        const providerMode = text(account.provider_mode ?? account.providerMode).toLowerCase();
+        if (platform === 'ctrader' && providerMode === 'ctrader_cbot') { skipped++; continue; }
         const snapshot = await readStatus({ account, lifecycle: row });
         if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== false
           || text(snapshot.accountId) !== text(account.account_id ?? account.brokerAccountId)
