@@ -21,6 +21,11 @@ function currentTakeProfit(leg) {
   return finiteProtection(leg?.takeProfit);
 }
 
+function logicalTargetIndex(leg) {
+  const value = Number(leg?.logicalTargetIndex ?? leg?.targetIndex);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function preservedStopLoss(group, leg) {
   const value = currentStopLoss(group, leg);
   return value == null ? {} : { stopLoss: value };
@@ -93,7 +98,7 @@ function coalesceCompoundProtectionActions(group, children) {
     const targetIndex = child.targetIndex == null ? null : Number(child.targetIndex);
     const matchingStates = targetIndex == null
       ? states
-      : states.filter(({ leg }) => Number(leg.targetIndex) === targetIndex);
+      : states.filter(({ leg }) => logicalTargetIndex(leg) === targetIndex);
 
     if (child.type === 'CHANGE_TP') {
       const takeProfit = Number(child.takeProfit);
@@ -120,7 +125,7 @@ function coalesceCompoundProtectionActions(group, children) {
     .map(({ leg, stopLoss, takeProfit, clearStopLoss, clearTakeProfit }) => ({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       ...(stopLoss != null ? { stopLoss } : clearStopLoss ? { clearStopLoss: true } : {}),
@@ -164,6 +169,9 @@ export function buildPositionGroup(intent, { totalLots, volumeStep = 0.01, group
       stopLoss: intent.stopLoss ?? null,
       takeProfit,
       status: 'PLANNED',
+      ...(['LIMIT', 'STOP', 'STOP_LIMIT'].includes(String(intent.orderType || '').toUpperCase())
+        ? { lifecycleTrackingEnabled: true }
+        : {}),
     })),
   };
 }
@@ -181,7 +189,7 @@ export function reconcileFastEntry(existingGroup, completedIntent, { totalLots, 
     symbol: completedIntent.symbol?.canonical,
     stopLoss: completedIntent.stopLoss ?? null,
     takeProfit: desired.legs[0]?.takeProfit ?? null,
-    targetIndex: firstOpen.targetIndex ?? 1,
+    targetIndex: logicalTargetIndex(firstOpen) ?? 1,
   }];
 
   for (let i = 1; i < desired.legs.length; i += 1) {
@@ -207,7 +215,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
   const index = Number(targetIndex);
   if (!Number.isInteger(index) || index < 1) throw new Error('valid targetIndex is required');
 
-  const hitLeg = group.legs.find((leg) => Number(leg.targetIndex) === index);
+  const hitLeg = group.legs.find((leg) => logicalTargetIndex(leg) === index);
   if (!hitLeg || !Number.isFinite(Number(hitLeg.takeProfit))) throw new Error('target-hit takeProfit is unavailable');
 
   let protectedStop;
@@ -215,7 +223,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
     if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for TP1 protection');
     protectedStop = Number(group.entryPrice);
   } else {
-    const previousLeg = group.legs.find((leg) => Number(leg.targetIndex) === index - 1);
+    const previousLeg = group.legs.find((leg) => logicalTargetIndex(leg) === index - 1);
     if (!previousLeg || !Number.isFinite(Number(previousLeg.takeProfit))) {
       throw new Error('previous target takeProfit is unavailable');
     }
@@ -223,7 +231,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
   }
 
   return group.legs
-    .filter((leg) => Number(leg.targetIndex) > index && leg.status === 'OPEN' && leg.brokerPositionId)
+    .filter((leg) => logicalTargetIndex(leg) > index && leg.status === 'OPEN' && leg.brokerPositionId)
     .filter((leg) => !sameProtectionPrice(currentStopLoss(group, leg), protectedStop))
     .map((leg) => ({
       type: 'MODIFY_POSITION',
@@ -232,7 +240,7 @@ export function buildTargetProtectionActions(group, targetIndex) {
       symbol: group.symbol,
       stopLoss: protectedStop,
       ...preservedTakeProfit(leg),
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
     }));
 }
 
@@ -274,7 +282,7 @@ export function buildManagementActions(group, management) {
         type: 'MODIFY_POSITION',
         managementType: 'MOVE_SL_TO_BE',
         legId: leg.legId,
-        targetIndex: leg.targetIndex,
+        targetIndex: logicalTargetIndex(leg),
         brokerPositionId: leg.brokerPositionId,
         symbol: group.symbol,
         side: group.side,
@@ -289,7 +297,7 @@ export function buildManagementActions(group, management) {
     return openLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       stopLoss,
@@ -302,11 +310,11 @@ export function buildManagementActions(group, management) {
     const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
     const matchingLegs = targetIndex == null
       ? openLegs
-      : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+      : openLegs.filter((leg) => logicalTargetIndex(leg) === targetIndex);
     return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       takeProfit,
@@ -318,7 +326,7 @@ export function buildManagementActions(group, management) {
       type: 'MODIFY_POSITION',
       managementType: 'REMOVE_SL',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       clearStopLoss: true,
@@ -329,12 +337,12 @@ export function buildManagementActions(group, management) {
     const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
     const matchingLegs = targetIndex == null
       ? openLegs
-      : openLegs.filter((leg) => Number(leg.targetIndex) === targetIndex);
+      : openLegs.filter((leg) => logicalTargetIndex(leg) === targetIndex);
     return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
       managementType: 'REMOVE_TP',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerPositionId: leg.brokerPositionId,
       symbol: group.symbol,
       clearTakeProfit: true,
@@ -368,7 +376,7 @@ export function buildManagementActions(group, management) {
       return {
         type: 'CLOSE_PARTIAL',
         legId: leg.legId,
-        targetIndex: leg.targetIndex,
+        targetIndex: logicalTargetIndex(leg),
         brokerPositionId: leg.brokerPositionId,
         symbol: group.symbol,
         ...(hasFraction ? { fraction } : {}),
@@ -382,7 +390,7 @@ export function buildManagementActions(group, management) {
       .map((leg) => ({
         type: 'CANCEL_PENDING',
         legId: leg.legId,
-        targetIndex: leg.targetIndex,
+        targetIndex: logicalTargetIndex(leg),
         brokerOrderId: leg.brokerOrderId,
         symbol: group.symbol,
       }));
@@ -402,7 +410,7 @@ export function buildManagementActions(group, management) {
       .map((leg) => ({
         type: 'CLOSE_POSITION',
         legId: leg.legId,
-        targetIndex: leg.targetIndex,
+        targetIndex: logicalTargetIndex(leg),
         brokerPositionId: leg.brokerPositionId,
         ...(leg.brokerOrderId != null ? { brokerOrderId: leg.brokerOrderId } : {}),
         symbol: group.symbol,
@@ -411,7 +419,7 @@ export function buildManagementActions(group, management) {
     const cancelActions = pendingLegs.map((leg) => ({
       type: 'CANCEL_PENDING',
       legId: leg.legId,
-      targetIndex: leg.targetIndex,
+      targetIndex: logicalTargetIndex(leg),
       brokerOrderId: leg.brokerOrderId,
       symbol: group.symbol,
     }));

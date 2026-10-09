@@ -345,6 +345,7 @@ async function orchestrateMatchedManagement({
   correlation,
   stateStore,
   accountProvider,
+  refreshPendingOrderLifecycle,
 }) {
   const base = { executionEnabled: false, actions: [] };
   const loaded = await loadMatchedFastGroups(correlation, stateStore);
@@ -366,7 +367,8 @@ async function orchestrateMatchedManagement({
   const results = [];
   const stagedGroups = [];
 
-  for (const matchedGroup of loaded.groups) {
+  for (const persistedGroup of loaded.groups) {
+    let matchedGroup = persistedGroup;
     const account = normalizeAccount(accountById.get(String(matchedGroup.tradeAccountId)));
     if (account.execution_enabled !== true && account.executionEnabled !== true) {
       results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
@@ -385,6 +387,19 @@ async function orchestrateMatchedManagement({
     if (!policy.allowed) {
       results.push({ accountId: account.id, status: 'BLOCKED', policy, actions: [] });
       continue;
+    }
+
+    const managementType = String(interpretation.management?.type || '').toUpperCase();
+    const needsFreshPendingState = ['CLOSE', 'CLOSE_ALL', 'CANCEL_PENDING'].includes(managementType)
+      && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING' && leg?.brokerOrderId);
+    if (needsFreshPendingState && typeof refreshPendingOrderLifecycle === 'function') {
+      try {
+        const refreshed = await refreshPendingOrderLifecycle({ group: matchedGroup, account, nowMs });
+        if (refreshed?.id && String(refreshed.id) === String(matchedGroup.id)) matchedGroup = refreshed;
+      } catch {
+        // Keep the existing management path available when a read-only broker
+        // refresh is unavailable; the scheduled recovery sweep retries later.
+      }
     }
 
     let actions;
@@ -614,6 +629,7 @@ export async function orchestrateTradingEventSimulation({
   instrumentProvider,
   exposureProvider = async () => ({}),
   marketPriceProvider = async () => undefined,
+  refreshPendingOrderLifecycle,
 } = {}) {
   if (!stateCoordinator?.correlate) throw new TypeError('stateCoordinator is required');
   if (!stateStore?.putGroup) throw new TypeError('stateStore is required');
@@ -644,6 +660,7 @@ export async function orchestrateTradingEventSimulation({
       correlation,
       stateStore,
       accountProvider,
+      refreshPendingOrderLifecycle,
     });
   }
 

@@ -7,6 +7,7 @@ import { providerFeedIdFromEvent } from '../sources/source_feed_store.js';
 import { evaluateRouteFilters } from '../destinations/route_filters.js';
 import { selectAuthorizedRoutesForFeed } from '../routes/logical_route_scope.js';
 import { buildSymbolEquivalentSizing, buildBalancePercentSizing } from '../execution/margin_equivalent_sizing.js';
+import { createProductionExecutionDependencies } from '../execution/production_execution_deps_unified.js';
 
 function parseJsonConfig(value, label) {
   if (!value) return {};
@@ -48,6 +49,10 @@ function createTradeStateClient(env, workspaceId) {
     stateStore: {
       getGroup: (groupId) => call(`/groups/${encodeURIComponent(String(groupId))}`, 'GET'),
       putGroup: (group) => call('/groups', 'POST', group),
+      reconcilePendingOrderSnapshot: (groupId, legId, payload) => call(
+        `/groups/${encodeURIComponent(String(groupId))}/legs/${encodeURIComponent(String(legId))}/pending-order-snapshot`,
+        'POST', payload,
+      ),
     },
   };
 }
@@ -643,7 +648,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader } = {}) {
+export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
   if (!supabase?.from) throw new Error('Supabase client is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
@@ -653,8 +658,54 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   const prices = parseJsonConfig(env.TRADING_V1_SIMULATION_PRICES, 'TRADING_V1_SIMULATION_PRICES');
   const exposures = parseJsonConfig(env.TRADING_V1_SIMULATION_EXPOSURES, 'TRADING_V1_SIMULATION_EXPOSURES');
 
+  const refreshPendingOrderLifecycle = env.PENDING_ORDER_LIFECYCLE_SYNC_ENABLED === 'true'
+    ? async ({ group, account } = {}) => {
+      const environment = text(account?.environment ?? account?.server_name ?? account?.serverName).toLowerCase();
+      if (!group?.id || text(group.workspaceId) !== workspaceId || !['demo', 'practice'].includes(environment)
+        || text(account?.workspace_id ?? account?.workspaceId) !== workspaceId
+        || text(group.tradeAccountId) !== text(account?.id)) return group;
+
+      const pendingLegs = (group.legs || []).filter((leg) =>
+        leg?.lifecycleTrackingEnabled === true
+          && String(leg?.status || '').toUpperCase() === 'PENDING' && text(leg?.brokerOrderId));
+      if (!pendingLegs.length) return group;
+
+      const lifecycleDependencies = lifecycleDependenciesFactory({ env, supabase, workspaceId });
+      try {
+        for (const leg of pendingLegs) {
+          try {
+            const snapshot = await lifecycleDependencies.readPendingOrderLifecycleStatus({
+              workspaceId,
+              account,
+              brokerOrderId: String(leg.brokerOrderId),
+              symbol: group.symbol,
+            });
+            if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== false
+              || text(snapshot.accountId) !== text(account?.account_id ?? account?.accountId)
+              || text(snapshot.brokerOrderId) !== String(leg.brokerOrderId)
+              || text(snapshot.environment).toLowerCase() !== environment) continue;
+            await state.stateStore.reconcilePendingOrderSnapshot(group.id, leg.legId, {
+              tradeAccountId: group.tradeAccountId,
+              brokerOrderId: String(leg.brokerOrderId),
+              snapshot: { ...snapshot, observedAt: Number(snapshot.observedAt) || Date.now() },
+            });
+          } catch {
+            // A failed read leaves the current group untouched; the scheduled
+            // recovery sweep will retry without issuing broker commands.
+          }
+        }
+        return await state.stateStore.getGroup(group.id) || group;
+      } finally {
+        if (typeof lifecycleDependencies.finalizeExecutionBatch === 'function') {
+          await lifecycleDependencies.finalizeExecutionBatch();
+        }
+      }
+    }
+    : undefined;
+
   return {
     ...state,
+    ...(refreshPendingOrderLifecycle ? { refreshPendingOrderLifecycle } : {}),
     async accountProvider() {
       const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation });
       if (!accountIds.length) return [];

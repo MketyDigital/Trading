@@ -5,6 +5,14 @@ import { buildManagementActions } from '../src/execution/position_group.js';
 import { buildMachinePlan } from '../src/pipeline/machine_plan.js';
 import { executeCTraderAction } from '../src/adapters/ctrader_executor_v2.js';
 import { executeMt5ConnectorAction } from '../src/adapters/mt5_connector_executor_v2.js';
+import { TradeStateStore } from '../src/state/trade_state_store.js';
+
+class MemoryStorage {
+  constructor() { this.map = new Map(); }
+  async get(key) { return this.map.get(key); }
+  async put(key, value) { this.map.set(key, structuredClone(value)); }
+  async list({ prefix = '' } = {}) { return new Map([...this.map].filter(([key]) => key.startsWith(prefix))); }
+}
 
 const ctraderSymbol = {
   platform: 'ctrader', platformId: 1, platformSymbol: 'EUR/USD', canonical: 'EURUSD',
@@ -50,6 +58,9 @@ test('delete wording without an explicit order reply does not become a pending c
 });
 
 test('close on a pending limit leg cancels the broker order instead of closing a position', () => {
+  const plan = buildMachinePlan({ text: 'Close', thread: { reply_to_event_id: 'event-pending' } });
+  assert.equal(plan.status, 'MANAGEMENT');
+  assert.equal(plan.management.type, 'CLOSE');
   const actions = buildManagementActions({
     symbol: 'EURUSD',
     orderType: 'LIMIT',
@@ -57,7 +68,7 @@ test('close on a pending limit leg cancels the broker order instead of closing a
       legId: 'leg-1', targetIndex: 1, status: 'PENDING',
       brokerPositionId: null, brokerOrderId: 'order-101', lots: 0.01,
     }],
-  }, { type: 'CLOSE' });
+  }, plan.management);
 
   assert.deepEqual(actions, [{
     type: 'CANCEL_PENDING',
@@ -82,6 +93,94 @@ test('close cancels pending legs and closes filled legs in the same group', () =
     { type: 'CLOSE_POSITION', legId: 'leg-2', targetIndex: 2, brokerPositionId: 'position-202', symbol: 'EURUSD', lots: 0.02 },
     { type: 'CANCEL_PENDING', legId: 'leg-1', targetIndex: 1, brokerOrderId: 'order-101', symbol: 'EURUSD' },
   ]);
+});
+
+test('Delete on an activated order cancels only its pending remainder', () => {
+  const actions = buildManagementActions({
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [
+      { legId: 'logical-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT' },
+      { legId: 'logical-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.04 },
+      { legId: 'logical-1:remainder', targetIndex: 3, logicalTargetIndex: 1, status: 'PENDING', lifecycleRole: 'PENDING_REMAINDER', brokerOrderId: 'order-1', lots: 0.06 },
+    ],
+  }, { type: 'CANCEL_PENDING' });
+
+  assert.deepEqual(actions, [{ type: 'CANCEL_PENDING', legId: 'logical-1:remainder', targetIndex: 1, brokerOrderId: 'order-1', symbol: 'EURUSD' }]);
+});
+
+test('Delete after a full activation does not close the resulting position', () => {
+  const actions = buildManagementActions({
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [
+      { legId: 'logical-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT' },
+      { legId: 'logical-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.10 },
+    ],
+  }, { type: 'CANCEL_PENDING' });
+
+  assert.deepEqual(actions, []);
+});
+
+test('Close on a wholly pending order cancels it without trying to close a position', () => {
+  const actions = buildManagementActions({
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [{ legId: 'leg-1', targetIndex: 1, status: 'PENDING', brokerOrderId: 'order-1', lots: 0.10 }],
+  }, { type: 'CLOSE' });
+
+  assert.deepEqual(actions, [{ type: 'CANCEL_PENDING', legId: 'leg-1', targetIndex: 1, brokerOrderId: 'order-1', symbol: 'EURUSD' }]);
+});
+
+test('Close on a partial activation closes every filled position and cancels the remainder', () => {
+  const actions = buildManagementActions({
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [
+      { legId: 'logical-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT' },
+      { legId: 'logical-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.04 },
+      { legId: 'logical-1:fill:position-2', targetIndex: 3, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-2', lots: 0.02 },
+      { legId: 'logical-1:remainder', targetIndex: 4, logicalTargetIndex: 1, status: 'PENDING', lifecycleRole: 'PENDING_REMAINDER', brokerOrderId: 'order-1', lots: 0.04 },
+    ],
+  }, { type: 'CLOSE' });
+
+  assert.deepEqual(actions, [
+    { type: 'CLOSE_POSITION', legId: 'logical-1:fill:position-1', targetIndex: 1, brokerPositionId: 'position-1', symbol: 'EURUSD', lots: 0.04 },
+    { type: 'CLOSE_POSITION', legId: 'logical-1:fill:position-2', targetIndex: 1, brokerPositionId: 'position-2', symbol: 'EURUSD', lots: 0.02 },
+    { type: 'CANCEL_PENDING', legId: 'logical-1:remainder', targetIndex: 1, brokerOrderId: 'order-1', symbol: 'EURUSD' },
+  ]);
+});
+
+test('simulated lifecycle replay preserves Delete and Close semantics without dispatching a broker action', async () => {
+  const store = new TradeStateStore(new MemoryStorage(), { workspaceId: 'ws-1' });
+  await store.putGroup({
+    id: 'group-simulation', workspaceId: 'ws-1', tradeAccountId: 'account-1', symbol: 'EURUSD', side: 'BUY', orderType: 'LIMIT', status: 'PENDING',
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.1, requestedLots: 0.1, status: 'PENDING', brokerOrderId: 'order-1', lifecycleTrackingEnabled: true }],
+  });
+  const snapshot = { status: 'PARTIALLY_FILLED', remainingLots: 0.06, observedAt: 100,
+    fills: [{ positionId: 'position-1', lots: 0.04, fillPrice: 1.08, dealId: 'deal-1' }] };
+  const first = await store.reconcilePendingOrderSnapshot('group-simulation', 'leg-1', { tradeAccountId: 'account-1', brokerOrderId: 'order-1', snapshot });
+  const replay = await store.reconcilePendingOrderSnapshot('group-simulation', 'leg-1:remainder', { tradeAccountId: 'account-1', brokerOrderId: 'order-1', snapshot });
+  assert.equal(first.outcome, 'APPLIED');
+  assert.equal(replay.outcome, 'UNCHANGED');
+  assert.deepEqual(buildManagementActions(first.group, { type: 'CANCEL_PENDING' }), [
+    { type: 'CANCEL_PENDING', legId: 'leg-1:remainder', targetIndex: 1, brokerOrderId: 'order-1', symbol: 'EURUSD' },
+  ]);
+  assert.deepEqual(buildManagementActions(first.group, { type: 'CLOSE' }), [
+    { type: 'CLOSE_POSITION', legId: 'leg-1:fill:position-1', targetIndex: 1, brokerPositionId: 'position-1', symbol: 'EURUSD', lots: 0.04 },
+    { type: 'CANCEL_PENDING', legId: 'leg-1:remainder', targetIndex: 1, brokerOrderId: 'order-1', symbol: 'EURUSD' },
+  ]);
+});
+
+test('target-specific management still selects children by the original logical target', () => {
+  const actions = buildManagementActions({
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [
+      { legId: 'logical-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT', takeProfit: 1.10 },
+      { legId: 'logical-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.04, takeProfit: 1.10 },
+    ],
+  }, { type: 'CHANGE_TP', targetIndex: 1, takeProfit: 1.11 });
+
+  assert.deepEqual(actions, [{
+    type: 'MODIFY_POSITION', legId: 'logical-1:fill:position-1', targetIndex: 1,
+    brokerPositionId: 'position-1', symbol: 'EURUSD', takeProfit: 1.11,
+  }]);
 });
 
 test('cTrader accepted limit with an unfilled order ID persists as pending, not an open position', async () => {

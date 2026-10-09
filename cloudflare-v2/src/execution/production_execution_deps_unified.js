@@ -339,5 +339,32 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     return preserveManagementBrokerIdentity(action, result);
   }
 
-  return { ...base, riskMaterializer, dispatchAction };
+  async function readPendingOrderLifecycleStatus(input = {}) {
+    const account = input.account;
+    if (!isMt5Connector(account)) return base.readPendingOrderLifecycleStatus(input);
+    if (text(input.workspaceId) !== workspaceId) throw new Error('production execution workspace mismatch');
+    assertBoundConnectorAccount(account, workspaceId);
+    if (text(account.environment).toLowerCase() !== 'demo') return { status: 'UNRESOLVED' };
+    const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
+    const connection = await loadConnectorIdentity({ account, credentials, fetchFn });
+    const orderId = text(input.brokerOrderId);
+    if (!/^[0-9]+$/.test(orderId)) throw new Error('MT5 broker order id is invalid');
+    let response;
+    try {
+      response = await fetchFn(`${connection.baseUrl}/v1/mt5-order-status/${encodeURIComponent(accountRef(account))}`, {
+        method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${connection.controlSecret}` },
+        body: JSON.stringify({ brokerOrderId: orderId }), signal: AbortSignal.timeout(8000),
+      });
+    } catch { throw new Error('MT5 connector order lifecycle request failed'); }
+    const body = await readJson(response, 'MT5 connector order lifecycle');
+    const snapshot = body.snapshot;
+    if (String(body.accountRowId || '') !== accountRef(account) || !snapshot || snapshot.isLive !== false
+      || text(snapshot.accountId) !== brokerAccountIdOf(account) || text(snapshot.serverName) !== text(account.server_name ?? account.serverName)
+      || text(snapshot.brokerOrderId) !== orderId || text(snapshot.environment).toLowerCase() !== 'demo') {
+      return { status: 'UNRESOLVED' };
+    }
+    return snapshot;
+  }
+
+  return { ...base, riskMaterializer, dispatchAction, readPendingOrderLifecycleStatus };
 }

@@ -22,6 +22,7 @@ const sessions = new Map();
 const pending = new Map();
 const pendingContext = new Map();
 const pendingSizing = new Map();
+const pendingOrderStatus = new Map();
 const delivered = new Map();
 
 function json(response, status, body) {
@@ -36,6 +37,7 @@ function authorizedControl(request) {
 function commandKey(accountRowId, commandId) { return `${accountRowId}:${commandId}`; }
 function contextKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function sizingKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
+function orderStatusKey(accountRowId, requestId) { return `${accountRowId}:${requestId}`; }
 function pruneDelivered(now = Date.now()) { for (const [key, expiresAt] of delivered.entries()) if (expiresAt < now) delivered.delete(key); }
 function clearSession(socket) {
   if (!socket.mketyAccountRowId) return;
@@ -179,6 +181,21 @@ wsServer.on('connection', (socket) => {
       }
       return waiter.resolve({ ok: true, sizing });
     }
+    if (message?.type === 'order_status_result' && message.requestId) {
+      const key = orderStatusKey(socket.mketyAccountRowId, message.requestId);
+      const waiter = pendingOrderStatus.get(key);
+      if (!waiter) return;
+      pendingOrderStatus.delete(key); clearTimeout(waiter.timer);
+      if (message.ok === false) return waiter.resolve({ ok: false, reason: String(message.reason || 'MT5_ORDER_STATUS_FAILED') });
+      const snapshot = message.snapshot && typeof message.snapshot === 'object' && !Array.isArray(message.snapshot) ? message.snapshot : null;
+      if (!snapshot || String(snapshot.accountId || '') !== String(session?.identity?.accountNumber || '')
+          || String(snapshot.serverName || '') !== String(session?.identity?.serverName || '')
+          || String(snapshot.brokerOrderId || '') !== String(waiter.brokerOrderId)
+          || typeof snapshot.isLive !== 'boolean') {
+        return waiter.resolve({ ok: false, reason: 'MT5_ORDER_STATUS_IDENTITY_INVALID' });
+      }
+      return waiter.resolve({ ok: true, snapshot });
+    }
     if (message?.type === 'result' && message.commandId) {
       const key = commandKey(socket.mketyAccountRowId, message.commandId);
       const waiter = pending.get(key);
@@ -219,6 +236,27 @@ const controlServer = http.createServer(async (request, response) => {
     } catch (error) {
       return json(response, 504, { ok: false, reason: error.message || 'MT5_CONTEXT_TIMEOUT' });
     }
+  }
+  const orderStatusMatch = url.pathname.match(/^\/v1\/mt5-order-status\/([^/]+)$/);
+  if (request.method === 'POST' && orderStatusMatch) {
+    const id = decodeURIComponent(orderStatusMatch[1]);
+    let raw = '';
+    for await (const chunk of request) { raw += chunk; if (raw.length > 64 * 1024) return json(response, 413, { ok: false, reason: 'BODY_TOO_LARGE' }); }
+    let body; try { body = JSON.parse(raw || '{}'); } catch { return json(response, 400, { ok: false, reason: 'INVALID_JSON' }); }
+    const brokerOrderId = String(body.brokerOrderId || '').trim();
+    if (!/^[0-9]+$/.test(brokerOrderId)) return json(response, 400, { ok: false, reason: 'BROKER_ORDER_ID_INVALID' });
+    const session = sessions.get(id);
+    if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 404, { ok: false, reason: 'MT5_CONNECTOR_OFFLINE' });
+    const requestId = crypto.randomUUID();
+    const key = orderStatusKey(id, requestId);
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pendingOrderStatus.delete(key); reject(new Error('MT5_ORDER_STATUS_TIMEOUT')); }, contextTimeoutMs);
+        pendingOrderStatus.set(key, { resolve, reject, timer, brokerOrderId });
+        session.socket.send(JSON.stringify({ type: 'order_status_request', requestId, brokerOrderId }));
+      });
+      return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
+    } catch (error) { return json(response, 504, { ok: false, reason: error.message || 'MT5_ORDER_STATUS_TIMEOUT' }); }
   }
   const sizingMatch = url.pathname.match(/^\/v1\/mt5-broker-sizing\/([^/]+)$/);
   if (request.method === 'POST' && sizingMatch) {

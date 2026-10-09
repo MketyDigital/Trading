@@ -92,6 +92,16 @@ export function groupToPersistenceRows(group = {}) {
       minimum_lots: nullableFiniteNumber(leg.minimumLots),
       action_type: nonEmpty(leg.actionType),
       failure_code: nonEmpty(leg.failureCode),
+      parent_leg_id: nonEmpty(leg.parentLegId),
+      lifecycle_role: nonEmpty(leg.lifecycleRole),
+      lifecycle_tracking_enabled: leg.lifecycleTrackingEnabled === true,
+      originating_order_id: nonEmpty(leg.originatingOrderId),
+      logical_target_index: nullableFiniteNumber(leg.logicalTargetIndex),
+      last_broker_observed_at: iso(leg.lastBrokerObservedAt),
+      last_broker_source_version: nonEmpty(leg.lastBrokerSourceVersion),
+      last_broker_status: nonEmpty(leg.lastBrokerStatus),
+      last_broker_snapshot_fingerprint: nonEmpty(leg.lastBrokerSnapshotFingerprint),
+      broker_deal_ids: Array.isArray(leg.brokerDealIds) ? [...new Set(leg.brokerDealIds.map(String))] : undefined,
       opened_at: iso(leg.openedAt),
       closed_at: iso(leg.closedAt),
       updated_at: iso(group.updatedAt),
@@ -146,6 +156,17 @@ export function persistenceRowsToGroup(row = {}) {
       minimumLots: hydratedNullableNumber(leg.minimum_lots),
       actionType: leg.action_type,
       failureCode: leg.failure_code,
+      parentLegId: leg.parent_leg_id,
+      lifecycleRole: leg.lifecycle_role,
+      lifecycleTrackingEnabled: leg.lifecycle_tracking_enabled === true,
+      originatingOrderId: leg.originating_order_id,
+      logicalTargetIndex: leg.logical_target_index != null && Number.isFinite(Number(leg.logical_target_index))
+        ? Number(leg.logical_target_index) : undefined,
+      lastBrokerObservedAt: millis(leg.last_broker_observed_at),
+      lastBrokerSourceVersion: leg.last_broker_source_version,
+      lastBrokerStatus: leg.last_broker_status,
+      lastBrokerSnapshotFingerprint: leg.last_broker_snapshot_fingerprint,
+      brokerDealIds: Array.isArray(leg.broker_deal_ids) ? leg.broker_deal_ids.map(String) : undefined,
       openedAt: millis(leg.opened_at),
       closedAt: millis(leg.closed_at),
     })),
@@ -197,6 +218,24 @@ export class SupabaseTradeStatePersistence {
       .order('updated_at', { ascending: false });
     if (error) throw new Error(`active trade state recovery failed: ${error.message}`);
     return (data || []).map(persistenceRowsToGroup);
+  }
+
+  async listPendingOrderLifecycles() {
+    const { data, error } = await this.supabase
+      .from('position_legs')
+      .select('workspace_id, position_group_id, runtime_leg_id, broker_order_id, position_groups!inner(runtime_group_id, trade_account_id, canonical_symbol)')
+      .eq('status', 'PENDING')
+      .eq('lifecycle_tracking_enabled', true)
+      .not('broker_order_id', 'is', null);
+    if (error) throw new Error(`pending order lifecycle scan failed: ${error.message}`);
+    return (data || []).map((row) => ({
+      workspaceId: String(row.workspace_id),
+      groupId: String(row.position_groups?.runtime_group_id || ''),
+      tradeAccountId: String(row.position_groups?.trade_account_id || ''),
+      legId: String(row.runtime_leg_id || ''),
+      brokerOrderId: String(row.broker_order_id || ''),
+      symbol: String(row.position_groups?.canonical_symbol || ''),
+    })).filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
 }
 

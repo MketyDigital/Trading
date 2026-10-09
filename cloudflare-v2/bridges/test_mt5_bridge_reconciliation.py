@@ -98,6 +98,34 @@ def broker_record(*, command_id, position_id=7001, order=9001, deal=9002, magic=
 
 
 class MT5BridgeReconciliationTests(unittest.TestCase):
+    def test_pending_order_status_is_exact_read_only_and_aggregates_position_deals(self):
+        class StatusMT5:
+            ORDER_STATE_FILLED = 4
+            ORDER_STATE_CANCELED = 2
+            ORDER_STATE_EXPIRED = 5
+            ORDER_STATE_REJECTED = 6
+
+            def __init__(self):
+                self.sent = []
+                self.order = SimpleNamespace(ticket=901, time_setup=1770000000, volume_initial=0.10, volume_current=0.04, state=1)
+                self.deals = [
+                    SimpleNamespace(order=901, ticket=1001, position_id=7001, volume=0.04, price=1.08),
+                    SimpleNamespace(order=901, ticket=1002, position_id=7002, volume=0.02, price=1.09),
+                    SimpleNamespace(order=999, ticket=1003, position_id=7003, volume=0.01, price=1.1),
+                ]
+
+            def orders_get(self, ticket=None): return (self.order,) if ticket == 901 else ()
+            def history_orders_get(self, ticket=None): return ()
+            def history_deals_get(self, start, end, ticket=None): return tuple(d for d in self.deals if d.order == ticket)
+            def order_send(self, request): self.sent.append(request)
+
+        mt5 = StatusMT5()
+        snapshot = MT5Engine(mt5).pending_order_status('901')
+        self.assertEqual(snapshot['status'], 'PARTIALLY_FILLED')
+        self.assertEqual(snapshot['remainingLots'], 0.04)
+        self.assertEqual([(fill['positionId'], fill['lots']) for fill in snapshot['fills']], [('7001', 0.04), ('7002', 0.02)])
+        self.assertEqual(mt5.sent, [])
+
     def test_command_marker_is_deterministic_broker_safe_and_does_not_truncate_common_prefixes(self):
         first_id = 'workspace:very-long-common-prefix:destination:account:leg:one'
         second_id = 'workspace:very-long-common-prefix:destination:account:leg:two'
