@@ -161,42 +161,64 @@ public class MketyCloudAutoTrader : Robot
     {
         try
         {
-            if (!long.TryParse(brokerOrderId, out var id) || id <= 0) throw new InvalidOperationException("ORDER_ID_INVALID");
+            if (!int.TryParse(brokerOrderId, out var id) || id <= 0) throw new InvalidOperationException("ORDER_ID_INVALID");
             var pending = PendingOrders.FindById(id);
-            var historical = pending == null ? HistoricalOrders.FindById(id) : null;
-            var order = (object?)pending ?? historical;
-            if (order == null)
+            if (pending != null)
+            {
+                // The cTrader PendingOrder API exposes the active order, but not
+                // its filled volume or the position created by a partial fill.
+                // Do not report it as wholly pending and risk losing that fill.
+                Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
+                return;
+            }
+            var historical = HistoricalOrders.FindById(id);
+            if (historical == null)
             {
                 Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
                 return;
             }
 
-            var symbolName = pending?.SymbolName ?? historical?.SymbolName ?? string.Empty;
+            var symbolName = historical.SymbolName ?? string.Empty;
             var symbol = Symbols.GetSymbol(symbolName);
             if (symbol == null || symbol.LotSize <= 0) throw new InvalidOperationException("ORDER_SYMBOL_UNAVAILABLE");
-            var positionId = pending?.PositionId ?? historical?.PositionId ?? 0;
+            var positionId = historical.PositionId ?? 0;
             var position = positionId > 0 ? Positions.FindById(positionId) : null;
-            var rawFilled = pending?.FilledVolumeInUnits ?? historical?.FilledVolumeInUnits ?? 0;
+            var rawFilled = historical.FilledVolumeInUnits ?? 0;
             var filledLots = rawFilled / symbol.LotSize;
-            var requestedLots = (pending?.VolumeInUnits ?? historical?.VolumeInUnits ?? 0) / symbol.LotSize;
+            var requestedLots = historical.VolumeInUnits / symbol.LotSize;
             if (requestedLots <= 0 || filledLots < 0 || filledLots > requestedLots + 0.00000001)
                 throw new InvalidOperationException("ORDER_VOLUME_UNCERTAIN");
 
-            var isPending = pending != null;
-            var orderStatus = historical?.Status.ToString() ?? string.Empty;
-            var cancelled = !isPending && (orderStatus.Contains("Cancel", StringComparison.OrdinalIgnoreCase)
+            var orderStatus = historical.Status.ToString();
+            var cancelled = orderStatus.Contains("Cancel", StringComparison.OrdinalIgnoreCase)
                 || orderStatus.Contains("Expire", StringComparison.OrdinalIgnoreCase)
-                || orderStatus.Contains("Reject", StringComparison.OrdinalIgnoreCase));
+                || orderStatus.Contains("Reject", StringComparison.OrdinalIgnoreCase);
+            var filledOrder = orderStatus.Contains("Fill", StringComparison.OrdinalIgnoreCase);
+            if (!cancelled && !filledOrder)
+            {
+                Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
+                return;
+            }
             if (filledLots > 0 && (position == null || positionId <= 0))
             {
                 Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
                 return;
             }
+            if (filledLots <= 0 && filledOrder)
+            {
+                Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
+                return;
+            }
 
-            var status = filledLots <= 0 ? (isPending ? "PENDING" : cancelled ? "CANCELLED" : "UNRESOLVED")
-                : isPending ? "PARTIALLY_FILLED" : cancelled ? "CANCELLED" : "FILLED";
-            var remainingLots = status == "PENDING" ? requestedLots : status == "PARTIALLY_FILLED" ? Math.Max(0, requestedLots - filledLots) : 0;
-            var historyPriceValue = historical?.GetType().GetProperty("ExecutedPrice")?.GetValue(historical);
+            if (position != null && Math.Abs(position.VolumeInUnits - rawFilled) > 0.5)
+            {
+                Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status = "UNRESOLVED", brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", fills = Array.Empty<object>() } });
+                return;
+            }
+
+            var status = filledLots <= 0 ? "CANCELLED" : cancelled ? "CANCELLED" : "FILLED";
+            var remainingLots = 0;
+            var historyPriceValue = historical.GetType().GetProperty("ExecutedPrice")?.GetValue(historical);
             var historyPrice = historyPriceValue == null ? 0 : Convert.ToDouble(historyPriceValue);
             var fillPrice = position?.EntryPrice ?? historyPrice;
             if (filledLots > 0 && fillPrice <= 0) throw new InvalidOperationException("ORDER_FILL_PRICE_UNCERTAIN");
