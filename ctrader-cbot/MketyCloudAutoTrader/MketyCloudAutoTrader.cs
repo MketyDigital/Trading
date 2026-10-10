@@ -222,7 +222,7 @@ public class MketyCloudAutoTrader : Robot
             var historyPrice = historyPriceValue == null ? 0 : Convert.ToDouble(historyPriceValue);
             var fillPrice = position?.EntryPrice ?? historyPrice;
             if (filledLots > 0 && fillPrice <= 0) throw new InvalidOperationException("ORDER_FILL_PRICE_UNCERTAIN");
-            var fills = filledLots > 0 ? new object[] { new { positionId = positionId.ToString(), lots = filledLots, fillPrice } } : Array.Empty<object>();
+            var fills = filledLots > 0 ? new object[] { new { positionId = positionId.ToString(), lots = filledLots, fillPrice, isOpen = true } } : Array.Empty<object>();
             Send(new { type = "lifecycle_result", requestId, ok = true, snapshot = new { status, brokerOrderId, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", requestedLots, remainingLots, fills, observedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() } });
         }
         catch (Exception ex)

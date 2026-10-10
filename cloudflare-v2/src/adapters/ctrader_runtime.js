@@ -14,6 +14,7 @@ function required(value, name) {
 export async function createCTraderRuntime({
   environment = 'demo',
   allowLiveTrading = false,
+  readOnlyLifecycle = false,
   allowBrokerMinimumVolumeFallback = false,
   clientId,
   clientSecret,
@@ -26,7 +27,10 @@ export async function createCTraderRuntime({
 } = {}) {
   const mode = String(environment || 'demo').toLowerCase();
   if (!['demo', 'live'].includes(mode)) throw new TypeError('cTrader environment must be demo or live');
-  if (mode === 'live' && allowLiveTrading !== true) {
+  if (readOnlyLifecycle === true && allowLiveTrading === true) {
+    throw new Error('read-only cTrader lifecycle runtime cannot enable live trading');
+  }
+  if (mode === 'live' && allowLiveTrading !== true && readOnlyLifecycle !== true) {
     throw new Error('live cTrader runtime is disabled unless explicitly enabled');
   }
 
@@ -34,7 +38,7 @@ export async function createCTraderRuntime({
   required(clientSecret, 'clientSecret');
   required(accessToken, 'accessToken');
   if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
-  if (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail) {
+  if (readOnlyLifecycle !== true && (!deliveryStore?.reserve || !deliveryStore?.complete || !deliveryStore?.fail)) {
     throw new TypeError('deliveryStore reserve/complete/fail required');
   }
 
@@ -52,7 +56,7 @@ export async function createCTraderRuntime({
 
   const marketData = new CTraderMarketData({ session, accountId: Number(accountId) });
   const account = await marketData.loadAccount();
-  if (!account.canOpenTrades) {
+  if (!account.canOpenTrades && readOnlyLifecycle !== true) {
     session.close?.();
     throw new Error(`cTrader account does not allow opening trades (${account.accessRights})`);
   }
@@ -114,6 +118,7 @@ export async function createCTraderRuntime({
       });
     },
     async execute(action) {
+      if (readOnlyLifecycle === true) throw new Error('cTrader lifecycle runtime is read-only');
       if (!action) throw new TypeError('canonical action is required');
       if (isBreakEvenAction(action)) {
         let marketPrice = null;

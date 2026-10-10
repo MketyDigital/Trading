@@ -77,7 +77,7 @@ test('reconciles an exact-account pending order snapshot through its separate in
   }, 'secret', 'POST', 'ws1'));
   const response = await n.fetch(req('/groups/group-1/legs/leg-1/pending-order-snapshot', {
     tradeAccountId: 'account-1', brokerOrderId: 'order-1', nowMs: 200,
-    snapshot: { status: 'PARTIALLY_FILLED', remainingLots: 0.06, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.08 }], observedAt: 190, sourceVersion: 'v1' },
+    snapshot: { status: 'PARTIALLY_FILLED', remainingLots: 0.06, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.08, isOpen: true }], observedAt: 190, sourceVersion: 'v1' },
   }, 'secret', 'POST', 'ws1'));
 
   assert.equal(response.status, 200);
@@ -94,7 +94,7 @@ test('pending order snapshot route rejects workspace mismatch without changing s
   }, 'secret', 'POST', 'ws1'));
   const response = await n.fetch(req('/groups/group-1/legs/leg-1/pending-order-snapshot', {
     tradeAccountId: 'account-1', brokerOrderId: 'order-1',
-    snapshot: { status: 'FILLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.10 }], observedAt: 190 },
+    snapshot: { status: 'FILLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.10, isOpen: true }], observedAt: 190 },
   }, 'secret', 'POST', 'ws2'));
 
   assert.equal(response.status, 200);

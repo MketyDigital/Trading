@@ -21,12 +21,16 @@ export function createPendingOrderLifecycleRuntime({
         const account = await loadAccount(row.workspaceId, row.tradeAccountId);
         if (!account || text(account.workspace_id ?? account.workspaceId) !== row.workspaceId) { skipped++; continue; }
         const environment = text(account.environment ?? account.server_name ?? account.serverName).toLowerCase();
-        if (!['demo', 'practice'].includes(environment)) { skipped++; continue; }
+        if (!['demo', 'practice', 'live'].includes(environment)) { skipped++; continue; }
+        if (environment === 'live' && env.PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED !== 'true') { skipped++; continue; }
         const platform = text(account.platform).toLowerCase();
         const providerMode = text(account.provider_mode ?? account.providerMode).toLowerCase();
-        if (platform === 'ctrader' && providerMode === 'ctrader_cbot') { skipped++; continue; }
+        if (platform === 'ctrader' && providerMode === 'ctrader_cbot' && environment !== 'live') { skipped++; continue; }
+        if (environment === 'live' && platform === 'ctrader'
+          && !['ctrader_oauth', 'ctrader_cbot'].includes(providerMode)) { skipped++; continue; }
+        if (environment === 'live' && platform !== 'ctrader' && platform !== 'mt5') { skipped++; continue; }
         const snapshot = await readStatus({ account, lifecycle: row });
-        if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== false
+        if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== (environment === 'live')
           || text(snapshot.accountId) !== text(account.account_id ?? account.brokerAccountId)
           || text(snapshot.brokerOrderId) !== row.brokerOrderId
           || text(snapshot.environment).toLowerCase() !== environment) { skipped++; continue; }

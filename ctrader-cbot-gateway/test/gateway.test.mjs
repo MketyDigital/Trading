@@ -111,6 +111,37 @@ test('gateway authenticates a cBot, binds broker identity, correlates a result, 
   assert.equal(firstResponse.status, 200);
   assert.deepEqual(await firstResponse.json(), { type: 'result', commandId: firstCommand.command_id, ok: true, positionId: 77 });
 
+  const lifecycleRequest = fetch(`${controlBase}/v1/order-lifecycle/${accountRowId}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ brokerOrderId: '99123' }),
+  });
+  const lifecycleObservedAt = Date.now();
+  const lifecycleMessage = await readMessage(socket);
+  assert.equal(lifecycleMessage.type, 'lifecycle_request');
+  assert.equal(lifecycleMessage.brokerOrderId, '99123');
+  socket.send(JSON.stringify({
+    type: 'lifecycle_result',
+    requestId: lifecycleMessage.requestId,
+    ok: true,
+    snapshot: {
+      status: 'FILLED', brokerOrderId: '99123', accountId: '12345678',
+      isLive: false, environment: 'demo', remainingLots: 0,
+      fills: [{ positionId: '44556', lots: 0.01, isOpen: true }], observedAt: lifecycleObservedAt,
+    },
+  }));
+  const lifecycleResponse = await lifecycleRequest;
+  assert.equal(lifecycleResponse.status, 200);
+  assert.deepEqual(await lifecycleResponse.json(), {
+    ok: true,
+    snapshot: {
+      status: 'FILLED', brokerOrderId: '99123', accountId: '12345678',
+      isLive: false, environment: 'demo', remainingLots: 0,
+      fills: [{ positionId: '44556', lots: 0.01, isOpen: true }], observedAt: lifecycleObservedAt,
+    },
+    accountRowId,
+  });
+
   const replayResponse = await fetch(`${controlBase}/v1/commands/${accountRowId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },

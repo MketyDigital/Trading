@@ -379,6 +379,10 @@ class MT5Engine:
         active = self.mt5.orders_get(ticket=ticket)
         if active is None:
             raise RuntimeError('MT5_PENDING_ORDER_QUERY_UNCERTAIN')
+        open_positions = self.mt5.positions_get()
+        if open_positions is None:
+            raise RuntimeError('MT5_PENDING_ORDER_POSITION_QUERY_UNCERTAIN')
+        open_position_ids = {str(getattr(position, 'ticket', '')) for position in open_positions}
         history = self.mt5.history_orders_get(ticket=ticket)
         if history is None:
             raise RuntimeError('MT5_PENDING_ORDER_HISTORY_UNCERTAIN')
@@ -403,7 +407,8 @@ class MT5Engine:
             price = float(getattr(deal, 'price', 0) or 0)
             if not position_id or not deal_ticket or lots <= 0 or price <= 0:
                 raise RuntimeError('MT5_PENDING_ORDER_DEAL_IDENTITY_UNCERTAIN')
-            fills.append({'dealId': str(deal_ticket), 'positionId': str(position_id), 'lots': lots, 'fillPrice': price})
+            fills.append({'dealId': str(deal_ticket), 'positionId': str(position_id), 'lots': lots,
+                          'fillPrice': price, 'isOpen': str(position_id) in open_position_ids})
         filled = sum(row['lots'] for row in fills)
         requested = float(getattr(order, 'volume_initial', 0) or 0)
         remaining = float(getattr(order, 'volume_current', 0) or 0) if active else 0.0

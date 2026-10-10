@@ -36,3 +36,27 @@ test('production lifecycle runtime applies broker-confirmed DEMO snapshots from 
   assert.equal(applied[0].snapshot.status, 'PARTIALLY_FILLED');
   assert.equal(finalized, 1);
 });
+
+test('production lifecycle runtime passes the separate LIVE gate and applies only an exact LIVE broker result', async () => {
+  const liveAccount = { ...account, account_id: 'live-123', environment: 'live', platform: 'mt5', provider_mode: 'mt5_connector' };
+  const liveSnapshot = { status: 'FILLED', accountId: 'live-123', brokerOrderId: 'order-1', environment: 'live', isLive: true,
+    requestedLots: 0.1, remainingLots: 0, fills: [{ positionId: 'position-live-1', lots: 0.1 }], observedAt: 1000 };
+  const applied = [];
+  const run = createProductionPendingOrderLifecycleRuntime({
+    persistenceFactory: async () => ({ supabase: {}, async listPendingOrderLifecycles() { return [row]; } }),
+    dependenciesFactory: () => ({
+      async accountLoader() { return liveAccount; },
+      async readPendingOrderLifecycleStatus() { return liveSnapshot; },
+      async finalizeExecutionBatch() {},
+    }),
+    applySnapshot: async (_env, input) => { applied.push(input); return { outcome: 'APPLIED' }; },
+  });
+
+  const disabled = await run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true' });
+  assert.equal(disabled.applied, 0);
+  assert.equal(applied.length, 0);
+
+  const enabled = await run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true', PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED: 'true' });
+  assert.equal(enabled.applied, 1);
+  assert.equal(applied[0].snapshot.isLive, true);
+});

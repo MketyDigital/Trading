@@ -241,6 +241,91 @@ test('live cTrader adapter does not require a redundant legacy env opt-in after 
   assert.equal(result.brokerPositionId, 'ct-live-position-1');
 });
 
+test('LIVE cTrader lifecycle uses an explicitly read-only runtime with exact broker identity', async () => {
+  const row = account({
+    platform: 'ctrader', provider_mode: 'ctrader_oauth', environment: 'live', server_name: 'live',
+    account_id: '123456', credential_ciphertext: 'synthetic-live-envelope',
+  });
+  let runtimeOptions;
+  let readCalls = 0;
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: createAccountQuerySupabase(row), workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: ctraderCredentialDecryptor(),
+    deliveryStoreFactory: () => ({ reserve() {}, complete() {}, fail() {} }),
+    ctraderRuntimeFactory: async (options) => {
+      runtimeOptions = options;
+      return {
+        async readPendingOrderStatus() {
+          readCalls += 1;
+          return { environment: 'live', isLive: true, snapshot: { status: 'FILLED', fills: [], accountId: 123456, brokerOrderId: 'order-1' } };
+        },
+        async execute() { throw new Error('read-only lifecycle must never execute'); },
+        close() {},
+      };
+    },
+  });
+
+  const result = await deps.readPendingOrderLifecycleStatus({ workspaceId: 'ws-a', account: row, brokerOrderId: 'order-1', symbol: 'EURUSD' });
+  assert.equal(result.status, 'FILLED');
+  assert.equal(result.isLive, true);
+  assert.equal(runtimeOptions.environment, 'live');
+  assert.equal(runtimeOptions.allowLiveTrading, false);
+  assert.equal(runtimeOptions.readOnlyLifecycle, true);
+  assert.equal(readCalls, 1);
+});
+
+test('LIVE cTrader cBot lifecycle uses only its account-bound read endpoint', async () => {
+  const row = account({
+    platform: 'ctrader', provider_mode: 'ctrader_cbot', environment: 'live', account_id: '123456',
+    credential_ciphertext: 'synthetic-live-cbot-envelope',
+  });
+  const requests = [];
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' }, supabase: createAccountQuerySupabase(row), workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example', controlSecret: 'control-secret' }),
+    fetchFn: async (url, options) => {
+      requests.push([String(url), options.method]);
+      return new Response(JSON.stringify({
+        ok: true, accountRowId: row.id,
+        snapshot: { status: 'FILLED', accountId: row.account_id, brokerOrderId: 'order-1', environment: 'live', isLive: true, remainingLots: 0, fills: [] },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  const result = await deps.readPendingOrderLifecycleStatus({ workspaceId: 'ws-a', account: row, brokerOrderId: 'order-1', symbol: 'EURUSD' });
+  assert.equal(result.status, 'FILLED');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], `https://gateway.example/v1/order-lifecycle/${row.id}`);
+  assert.equal(requests[0][1], 'POST');
+});
+
+test('LIVE direct MT5 lifecycle only reads a matching account and broker order snapshot', async () => {
+  const row = account({ platform: 'mt5', environment: 'live', server_name: 'Broker-Live', account_id: '90001' });
+  const requests = [];
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' }, supabase: createAccountQuerySupabase(row), workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(),
+    fetchFn: async (url, options) => {
+      requests.push([String(url), options.method]);
+      return new Response(JSON.stringify({
+        ok: true,
+        snapshot: { status: 'PARTIALLY_FILLED', accountId: row.account_id, serverName: row.server_name,
+          environment: 'live', isLive: true, brokerOrderId: '9001', remainingLots: 0.06, fills: [] },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  const result = await deps.readPendingOrderLifecycleStatus({ workspaceId: 'ws-a', account: row, brokerOrderId: '9001', symbol: 'EURUSD' });
+  assert.equal(result.status, 'PARTIALLY_FILLED');
+  assert.equal(requests.length, 1);
+  assert.match(requests[0][0], /\/v1\/order-status\?ticket=9001$/);
+  assert.equal(requests[0][1], 'GET');
+});
+
 test('unsupported platform and missing per-account credential authority fail before executor construction', async () => {
   const unsupported = account({ platform: 'deriv' });
   const deps = createProductionExecutionDependencies({
