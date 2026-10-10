@@ -1,5 +1,11 @@
 function text(value) { return String(value ?? '').trim(); }
 
+function epochMillis(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** Read-only periodic order observation. Snapshot application only writes state and never dispatches broker commands. */
 export function createPendingOrderLifecycleRuntime({
   loadCandidates,
@@ -23,6 +29,11 @@ export function createPendingOrderLifecycleRuntime({
         const environment = text(account.environment ?? account.server_name ?? account.serverName).toLowerCase();
         if (!['demo', 'practice', 'live'].includes(environment)) { skipped++; continue; }
         if (environment === 'live' && env.PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED !== 'true') { skipped++; continue; }
+        if (environment === 'live') {
+          const syncAfter = epochMillis(env.PENDING_ORDER_LIFECYCLE_LIVE_SYNC_AFTER);
+          const createdAt = epochMillis(row.createdAt);
+          if (syncAfter == null || createdAt == null || createdAt < syncAfter) { skipped++; continue; }
+        }
         const platform = text(account.platform).toLowerCase();
         const providerMode = text(account.provider_mode ?? account.providerMode).toLowerCase();
         if (platform === 'ctrader' && providerMode === 'ctrader_cbot' && environment !== 'live') { skipped++; continue; }
