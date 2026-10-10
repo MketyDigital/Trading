@@ -684,7 +684,9 @@ export function createProductionExecutionDependencies({
   async function readPendingOrderLifecycleStatus({ workspaceId: requestedWorkspaceId, account, brokerOrderId, symbol } = {}) {
     if (text(requestedWorkspaceId) !== boundWorkspaceId) throw new Error('production execution workspace mismatch');
     assertBoundAccount(account, boundWorkspaceId);
-    if (environmentOf(account) !== 'demo') return { status: 'UNRESOLVED' };
+    const expectedEnvironment = environmentOf(account);
+    if (!['demo', 'live'].includes(expectedEnvironment)) return { status: 'UNRESOLVED' };
+    const expectedIsLive = expectedEnvironment === 'live';
     const orderId = required(brokerOrderId, 'broker order id');
     let snapshot;
     if (platformOf(account) === 'ctrader' && providerModeOf(account) === 'ctrader_cbot') {
@@ -698,11 +700,11 @@ export function createProductionExecutionDependencies({
       const credentials = await loadAccountCredentials(account, 'ctrader');
       const accountId = Number(brokerAccountIdOf(account));
       if (!Number.isInteger(accountId)) throw new Error('cTrader account id must be an integer');
-      const cacheKey = `${accountRef(account)}|${accountId}|demo`;
+      const cacheKey = `${accountRef(account)}|${accountId}|${expectedEnvironment}`;
       let runtime = ctraderLifecycleRuntimes.get(cacheKey)?.runtime;
       if (!runtime) {
         runtime = await ctraderRuntimeFactory({
-          environment: 'demo', allowLiveTrading: false,
+          environment: expectedEnvironment, allowLiveTrading: false, readOnlyLifecycle: true,
           clientId: required(credentials.clientId, 'cTrader clientId'),
           clientSecret: required(credentials.clientSecret, 'cTrader clientSecret'),
           accessToken: required(credentials.accessToken, 'cTrader accessToken'), accountId,
@@ -731,8 +733,14 @@ export function createProductionExecutionDependencies({
       const body = await readJson(response, 'MT5 order lifecycle');
       snapshot = body.snapshot;
     } else throw new Error('pending order lifecycle platform is unsupported');
-    if (!snapshot || snapshot.isLive !== false || String(snapshot.accountId || '') !== brokerAccountIdOf(account)
-      || String(snapshot.brokerOrderId || '') !== orderId) return { status: 'UNRESOLVED' };
+    const expectedServerName = text(account.server_name ?? account.serverName);
+    if (!snapshot || snapshot.isLive !== expectedIsLive
+      || text(snapshot.environment).toLowerCase() !== expectedEnvironment
+      || text(snapshot.accountId) !== brokerAccountIdOf(account)
+      || text(snapshot.brokerOrderId) !== orderId
+      || (platformOf(account) === 'mt5' && expectedServerName && text(snapshot.serverName) !== expectedServerName)) {
+      return { status: 'UNRESOLVED' };
+    }
     return snapshot;
   }
 

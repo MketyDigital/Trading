@@ -661,40 +661,53 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   const refreshPendingOrderLifecycle = env.PENDING_ORDER_LIFECYCLE_SYNC_ENABLED === 'true'
     ? async ({ group, account } = {}) => {
       const environment = text(account?.environment ?? account?.server_name ?? account?.serverName).toLowerCase();
-      if (!group?.id || text(group.workspaceId) !== workspaceId || !['demo', 'practice'].includes(environment)
-        || text(account?.workspace_id ?? account?.workspaceId) !== workspaceId
-        || text(group.tradeAccountId) !== text(account?.id)) return group;
-
-      const pendingLegs = (group.legs || []).filter((leg) =>
+      const pendingLegs = (group?.legs || []).filter((leg) =>
         leg?.lifecycleTrackingEnabled === true
           && String(leg?.status || '').toUpperCase() === 'PENDING' && text(leg?.brokerOrderId));
       if (!pendingLegs.length) return group;
+      if (!group?.id || text(group.workspaceId) !== workspaceId
+        || text(account?.workspace_id ?? account?.workspaceId) !== workspaceId
+        || text(group.tradeAccountId) !== text(account?.id)) throw new Error('pending lifecycle account or workspace mismatch');
+      if (!['demo', 'practice', 'live'].includes(environment)) throw new Error('pending lifecycle environment is unsupported');
+      if (environment === 'live' && env.PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED !== 'true') {
+        throw new Error('LIVE pending lifecycle sync is disabled');
+      }
+      const platform = text(account?.platform).toLowerCase();
+      const providerMode = text(account?.provider_mode ?? account?.providerMode).toLowerCase();
+      if (environment === 'live' && platform === 'ctrader'
+        && !['ctrader_oauth', 'ctrader_cbot'].includes(providerMode)) throw new Error('LIVE cTrader lifecycle provider is unsupported');
+      if (environment === 'live' && platform !== 'ctrader' && platform !== 'mt5') throw new Error('LIVE pending lifecycle platform is unsupported');
+      if (platform === 'ctrader' && providerMode === 'ctrader_cbot' && environment !== 'live') {
+        throw new Error('cBot lifecycle status is available only for LIVE accounts');
+      }
 
       const lifecycleDependencies = lifecycleDependenciesFactory({ env, supabase, workspaceId });
       try {
         for (const leg of pendingLegs) {
-          try {
-            const snapshot = await lifecycleDependencies.readPendingOrderLifecycleStatus({
-              workspaceId,
-              account,
-              brokerOrderId: String(leg.brokerOrderId),
-              symbol: group.symbol,
-            });
-            if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== false
-              || text(snapshot.accountId) !== text(account?.account_id ?? account?.accountId)
-              || text(snapshot.brokerOrderId) !== String(leg.brokerOrderId)
-              || text(snapshot.environment).toLowerCase() !== environment) continue;
-            await state.stateStore.reconcilePendingOrderSnapshot(group.id, leg.legId, {
-              tradeAccountId: group.tradeAccountId,
-              brokerOrderId: String(leg.brokerOrderId),
-              snapshot: { ...snapshot, observedAt: Number(snapshot.observedAt) || Date.now() },
-            });
-          } catch {
-            // A failed read leaves the current group untouched; the scheduled
-            // recovery sweep will retry without issuing broker commands.
+          const snapshot = await lifecycleDependencies.readPendingOrderLifecycleStatus({
+            workspaceId,
+            account,
+            brokerOrderId: String(leg.brokerOrderId),
+            symbol: group.symbol,
+          });
+          if (!snapshot || snapshot.status === 'UNRESOLVED' || snapshot.isLive !== (environment === 'live')
+            || text(snapshot.accountId) !== text(account?.account_id ?? account?.accountId)
+            || text(snapshot.brokerOrderId) !== String(leg.brokerOrderId)
+            || text(snapshot.environment).toLowerCase() !== environment) {
+            throw new Error('pending lifecycle broker status is unresolved or mismatched');
+          }
+          const applied = await state.stateStore.reconcilePendingOrderSnapshot(group.id, leg.legId, {
+            tradeAccountId: group.tradeAccountId,
+            brokerOrderId: String(leg.brokerOrderId),
+            snapshot: { ...snapshot, observedAt: Number(snapshot.observedAt) || Date.now() },
+          });
+          if (!['APPLIED', 'UNCHANGED'].includes(applied?.outcome)) {
+            throw new Error('pending lifecycle snapshot could not be applied safely');
           }
         }
-        return await state.stateStore.getGroup(group.id) || group;
+        const refreshed = await state.stateStore.getGroup(group.id);
+        if (!refreshed || String(refreshed.id) !== String(group.id)) throw new Error('pending lifecycle state refresh is unavailable');
+        return refreshed;
       } finally {
         if (typeof lifecycleDependencies.finalizeExecutionBatch === 'function') {
           await lifecycleDependencies.finalizeExecutionBatch();

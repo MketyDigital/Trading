@@ -115,6 +115,7 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
                 ]
 
             def orders_get(self, ticket=None): return (self.order,) if ticket == 901 else ()
+            def positions_get(self): return (SimpleNamespace(ticket=7001),)
             def history_orders_get(self, ticket=None): return ()
             def history_deals_get(self, start, end, ticket=None): return tuple(d for d in self.deals if d.order == ticket)
             def order_send(self, request): self.sent.append(request)
@@ -124,6 +125,7 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
         self.assertEqual(snapshot['status'], 'PARTIALLY_FILLED')
         self.assertEqual(snapshot['remainingLots'], 0.04)
         self.assertEqual([(fill['positionId'], fill['lots']) for fill in snapshot['fills']], [('7001', 0.04), ('7002', 0.02)])
+        self.assertEqual([fill['isOpen'] for fill in snapshot['fills']], [True, False])
         self.assertEqual(mt5.sent, [])
 
     def test_command_marker_is_deterministic_broker_safe_and_does_not_truncate_common_prefixes(self):

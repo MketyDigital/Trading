@@ -154,7 +154,7 @@ test('simulated lifecycle replay preserves Delete and Close semantics without di
     legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.1, requestedLots: 0.1, status: 'PENDING', brokerOrderId: 'order-1', lifecycleTrackingEnabled: true }],
   });
   const snapshot = { status: 'PARTIALLY_FILLED', remainingLots: 0.06, observedAt: 100,
-    fills: [{ positionId: 'position-1', lots: 0.04, fillPrice: 1.08, dealId: 'deal-1' }] };
+    fills: [{ positionId: 'position-1', lots: 0.04, fillPrice: 1.08, dealId: 'deal-1', isOpen: true }] };
   const first = await store.reconcilePendingOrderSnapshot('group-simulation', 'leg-1', { tradeAccountId: 'account-1', brokerOrderId: 'order-1', snapshot });
   const replay = await store.reconcilePendingOrderSnapshot('group-simulation', 'leg-1:remainder', { tradeAccountId: 'account-1', brokerOrderId: 'order-1', snapshot });
   assert.equal(first.outcome, 'APPLIED');

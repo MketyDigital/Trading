@@ -344,9 +344,12 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     if (!isMt5Connector(account)) return base.readPendingOrderLifecycleStatus(input);
     if (text(input.workspaceId) !== workspaceId) throw new Error('production execution workspace mismatch');
     assertBoundConnectorAccount(account, workspaceId);
-    if (text(account.environment).toLowerCase() !== 'demo') return { status: 'UNRESOLVED' };
+    const expectedEnvironment = text(account.environment).toLowerCase();
+    if (!['demo', 'live'].includes(expectedEnvironment)) return { status: 'UNRESOLVED' };
+    const expectedIsLive = expectedEnvironment === 'live';
     const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
     const connection = await loadConnectorIdentity({ account, credentials, fetchFn });
+    if (connection.identity.isLive !== expectedIsLive) return { status: 'UNRESOLVED' };
     const orderId = text(input.brokerOrderId);
     if (!/^[0-9]+$/.test(orderId)) throw new Error('MT5 broker order id is invalid');
     let response;
@@ -358,9 +361,9 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     } catch { throw new Error('MT5 connector order lifecycle request failed'); }
     const body = await readJson(response, 'MT5 connector order lifecycle');
     const snapshot = body.snapshot;
-    if (String(body.accountRowId || '') !== accountRef(account) || !snapshot || snapshot.isLive !== false
+    if (String(body.accountRowId || '') !== accountRef(account) || !snapshot || snapshot.isLive !== expectedIsLive
       || text(snapshot.accountId) !== brokerAccountIdOf(account) || text(snapshot.serverName) !== text(account.server_name ?? account.serverName)
-      || text(snapshot.brokerOrderId) !== orderId || text(snapshot.environment).toLowerCase() !== 'demo') {
+      || text(snapshot.brokerOrderId) !== orderId || text(snapshot.environment).toLowerCase() !== expectedEnvironment) {
       return { status: 'UNRESOLVED' };
     }
     return snapshot;

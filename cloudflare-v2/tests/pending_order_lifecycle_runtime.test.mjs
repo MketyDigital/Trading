@@ -49,6 +49,53 @@ test('pending lifecycle never reads a production account', async () => {
   assert.equal(h.calls.some(([kind]) => kind === 'read'), false);
 });
 
+test('LIVE pending lifecycle requires its own exact opt-in and only applies a matching LIVE observation', async () => {
+  const liveAccount = { workspace_id: 'ws-1', account_id: 'acct-1', environment: 'live', platform: 'mt5', provider_mode: 'mt5_connector' };
+  const liveSnapshot = { status: 'PARTIALLY_FILLED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'live', isLive: true, remainingLots: 0.06, fills: [{ positionId: 'position-1', lots: 0.04 }], observedAt: 10 };
+  const disabled = runtimeHarness({ account: liveAccount, snapshot: liveSnapshot });
+  const disabledResult = await disabled.run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true' });
+  assert.equal(disabledResult.applied, 0);
+  assert.equal(disabled.calls.some(([kind]) => kind === 'read'), false);
+
+  const nonExactOptIn = runtimeHarness({ account: liveAccount, snapshot: liveSnapshot });
+  const nonExactResult = await nonExactOptIn.run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true', PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED: 'TRUE' });
+  assert.equal(nonExactResult.applied, 0);
+  assert.equal(nonExactOptIn.calls.some(([kind]) => kind === 'read'), false);
+
+  const h = runtimeHarness({ account: liveAccount, snapshot: liveSnapshot });
+  const result = await h.run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true', PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED: 'true' });
+  assert.equal(result.applied, 1);
+  assert.equal(h.applied[0].snapshot.isLive, true);
+  assert.equal(h.applied[0].snapshot.environment, 'live');
+});
+
+test('LIVE lifecycle skips broker observations that claim DEMO or another account', async () => {
+  const account = { workspace_id: 'ws-1', account_id: 'acct-1', environment: 'live', platform: 'ctrader', provider_mode: 'ctrader_oauth' };
+  for (const snapshot of [
+    { status: 'FILLED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'live', isLive: false },
+    { status: 'FILLED', accountId: 'other', brokerOrderId: 'order-1', environment: 'live', isLive: true },
+    { status: 'FILLED', accountId: 'acct-1', brokerOrderId: 'wrong', environment: 'live', isLive: true },
+    { status: 'FILLED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'demo', isLive: true },
+  ]) {
+    const h = runtimeHarness({ account, snapshot });
+    const result = await h.run({ PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true', PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED: 'true' });
+    assert.equal(result.applied, 0);
+    assert.equal(h.applied.length, 0);
+  }
+});
+
+test('LIVE cBot lifecycle can apply a terminal snapshot but skips an unresolved active partial order', async () => {
+  const account = { workspace_id: 'ws-1', account_id: 'acct-1', environment: 'live', platform: 'ctrader', provider_mode: 'ctrader_cbot' };
+  const enabled = { PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true', PENDING_ORDER_LIFECYCLE_LIVE_SYNC_ENABLED: 'true' };
+  const terminal = runtimeHarness({ account, snapshot: { status: 'FILLED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'live', isLive: true, remainingLots: 0, fills: [{ positionId: 'position-1', lots: 0.1 }], observedAt: 10 } });
+  assert.equal((await terminal.run(enabled)).applied, 1);
+  assert.equal(terminal.calls.some(([kind]) => kind === 'read'), true);
+
+  const uncertain = runtimeHarness({ account, snapshot: { status: 'UNRESOLVED', accountId: 'acct-1', brokerOrderId: 'order-1', environment: 'live', isLive: true } });
+  assert.equal((await uncertain.run(enabled)).applied, 0);
+  assert.equal(uncertain.applied.length, 0);
+});
+
 test('pending lifecycle leaves cTrader cBot accounts unchanged until active partial fills are observable', async () => {
   const h = runtimeHarness({
     account: { workspace_id: 'ws-1', account_id: 'acct-1', environment: 'demo', platform: 'ctrader', provider_mode: 'ctrader_cbot' },

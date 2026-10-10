@@ -146,3 +146,42 @@ test('live environment requires an explicit runtime opt-in', async () => {
     deliveryStore: { reserve: async () => ({ ok: true }), complete: async () => {}, fail: async () => {} },
   }), /live cTrader runtime is disabled/i);
 });
+
+test('LIVE lifecycle runtime is read-only and does not require trade execution authority', async () => {
+  const session = fakeSession();
+  session.request = async (message) => {
+    session.calls.push(['request', message.payloadType]);
+    if (message.payloadType === 2121) {
+      return { payloadType: 2122, payload: { trader: { ctidTraderAccountId: 77, accountType: 0, accessRights: 1 } } };
+    }
+    if (message.payloadType === 2114) {
+      return { payloadType: 2115, payload: { symbol: [{ symbolId: 41, symbolName: 'XAU/USD', enabled: true }] } };
+    }
+    if (message.payloadType === 2116) {
+      return { payloadType: 2117, payload: { symbol: [{ symbolId: 41, symbolName: 'XAU/USD', digits: 2, lotSize: 10000, minVolume: 100, maxVolume: 100000000, stepVolume: 100 }] } };
+    }
+    if (message.payloadType === 2181) {
+      return { payloadType: 2182, payload: { ctidTraderAccountId: 77, order: {
+        orderId: 9001, orderStatus: 2, executedVolume: 10000, utcLastUpdateTimestamp: 1700000000000,
+        tradeData: { symbolId: 41, volume: 10000 },
+      }, deal: [{ orderId: 9001, dealId: 8001, positionId: 7001, dealStatus: 2, filledVolume: 10000, executionPrice: 4306.5 }] } };
+    }
+    if (message.payloadType === 2124) {
+      return { payloadType: 2125, payload: { ctidTraderAccountId: 77, position: [{ positionId: 7001 }] } };
+    }
+    throw new Error(`unexpected payload ${message.payloadType}`);
+  };
+  const runtime = await createCTraderRuntime({
+    environment: 'live', readOnlyLifecycle: true, allowLiveTrading: false,
+    clientId: 'client-id', clientSecret: 'client-secret', accessToken: 'access-token', accountId: 77,
+    sessionFactory: () => session,
+  });
+
+  const result = await runtime.readPendingOrderStatus({ accountRowId: 'acct-row-live', brokerOrderId: '9001', symbol: 'XAUUSD' });
+  assert.equal(result.snapshot.status, 'FILLED');
+  assert.equal(result.isLive, true);
+  await assert.rejects(() => runtime.execute({ type: 'CANCEL_PENDING', brokerOrderId: '9001' }), /read-only/i);
+  const requestCalls = session.calls.filter((call) => Array.isArray(call) && call[0] === 'request');
+  assert.equal(requestCalls.every((call) => [2121, 2114, 2116, 2181, 2124].includes(call[1])), true);
+  runtime.close();
+});

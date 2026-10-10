@@ -244,10 +244,12 @@ export class TradeStateStore {
       const lots = Number(fill?.lots);
       const fillPrice = fill?.fillPrice == null ? undefined : Number(fill.fillPrice);
       if (!positionId || (fill?.dealId != null && !dealId) || !(Number.isFinite(lots) && lots > 0)
+        || typeof fill?.isOpen !== 'boolean'
         || (fillPrice != null && !(Number.isFinite(fillPrice) && fillPrice > 0))) {
         return { outcome: 'MISMATCH', group };
       }
       const prior = byPosition.get(positionId) || { positionId, lots: 0, dealIds: [], weightedPrice: 0, pricedLots: 0 };
+      prior.isOpen = fill.isOpen;
       prior.lots += lots;
       prior.dealIds.push(...dealIds);
       if (Number.isFinite(fillPrice)) {
@@ -281,6 +283,7 @@ export class TradeStateStore {
       .map((fill) => ({
         positionId: fill.positionId,
         lots: Number(fill.lots.toFixed(12)),
+        isOpen: fill.isOpen,
         dealIds: [...new Set(fill.dealIds)].sort(),
         fillPrice: fill.pricedLots > 0 ? Number((fill.weightedPrice / fill.pricedLots).toFixed(12)) : undefined,
       }));
@@ -322,6 +325,7 @@ export class TradeStateStore {
       const legId = `${rootLegId}:fill:${encodeURIComponent(fill.positionId)}`;
       const existingIndex = nextLegs.findIndex((leg) => String(leg.legId) === legId);
       const existing = existingIndex >= 0 ? nextLegs[existingIndex] : null;
+      const positionIsOpen = fill.isOpen && existing?.status !== 'CLOSED';
       const child = {
         ...(existing || {}),
         legId,
@@ -336,13 +340,14 @@ export class TradeStateStore {
         executedLots: fill.lots,
         stopLoss: parent.stopLoss ?? group.stopLoss ?? null,
         takeProfit: parent.takeProfit ?? null,
-        status: 'OPEN',
+        status: positionIsOpen ? 'OPEN' : 'CLOSED',
         brokerPositionId: fill.positionId,
         brokerOrderId: undefined,
         brokerDealId: fill.dealIds.length === 1 ? fill.dealIds[0] : undefined,
         brokerDealIds: fill.dealIds,
         fillPrice: fill.fillPrice,
         openedAt: existing?.openedAt ?? observedAt,
+        ...(!positionIsOpen ? { closedAt: existing?.closedAt ?? observedAt } : {}),
         lastBrokerObservedAt: observedAt,
         lastBrokerSourceVersion: sourceVersion,
       };

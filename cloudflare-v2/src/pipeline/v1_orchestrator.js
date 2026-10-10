@@ -392,14 +392,30 @@ async function orchestrateMatchedManagement({
     const managementType = String(interpretation.management?.type || '').toUpperCase();
     const needsFreshPendingState = ['CLOSE', 'CLOSE_ALL', 'CANCEL_PENDING'].includes(managementType)
       && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING' && leg?.brokerOrderId);
-    if (needsFreshPendingState && typeof refreshPendingOrderLifecycle === 'function') {
+    const requiresLifecycleRefresh = ['CLOSE', 'CLOSE_ALL'].includes(managementType)
+      && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING'
+        && leg?.brokerOrderId && leg?.lifecycleTrackingEnabled === true);
+    let lifecycleRefreshFailed = false;
+    if (requiresLifecycleRefresh && typeof refreshPendingOrderLifecycle !== 'function') {
+      lifecycleRefreshFailed = true;
+    } else if (needsFreshPendingState && typeof refreshPendingOrderLifecycle === 'function') {
       try {
         const refreshed = await refreshPendingOrderLifecycle({ group: matchedGroup, account, nowMs });
         if (refreshed?.id && String(refreshed.id) === String(matchedGroup.id)) matchedGroup = refreshed;
+        else if (requiresLifecycleRefresh) lifecycleRefreshFailed = true;
       } catch {
-        // Keep the existing management path available when a read-only broker
-        // refresh is unavailable; the scheduled recovery sweep retries later.
+        lifecycleRefreshFailed = true;
       }
+    }
+    if (lifecycleRefreshFailed) {
+      results.push({
+        accountId: account.id,
+        status: 'BLOCKED',
+        reason: 'PENDING_LIFECYCLE_REFRESH_UNAVAILABLE',
+        policy,
+        actions: [],
+      });
+      continue;
     }
 
     let actions;

@@ -135,3 +135,65 @@ test('close refreshes a pending DEMO group before building actions so a just-fil
   assert.equal(result.accounts[0].actions[0].brokerPositionId, 'position-1');
   assert.equal(result.accounts[0].actions[1].brokerOrderId, 'order-1');
 });
+
+test('close refreshes a LIVE pending group before building actions so fills and remainder are both managed', async () => {
+  const existing = pendingGroup({
+    legs: [{ legId: 'pending-leg-1', targetIndex: 1, lots: 0.10, status: 'PENDING', brokerOrderId: 'order-1', lifecycleTrackingEnabled: true }],
+  });
+  const refreshed = {
+    ...existing,
+    legs: [
+      { legId: 'pending-leg-1', targetIndex: 1, status: 'SUPERSEDED', lifecycleRole: 'PARENT' },
+      { legId: 'pending-leg-1:fill:position-1', targetIndex: 2, logicalTargetIndex: 1, status: 'OPEN', lifecycleRole: 'FILLED_POSITION', brokerPositionId: 'position-1', lots: 0.04 },
+      { legId: 'pending-leg-1:remainder', targetIndex: 3, logicalTargetIndex: 1, status: 'PENDING', lifecycleRole: 'PENDING_REMAINDER', brokerOrderId: 'order-1', lots: 0.06 },
+    ],
+  };
+  const liveAccount = { ...account(), environment: 'live', platform: 'mt5' };
+  const persisted = [];
+  const dependencies = { ...deps(existing, persisted), accountProvider: async () => [liveAccount] };
+  dependencies.refreshPendingOrderLifecycle = async ({ group, account: selectedAccount }) => {
+    assert.equal(group.id, existing.id);
+    assert.equal(selectedAccount.environment, 'live');
+    return refreshed;
+  };
+
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'close-live-just-filled',
+      workspace_hint: 'ws-1',
+      source: { instance_id: 'acceptance-harness' },
+      thread: { reply_to_event_id: 'pending-signal-1' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    eventId: 'db-close-live-just-filled',
+    nowMs: 3000,
+  }, dependencies);
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.type), ['CLOSE_POSITION', 'CANCEL_PENDING']);
+  assert.equal(result.accounts[0].actions[0].brokerPositionId, 'position-1');
+  assert.equal(result.accounts[0].actions[1].brokerOrderId, 'order-1');
+});
+
+test('close blocks without dispatching partial cancellation when a tracked pending order cannot be reconciled', async () => {
+  const existing = pendingGroup({
+    legs: [{ legId: 'pending-leg-1', targetIndex: 1, lots: 0.10, status: 'PENDING', brokerOrderId: 'order-1', lifecycleTrackingEnabled: true }],
+  });
+  const persisted = [];
+  const dependencies = deps(existing, persisted);
+  dependencies.refreshPendingOrderLifecycle = async () => { throw new Error('broker status unresolved'); };
+
+  const result = await orchestrateTradingEventSimulation({
+    event: {
+      external_event_id: 'close-unresolved-pending', workspace_hint: 'ws-1',
+      source: { instance_id: 'acceptance-harness' }, thread: { reply_to_event_id: 'pending-signal-1' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+    eventId: 'db-close-unresolved-pending', nowMs: 3000,
+  }, dependencies);
+
+  assert.equal(result.accounts[0].status, 'BLOCKED');
+  assert.equal(result.accounts[0].reason, 'PENDING_LIFECYCLE_REFRESH_UNAVAILABLE');
+  assert.deepEqual(result.accounts[0].actions, []);
+  assert.equal(persisted.length, 0);
+});

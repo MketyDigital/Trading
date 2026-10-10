@@ -9,10 +9,16 @@ const context = {
 };
 
 function session(response) {
+  const responses = Array.isArray(response) ? [...response] : [response];
   return {
     calls: [],
-    async request(message, options) { this.calls.push({ message, options }); return response; },
+    async request(message, options) { this.calls.push({ message, options }); return responses.shift(); },
   };
+}
+
+function reconciliationResponse(positionIds = [501]) {
+  return { payloadType: 2125, payload: { ctidTraderAccountId: 12345,
+    position: positionIds.map((positionId) => ({ positionId })) } };
 }
 
 function orderResponse(overrides = {}) {
@@ -34,21 +40,23 @@ function orderResponse(overrides = {}) {
 }
 
 test('reads exact cTrader order details and normalizes multiple fills into one manageable position', async () => {
-  const api = session(orderResponse());
+  const api = session([orderResponse(), reconciliationResponse()]);
   const result = await readCTraderPendingOrderStatus({ ...context, session: api });
 
   assert.deepEqual(result, {
     accountRowId: 'account-row-1', brokerAccountNumber: '12345', serverName: 'Broker-Demo', environment: 'demo', isLive: false,
     snapshot: {
       status: 'PARTIALLY_FILLED', remainingLots: 0.6,
-      fills: [{ dealId: '11', dealIds: ['11', '12'], positionId: '501', lots: 0.4, fillPrice: 1.08075 }],
+      fills: [{ dealId: '11', dealIds: ['11', '12'], positionId: '501', lots: 0.4, fillPrice: 1.08075, isOpen: true }],
       observedAt: 1900, sourceVersion: '1:4000:1900',
     },
   });
-  assert.equal(api.calls.length, 1);
+  assert.equal(api.calls.length, 2);
   assert.equal(api.calls[0].message.payloadType, 2181);
   assert.deepEqual(api.calls[0].message.payload, { ctidTraderAccountId: 12345, orderId: 9001 });
   assert.deepEqual(api.calls[0].options, { successPayloadTypes: [2182] });
+  assert.equal(api.calls[1].message.payloadType, 2124);
+  assert.deepEqual(api.calls[1].options, { successPayloadTypes: [2125] });
 });
 
 test('returns unresolved on wrong account, wrong order, incomplete fill mapping, or invalid volume evidence', async () => {
@@ -58,7 +66,7 @@ test('returns unresolved on wrong account, wrong order, incomplete fill mapping,
     orderResponse({ payload: { ...orderResponse().payload, deal: [{ ...orderResponse().payload.deal[0], positionId: null }] } }),
     orderResponse({ payload: { ...orderResponse().payload, deal: [{ ...orderResponse().payload.deal[0], filledVolume: 0 }] } }),
   ]) {
-    const result = await readCTraderPendingOrderStatus({ ...context, session: session(response) });
+    const result = await readCTraderPendingOrderStatus({ ...context, session: session([response, reconciliationResponse()]) });
     assert.equal(result.snapshot.status, 'UNRESOLVED');
   }
 });
@@ -74,8 +82,23 @@ test('maps fully filled and cancelled cTrader orders without fabricating filled 
     order: { ...orderResponse().payload.order, orderStatus: 5, executedVolume: 4000 },
   } });
 
-  assert.equal((await readCTraderPendingOrderStatus({ ...context, session: session(filled) })).snapshot.status, 'FILLED');
-  const cancellation = await readCTraderPendingOrderStatus({ ...context, session: session(cancelled) });
+  assert.equal((await readCTraderPendingOrderStatus({ ...context, session: session([filled, reconciliationResponse()]) })).snapshot.status, 'FILLED');
+  const cancellation = await readCTraderPendingOrderStatus({ ...context, session: session([cancelled, reconciliationResponse()]) });
   assert.equal(cancellation.snapshot.status, 'CANCELLED');
   assert.equal(cancellation.snapshot.remainingLots, 0);
+
+  const rejected = orderResponse({ payload: {
+    ...orderResponse().payload,
+    order: { ...orderResponse().payload.order, orderStatus: 3, executedVolume: 0 },
+    deal: [],
+  } });
+  const rejection = await readCTraderPendingOrderStatus({ ...context, session: session([rejected, reconciliationResponse()]) });
+  assert.equal(rejection.snapshot.status, 'CANCELLED');
+});
+
+test('marks historical cTrader fills closed when the broker no longer reports their positions open', async () => {
+  const closedPosition = orderResponse();
+  const result = await readCTraderPendingOrderStatus({ ...context, session: session([closedPosition, reconciliationResponse([])]) });
+  assert.equal(result.snapshot.status, 'PARTIALLY_FILLED');
+  assert.equal(result.snapshot.fills[0].isOpen, false);
 });

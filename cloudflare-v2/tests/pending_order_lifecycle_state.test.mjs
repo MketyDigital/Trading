@@ -38,7 +38,7 @@ const snapshotArgs = (overrides = {}) => ({
   snapshot: {
     status: 'PARTIALLY_FILLED',
     remainingLots: 0.06,
-    fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825 }],
+    fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825, isOpen: true }],
     observedAt: 190,
     sourceVersion: 'version-1',
   },
@@ -112,7 +112,7 @@ test('partial activation preserves per-TP fixed lots and leaves sibling TP order
       status: 'PARTIALLY_FILLED',
       requestedLots: 0.10,
       remainingLots: 0.06,
-      fills: [{ dealId: 'deal-2a', positionId: 'position-2a', lots: 0.04, fillPrice: 1.0825 }],
+      fills: [{ dealId: 'deal-2a', positionId: 'position-2a', lots: 0.04, fillPrice: 1.0825, isOpen: true }],
       observedAt: 190,
       sourceVersion: 'version-1',
     },
@@ -137,12 +137,29 @@ test('a cBot fill with exact position identity does not invent a broker deal id'
   await store.putGroup(pendingGroup());
   const result = await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1', snapshotArgs({
     snapshot: { status: 'PARTIALLY_FILLED', remainingLots: 0.06,
-      fills: [{ positionId: 'position-1', lots: 0.04, fillPrice: 1.0825 }], observedAt: 190 },
+      fills: [{ positionId: 'position-1', lots: 0.04, fillPrice: 1.0825, isOpen: true }], observedAt: 190 },
   }));
   const fill = result.group.legs.find((leg) => leg.lifecycleRole === 'FILLED_POSITION');
   assert.equal(result.outcome, 'APPLIED');
   assert.equal(fill.brokerDealId, undefined);
   assert.deepEqual(fill.brokerDealIds, []);
+});
+
+test('a position closed before the lifecycle scan remains closed instead of being recreated as OPEN', async () => {
+  const { store } = makeStore();
+  await store.putGroup(pendingGroup());
+  const result = await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1', snapshotArgs({
+    snapshot: { status: 'FILLED', remainingLots: 0,
+      fills: [{ dealId: 'deal-closed', positionId: 'position-closed', lots: 0.10, fillPrice: 1.0825, isOpen: false }],
+      observedAt: 190, sourceVersion: 'filled-then-closed' },
+  }));
+
+  assert.equal(result.outcome, 'APPLIED');
+  const fill = result.group.legs.find((leg) => leg.lifecycleRole === 'FILLED_POSITION');
+  assert.equal(fill.status, 'CLOSED');
+  assert.equal(fill.brokerPositionId, 'position-closed');
+  assert.equal(fill.closedAt, 190);
+  assert.equal(result.group.status, 'CLOSED');
 });
 
 test('duplicate cumulative snapshot is idempotent and does not add child legs', async () => {
@@ -164,8 +181,8 @@ test('a later partial observation on the remainder updates the original position
   const second = await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1:remainder', snapshotArgs({
     nowMs: 205,
     snapshot: { status: 'PARTIALLY_FILLED', remainingLots: 0.04, fills: [
-      { dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825 },
-      { dealId: 'deal-2', positionId: 'position-2', lots: 0.02, fillPrice: 1.0830 },
+      { dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825, isOpen: true },
+      { dealId: 'deal-2', positionId: 'position-2', lots: 0.02, fillPrice: 1.0830, isOpen: true },
     ], observedAt: 204, sourceVersion: 'version-2' },
   }));
 
@@ -208,7 +225,7 @@ test('broker cancellation terminalizes only the remainder and preserves filled p
   await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1', snapshotArgs());
   const cancelled = await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1', snapshotArgs({
     nowMs: 205,
-    snapshot: { status: 'CANCELLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825 }], observedAt: 204, sourceVersion: 'version-2' },
+      snapshot: { status: 'CANCELLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.04, fillPrice: 1.0825, isOpen: true }], observedAt: 204, sourceVersion: 'version-2' },
   }));
 
   assert.equal(cancelled.outcome, 'APPLIED');
@@ -221,7 +238,7 @@ test('full fill creates filled child without an actionable pending remainder', a
   const { store } = makeStore();
   await store.putGroup(pendingGroup());
   const result = await store.reconcilePendingOrderSnapshot('group-1', 'logical-leg-1', snapshotArgs({
-    snapshot: { status: 'FILLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.10, fillPrice: 1.0825 }], observedAt: 190, sourceVersion: 'version-1' },
+    snapshot: { status: 'FILLED', remainingLots: 0, fills: [{ dealId: 'deal-1', positionId: 'position-1', lots: 0.10, fillPrice: 1.0825, isOpen: true }], observedAt: 190, sourceVersion: 'version-1' },
   }));
 
   assert.equal(result.outcome, 'APPLIED');

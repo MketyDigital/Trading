@@ -1,4 +1,4 @@
-import { buildOrderDetailsMessage } from './ctrader_protocol.js';
+import { buildOrderDetailsMessage, buildReconcileMessage } from './ctrader_protocol.js';
 
 function unresolved(context, reason) {
   return {
@@ -64,7 +64,7 @@ export function normalizeCTraderOrderDetails(response, context = {}) {
     status = 'FILLED';
   } else if (orderStatus === 1) {
     status = executedVolume > 0 ? 'PARTIALLY_FILLED' : 'PENDING';
-  } else if (orderStatus === 4 || orderStatus === 5) {
+  } else if (orderStatus === 3 || orderStatus === 4 || orderStatus === 5) {
     status = 'CANCELLED';
   } else {
     return unresolved(context, 'UNSUPPORTED_ORDER_STATUS');
@@ -75,6 +75,7 @@ export function normalizeCTraderOrderDetails(response, context = {}) {
     const dealIds = [...new Set(row.dealIds)].sort();
     return {
       dealId: dealIds[0], dealIds, positionId: row.positionId, lots: Number(row.lots.toFixed(12)),
+      isOpen: context.openPositionIds instanceof Set && context.openPositionIds.has(row.positionId),
       ...(row.pricedVolume > 0 ? { fillPrice: Number((row.weightedPrice / row.pricedVolume).toFixed(12)) } : {}),
     };
   });
@@ -104,7 +105,17 @@ export async function readCTraderPendingOrderStatus(context = {}) {
   });
   try {
     const response = await context.session.request(request, { successPayloadTypes: [2182] });
-    return normalizeCTraderOrderDetails(response, context);
+    const reconciliation = await context.session.request(buildReconcileMessage({
+      clientMsgId: `lifecycle-reconcile-${String(context.brokerOrderId)}`.slice(0, 64),
+      accountId: context.accountId,
+      returnProtectionOrders: false,
+    }), { successPayloadTypes: [2125] });
+    const positions = reconciliation?.payload?.position;
+    if (Number(reconciliation?.payloadType) !== 2125
+      || String(reconciliation?.payload?.ctidTraderAccountId ?? '') !== String(context.accountId)
+      || !Array.isArray(positions)) return unresolved(context, 'OPEN_POSITION_RECONCILIATION_UNAVAILABLE');
+    const openPositionIds = new Set(positions.map((position) => String(position?.positionId ?? '')).filter(Boolean));
+    return normalizeCTraderOrderDetails(response, { ...context, openPositionIds });
   } catch {
     return unresolved(context, 'BROKER_HISTORY_UNAVAILABLE');
   }
