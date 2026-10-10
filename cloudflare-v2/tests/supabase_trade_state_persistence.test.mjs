@@ -11,6 +11,7 @@ test('pending lifecycle scan selects only legs explicitly marked for lifecycle t
   const calls = [];
   const row = {
     workspace_id: 'workspace-1', runtime_leg_id: 'old-pending-leg', broker_order_id: 'old-order',
+    created_at: '2026-10-10T17:25:00.000Z',
     position_groups: { runtime_group_id: 'old-group', trade_account_id: 'account-1', canonical_symbol: 'EURUSD' },
   };
   const builder = {
@@ -23,6 +24,7 @@ test('pending lifecycle scan selects only legs explicitly marked for lifecycle t
   const persistence = new SupabaseTradeStatePersistence({ from(table) { calls.push(['from', table]); return builder; } });
   await persistence.listPendingOrderLifecycles();
   assert.ok(calls.some((call) => call[0] === 'eq' && call[1] === 'lifecycle_tracking_enabled' && call[2] === true));
+  assert.ok(calls.some((call) => call[0] === 'select' && call[1].includes('created_at')));
 });
 
 const group = {

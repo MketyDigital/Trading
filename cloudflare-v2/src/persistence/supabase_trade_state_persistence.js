@@ -223,7 +223,7 @@ export class SupabaseTradeStatePersistence {
   async listPendingOrderLifecycles() {
     const { data, error } = await this.supabase
       .from('position_legs')
-      .select('workspace_id, position_group_id, runtime_leg_id, broker_order_id, position_groups!inner(runtime_group_id, trade_account_id, canonical_symbol)')
+      .select('workspace_id, position_group_id, runtime_leg_id, broker_order_id, created_at, position_groups!inner(runtime_group_id, trade_account_id, canonical_symbol)')
       .eq('status', 'PENDING')
       .eq('lifecycle_tracking_enabled', true)
       .not('broker_order_id', 'is', null);
@@ -235,6 +235,7 @@ export class SupabaseTradeStatePersistence {
       legId: String(row.runtime_leg_id || ''),
       brokerOrderId: String(row.broker_order_id || ''),
       symbol: String(row.position_groups?.canonical_symbol || ''),
+      createdAt: millis(row.created_at),
     })).filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
 }
