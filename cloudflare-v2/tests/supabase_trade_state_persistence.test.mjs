@@ -77,6 +77,7 @@ test('serializes composite runtime ids beside UUID relational keys and preserves
   assert.equal(rows.legs[0].requested_lots, 0.01);
   assert.equal(rows.legs[0].executed_lots, 0.01);
   assert.equal(rows.legs[0].remaining_lots, 0.01);
+  assert.deepEqual(rows.legs.map((row) => row.broker_deal_ids), [[], []]);
   assert.equal(rows.legs[1].lifecycle_tracking_enabled, true);
 });
 

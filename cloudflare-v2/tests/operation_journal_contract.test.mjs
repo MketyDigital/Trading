@@ -55,6 +55,31 @@ test('normalizes operation evidence to a bounded secret-safe taxonomy', () => {
   assert.equal(JSON.stringify(evidence).includes('sk-summary-never-persist'), false);
 });
 
+test('stores only UUID trading event ids in the relational UUID column', () => {
+  const composite = normalizeOperationEvidence({
+    workspaceId: 'ws-1',
+    evidenceKey: 'external-event:revision:interpretation',
+    correlationId: 'external-event:revision',
+    tradingEventId: 'e09cd362-c750-412d-b46d-2fea8eb22f85:40eacf2a-5a8a-4648-9b90-55038748d2ed',
+    stage: 'INTERPRETATION',
+    operation: 'interpret_event',
+    status: 'SUCCEEDED',
+  });
+  const uuid = normalizeOperationEvidence({
+    workspaceId: 'ws-1',
+    evidenceKey: 'event-id:execution',
+    correlationId: 'event-id',
+    tradingEventId: 'e09cd362-c750-412d-b46d-2fea8eb22f85',
+    stage: 'BROKER_EXECUTION',
+    operation: 'execute_plan',
+    status: 'SUCCEEDED',
+  });
+
+  assert.equal(composite.tradingEventId, null);
+  assert.equal(composite.correlationId, 'external-event:revision');
+  assert.equal(uuid.tradingEventId, 'e09cd362-c750-412d-b46d-2fea8eb22f85');
+});
+
 test('rejects unknown stage/status rather than creating free-form journal semantics', () => {
   assert.throws(() => normalizeOperationEvidence({
     workspaceId: 'ws-1',

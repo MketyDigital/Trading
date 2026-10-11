@@ -50,6 +50,13 @@ function text(value, max = 512) {
   return normalized ? normalized.slice(0, max) : null;
 }
 
+function uuidText(value) {
+  const normalized = text(value);
+  return normalized && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)
+    ? normalized
+    : null;
+}
+
 function normalizeKeyName(key) {
   return String(key ?? '').trim().replace(/[\s-]+/g, '_').toLowerCase();
 }
@@ -133,7 +140,7 @@ export function normalizeOperationEvidence(input = {}) {
     workspaceId: requiredText(input.workspaceId ?? input.workspace_id, 'OPERATION_WORKSPACE_REQUIRED'),
     evidenceKey: requiredText(input.evidenceKey ?? input.evidence_key, 'OPERATION_EVIDENCE_KEY_REQUIRED', 1000),
     correlationId: requiredText(input.correlationId ?? input.correlation_id, 'OPERATION_CORRELATION_ID_REQUIRED', 1000),
-    tradingEventId: text(input.tradingEventId ?? input.trading_event_id),
+    tradingEventId: uuidText(input.tradingEventId ?? input.trading_event_id),
     sourceConnectionId: text(input.sourceConnectionId ?? input.source_connection_id),
     sourceFeedId: text(input.sourceFeedId ?? input.source_feed_id),
     routeId: text(input.routeId ?? input.route_id),
