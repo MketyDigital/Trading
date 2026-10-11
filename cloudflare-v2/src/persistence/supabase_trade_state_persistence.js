@@ -101,7 +101,7 @@ export function groupToPersistenceRows(group = {}) {
       last_broker_source_version: nonEmpty(leg.lastBrokerSourceVersion),
       last_broker_status: nonEmpty(leg.lastBrokerStatus),
       last_broker_snapshot_fingerprint: nonEmpty(leg.lastBrokerSnapshotFingerprint),
-      broker_deal_ids: Array.isArray(leg.brokerDealIds) ? [...new Set(leg.brokerDealIds.map(String))] : undefined,
+      broker_deal_ids: Array.isArray(leg.brokerDealIds) ? [...new Set(leg.brokerDealIds.map(String))] : [],
       opened_at: iso(leg.openedAt),
       closed_at: iso(leg.closedAt),
       updated_at: iso(group.updatedAt),
