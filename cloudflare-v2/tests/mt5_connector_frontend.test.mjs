@@ -150,6 +150,12 @@ test('MT5 account observer is idempotent and does not self-trigger on unchanged 
   assert.doesNotMatch(mt5, /b\.textContent=connected\?'Refresh MT5 connection':'Sync MT5 identity'/);
 });
 
+test('pending sync button renderer does not retrigger its own subtree observer', () => {
+  const mt5 = fs.readFileSync(path.join(root, 'cloudflare-v2/src/dashboard_mt5_connector_connections.js'), 'utf8');
+  assert.match(mt5, /var label='Sync all pending MT5 identities \('\+pending\.length\+'\)';if\(button\.textContent!==label\)button\.textContent=label/);
+  assert.doesNotMatch(mt5, /button\.textContent='Sync all pending MT5 identities \('\+pending\.length\+'\)'/);
+});
+
 test('production browser release gate verifies the shipped MT5 Connector contract without authenticating or clicking setup controls', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/production-frontend-e2e.yml'), 'utf8');
   assert.doesNotMatch(workflow, /showAdvancedMt5BridgeBtn/);
