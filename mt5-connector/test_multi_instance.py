@@ -48,6 +48,23 @@ class MultiInstanceTests(unittest.TestCase):
         self.assertEqual(args.config, r'C:\Mkety\Deriv\connector.json')
         self.assertEqual(args.ledger, r'C:\Mkety\Deriv\ledger.sqlite')
 
+    def test_worker_cli_accepts_profile_status_and_stop_files(self):
+        args = module.parse_args([
+            '--worker', '--profile-id', 'alpha', '--status-file', r'C:\Mkety\alpha\status.json',
+            '--stop-file', r'C:\Mkety\alpha\.alpha.worker.stop',
+            '--terminal', r'C:\MT5\alpha\terminal64.exe',
+            '--config', r'C:\Mkety\alpha\connector.json',
+            '--ledger', r'C:\Mkety\alpha\ledger.sqlite',
+        ])
+        self.assertTrue(args.worker)
+        self.assertEqual(args.profile_id, 'alpha')
+        self.assertEqual(args.status_file, r'C:\Mkety\alpha\status.json')
+        self.assertEqual(args.stop_file, r'C:\Mkety\alpha\.alpha.worker.stop')
+
+    def test_packaged_runtime_smoke_mode_is_an_explicit_non_trading_entrypoint(self):
+        args = module.parse_args(['--runtime-smoke'])
+        self.assertTrue(args.runtime_smoke)
+
     def test_two_replay_ledgers_are_isolated(self):
         with tempfile.TemporaryDirectory() as td:
             first = module.ReplayLedger(Path(td) / 'octa.sqlite')

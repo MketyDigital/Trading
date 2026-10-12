@@ -6,11 +6,15 @@ Mkety MT5 Connector is the recommended MetaTrader 5 execution adapter for Mkety 
 
 1. Open **Mkety Trading → Connections**.
 2. Choose **MT5 Connector — Recommended**.
-3. Enter a label and the expected Demo/Live environment.
-4. Click **Create MT5 Connector pairing**.
-5. Download `MketyMT5Connector.exe`.
-6. Keep MetaTrader 5 open and logged into the intended broker account.
-7. Start `MketyMT5Connector.exe`. On first run, with no saved config and no CLI token, it prompts once:
+3. Enter a label and the expected Demo/Live environment, then click **Create MT5 Connector pairing**.
+4. Download the universal `MketyMT5Connector.exe` and open it. The packaged Windows app opens the terminal manager; choose **Connect one terminal** (recommended) or **Set up multiple terminals**.
+5. Select a listed MT5 installation, browse to `terminal64.exe`, or choose an installer. The app checks known locations and running processes without scanning every drive. An installer opens interactively and you choose a new or empty folder.
+6. Sign in to the intended broker account inside MT5. The manager shows the observed account, server and Demo/Live state; confirm those details before pasting the token created for that same account.
+7. The manager saves the pairing in that terminal profile and starts its isolated connector worker. On the first successful gateway authentication, the gateway reconnect credential replaces the local one-time pairing token.
+8. Return to Mkety and click **Sync MT5 identity** for that account. The manager opens Mkety and keeps identity sync as unconfirmed until it is verified there.
+9. Verify the account number, server, broker and Demo/Live state in Mkety. New accounts remain inactive, execution-disabled and kill-switched until explicitly enabled.
+
+For Python/console or operator use, the existing token prompt and flags remain supported. With no saved config and no CLI token, the connector prompts once:
 
 ```text
 Paste the one-time pairing token from Mkety Trading:
@@ -22,7 +26,7 @@ The production gateway is preconfigured in the connector:
 wss://cbot.mkety.com:25345/v1/mt5
 ```
 
-The customer normally pastes only the one-time pairing token; they do not need to copy or configure the WebSocket URL.
+The customer pastes only the one-time pairing token; they do not need to copy or configure the WebSocket URL.
 
 For operator/testing use, the equivalent explicit command is:
 
@@ -32,11 +36,27 @@ MketyMT5Connector.exe --token "<PAIR_TOKEN>"
 
 The pair token is short-lived. On the first successful connection, the gateway issues an instance-bound reconnect credential and the connector replaces the local pair token automatically. The customer does not need to paste a token again unless the connector is reset or revoked.
 
-8. Return to Mkety and click **Sync MT5 identity**.
-9. Verify the actual account number, server, broker and Demo/Live state shown in Mkety.
-10. Configure route and risk controls. New accounts remain inactive, execution-disabled and kill-switched until explicitly enabled.
+Explicit CLI startup is retained for existing installations and operator workflows; omitting `--terminal` preserves historical single-terminal auto-discovery.
 
 ## Multiple MT5 brokers/accounts on one Windows VPS
+
+The multi-terminal manager is designed to make this setup available from one universal connector download. On launch it checks running MT5 processes, Windows' registered MT5 install entries, and a short list of standard install folders. It does not scan every drive. If a terminal is not listed, use **Browse for terminal64.exe** or search only a folder you choose. The list is deduplicated by the full executable path, and a terminal already assigned to a profile cannot be added a second time.
+
+To add another installation, choose an MT5 installer you already have or open the [official MetaTrader 5 download page](https://www.metatrader5.com/en/download). The manager asks you to choose an empty target folder, validates it, and tells you to select that folder in the interactive installer. It does not use silent or overwrite flags. Complete broker login inside MT5 yourself. A universal MetaQuotes terminal may not include every broker's server entry; use that broker's MT5 installer if its server is missing. Copying an existing terminal is kept unavailable until a package layout can be validated to exclude roaming data and credentials.
+
+For each terminal, select its `terminal64.exe`, open MT5, sign in to the intended account, and assign a distinct Mkety pairing token. Then use **Sync MT5 identity** for each destination in Mkety. Process status, account login, gateway connection, and dashboard identity sync are separate states; seeing MT5 open does not by itself mean Mkety is connected or synced.
+
+### Upgrading an existing single-terminal connector
+
+The manager detects the existing `%APPDATA%\Mkety\mt5-connector.json` config and adopts it as the **Existing MT5 connection** profile. It keeps the old config and replay ledger at their original paths and does not ask for a new token. If the terminal executable path is not known, select that existing terminal once; the selected path is kept in the local profile manifest. If an older standalone connector process is still open, close it before starting the manager profile. The manager checks for that old process and refuses to start a duplicate worker.
+
+### Status, sync and stopping
+
+The profile list shows the MT5 terminal process, connector worker process, observed account/server/environment, gateway state, and dashboard sync reminder separately. **Connected** requires successful gateway authentication followed by a recent heartbeat acknowledgement; a running process alone is not enough. Mkety remains authoritative for identity sync, so confirm each account in the dashboard. Individual **Sync MT5 identity** remains available. **Sync all pending MT5 identities** runs only pending MT5 Connector accounts sequentially, continues after a per-account failure, and reports the results separately; it does not sync cTrader, the HTTP Bridge, or accounts already marked connected.
+
+Minimizing the manager keeps it and its connector workers running. Closing asks whether to stop the managed connector workers and exit; choosing No leaves the manager open. If the manager is reopened after an unexpected exit, it can recover status and stop requests for workers whose saved PID still identifies the Mkety connector. A PID that cannot be verified is left untouched and reported. Stopping a worker leaves its MT5 terminal, open positions and pending orders alone. Start a stopped saved profile to reconnect its worker later. The manager does not automatically start every saved terminal at Windows login.
+
+The installer path is available for a downloaded MetaQuotes or broker-specific setup file. Copying an existing terminal directory is intentionally unavailable until its layout can be validated to exclude terminal data and credentials.
 
 One running MT5 terminal instance can hold one active logged-in trading account identity at a time. Switching the login inside that terminal changes the account controlled by that terminal; it does not keep multiple broker accounts simultaneously connected.
 
@@ -78,6 +98,8 @@ After first successful pairing, omit `--token`; each instance reloads its own pr
 The explicit `--terminal` option is what makes the connector bind deterministically to the intended broker installation instead of relying on MetaTrader5 package auto-discovery. Omitting `--terminal` preserves the original single-terminal behavior for existing installations.
 
 Windows/Windows VPS is the primary supported multi-terminal deployment target. Linux + Wine remains experimental until it has its own connector and broker acceptance evidence.
+
+Each running terminal and connector worker adds RAM and CPU use. Three live MT5 terminals should not be planned on a 1 GB RAM VPS. Treat 4 GB as a starting point for a controlled resource check and 6 GB as a safer initial choice; these are conservative planning estimates, not measurements or guarantees for every broker, Windows image, or workload. Leave terminals stopped when they are not needed, and keep charts and extra terminal features disabled if the broker allows it.
 
 ## Authority and credential boundary
 
