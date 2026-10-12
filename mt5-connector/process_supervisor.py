@@ -36,11 +36,43 @@ def _canonical_path(path: Path) -> str:
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_is_running(pid)
     try:
         os.kill(pid, 0)
         return True
     except OSError:
         return False
+
+
+def _windows_pid_is_running(pid: int, *, api=None, last_error=None) -> bool:
+    """Check a Windows PID without sending a signal or terminating the process."""
+    import ctypes
+    from ctypes import wintypes
+
+    if pid <= 0:
+        return False
+    if api is None:
+        kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        api = kernel32
+    if last_error is None:
+        last_error = getattr(ctypes, "get_last_error", lambda: 87)
+
+    handle = api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        # Invalid PID means exited. Treat other failures (including access denied)
+        # as possibly running so callers fail closed and avoid duplicate workers.
+        return int(last_error()) != 87  # ERROR_INVALID_PARAMETER
+    try:
+        return api.WaitForSingleObject(handle, 0) == 0x00000102  # WAIT_TIMEOUT
+    finally:
+        api.CloseHandle(handle)
 
 
 def _terminate_pid(pid: int) -> bool:

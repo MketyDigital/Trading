@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from process_supervisor import ConnectorSupervisor, WorkerSpec, _pid_is_running
+from process_supervisor import ConnectorSupervisor, WorkerSpec, _pid_is_running, _windows_pid_is_running
 
 
 class FakeProcess:
@@ -35,6 +35,42 @@ class ProcessSupervisorTests(unittest.TestCase):
         self.assertTrue(_pid_is_running(os.getpid()))
         self.assertFalse(_pid_is_running(0))
         self.assertFalse(_pid_is_running(-1))
+
+    def test_windows_pid_probe_checks_wait_state_without_signaling_process(self):
+        class Api:
+            def __init__(self, wait_result):
+                self.wait_result = wait_result
+                self.opened = []
+                self.closed = []
+
+            def OpenProcess(self, access, inherit, pid):
+                self.opened.append((access, inherit, pid))
+                return 42
+
+            def WaitForSingleObject(self, handle, timeout):
+                self.assert_wait_args = (handle, timeout)
+                return self.wait_result
+
+            def CloseHandle(self, handle):
+                self.closed.append(handle)
+                return True
+
+        running = Api(0x00000102)  # WAIT_TIMEOUT
+        exited = Api(0x00000000)  # WAIT_OBJECT_0
+        self.assertTrue(_windows_pid_is_running(123, api=running))
+        self.assertFalse(_windows_pid_is_running(123, api=exited))
+        self.assertEqual(running.opened, [(0x00100000, False, 123)])
+        self.assertEqual(running.assert_wait_args, (42, 0))
+        self.assertEqual(running.closed, [42])
+        self.assertEqual(exited.closed, [42])
+
+    def test_windows_pid_probe_treats_only_invalid_pid_as_definitely_stopped(self):
+        class Api:
+            def OpenProcess(self, _access, _inherit, _pid):
+                return None
+
+        self.assertFalse(_windows_pid_is_running(123, api=Api(), last_error=lambda: 87))
+        self.assertTrue(_windows_pid_is_running(123, api=Api(), last_error=lambda: 5))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
