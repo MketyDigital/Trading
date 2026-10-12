@@ -2,6 +2,12 @@ name: MT5 Connector Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional explicit release tag (main only), e.g. mt5-connector-v1.1.0'
+        required: false
+        type: string
+        default: ''
   pull_request:
     paths:
       - '.github/workflows/mt5-connector-release.yml'
@@ -97,24 +103,56 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mt5-connector-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mt5-connector-v') || (github.ref == 'refs/heads/main' && inputs.release_tag != '')
     needs: package-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout the commit to release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
       - name: Download verified Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: MketyMT5Connector-windows
           path: dist
 
+      - name: Create an explicit version tag from main when dispatched
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Manual connector releases can run only from main." >&2
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^mt5-connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use mt5-connector-vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Release tag already exists; refusing to replace it." >&2
+            exit 1
+          fi
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+
       - name: Create a new versioned release without replacing existing assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
           tag="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$RELEASE_TAG"
+          fi
           if [[ ! "$tag" =~ ^mt5-connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tag must use mt5-connector-vMAJOR.MINOR.PATCH" >&2
             exit 1
