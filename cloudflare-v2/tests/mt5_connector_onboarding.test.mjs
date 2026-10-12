@@ -243,3 +243,41 @@ test('MT5 connector sync persists terminal identity, retires local pairing stora
   assert.equal(persistedCredentials.controlSecret, env.CBOT_CONTROL_SECRET);
   assert.equal(body.account.accountId, '50123456');
 });
+
+test('MT5 connector sync still rejects account-row and Demo/Live identity mismatches without persisting them', async () => {
+  const credentialCiphertext = await encryptConnectionCredentials('mt5_connector', {
+    connectionToken: 'mt5v1.test.test', gatewayUrl: env.CTRADER_CBOT_GATEWAY_URL,
+    controlSecret: env.CBOT_CONTROL_SECRET,
+  }, env.TRADING_MASTER_KEY);
+  const current = {
+    id: 'acct-mt5-safe', workspace_id: 'ws-1', account_label: 'Expected Demo', platform: 'mt5',
+    account_id: 'pending:safe', server_name: null, lot_sizing_type: 'fixed', lot_value: 0.01,
+    is_active: false, execution_enabled: false, safety_policy: { killSwitch: true },
+    fast_entry_policy: {}, entry_zone_policy: {}, credential_ciphertext: credentialCiphertext,
+    provider_mode: 'mt5_connector', environment: 'demo', roles: ['execution'],
+    provider_config: { status: 'awaiting_connector' }, created_at: '2026-09-11T15:00:00.000Z',
+  };
+  const cases = [
+    { label: 'row mismatch', accountRowId: 'acct-mt5-other', identity: { accountNumber: '50123456', serverName: 'Broker-Demo', isLive: false }, reason: 'MT5_CONNECTOR_IDENTITY_MISMATCH' },
+    { label: 'environment mismatch', accountRowId: 'acct-mt5-safe', identity: { accountNumber: '50123456', serverName: 'Broker-Live', isLive: true }, reason: 'MT5_CONNECTOR_ENVIRONMENT_MISMATCH' },
+  ];
+
+  for (const scenario of cases) {
+    const capture = {};
+    const response = await handleV1AdminMt5ConnectorRequest(
+      new Request('https://trade.mkety.com/api/v1/admin/connections/mt5/connector/acct-mt5-safe/sync', { method: 'POST' }),
+      env,
+      {
+        supabaseFactory: async () => createSupabase(capture, current),
+        authorizeFn: authorizeOwner,
+        fetchFn: async () => new Response(JSON.stringify({
+          ok: true, online: true, accountRowId: scenario.accountRowId,
+          identity: scenario.identity,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      },
+    );
+    assert.equal(response.status, 409, scenario.label);
+    assert.equal((await response.json()).reason, scenario.reason, scenario.label);
+    assert.equal(capture.updated, undefined, scenario.label);
+  }
+});

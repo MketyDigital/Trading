@@ -3,8 +3,11 @@ import json
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
+
+from process_supervisor import WorkerStatusWriter
 
 MODULE_PATH = Path(__file__).with_name('mkety_mt5_connector.py')
 spec = importlib.util.spec_from_file_location('mkety_mt5_connector', MODULE_PATH)
@@ -154,6 +157,91 @@ class ConnectorTests(unittest.TestCase):
             self.assertEqual(loaded['connection_token'], 'mt5r1.reconnect.signature')
             self.assertEqual(connector.config['connection_token'], 'mt5r1.reconnect.signature')
             self.assertNotIn('mt5v1.pair.signature', path.read_text(encoding='utf-8'))
+
+    def test_worker_status_tracks_gateway_lifecycle_without_credentials(self):
+        with tempfile.TemporaryDirectory() as td:
+            status_path = Path(td) / 'status.json'
+            writer = WorkerStatusWriter(status_path, 'alpha', Path(td) / 'terminal64.exe', worker_pid=41)
+            connector = module.MketyMt5Connector(
+                FakeMT5(), lambda *args, **kwargs: None,
+                {'gateway_url': module.DEFAULT_GATEWAY, 'connection_token': 'secret-token', 'connector_instance_id': 'i'},
+                ledger_path=Path(td) / 'ledger.sqlite', status_callback=writer.update,
+                profile_id='alpha', terminal_path=Path(td) / 'terminal64.exe', worker_pid=41,
+            )
+            self.assertEqual(json.loads(status_path.read_text())['state'], 'starting')
+            connector.begin_gateway_connection()
+            connector.handle_auth_ok({'type': 'auth_ok'})
+            self.assertEqual(json.loads(status_path.read_text())['state'], 'authenticated')
+            connector.handle_gateway_heartbeat_ack()
+            payload = json.loads(status_path.read_text())
+            self.assertEqual(payload['state'], 'connected')
+            self.assertTrue(payload['last_gateway_heartbeat_at'])
+            self.assertEqual(payload['account_number'], '123456')
+            self.assertEqual(payload['environment'], 'demo')
+            connector.handle_gateway_disconnect()
+            self.assertEqual(json.loads(status_path.read_text())['state'], 'reconnecting')
+            connector.begin_gateway_connection()
+            connector.shutdown_status()
+            self.assertEqual(json.loads(status_path.read_text())['state'], 'stopped')
+            self.assertNotIn('connection_token', status_path.read_text().lower())
+            self.assertNotIn('password', status_path.read_text().lower())
+
+    def test_heartbeat_ack_before_authentication_cannot_mark_worker_connected(self):
+        with tempfile.TemporaryDirectory() as td:
+            status_path = Path(td) / 'status.json'
+            writer = WorkerStatusWriter(status_path, 'alpha', Path(td) / 'terminal64.exe', worker_pid=43)
+            connector = module.MketyMt5Connector(
+                FakeMT5(), lambda *args, **kwargs: None,
+                {'gateway_url': module.DEFAULT_GATEWAY, 'connection_token': 'token', 'connector_instance_id': 'i'},
+                ledger_path=Path(td) / 'ledger.sqlite', status_callback=writer.update,
+            )
+            self.assertFalse(connector.handle_gateway_heartbeat_ack())
+            self.assertEqual(json.loads(status_path.read_text())['state'], 'starting')
+
+    def test_run_loop_records_auth_heartbeat_disconnect_and_clean_shutdown(self):
+        with tempfile.TemporaryDirectory() as td:
+            status_path = Path(td) / 'status.json'
+            writer = WorkerStatusWriter(status_path, 'alpha', Path(td) / 'terminal64.exe', worker_pid=42)
+            states = []
+
+            def status_callback(state, **details):
+                states.append(state)
+                writer.update(state, **details)
+
+            class ScriptedSocket:
+                def __init__(self):
+                    self.messages = [
+                        json.dumps({'type': 'auth_ok'}),
+                        json.dumps({'type': 'heartbeat_ack'}),
+                    ]
+
+                def settimeout(self, _timeout):
+                    pass
+
+                def send(self, _message):
+                    pass
+
+                def recv(self):
+                    if self.messages:
+                        return self.messages.pop(0)
+                    raise OSError('network dropped')
+
+                def close(self):
+                    pass
+
+            connector = module.MketyMt5Connector(
+                FakeMT5(), lambda *args, **kwargs: ScriptedSocket(),
+                {'gateway_url': module.DEFAULT_GATEWAY, 'connection_token': 'secret-token', 'connector_instance_id': 'i'},
+                ledger_path=Path(td) / 'ledger.sqlite', status_callback=status_callback,
+                profile_id='alpha', terminal_path=Path(td) / 'terminal64.exe', worker_pid=42,
+            )
+
+            def stop_after_reconnect_starts():
+                return bool(states.count('reconnecting') and states[-1] == 'authenticating')
+
+            with patch.object(module.time, 'sleep', return_value=None):
+                connector.run_forever(stop_requested=stop_after_reconnect_starts)
+            self.assertEqual(states, ['starting', 'authenticating', 'authenticated', 'connected', 'reconnecting', 'authenticating', 'stopped'])
 
     def test_reconnect_auth_without_rotation_keeps_existing_local_credential(self):
         with tempfile.TemporaryDirectory() as td:

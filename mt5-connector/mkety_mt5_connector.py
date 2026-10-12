@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import json
 import os
 import sqlite3
@@ -433,7 +434,8 @@ def initialize_terminal(mt5, terminal_path=None):
 
 class MketyMt5Connector:
     def __init__(self, mt5, websocket_factory, config, ledger_path=None, heartbeat_seconds=DEFAULT_HEARTBEAT_SECONDS,
-                 symbol_refresh_seconds=DEFAULT_SYMBOL_REFRESH_SECONDS, config_path=None):
+                 symbol_refresh_seconds=DEFAULT_SYMBOL_REFRESH_SECONDS, config_path=None, status_callback=None,
+                 profile_id=None, terminal_path=None, worker_pid=None):
         self.mt5 = mt5
         self.websocket_factory = websocket_factory
         self.config = dict(config)
@@ -444,8 +446,46 @@ class MketyMt5Connector:
         self.catalog = symbol_catalog(mt5)
         self.instance_id = str(self.config.get('connector_instance_id') or uuid.uuid4())
         self.config['connector_instance_id'] = self.instance_id
+        self.status_callback = status_callback
+        self.profile_id = str(profile_id or 'legacy-default')
+        self.terminal_path = str(terminal_path or '') or None
+        self.worker_pid = int(worker_pid or os.getpid())
+        self.last_gateway_heartbeat_at = None
+        self._gateway_authenticated = False
         self.engine = MT5Engine(mt5, magic=460051)
         self.ledger = ReplayLedger(str(ledger_path or default_ledger_path()))
+        self.publish_status('starting')
+
+    def publish_status(self, state):
+        if self.status_callback is None:
+            return
+        self.identity = terminal_identity(self.mt5)
+        self.status_callback(
+            state,
+            account_number=str(self.identity.get('accountNumber') or ''),
+            server_name=str(self.identity.get('serverName') or ''),
+            environment='live' if self.identity.get('isLive') else 'demo',
+            last_gateway_heartbeat_at=self.last_gateway_heartbeat_at,
+        )
+
+    def begin_gateway_connection(self):
+        self._gateway_authenticated = False
+        self.last_gateway_heartbeat_at = None
+        self.publish_status('authenticating')
+
+    def handle_gateway_heartbeat_ack(self):
+        if not self._gateway_authenticated:
+            return False
+        self.last_gateway_heartbeat_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+        self.publish_status('connected')
+        return True
+
+    def handle_gateway_disconnect(self):
+        self._gateway_authenticated = False
+        self.publish_status('reconnecting')
+
+    def shutdown_status(self):
+        self.publish_status('stopped')
 
     def auth_message(self):
         self.identity = terminal_identity(self.mt5)
@@ -460,12 +500,15 @@ class MketyMt5Connector:
         }
 
     def handle_auth_ok(self, message):
+        self._gateway_authenticated = True
         reconnect_token = str(message.get('reconnectToken') or '').strip()
         if not reconnect_token:
+            self.publish_status('authenticated')
             return False
         self.config['connection_token'] = reconnect_token
         if self.config_path is not None:
             self.config = save_local_config(self.config_path, self.config)
+        self.publish_status('authenticated')
         return True
 
     def maintenance_messages(self, *, now, last_heartbeat, last_symbols):
@@ -542,17 +585,19 @@ class MketyMt5Connector:
                 return {'type': 'order_status_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
         return None
 
-    def run_forever(self):
-        while True:
+    def run_forever(self, stop_requested=None):
+        stopping = stop_requested or (lambda: False)
+        while not stopping():
             socket = None
             try:
+                self.begin_gateway_connection()
                 socket = self.websocket_factory(self.config['gateway_url'], timeout=30, sslopt=websocket_ssl_options())
                 if hasattr(socket, 'settimeout'):
                     socket.settimeout(1.0)
                 socket.send(json.dumps(self.auth_message(), separators=(',', ':')))
                 now = time.monotonic()
                 maintenance = {'last_heartbeat': now, 'last_symbols': now}
-                while True:
+                while not stopping():
                     messages, maintenance = self.maintenance_messages(now=time.monotonic(), **maintenance)
                     for outbound in messages:
                         socket.send(json.dumps(outbound, separators=(',', ':')))
@@ -569,13 +614,17 @@ class MketyMt5Connector:
                         print(f"Mkety MT5 Connector connected: account {self.identity['accountNumber']} / {self.identity['serverName']}")
                         continue
                     if kind == 'heartbeat_ack' or kind == 'symbols_ack':
+                        if kind == 'heartbeat_ack':
+                            self.handle_gateway_heartbeat_ack()
                         continue
                     response = self.handle_message(message)
                     if response is not None:
                         socket.send(json.dumps(response, separators=(',', ':')))
             except KeyboardInterrupt:
+                self.shutdown_status()
                 return
             except Exception as exc:
+                self.handle_gateway_disconnect()
                 print(f'Mkety MT5 Connector reconnecting: {type(exc).__name__}: {exc}')
                 time.sleep(3)
             finally:
@@ -584,6 +633,7 @@ class MketyMt5Connector:
                         socket.close()
                     except Exception:
                         pass
+        self.shutdown_status()
 
 
 def parse_args(argv=None):
@@ -593,8 +643,21 @@ def parse_args(argv=None):
     parser.add_argument('--config', default=str(default_config_path()), help='Local protected connector configuration path')
     parser.add_argument('--terminal', default=None, help='Exact terminal64.exe path for this broker/account instance')
     parser.add_argument('--ledger', default=None, help='Replay ledger SQLite path for this connector instance')
+    parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--profile-id', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--status-file', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--stop-file', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--runtime-smoke', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--reset', action='store_true', help='Forget local connector pairing and require a new token')
     return parser.parse_args(argv)
+
+
+def ensure_console_streams():
+    """Give windowed PyInstaller workers harmless sinks for console-only output."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
 
 def resolve_startup_config(args, input_fn=input):
@@ -621,24 +684,55 @@ def resolve_startup_config(args, input_fn=input):
 
 
 def main(argv=None):
+    if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
+        from manager_ui import run_manager
+        from process_supervisor import ConnectorSupervisor
+        from terminal_catalog import TerminalCatalog
+        app_data = Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'Mkety'
+        return run_manager(app_data, ConnectorSupervisor(), TerminalCatalog())
+
+    ensure_console_streams()
     args = parse_args(argv)
-    config = resolve_startup_config(args)
+    if args.runtime_smoke:
+        import MetaTrader5  # noqa: F401
+        import numpy  # noqa: F401
+        import websocket  # noqa: F401
+        import certifi  # noqa: F401
+        return 0
+    writer = None
+    if args.worker:
+        if not args.profile_id or not args.status_file or not args.terminal:
+            print('Worker mode requires a profile id, status file, and explicit terminal path.')
+            return 2
+        from process_supervisor import WorkerStatusWriter
+        writer = WorkerStatusWriter(Path(args.status_file), args.profile_id, Path(args.terminal))
+    config = resolve_startup_config(args, input_fn=(lambda _prompt: '') if args.worker or sys.stdin is None else input)
     if not config:
         print('Mkety MT5 connection token is required.')
+        if writer:
+            writer.update('stopped')
         return 2
 
     import MetaTrader5 as mt5
     import websocket
-    initialize_terminal(mt5, args.terminal)
     try:
+        initialize_terminal(mt5, args.terminal)
         connector = MketyMt5Connector(
             mt5,
             websocket.create_connection,
             config,
             ledger_path=Path(args.ledger) if args.ledger else None,
             config_path=Path(args.config),
+            status_callback=writer.update if writer else None,
+            profile_id=args.profile_id,
+            terminal_path=args.terminal,
         )
-        connector.run_forever()
+        stop_requested = lambda: bool(args.stop_file and Path(args.stop_file).exists())
+        connector.run_forever(stop_requested=stop_requested)
+    except Exception:
+        if writer:
+            writer.update('stopped')
+        raise
     finally:
         mt5.shutdown()
     return 0

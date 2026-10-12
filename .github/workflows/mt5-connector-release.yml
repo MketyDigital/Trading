@@ -18,7 +18,7 @@ on:
       - 'mt5-connector-v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   package-windows:
@@ -47,34 +47,39 @@ jobs:
             --noconfirm `
             --clean `
             --onefile `
+            --windowed `
             --name MketyMT5Connector `
             --paths cloudflare-v2/bridges `
             --hidden-import mt5_bridge `
             --hidden-import websocket `
+            --hidden-import manager_ui `
+            --hidden-import process_supervisor `
+            --hidden-import profile_store `
+            --hidden-import terminal_catalog `
             --collect-data certifi `
             --collect-all numpy `
             mt5-connector/mkety_mt5_connector.py
           if (!(Test-Path "dist/MketyMT5Connector.exe")) { throw "MT5 connector executable was not produced" }
 
-      # Exercise the packaged EXE so binary-only dependency omissions fail before release publication.
-      - name: Smoke-test packaged runtime dependencies
+      # Exercise both the explicit CLI and hidden worker entrypoint without connecting to a broker.
+      - name: Smoke-test packaged manager and worker entrypoints
         shell: pwsh
         run: |
-          $stdout = Join-Path $env:RUNNER_TEMP 'mkety-mt5-smoke.stdout.txt'
-          $stderr = Join-Path $env:RUNNER_TEMP 'mkety-mt5-smoke.stderr.txt'
-          $process = Start-Process `
+          $help = Start-Process -FilePath "dist/MketyMT5Connector.exe" -ArgumentList @('--help') -PassThru -Wait
+          if ($help.ExitCode -ne 0) { throw "Packaged explicit CLI entrypoint failed" }
+          $runtime = Start-Process -FilePath "dist/MketyMT5Connector.exe" -ArgumentList @('--runtime-smoke') -PassThru -Wait
+          if ($runtime.ExitCode -ne 0) { throw "Packaged MT5, NumPy, WebSocket or CA runtime import failed" }
+          $status = Join-Path $env:RUNNER_TEMP 'mkety-mt5-worker-smoke.json'
+          $config = Join-Path $env:RUNNER_TEMP 'mkety-mt5-missing-config.json'
+          $terminal = Join-Path $env:RUNNER_TEMP 'terminal64.exe'
+          $worker = Start-Process `
             -FilePath "dist/MketyMT5Connector.exe" `
-            -ArgumentList @('--token','ci-packaging-smoke','--gateway','ws://127.0.0.1:9') `
+            -ArgumentList @('--worker','--profile-id','smoke','--status-file',$status,'--terminal',$terminal,'--config',$config,'--ledger',(Join-Path $env:RUNNER_TEMP 'ledger.sqlite')) `
             -PassThru `
-            -RedirectStandardOutput $stdout `
-            -RedirectStandardError $stderr
-          if (-not $process.WaitForExit(30000)) {
-            Stop-Process -Id $process.Id -Force
-          }
-          $output = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
-          Write-Host $output
-          if ($output -match 'ModuleNotFoundError') { throw "Packaged connector has a missing Python runtime module" }
-          if ($output -match 'numpy\._core\.multiarray') { throw "Packaged connector cannot import NumPy multiarray" }
+            -Wait
+          if ($worker.ExitCode -ne 2) { throw "Packaged worker did not fail closed when its pairing config was missing" }
+          $workerStatus = Get-Content $status -Raw | ConvertFrom-Json
+          if ($workerStatus.state -ne 'stopped') { throw "Packaged worker did not write its stopped status" }
 
       - name: Create SHA256 checksum
         shell: pwsh
@@ -91,20 +96,33 @@ jobs:
             dist/MketyMT5Connector.exe.sha256
           if-no-files-found: error
 
-      - name: Publish stable GitHub Release assets
-        if: github.event_name != 'pull_request'
+  publish-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mt5-connector-v')
+    needs: package-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MketyMT5Connector-windows
+          path: dist
+
+      - name: Create a new versioned release without replacing existing assets
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+        shell: bash
         run: |
-          if ($env:GITHUB_REF -like 'refs/tags/mt5-connector-v*') {
-            $tag = $env:GITHUB_REF_NAME
-          } else {
-            $tag = 'mt5-connector-v1.0.0'
-          }
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag dist/MketyMT5Connector.exe dist/MketyMT5Connector.exe.sha256 --clobber
-          } else {
-            gh release create $tag dist/MketyMT5Connector.exe dist/MketyMT5Connector.exe.sha256 --target main --title "Mkety MT5 Connector $($tag.Replace('mt5-connector-v',''))" --generate-notes
-          }
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^mt5-connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use mt5-connector-vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            dist/MketyMT5Connector.exe \
+            dist/MketyMT5Connector.exe.sha256 \
+            --verify-tag \
+            --latest \
+            --title "Mkety MT5 Connector ${tag#mt5-connector-v}" \
+            --generate-notes
