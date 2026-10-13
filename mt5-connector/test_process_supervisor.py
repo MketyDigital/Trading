@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+import process_supervisor
 from process_supervisor import ConnectorSupervisor, WorkerSpec, _pid_is_running, _windows_pid_is_running
 
 
@@ -132,6 +134,32 @@ class ProcessSupervisorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "another Mkety MT5 Connector session"):
             guarded.start(self.first)
+
+    def test_frozen_onefile_bootloader_parent_does_not_block_pairing(self):
+        executable = Path("MketyMT5Connector.exe")
+        current_pid = os.getpid()
+        parent_pid = current_pid + 7000
+        guarded = ConnectorSupervisor(
+            popen_factory=lambda *args, **kwargs: FakeProcess(args, **kwargs),
+            pid_is_running=lambda _pid: True,
+            worker_command_prefix=[str(executable)],
+            connector_process_reader=lambda: [(current_pid, executable), (parent_pid, executable)],
+        )
+        with patch.object(process_supervisor.sys, "frozen", True, create=True), \
+                patch.object(process_supervisor.sys, "executable", str(executable)), \
+                patch.object(process_supervisor.os, "getppid", return_value=parent_pid):
+            self.assertGreater(guarded.start(self.first), 0)
+
+            other = ConnectorSupervisor(
+                popen_factory=lambda *args, **kwargs: self.fail("must not start beside another connector"),
+                pid_is_running=lambda _pid: True,
+                worker_command_prefix=[str(executable)],
+                connector_process_reader=lambda: [
+                    (current_pid, executable), (parent_pid, executable), (parent_pid + 1, executable),
+                ],
+            )
+            with self.assertRaisesRegex(RuntimeError, "another Mkety MT5 Connector session"):
+                other.start(self.second)
 
     def test_duplicate_canonical_terminal_path_is_rejected(self):
         self.supervisor.start(self.first)
