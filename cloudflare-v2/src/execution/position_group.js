@@ -386,7 +386,7 @@ export function buildManagementActions(group, management) {
   }
   if (management?.type === 'CANCEL_PENDING') {
     return group.legs
-      .filter((leg) => leg.brokerOrderId)
+      .filter((leg) => String(leg?.status || '').toUpperCase() === 'PENDING' && leg.brokerOrderId)
       .map((leg) => ({
         type: 'CANCEL_PENDING',
         legId: leg.legId,
