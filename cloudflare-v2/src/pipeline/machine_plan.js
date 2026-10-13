@@ -113,12 +113,18 @@ function managementPlan(text, event = {}) {
   const managementUncertain = text.includes('?')
     || /\b(?:DO\s+NOT|DONT|DON'T|NEVER)\s+(?:CLOSE|MOVE|SET|MAKE)\b/i.test(text)
     || /\b(?:SHOULD|MAY|MIGHT|COULD|WOULD|CAN)\s+(?:WE\s+)?(?:CLOSE|MOVE|SET)\b/i.test(text);
+  const replyToEventId = event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId;
+  const deleteCommandHeader = text.split(/\r?\n\s*\r?\n/, 1)[0];
+  const contextualDeleteReply = replyToEventId != null
+    && String(replyToEventId).trim() !== ''
+    && /^\s*(?:(?:PLEASE|KINDLY)\s+)?DELETE\b/i.test(deleteCommandHeader)
+    && isConfidentExecutionInstruction(deleteCommandHeader);
 
   // Explicit risk-reducing management may appear inside celebratory commentary
   // containing words such as "can't". Do not let unrelated prose suppress a
   // direct CLOSE HALF / BE instruction, while questions, direct negation and
   // modal suggestions remain fail-closed.
-  if (!isConfidentExecutionInstruction(text) && !(directManagement && !managementUncertain)) return null;
+  if (!isConfidentExecutionInstruction(text) && !(directManagement && !managementUncertain) && !contextualDeleteReply) return null;
   const containsTradeSide = /\b(?:BUY|SELL|LONG|SHORT)\b/.test(upper);
 
   const targetHit = upper.match(/^\s*TP\s*([1-9]\d?)\s*(?:HIT\s*)?(?:✅+|[!.]+)?\s*$/u);
@@ -197,10 +203,6 @@ function managementPlan(text, event = {}) {
     const lots = parsedNumber(closeLots[1]);
     if (lots != null && lots > 0) return withManagementSymbol(text, { type: 'CLOSE_PARTIAL', lots });
   }
-  const replyToEventId = event?.thread?.reply_to_event_id ?? event?.thread?.replyToEventId;
-  const contextualDeleteReply = replyToEventId != null
-    && String(replyToEventId).trim() !== ''
-    && /^\s*(?:(?:PLEASE|KINDLY)\s+)?DELETE\b/i.test(text);
   const directPendingCancellation = /^\s*(?:DELETE|CANCEL|REMOVE)(?:\s+(?:(?:(?:THE|THIS|THAT|IT)(?:\s+(?:PENDING\s+)?ORDER)?)|PENDING(?:\s+ORDER)?|ORDER))?[!.]*\s*$/.test(upper);
   if (directPendingCancellation || contextualDeleteReply
     || new RegExp(`\\b(?:CANCEL|DELETE|REMOVE)\\b${OPTIONAL_MANAGEMENT_SYMBOL_WORDS}\\s+PENDING\\b`).test(upper)) {

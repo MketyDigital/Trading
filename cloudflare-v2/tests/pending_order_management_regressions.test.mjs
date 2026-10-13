@@ -49,6 +49,26 @@ test('delete reply with a channel footer cancels the replied-to pending order', 
   assert.equal(plan.management.type, 'CANCEL_PENDING');
 });
 
+test('delete reply is not blocked by unrelated footer wording', () => {
+  const plan = buildMachinePlan({
+    text: "Delete order\n\nYou can join our VIP channel. Don't forget to subscribe.",
+    thread: { reply_to_event_id: 'event-delete-footer' },
+  });
+
+  assert.equal(plan.status, 'MANAGEMENT');
+  assert.equal(plan.management.type, 'CANCEL_PENDING');
+});
+
+test('reply delete remains fail-closed when the command itself is conditional or negated', () => {
+  for (const text of ['Delete order if it is pending', "Don't delete order"]) {
+    const plan = buildMachinePlan({
+      text,
+      thread: { reply_to_event_id: 'event-delete-uncertain' },
+    });
+    assert.notEqual(plan.status, 'MANAGEMENT', text);
+  }
+});
+
 test('delete wording without an explicit order reply does not become a pending cancellation', () => {
   const plan = buildMachinePlan({
     text: 'Delete ❌ LIMIT trade join 👇\n\n⭐️ Become a VIP member',
@@ -118,6 +138,21 @@ test('Delete after a full activation does not close the resulting position', () 
   }, { type: 'CANCEL_PENDING' });
 
   assert.deepEqual(actions, []);
+});
+
+test('Delete and Cancel never dispatch against legs that are already open', () => {
+  const group = {
+    symbol: 'EURUSD', orderType: 'LIMIT',
+    legs: [
+      { legId: 'open-with-stale-order-id', targetIndex: 1, status: 'OPEN', brokerPositionId: 'position-1', brokerOrderId: 'stale-order-1' },
+      { legId: 'pending-remainder', targetIndex: 2, status: 'PENDING', lifecycleRole: 'PENDING_REMAINDER', brokerOrderId: 'order-2' },
+      { legId: 'filled', targetIndex: 3, status: 'CLOSED', brokerPositionId: 'position-3', brokerOrderId: 'old-order-3' },
+    ],
+  };
+
+  assert.deepEqual(buildManagementActions(group, { type: 'CANCEL_PENDING' }), [
+    { type: 'CANCEL_PENDING', legId: 'pending-remainder', targetIndex: 2, brokerOrderId: 'order-2', symbol: 'EURUSD' },
+  ]);
 });
 
 test('Close on a wholly pending order cancels it without trying to close a position', () => {
