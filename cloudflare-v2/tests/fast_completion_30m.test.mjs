@@ -108,14 +108,14 @@ test('two distinct compatible incomplete trades inside 30 minutes fail closed', 
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' });
 });
 
-test('unresolved explicit reply does not fall through to inference and attach another fast trade', () => {
+test('unresolved explicit reply completes the unique compatible fast trade in its source context', () => {
   const request = fullEvent({ event: { thread: { reply_to_event_id: 'telegram:-1001:missing' } } });
   const result = correlateTradingEvent({
     ...request,
     activeGroups: [fastGroup()],
     nowMs: now,
   });
-  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
 });
 
 

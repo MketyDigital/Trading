@@ -96,6 +96,57 @@ async function bindOpenFailure({ stateBinder, workspaceId, eventId, accountId, g
 async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, authorityLoader, snapshotLoader, riskMaterializer, dispatchAction, stateBinder, bindingRepairRecorder, latencyTrace, liveBrokerExecutionEnabled, liveBrokerExecutionControlAvailable }) {
   const requestedAccountId = text(plan?.accountId);
   if (!requestedAccountId) return blockedAccount('', 'ACCOUNT_ID_REQUIRED');
+  const requestedActions = Array.isArray(plan?.actions) ? plan.actions : [];
+  const supersessionCloseActionCount = Number(plan?.supersessionCloseActionCount || 0);
+  if (Number.isInteger(supersessionCloseActionCount)
+    && supersessionCloseActionCount > 0
+    && supersessionCloseActionCount < requestedActions.length) {
+    const closeGroupId = text(requestedActions[0]?.executionGroupId) || text(plan?.groupId);
+    if (!closeGroupId) return failedAccount(requestedAccountId, 'SUPERSESSION_CLOSE_GROUP_REQUIRED');
+    const closeResult = await runAccountPlan({
+      workspaceId,
+      eventId,
+      plan: {
+        ...plan,
+        groupId: closeGroupId,
+        supersessionCloseActionCount: 0,
+        actions: requestedActions.slice(0, supersessionCloseActionCount),
+      },
+      accountLoader,
+      authorityLoader,
+      snapshotLoader,
+      riskMaterializer,
+      dispatchAction,
+      stateBinder,
+      bindingRepairRecorder,
+      latencyTrace,
+      liveBrokerExecutionEnabled,
+      liveBrokerExecutionControlAvailable,
+    });
+    if (closeResult.status !== 'SUCCEEDED') {
+      return failedAccount(requestedAccountId, 'SUPERSESSION_CLOSE_FAILED', closeResult.actions || []);
+    }
+    const entryResult = await runAccountPlan({
+      workspaceId,
+      eventId,
+      plan: {
+        ...plan,
+        supersessionCloseActionCount: 0,
+        actions: requestedActions.slice(supersessionCloseActionCount),
+      },
+      accountLoader,
+      authorityLoader,
+      snapshotLoader,
+      riskMaterializer,
+      dispatchAction,
+      stateBinder,
+      bindingRepairRecorder,
+      latencyTrace,
+      liveBrokerExecutionEnabled,
+      liveBrokerExecutionControlAvailable,
+    });
+    return { ...entryResult, actions: [...(closeResult.actions || []), ...(entryResult.actions || [])] };
+  }
   let account;
   try { account = await accountLoader(workspaceId, requestedAccountId); } catch { return failedAccount(requestedAccountId, 'ACCOUNT_LOAD_FAILED'); }
   const initialAuthorityBlock = validateAccountAuthority(account, workspaceId, requestedAccountId); if (initialAuthorityBlock) return initialAuthorityBlock;

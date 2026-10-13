@@ -50,6 +50,10 @@ function trustedReadyPlans(simulation = {}, result = {}) {
       return {
         accountId,
         groupId,
+        ...(Number.isInteger(Number(account?.supersessionCloseActionCount))
+          && Number(account.supersessionCloseActionCount) > 0
+          ? { supersessionCloseActionCount: Number(account.supersessionCloseActionCount) }
+          : {}),
         actions,
         ...(Number.isFinite(Number(account?.currentRiskUsd)) ? { currentRiskUsd: Number(account.currentRiskUsd) } : {}),
         ...(Number.isFinite(Number(account?.dailyPnlPct)) ? { dailyPnlPct: Number(account.dailyPnlPct) } : {}),

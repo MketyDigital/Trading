@@ -108,13 +108,13 @@ test('thread id can target management when reply id is unavailable', () => {
   assert.equal(result.reason, 'THREAD_TARGET');
 });
 
-test('does not correlate opposite-side or fast trades older than 30 minutes to a new full signal', () => {
+test('supersedes a recent opposite-side fast trade but does not complete an expired fast trade', () => {
   const opposite = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '104', thread: {} },
     interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' }, side: 'SELL', fastEntry: false, incomplete: false } },
     activeGroups: [group()], nowMs: now,
   });
-  assert.equal(opposite.status, 'NEW_GROUP');
+  assert.deepEqual(opposite, { status: 'MATCHED', reason: 'FAST_ENTRY_SUPERSESSION', groupId: 'g1' });
 
   const expired = correlateTradingEvent({
     event: { source: { instance_id: 'listener-1' }, external_event_id: '105', thread: {} },

@@ -704,12 +704,13 @@ export async function orchestrateTradingEventSimulation({
   }
 
   const isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
-  if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion) {
+  const isFastSupersession = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_SUPERSESSION';
+  if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion && !isFastSupersession) {
     return { ...base, status: 'CORRELATED', correlation, accounts: [] };
   }
 
   let matchedByAccount = new Map();
-  if (isFastCompletion) {
+  if (isFastCompletion || isFastSupersession) {
     const loaded = await loadMatchedFastGroups(correlation, stateStore);
     if (!loaded.ok) {
       return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
@@ -722,14 +723,16 @@ export async function orchestrateTradingEventSimulation({
 
   for (const rawAccount of Array.isArray(accounts) ? accounts : []) {
     const account = normalizeAccount(rawAccount);
-    const matchedGroup = isFastCompletion ? matchedByAccount.get(String(account.id)) || null : null;
+    const matchedGroup = (isFastCompletion || isFastSupersession)
+      ? matchedByAccount.get(String(account.id)) || null
+      : null;
 
     if (account.execution_enabled !== true && account.executionEnabled !== true) {
       results.push({ accountId: account.id, status: 'SKIPPED', reason: 'EXECUTION_DISABLED', actions: [] });
       continue;
     }
 
-    const planningIntent = matchedGroup
+    const planningIntent = isFastCompletion && matchedGroup
       ? progressiveFastIntent(matchedGroup, interpretation.intent)
       : interpretation.intent;
 
@@ -749,13 +752,15 @@ export async function orchestrateTradingEventSimulation({
     }
 
     let plan;
-    const groupId = matchedGroup?.id || `${eventId || event.external_event_id || 'event'}:${account.id}`;
+    const groupId = isFastCompletion && matchedGroup
+      ? matchedGroup.id
+      : `${eventId || event.external_event_id || 'event'}:${account.id}`;
     try {
       plan = buildExecutionPlan(planningIntent, {
         account,
         instrument,
         currentMarketPrice,
-        ...(matchedGroup ? {
+        ...(isFastCompletion && matchedGroup ? {
           protectionReferencePrice: fastCompletionProtectionReference(matchedGroup, currentMarketPrice),
         } : {}),
         groupId,
@@ -779,7 +784,7 @@ export async function orchestrateTradingEventSimulation({
       continue;
     }
 
-    if (matchedGroup) {
+    if (isFastCompletion && matchedGroup) {
       let reconciliation;
       try {
         reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: planningIntent }, {
@@ -808,6 +813,20 @@ export async function orchestrateTradingEventSimulation({
       continue;
     }
 
+    let closeActions = [];
+    if (isFastSupersession && matchedGroup) {
+      try {
+        closeActions = buildSimulationManagementActions(matchedGroup, { type: 'CLOSE' }).map((action) => ({
+          ...action,
+          executionGroupId: matchedGroup.id,
+          idempotencyKey: `${matchedGroup.id}:supersede:${String(event?.external_event_id ?? eventId ?? nowMs)}:${String(action.legId ?? action.targetIndex ?? 'leg')}`,
+        }));
+      } catch (error) {
+        results.push({ accountId: account.id, status: 'BLOCKED', reason: 'FAST_ENTRY_SUPERSESSION_CLOSE_INVALID', error: error.message, actions: [] });
+        continue;
+      }
+    }
+
     const group = plannedStateGroup({ ...plan, intent: interpretation.intent }, {
       event,
       eventId,
@@ -825,7 +844,8 @@ export async function orchestrateTradingEventSimulation({
       risk: plan.risk,
       protectionIssues: plan.protectionIssues ?? [],
       protectionSkips: plan.protectionSkips ?? [],
-      actions: simulationActions(plan.actions),
+      ...(closeActions.length ? { supersessionCloseActionCount: closeActions.length } : {}),
+      actions: simulationActions([...closeActions, ...plan.actions]),
     });
   }
 
