@@ -135,3 +135,26 @@ test('broker planning applies feed route canonical-symbol filters before account
   const routed = await deps.accountProvider();
   assert.deepEqual(routed.map((row) => row.id), ['acct-ctrader']);
 });
+
+test('reply management reloads only the correlated account even when the route requires a signal symbol', async () => {
+  const supabase = supabaseFor({
+    routes: [
+      { destination_id: 'dest-gold', priority: 1, source_feed_id: 'feed-1', filters: { allowedCanonicalSymbols: ['XAUUSD'] } },
+    ],
+    feed: { id: 'feed-1' },
+    destinations: [
+      { id: 'dest-gold', destination_ref: 'acct-mt5', destination_type: 'broker_account', is_active: true },
+    ],
+    accounts: [account('acct-mt5', 'mt5')],
+  });
+
+  const deps = await createV1SimulationDependencies({
+    env: env(), supabase, sourceId: 'source-1', event: telegramEvent,
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING' } },
+  });
+
+  const routed = await deps.accountProvider('ws-1', telegramEvent,
+    { status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING' } },
+    { matchedAccountIds: ['acct-mt5'] });
+  assert.deepEqual(routed.map((row) => row.id), ['acct-mt5']);
+});
