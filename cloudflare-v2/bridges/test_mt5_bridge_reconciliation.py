@@ -99,6 +99,44 @@ def broker_record(*, command_id, position_id=7001, order=9001, deal=9002, magic=
 
 
 class MT5BridgeReconciliationTests(unittest.TestCase):
+    def test_broker_position_close_status_reads_tp_reason_and_exact_position_without_sending(self):
+        class PositionHistoryMT5:
+            DEAL_ENTRY_IN = 0
+            DEAL_ENTRY_OUT = 1
+            DEAL_ENTRY_INOUT = 2
+            DEAL_ENTRY_OUT_BY = 3
+            DEAL_REASON_TP = 5
+
+            def __init__(self):
+                self.sent = []
+                self.position_queries = []
+                self.history_queries = []
+                self.deals = (
+                    SimpleNamespace(ticket=100, position_id=700, volume=1.0, entry=0, reason=0, price=1.1),
+                    SimpleNamespace(ticket=101, position_id=700, volume=1.0, entry=1, reason=5, price=1.12),
+                    SimpleNamespace(ticket=102, position_id=701, volume=2.0, entry=1, reason=5, price=1.12),
+                )
+
+            def positions_get(self, ticket=None):
+                self.position_queries.append(ticket)
+                return ()
+            def history_deals_get(self, start, end, position=None):
+                self.history_queries.append(position)
+                return tuple(deal for deal in self.deals if deal.position_id == position)
+            def order_send(self, request): self.sent.append(request)
+
+        mt5 = PositionHistoryMT5()
+        snapshot = MT5Engine(mt5).broker_position_close_status('700')
+        self.assertEqual(snapshot['positionId'], '700')
+        self.assertFalse(snapshot['isOpen'])
+        self.assertEqual(snapshot['initialLots'], 1.0)
+        self.assertEqual(snapshot['closedLots'], 1.0)
+        self.assertEqual(snapshot['deals'], [{'dealId': '101', 'positionId': '700', 'lots': 1.0,
+            'entry': 'OUT', 'reason': 'TP', 'executionPrice': 1.12}])
+        self.assertEqual(mt5.position_queries, [700])
+        self.assertEqual(mt5.history_queries, [700])
+        self.assertEqual(mt5.sent, [])
+
     def test_active_pending_order_does_not_require_ticket_history_lookup(self):
         class ActiveOrderHistoryUnavailableMT5:
             ORDER_STATE_FILLED = 4

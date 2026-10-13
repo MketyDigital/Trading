@@ -583,6 +583,17 @@ class MketyMt5Connector:
                                      'environment': 'live' if identity['isLive'] else 'demo'}}
             except Exception as exc:
                 return {'type': 'order_status_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
+        if kind == 'position_close_status_request':
+            request_id = str(message.get('requestId') or '')
+            try:
+                result = self.engine.broker_position_close_status(message.get('positionId'), message.get('openedAt'))
+                identity = terminal_identity(self.mt5)
+                return {'type': 'position_close_status_result', 'requestId': request_id, 'ok': True,
+                        'snapshot': {**result, 'accountId': identity['accountNumber'],
+                                     'serverName': identity['serverName'], 'isLive': identity['isLive'],
+                                     'environment': 'live' if identity['isLive'] else 'demo'}}
+            except Exception as exc:
+                return {'type': 'position_close_status_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
         return None
 
     def run_forever(self, stop_requested=None):

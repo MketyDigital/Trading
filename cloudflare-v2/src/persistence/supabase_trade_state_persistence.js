@@ -238,6 +238,45 @@ export class SupabaseTradeStatePersistence {
       createdAt: millis(row.created_at),
     })).filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
+
+  async listBrokerTpProtectionCandidates({ batchSize = 500, maxRows = 5000 } = {}) {
+    const limit = Math.max(1, Math.min(1000, Math.trunc(Number(batchSize)) || 500));
+    const maximum = Math.max(limit, Math.min(20000, Math.trunc(Number(maxRows)) || 5000));
+    const rows = [];
+    for (let offset = 0; offset < maximum; offset += limit) {
+      const end = Math.min(offset + limit, maximum) - 1;
+      const { data, error } = await this.supabase.from('position_legs')
+        .select('workspace_id,position_group_id,runtime_leg_id,target_index,logical_target_index,lots,executed_lots,broker_position_id,stop_loss,take_profit,created_at,position_groups!inner(runtime_group_id,trade_account_id,source_event_id,source_instance_id,source_event_ids,thread_id,canonical_symbol,side,order_type,entry,stop_loss,status,created_at,updated_at)')
+        .eq('status', 'OPEN').eq('position_groups.status', 'OPEN')
+        .not('broker_position_id', 'is', null).not('take_profit', 'is', null)
+        .order('created_at', { ascending: true }).range(offset, end);
+      if (error) throw new Error(`broker TP candidate scan failed: ${error.message}`);
+      const page = Array.isArray(data) ? data : [];
+      rows.push(...page.map((row) => {
+        const group = row.position_groups || {};
+        return {
+          workspaceId: String(row.workspace_id || ''), groupId: String(group.runtime_group_id || row.position_group_id || ''),
+          tradeAccountId: String(group.trade_account_id || ''), sourceEventId: String(group.source_event_id || ''),
+          sourceInstanceId: group.source_instance_id == null ? null : String(group.source_instance_id),
+          sourceEventIds: Array.isArray(group.source_event_ids) ? group.source_event_ids.map(String) : [],
+          threadId: group.thread_id == null ? null : String(group.thread_id), symbol: String(group.canonical_symbol || ''),
+          side: String(group.side || '').toUpperCase(), orderType: String(group.order_type || '').toUpperCase(),
+          entry: group.entry && typeof group.entry === 'object' ? group.entry : {},
+          groupStopLoss: group.stop_loss == null ? null : Number(group.stop_loss),
+          groupCreatedAt: millis(group.created_at), groupUpdatedAt: millis(group.updated_at),
+          legId: String(row.runtime_leg_id || ''), targetIndex: Number(row.logical_target_index ?? row.target_index),
+          lots: Number(row.lots), executedLots: row.executed_lots == null ? null : Number(row.executed_lots),
+          brokerPositionId: String(row.broker_position_id || ''),
+          stopLoss: row.stop_loss == null ? (group.stop_loss == null ? null : Number(group.stop_loss)) : Number(row.stop_loss),
+          takeProfit: Number(row.take_profit), createdAt: millis(row.created_at),
+        };
+      }));
+      if (page.length < limit) break;
+    }
+    return rows.filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId
+      && row.brokerPositionId && Number.isInteger(row.targetIndex) && row.targetIndex > 0
+      && Number.isFinite(row.takeProfit) && row.takeProfit > 0);
+  }
 }
 
 export async function createSupabaseTradeStatePersistence(env = {}) {

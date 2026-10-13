@@ -165,16 +165,19 @@ function managementBrokerIdentity(interpretation = {}) {
   const management = interpretation?.management || {};
   const brokerPositionId = management.brokerPositionId ?? management.broker_position_id ?? management.positionId ?? management.position_id;
   const brokerOrderId = management.brokerOrderId ?? management.broker_order_id ?? management.orderId ?? management.order_id;
+  const tradeAccountId = management.tradeAccountId ?? management.trade_account_id ?? management.accountId ?? management.account_id;
   return {
     brokerPositionId: brokerPositionId == null || String(brokerPositionId).trim() === '' ? null : String(brokerPositionId).trim(),
     brokerOrderId: brokerOrderId == null || String(brokerOrderId).trim() === '' ? null : String(brokerOrderId).trim(),
+    tradeAccountId: tradeAccountId == null || String(tradeAccountId).trim() === '' ? null : String(tradeAccountId).trim(),
   };
 }
 
 function brokerIdentityTarget(groups = [], interpretation = {}) {
   const identity = managementBrokerIdentity(interpretation);
   if (!identity.brokerPositionId && !identity.brokerOrderId) return null;
-  const matches = groups.filter((group) => (group?.legs || []).some((leg) => {
+  const matches = groups.filter((group) => (!identity.tradeAccountId || String(group?.tradeAccountId ?? '') === identity.tradeAccountId)
+    && (group?.legs || []).some((leg) => {
     if (identity.brokerPositionId && String(leg?.brokerPositionId ?? '') === identity.brokerPositionId) return true;
     if (identity.brokerOrderId && String(leg?.brokerOrderId ?? '') === identity.brokerOrderId) return true;
     return false;

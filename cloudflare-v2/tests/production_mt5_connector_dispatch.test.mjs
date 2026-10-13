@@ -150,3 +150,33 @@ test('LIVE MT5 connector lifecycle uses status-only route and validates current 
   assert.match(calls[1][0], /\/v1\/mt5-order-status\/acct-mt5-live$/);
   assert.equal(calls[1][1], 'POST');
 });
+
+test('LIVE MT5 connector reads exact broker position TP history without sending a trading command', async () => {
+  const account = {
+    id: 'acct-mt5-live', workspace_id: 'ws-a', platform: 'mt5', provider_mode: 'mt5_connector',
+    account_id: '50123456', environment: 'live', server_name: 'Broker-Live',
+    provider_config: { status: 'connected' }, credential_ciphertext: 'live-cipher', is_active: true, execution_enabled: true,
+  };
+  const calls = [];
+  const deps = createProductionExecutionDependencies({ env: { TRADING_MASTER_KEY: 'master-key' }, supabase: unexpectedSupabase(), workspaceId: 'ws-a' }, {
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'gateway-secret' }),
+    mt5ConnectorExecutor: async () => { throw new Error('position history must not dispatch broker commands'); },
+    fetchFn: async (url, options = {}) => {
+      calls.push([String(url), options.method || 'GET', options.body]);
+      if (String(url).includes('/v1/mt5-connections/')) return new Response(JSON.stringify({ ok: true, online: true,
+        accountRowId: account.id, identity: { accountNumber: account.account_id, serverName: account.server_name, isLive: true } }), { status: 200 });
+      if (String(url).includes('/v1/mt5-position-close/')) return new Response(JSON.stringify({ ok: true, accountRowId: account.id,
+        snapshot: { accountId: account.account_id, serverName: account.server_name, environment: 'live', isLive: true,
+          positionId: '7001', isOpen: false, initialLots: 0.1, closedLots: 0.1,
+          deals: [{ dealId: '8001', positionId: '7001', lots: 0.1, entry: 'OUT', reason: 'TP' }] } }), { status: 200 });
+      throw new Error('unexpected gateway request');
+    },
+  });
+  const snapshot = await deps.readBrokerPositionCloseStatus({ workspaceId: 'ws-a', account, brokerPositionId: '7001', symbol: 'EURUSD', side: 'BUY', openedAt: 1770000000000 });
+  assert.equal(snapshot.positionId, '7001');
+  assert.equal(snapshot.isLive, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1][0], /\/v1\/mt5-position-close\/acct-mt5-live$/);
+  assert.equal(calls[1][1], 'POST');
+  assert.deepEqual(JSON.parse(calls[1][2]), { positionId: '7001', openedAt: 1770000000000 });
+});

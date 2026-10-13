@@ -145,4 +145,22 @@ test('MT5 gateway accepts reusable pairing auth until expiry, issues instance re
   const sizingBody = await sizingResponse.json();
   assert.equal(sizingBody.ok, true);
   assert.equal(sizingBody.sizing.lots, 0.3);
+
+  const positionHistoryRequest = fetch(`${controlBase}/v1/mt5-position-close/${accountRowId}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ positionId: '7001', openedAt: 1770000000000 }),
+  });
+  const positionHistoryDelivered = await readMessage(reconnect);
+  assert.equal(positionHistoryDelivered.type, 'position_close_status_request');
+  assert.equal(positionHistoryDelivered.positionId, '7001');
+  assert.equal(positionHistoryDelivered.openedAt, 1770000000000);
+  reconnect.send(JSON.stringify({ type: 'position_close_status_result', requestId: positionHistoryDelivered.requestId, ok: true,
+    snapshot: { accountId: '50123456', serverName: 'Broker-Demo', environment: 'demo', isLive: false,
+      positionId: '7001', isOpen: false, initialLots: 0.1, closedLots: 0.1,
+      deals: [{ dealId: '8001', positionId: '7001', lots: 0.1, entry: 'OUT', reason: 'TP' }] } }));
+  const positionHistoryResponse = await positionHistoryRequest;
+  assert.equal(positionHistoryResponse.status, 200);
+  const positionHistoryBody = await positionHistoryResponse.json();
+  assert.equal(positionHistoryBody.snapshot.positionId, '7001');
+  assert.equal(positionHistoryBody.snapshot.deals[0].reason, 'TP');
 });

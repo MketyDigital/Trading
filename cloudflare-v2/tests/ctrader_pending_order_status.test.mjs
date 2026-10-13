@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readCTraderPendingOrderStatus } from '../src/adapters/ctrader_pending_order_status.js';
+import { readCTraderPendingOrderStatus, readCTraderPositionCloseStatus } from '../src/adapters/ctrader_pending_order_status.js';
 
 const context = {
   accountRowId: 'account-row-1', accountId: 12345, brokerAccountNumber: '12345',
@@ -101,4 +101,42 @@ test('marks historical cTrader fills closed when the broker no longer reports th
   const result = await readCTraderPendingOrderStatus({ ...context, session: session([closedPosition, reconciliationResponse([])]) });
   assert.equal(result.snapshot.status, 'PARTIALLY_FILLED');
   assert.equal(result.snapshot.fills[0].isOpen, false);
+});
+
+test('reads cTrader deals and closing orders for one position and returns account-bound TP evidence', async () => {
+  const api = session([
+    { payloadType: 2180, payload: { ctidTraderAccountId: 12345, hasMore: false, deal: [
+      { dealId: 1, orderId: 700, positionId: 501, filledVolume: 10000, tradeSide: 1, dealStatus: 2 },
+      { dealId: 2, orderId: 701, positionId: 501, filledVolume: 10000, tradeSide: 2, dealStatus: 2, executionPrice: 1.12 },
+    ] } },
+    { payloadType: 2184, payload: { ctidTraderAccountId: 12345, hasMore: false, order: [
+      { orderId: 701, positionId: 501, closingOrder: true, orderType: 4, takeProfit: 1.12, stopLoss: 1.1 },
+    ] } },
+    reconciliationResponse([]),
+  ]);
+  const result = await readCTraderPositionCloseStatus({ ...context, session: api, brokerPositionId: '501', side: 'BUY', tickSize: 0.00001 });
+  assert.equal(result.snapshot.positionId, '501');
+  assert.equal(result.snapshot.accountId, '12345');
+  assert.equal(result.snapshot.environment, 'demo');
+  assert.equal(result.snapshot.isLive, false);
+  assert.equal(result.snapshot.isOpen, false);
+  assert.equal(result.snapshot.initialLots, 1);
+  assert.equal(result.snapshot.closedLots, 1);
+  assert.deepEqual(result.snapshot.deals, [{ dealId: '2', positionId: '501', lots: 1, executionPrice: 1.12, orderId: '701' }]);
+  assert.deepEqual(result.snapshot.closingOrders, [{ orderId: '701', positionId: '501', closingOrder: true,
+    orderType: '4', takeProfit: 1.12, stopLoss: 1.1, isStopOut: false }]);
+  assert.deepEqual(api.calls.map((call) => call.message.payloadType), [2179, 2183, 2124]);
+});
+
+test('cTrader position history rejects response identity mismatches and truncated history', async () => {
+  const validDealResponse = { payloadType: 2180, payload: { ctidTraderAccountId: 12345, hasMore: false, deal: [] } };
+  const validOrderResponse = { payloadType: 2184, payload: { ctidTraderAccountId: 12345, hasMore: false, order: [] } };
+  for (const [deals, orders] of [
+    [{ ...validDealResponse, payload: { ...validDealResponse.payload, ctidTraderAccountId: 999 } }, validOrderResponse],
+    [{ ...validDealResponse, payload: { ...validDealResponse.payload, hasMore: true } }, validOrderResponse],
+  ]) {
+    const result = await readCTraderPositionCloseStatus({ ...context, session: session([deals, orders, reconciliationResponse([])]),
+      brokerPositionId: '501', side: 'BUY', tickSize: 0.00001 });
+    assert.equal(result.snapshot.status, 'UNRESOLVED');
+  }
 });
