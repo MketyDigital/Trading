@@ -694,7 +694,10 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
             || text(snapshot.accountId) !== text(account?.account_id ?? account?.accountId)
             || text(snapshot.brokerOrderId) !== String(leg.brokerOrderId)
             || text(snapshot.environment).toLowerCase() !== environment) {
-            throw new Error('pending lifecycle broker status is unresolved or mismatched');
+            const reason = /^[A-Z0-9_]{1,64}$/.test(text(snapshot?.reason)) ? text(snapshot.reason) : '';
+            throw new Error(reason
+              ? `pending lifecycle broker status is unresolved: ${reason}`
+              : 'pending lifecycle broker status is unresolved or mismatched');
           }
           const applied = await state.stateStore.reconcilePendingOrderSnapshot(group.id, leg.legId, {
             tradeAccountId: group.tradeAccountId,
