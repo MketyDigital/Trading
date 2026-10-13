@@ -27,6 +27,27 @@ function retryAll(batch, error) {
   };
 }
 
+const TRANSIENT_COMPLETION_CORRELATION_REASONS = new Set([
+  'NO_REPLY_TARGET',
+  'NO_THREAD_TARGET',
+  'AMBIGUOUS_FAST_ENTRY_COMPLETION',
+]);
+
+function shouldRetryOrchestration(result = {}) {
+  if (result?.duplicate === true && result?.recoveryReady !== true) return true;
+  if (result?.simulation?.status === 'BLOCKED') return true;
+
+  const interpretation = result?.interpretation;
+  const intent = interpretation?.intent;
+  const hasProtection = intent?.stopLoss != null
+    || (Array.isArray(intent?.takeProfits) && intent.takeProfits.length > 0);
+  const isFullSignal = interpretation?.status === 'READY'
+    && intent
+    && (intent.incomplete === false || hasProtection);
+  const reason = String(result?.simulation?.correlation?.reason || '').trim().toUpperCase();
+  return Boolean(isFullSignal && TRANSIENT_COMPLETION_CORRELATION_REASONS.has(reason));
+}
+
 function signedRequest({ rawBody, sourceId, timestamp, signature }) {
   return new Request('https://trading.internal/api/v1/events', {
     method: 'POST',
@@ -80,8 +101,8 @@ export function createSourceQueueRuntime({
           result = {};
         }
 
-        if (result?.simulation?.status === 'BLOCKED') {
-          throw new Error(`source event orchestration blocked: ${result.simulation.error || 'unknown error'}`);
+        if (shouldRetryOrchestration(result)) {
+          throw new Error('source event orchestration recovery is temporarily incomplete');
         }
 
         return {
