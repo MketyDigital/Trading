@@ -123,9 +123,6 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       liveBrokerExecutionEnabled,
       liveBrokerExecutionControlAvailable,
     });
-    if (closeResult.status !== 'SUCCEEDED') {
-      return failedAccount(requestedAccountId, 'SUPERSESSION_CLOSE_FAILED', closeResult.actions || []);
-    }
     const entryResult = await runAccountPlan({
       workspaceId,
       eventId,
@@ -145,7 +142,54 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       liveBrokerExecutionEnabled,
       liveBrokerExecutionControlAvailable,
     });
-    return { ...entryResult, actions: [...(closeResult.actions || []), ...(entryResult.actions || [])] };
+    if (closeResult.status === 'SUCCEEDED') {
+      return { ...entryResult, actions: [...(closeResult.actions || []), ...(entryResult.actions || [])] };
+    }
+
+    // A failed close must not suppress the replacement entry. Retry only the
+    // old position's failed/blocked close actions after the new entry attempt.
+    const closeActions = requestedActions.slice(0, supersessionCloseActionCount);
+    const closeOutcomes = closeResult.actions || [];
+    const retryActions = closeActions.filter((action, index) => {
+      const outcome = closeOutcomes[index];
+      return !outcome || outcome.status === 'FAILED' || outcome.status === 'BLOCKED';
+    }).map((action) => ({
+      ...action,
+      idempotencyKey: `${text(action?.idempotencyKey) || `${eventId || 'event'}:${requestedAccountId}:${text(action?.legId) || 'close'}`}:retry-after-entry`,
+    }));
+    let retryResult = { actions: [] };
+    if (retryActions.length > 0) {
+      retryResult = await runAccountPlan({
+        workspaceId,
+        eventId,
+        plan: {
+          ...plan,
+          groupId: closeGroupId,
+          supersessionCloseActionCount: 0,
+          actions: retryActions,
+        },
+        accountLoader,
+        authorityLoader,
+        snapshotLoader,
+        riskMaterializer,
+        dispatchAction,
+        stateBinder,
+        bindingRepairRecorder,
+        latencyTrace,
+        liveBrokerExecutionEnabled,
+        liveBrokerExecutionControlAvailable,
+      });
+    }
+    const actions = [...closeOutcomes, ...(entryResult.actions || []), ...(retryResult.actions || [])];
+    if (retryResult.status !== 'SUCCEEDED') {
+      return {
+        ...entryResult,
+        status: entryResult.status === 'FAILED' ? 'FAILED' : 'PARTIAL',
+        reason: entryResult.status === 'FAILED' ? entryResult.reason : 'SUPERSESSION_CLOSE_RETRY_FAILED',
+        actions,
+      };
+    }
+    return { ...entryResult, actions };
   }
   let account;
   try { account = await accountLoader(workspaceId, requestedAccountId); } catch { return failedAccount(requestedAccountId, 'ACCOUNT_LOAD_FAILED'); }

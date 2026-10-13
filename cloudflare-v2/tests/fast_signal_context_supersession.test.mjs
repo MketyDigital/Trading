@@ -49,7 +49,7 @@ test('a recent opposite fast group is superseded only within the same workspace 
   }), { status: 'NEW_GROUP' });
 });
 
-test('opposite signal plan closes the old position first and holds the new entry if close fails', async () => {
+test('opposite signal plan still opens the new side when close fails and retries only the old position', async () => {
   const previous = fastSell();
   const saved = [];
   const planned = await orchestrateTradingEventSimulation({
@@ -92,11 +92,15 @@ test('opposite signal plan closes the old position first and holds the new entry
       return action.type === 'CLOSE_POSITION' ? { ok: false, code: 'CLOSE_REJECTED' } : { ok: true };
     },
   });
-  assert.equal(failedClose.accounts[0].status, 'FAILED');
-  assert.deepEqual(dispatched, [{ groupId: previous.id, type: 'CLOSE_POSITION' }]);
+  assert.equal(failedClose.accounts[0].status, 'PARTIAL');
+  assert.deepEqual(dispatched, [
+    { groupId: previous.id, type: 'CLOSE_POSITION' },
+    { groupId: 'new-buy-group', type: 'OPEN_POSITION' },
+    { groupId: previous.id, type: 'CLOSE_POSITION' },
+  ]);
 });
 
-test('replacement buy dispatches only after the old sell close succeeds', async () => {
+test('replacement buy dispatches after the old sell close succeeds', async () => {
   const dispatched = [];
   const result = await executeProductionPlan({
     workspaceId: 'ws', eventId: 'db-buy', brokerExecutionEnabled: true,
