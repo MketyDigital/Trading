@@ -194,6 +194,7 @@ test('close blocks without dispatching partial cancellation when a tracked pendi
 
   assert.equal(result.accounts[0].status, 'BLOCKED');
   assert.equal(result.accounts[0].reason, 'PENDING_LIFECYCLE_REFRESH_UNAVAILABLE');
+  assert.equal(result.accounts[0].error, 'broker status unresolved');
   assert.deepEqual(result.accounts[0].actions, []);
   assert.equal(persisted.length, 0);
 });
