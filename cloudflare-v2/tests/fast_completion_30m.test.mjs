@@ -119,6 +119,24 @@ test('unresolved explicit reply completes the unique compatible fast trade in it
 });
 
 
+test('source recovery replay uses original event time to preserve the fast-to-full interval', () => {
+  const occurredAt = now - 60 * 60 * 1000;
+  const request = fullEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:101',
+      occurred_at: new Date(occurredAt).toISOString(),
+      thread: { reply_to_event_id: 'telegram:-1001:missing' },
+    },
+  });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [fastGroup({ createdAt: occurredAt - 4 * 60 * 1000, updatedAt: occurredAt - 4 * 60 * 1000 })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
+});
+
 test('explicit reply completion returns the whole logical multi-account fast cohort', () => {
   const request = fullEvent({ event: { thread: { reply_to_event_id: 'telegram:-1001:100' } } });
   const result = correlateTradingEvent({
