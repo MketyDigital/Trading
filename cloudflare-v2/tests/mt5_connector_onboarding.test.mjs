@@ -228,6 +228,11 @@ test('MT5 connector sync persists terminal identity, retires local pairing stora
   assert.equal(capture.updated.account_id, '50123456');
   assert.equal(capture.updated.server_name, 'Broker-Demo');
   assert.equal(capture.updated.environment, 'demo');
+  assert.equal(capture.updated.roles, undefined);
+  assert.equal(capture.updated.is_active, undefined);
+  assert.equal(capture.updated.execution_enabled, undefined);
+  assert.equal(capture.updated.live_execution_enabled, undefined);
+  assert.equal(capture.updated.safety_policy, undefined);
   assert.equal(capture.updated.provider_config.status, 'connected');
   assert.equal(capture.updated.provider_config.brokerName, 'Broker Ltd');
   assert.equal(capture.updated.provider_config.symbolCatalog.length, 2);

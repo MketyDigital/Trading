@@ -34,6 +34,9 @@ test('production verification checks broker secrets at deployed sources without 
   assert.match(workflow, /PUBLIC_GATEWAY_HEALTH=PASS/);
   assert.match(workflow, /\/v1\/cbot/);
   assert.match(workflow, /\/v1\/mt5/);
+  assert.match(workflow, /\/v1\/order-lifecycle\/probe/);
+  assert.match(workflow, /\/v1\/mt5-order-status\/probe/);
+  assert.match(workflow, /LIFECYCLE_HTTP_ROUTES=PASS/);
   assert.doesNotMatch(workflow, /wrangler secret bulk/);
   assert.doesNotMatch(workflow, /secrets\.CTRADER_CLIENT_ID/);
   assert.doesNotMatch(workflow, /secrets\.CTRADER_CLIENT_SECRET/);
@@ -46,7 +49,7 @@ test('production broker verification remains fail closed and never enables live 
 
   assert.match(workflow, /Worker broker secret binding missing after deploy/);
   assert.match(workflow, /Coolify gateway environment key missing/);
-  assert.match(workflow, /Expected exactly one Mkety gateway application/);
+  assert.match(workflow, /Expected exactly one public Cbot Tcp gateway application/);
   assert.doesNotMatch(workflow, /CTRADER_LIVE_TRADING_ENABLED:\s*true/i);
   assert.doesNotMatch(workflow, /liveBrokerExecutionEnabled\s*[:=]\s*true/i);
 });
