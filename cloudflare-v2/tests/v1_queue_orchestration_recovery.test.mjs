@@ -130,3 +130,46 @@ test('source queue retries instead of acknowledging an event whose orchestration
   assert.equal(result.acknowledged, 0);
   assert.equal(result.retried, 1);
 });
+
+
+test('source queue retries a full signal when fast-group correlation is temporarily missing', async () => {
+  let acked = 0;
+  let retried = 0;
+  const batch = {
+    messages: [{
+      body: { version: 'mkety.source-event.v1', sourceId: 'src-1', event: { external_event_id: 'full-1', text: 'EURJPY BUY ENTRY 176.755 SL 176.371 TP1 177.098 TP2 177.552' } },
+      ack() { acked += 1; },
+      retry() { retried += 1; },
+    }],
+  };
+
+  const runtime = createSourceQueueRuntime({
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({
+      sourceStore: {
+        async getActiveSource() {
+          return {
+            id: 'src-1', workspace_id: 'ws-1', source_type: 'telegram',
+            source_instance_id: 'main signal2', source_family: 'telegram_mtproto',
+            external_identity: 'telegram:1', secret: 'source-secret',
+          };
+        },
+      },
+      eventStore: {},
+    }),
+    eventsHandler: async () => new Response(JSON.stringify({
+      ok: true,
+      duplicate: true,
+      recoveryReady: true,
+      interpretation: { status: 'READY', intent: { incomplete: false, stopLoss: 176.371, takeProfits: [177.098, 177.552] } },
+      simulation: { status: 'NEEDS_REVIEW', correlation: { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    now: () => 1700000000000,
+  });
+
+  const result = await runtime(batch, { TRADING_MASTER_KEY: 'master' });
+  assert.equal(acked, 0);
+  assert.equal(retried, 1);
+  assert.equal(result.acknowledged, 0);
+  assert.equal(result.retried, 1);
+});
