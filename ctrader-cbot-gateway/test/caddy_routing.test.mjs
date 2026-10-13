@@ -22,5 +22,6 @@ for (const relativePath of configs) {
       /@control path[^\n]*\/v1\/order-lifecycle\/\*/,
       'cTrader order lifecycle must reach the cTrader HTTP control API',
     );
+    assert.match(source, /@mt5control path[^\n]*\/v1\/mt5-position-close\/\*/, 'MT5 close history must reach the MT5 HTTP control API');
   });
 }

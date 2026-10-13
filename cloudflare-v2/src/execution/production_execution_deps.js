@@ -744,6 +744,56 @@ export function createProductionExecutionDependencies({
     return snapshot;
   }
 
+  async function readBrokerPositionCloseStatus({ workspaceId: requestedWorkspaceId, account, brokerPositionId, symbol, side, openedAt, nowMs = Date.now() } = {}) {
+    if (text(requestedWorkspaceId) !== boundWorkspaceId) throw new Error('production execution workspace mismatch');
+    assertBoundAccount(account, boundWorkspaceId);
+    const expectedEnvironment = environmentOf(account);
+    if (!['demo', 'live'].includes(expectedEnvironment)) return { status: 'UNRESOLVED' };
+    const expectedIsLive = expectedEnvironment === 'live';
+    const positionId = required(brokerPositionId, 'broker position id');
+    if (!/^\d+$/.test(positionId)) throw new Error('broker position id must be numeric');
+    let snapshot;
+    if (platformOf(account) === 'ctrader' && providerModeOf(account) === 'ctrader_cbot') {
+      // The cBot provider reports explicit PositionCloseReason events through its gateway.
+      // Until that feed is connected, history polling must remain unresolved.
+      return { status: 'UNRESOLVED' };
+    } else if (platformOf(account) === 'ctrader') {
+      const credentials = await loadAccountCredentials(account, 'ctrader');
+      const accountId = Number(brokerAccountIdOf(account));
+      if (!Number.isInteger(accountId)) throw new Error('cTrader account id must be an integer');
+      const cacheKey = `${accountRef(account)}|${accountId}|${expectedEnvironment}`;
+      let runtime = ctraderLifecycleRuntimes.get(cacheKey)?.runtime;
+      if (!runtime) {
+        runtime = await ctraderRuntimeFactory({ environment: expectedEnvironment, allowLiveTrading: false, readOnlyLifecycle: true,
+          clientId: required(credentials.clientId, 'cTrader clientId'), clientSecret: required(credentials.clientSecret, 'cTrader clientSecret'),
+          accessToken: required(credentials.accessToken, 'cTrader accessToken'), accountId });
+        ctraderLifecycleRuntimes.set(cacheKey, { runtime });
+      }
+      if (typeof runtime?.readBrokerPositionCloseStatus !== 'function') throw new Error('cTrader broker position history reader is unavailable');
+      const result = await runtime.readBrokerPositionCloseStatus({ accountRowId: accountRef(account), accountId,
+        brokerPositionId: positionId, symbol, side, openedAt: openedAt == null ? null : Number(openedAt), nowMs: Number(nowMs) });
+      snapshot = result?.snapshot;
+    } else if (platformOf(account) === 'mt5') {
+      const credentials = await loadAccountCredentials(account, 'mt5');
+      const baseUrl = normalizedBaseUrl(required(credentials.bridgeUrl, 'MT5 bridgeUrl'));
+      const openedAtMs = openedAt == null ? null : Number(openedAt);
+      if (openedAtMs != null && !(Number.isFinite(openedAtMs) && openedAtMs >= 0)) return { status: 'UNRESOLVED' };
+      const query = `position_id=${encodeURIComponent(positionId)}${openedAtMs == null ? '' : `&opened_at=${encodeURIComponent(String(Math.floor(openedAtMs / 1000)))}`}`;
+      const path = `/v1/position-close-status?${query}`;
+      const timestamp = String(Date.now());
+      const signature = await signMT5MetadataRequest({ method: 'GET', target: path, timestamp, secret: required(credentials.bridgeSecret, 'MT5 bridgeSecret') });
+      const response = await fetchFn(`${baseUrl}${path}`, { method: 'GET', headers: { Accept: 'application/json', 'X-Mkety-Timestamp': timestamp, 'X-Mkety-Signature': signature }, signal: AbortSignal.timeout(8000) });
+      const body = await readJson(response, 'MT5 broker position close history');
+      snapshot = body.snapshot;
+    } else return { status: 'UNRESOLVED' };
+    if (!snapshot || snapshot.isLive !== expectedIsLive
+      || text(snapshot.environment).toLowerCase() !== expectedEnvironment
+      || text(snapshot.accountId) !== brokerAccountIdOf(account)
+      || text(snapshot.positionId) !== positionId
+      || (platformOf(account) === 'mt5' && text(snapshot.serverName) !== text(account.server_name ?? account.serverName))) return { status: 'UNRESOLVED' };
+    return snapshot;
+  }
+
   async function dispatchAction({ workspaceId: requestedWorkspaceId, groupId, account, action } = {}) {
     if (text(requestedWorkspaceId) !== boundWorkspaceId) {
       throw new Error('production execution workspace mismatch');
@@ -886,6 +936,7 @@ export function createProductionExecutionDependencies({
     retryValidityValidator,
     dispatchAction,
     readPendingOrderLifecycleStatus,
+    readBrokerPositionCloseStatus,
     stateBinder,
     finalizeExecutionBatch,
   };

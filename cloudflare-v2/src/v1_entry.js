@@ -23,6 +23,7 @@ import { createMtprotoRecoveryRuntime } from './sources/mtproto/recovery_runtime
 import { createProductionDestinationRetryRuntime } from './execution/destination_retry_production.js';
 import { runScheduledBindingRepairs } from './execution/production_binding_repair.js';
 import { createProductionPendingOrderLifecycleRuntime } from './execution/pending_order_lifecycle_production.js';
+import { createProductionBrokerTpProtectionRuntime } from './execution/broker_tp_protection_production.js';
 import { handleCustomHostnameRouteProofRequest } from './security/custom_hostname_route_proof.js';
 import { isTradingAccessEnabled, tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
 
@@ -32,6 +33,7 @@ export { MtprotoContainerRuntime } from './sources/mtproto/container_runtime.js'
 
 const MTPROTO_RECOVERY_CRON = '* * * * *';
 const pendingOrderLifecycleRuntime = createProductionPendingOrderLifecycleRuntime();
+const brokerTpProtectionRuntime = createProductionBrokerTpProtectionRuntime();
 
 function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -163,6 +165,7 @@ export function createTradingV1Entrypoint({
   recoveryRuntime = null,
   destinationRetryRuntime = null,
   bindingRepairRuntime = null,
+  brokerTpProtectionRuntime: configuredBrokerTpProtectionRuntime = null,
 } = {}) {
   return {
     async fetch(request, env, ctx) {
@@ -227,8 +230,9 @@ export function createTradingV1Entrypoint({
         const mtprotoRuntime = recoveryRuntime || createMtprotoRecoveryRuntime();
         const retryRuntime = destinationRetryRuntime || createProductionDestinationRetryRuntime();
         const repairRuntime = bindingRepairRuntime || runScheduledBindingRepairs;
-        const [mtprotoResult, retryResult, bindingRepairResult, pendingLifecycleResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }), pendingOrderLifecycleRuntime(env, { ctx })]);
-        return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status, pendingOrderLifecycle: pendingLifecycleResult.status };
+        const tpProtectionRuntime = configuredBrokerTpProtectionRuntime || brokerTpProtectionRuntime;
+        const [mtprotoResult, retryResult, bindingRepairResult, pendingLifecycleResult, tpProtectionResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }), pendingOrderLifecycleRuntime(env, { ctx }), tpProtectionRuntime(env, { ctx })]);
+        return { mtprotoRecovery: mtprotoResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status, pendingOrderLifecycle: pendingLifecycleResult.status, brokerTpProtection: tpProtectionResult.status };
       }
       if (typeof legacy.scheduled === 'function') return legacy.scheduled(event, env, ctx);
     },

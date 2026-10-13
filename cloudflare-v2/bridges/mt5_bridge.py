@@ -440,6 +440,67 @@ class MT5Engine:
                 'remainingLots': max(0.0, remaining), 'fills': fills,
                 'observedAt': int(time.time() * 1000)}
 
+    def broker_position_close_status(self, position_id, since_epoch=None):
+        """Read exact broker-side close history for one position; never sends an order."""
+        ticket = int(position_id)
+        if ticket <= 0:
+            raise RuntimeError('MT5_POSITION_ID_INVALID')
+        active = self.mt5.positions_get(ticket=ticket)
+        if active is None:
+            raise RuntimeError('MT5_POSITION_QUERY_UNCERTAIN')
+        active = [position for position in active if str(getattr(position, 'ticket', '')) == str(ticket)]
+        if since_epoch is None:
+            start = datetime.now(timezone.utc) - timedelta(days=MT5_RECONCILIATION_LOOKBACK_DAYS)
+        else:
+            try:
+                timestamp = float(since_epoch)
+                if timestamp > 100_000_000_000:
+                    timestamp /= 1000
+                start = datetime.fromtimestamp(max(0, int(timestamp) - 10), tz=timezone.utc)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError('MT5_POSITION_TIME_INVALID') from exc
+        end = datetime.now(timezone.utc) + timedelta(seconds=5)
+        try:
+            records = self.mt5.history_deals_get(start, end, position=ticket)
+        except Exception as exc:
+            raise RuntimeError('MT5_POSITION_HISTORY_UNCERTAIN') from exc
+        if records is None:
+            raise RuntimeError('MT5_POSITION_HISTORY_UNCERTAIN')
+        records = [deal for deal in records if str(getattr(deal, 'position_id', '')) == str(ticket)]
+        if not records:
+            return {'positionId': str(ticket), 'isOpen': bool(active), 'initialLots': None,
+                    'closedLots': 0, 'deals': []}
+        entry_in = getattr(self.mt5, 'DEAL_ENTRY_IN', 0)
+        entry_inout = getattr(self.mt5, 'DEAL_ENTRY_INOUT', 2)
+        entry_out = getattr(self.mt5, 'DEAL_ENTRY_OUT', 1)
+        entry_out_by = getattr(self.mt5, 'DEAL_ENTRY_OUT_BY', 3)
+        reason_tp = getattr(self.mt5, 'DEAL_REASON_TP', 5)
+        opens = 0.0
+        closed = 0.0
+        deals = []
+        for deal in records:
+            volume = float(getattr(deal, 'volume', 0) or 0)
+            deal_id = getattr(deal, 'ticket', None)
+            if volume <= 0 or deal_id is None:
+                raise RuntimeError('MT5_POSITION_DEAL_IDENTITY_UNCERTAIN')
+            entry = getattr(deal, 'entry', None)
+            reason = getattr(deal, 'reason', None)
+            if entry == entry_in:
+                opens += volume
+                continue
+            if entry == entry_inout:
+                raise RuntimeError('MT5_POSITION_REVERSED_UNCERTAIN')
+            if entry not in (entry_out, entry_out_by):
+                continue
+            closed += volume
+            deals.append({'dealId': str(deal_id), 'positionId': str(ticket), 'lots': volume,
+                          'entry': 'OUT' if entry == entry_out else 'OUT_BY',
+                          'reason': 'TP' if reason == reason_tp else str(reason),
+                          'executionPrice': float(getattr(deal, 'price', 0) or 0)})
+        initial = float(getattr(active[0], 'volume', 0) or 0) + closed if active else opens
+        return {'positionId': str(ticket), 'isOpen': bool(active), 'initialLots': initial,
+                'closedLots': closed, 'deals': deals}
+
     def _normalized_recovered_deal(self, deal):
         return {
             'ok': True,
@@ -572,7 +633,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == '/health':
             return self._json(200, {'ok': True})
-        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick', '/v1/order-status'):
+        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick', '/v1/order-status', '/v1/position-close-status'):
             return self._json(404, {'ok': False, 'error': 'not found'})
         if not self._metadata_authorized():
             return self._json(401, {'ok': False, 'error': 'invalid metadata signature'})
@@ -588,6 +649,21 @@ class BridgeHandler(BaseHTTPRequestHandler):
             ticket = parse_qs(parsed.query).get('ticket', [None])[0]
             try:
                 snapshot = self.engine.pending_order_status(ticket)
+                account = self.mt5.account_info()
+                if account is None:
+                    raise RuntimeError('MT5_ACCOUNT_UNAVAILABLE')
+                is_live = int(getattr(account, 'trade_mode', -1)) == int(getattr(self.mt5, 'ACCOUNT_TRADE_MODE_REAL', 2))
+                snapshot.update({'accountId': str(account.login), 'serverName': str(account.server),
+                                 'isLive': is_live, 'environment': 'live' if is_live else 'demo'})
+                return self._json(200, {'ok': True, 'snapshot': snapshot})
+            except Exception as exc:
+                return self._json(409, {'ok': False, 'error': str(exc)})
+        if parsed.path == '/v1/position-close-status':
+            query = parse_qs(parsed.query)
+            position_id = query.get('position_id', [None])[0]
+            opened_at = query.get('opened_at', [None])[0]
+            try:
+                snapshot = self.engine.broker_position_close_status(position_id, opened_at)
                 account = self.mt5.account_info()
                 if account is None:
                     raise RuntimeError('MT5_ACCOUNT_UNAVAILABLE')

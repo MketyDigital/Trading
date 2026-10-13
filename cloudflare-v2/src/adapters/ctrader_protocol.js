@@ -30,6 +30,18 @@ export function buildOrderDetailsMessage({ clientMsgId, accountId, orderId }) {
   return { clientMsgId, payloadType: 2181, payload: { ctidTraderAccountId: Number(accountId), orderId: Number(orderId) } };
 }
 
+export function buildDealsByPositionMessage({ clientMsgId, accountId, positionId, fromTimestamp = 0, toTimestamp = Date.now() }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  if (!Number.isInteger(Number(positionId))) throw new TypeError('positionId is required');
+  return { clientMsgId, payloadType: 2179, payload: { ctidTraderAccountId: Number(accountId), positionId: Number(positionId), fromTimestamp: Number(fromTimestamp), toTimestamp: Number(toTimestamp) } };
+}
+
+export function buildOrdersByPositionMessage({ clientMsgId, accountId, positionId, fromTimestamp = 0, toTimestamp = Date.now() }) {
+  if (!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required');
+  if (!Number.isInteger(Number(positionId))) throw new TypeError('positionId is required');
+  return { clientMsgId, payloadType: 2183, payload: { ctidTraderAccountId: Number(accountId), positionId: Number(positionId), fromTimestamp: Number(fromTimestamp), toTimestamp: Number(toTimestamp) } };
+}
+
 export function decodeSpotEvent(message, { digits } = {}) { if (Number(message?.payloadType) !== 2131) throw new TypeError('ProtoOASpotEvent payload required'); const p = message.payload || {}; const places = Number.isInteger(Number(digits)) ? Number(digits) : 5; const decode = v => v == null ? null : Number((Number(v) / 100000).toFixed(places)); return { accountId:Number(p.ctidTraderAccountId), symbolId:Number(p.symbolId), ...(p.bid!=null?{bid:decode(p.bid)}:{}), ...(p.ask!=null?{ask:decode(p.ask)}:{}), ...(p.timestamp!=null?{timestamp:Number(p.timestamp)}:{}) }; }
 export function buildNewOrderMessage({clientMsgId,accountId,symbolId,side,orderType,protocolVolume,entryPrice,stopPrice,stopLoss,takeProfit,timeInForce,clientOrderId,label,comment}) { if(!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required'); if(!Number.isInteger(Number(symbolId))) throw new TypeError('symbolId is required'); if(!ORDER_TYPES[orderType]) throw new TypeError('unsupported cTrader order type'); if(!SIDES[side]) throw new TypeError('unsupported cTrader side'); const payload={ctidTraderAccountId:Number(accountId),symbolId:Number(symbolId),orderType:ORDER_TYPES[orderType],tradeSide:SIDES[side],volume:Math.trunc(protocolVolume)}; if(orderType==='LIMIT'&&entryPrice!=null) payload.limitPrice=Number(entryPrice); if((orderType==='STOP'||orderType==='STOP_LIMIT')&&(stopPrice??entryPrice)!=null) payload.stopPrice=Number(stopPrice??entryPrice); if(stopLoss!=null) payload.stopLoss=Number(stopLoss); if(takeProfit!=null) payload.takeProfit=Number(takeProfit); if(timeInForce!=null) payload.timeInForce=timeInForce; if(clientOrderId) payload.clientOrderId=String(clientOrderId).slice(0,50); if(label) payload.label=String(label).slice(0,100); if(comment) payload.comment=String(comment).slice(0,512); return {clientMsgId,payloadType:2106,payload}; }
 export function buildCancelOrderMessage({clientMsgId,accountId,orderId}) { if(!Number.isInteger(Number(accountId))) throw new TypeError('accountId is required'); if(!Number.isInteger(Number(orderId))) throw new TypeError('orderId is required'); return {clientMsgId,payloadType:2108,payload:{ctidTraderAccountId:Number(accountId),orderId:Number(orderId)}}; }

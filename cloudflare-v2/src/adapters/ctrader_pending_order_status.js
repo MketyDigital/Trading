@@ -1,4 +1,4 @@
-import { buildOrderDetailsMessage, buildReconcileMessage } from './ctrader_protocol.js';
+import { buildDealsByPositionMessage, buildOrderDetailsMessage, buildOrdersByPositionMessage, buildReconcileMessage } from './ctrader_protocol.js';
 
 function unresolved(context, reason) {
   return {
@@ -118,5 +118,72 @@ export async function readCTraderPendingOrderStatus(context = {}) {
     return normalizeCTraderOrderDetails(response, { ...context, openPositionIds });
   } catch {
     return unresolved(context, 'BROKER_HISTORY_UNAVAILABLE');
+  }
+}
+
+/** Read-only exact position history used to prove broker-side TP closure. */
+export async function readCTraderPositionCloseStatus(context = {}) {
+  if (!context.session?.request) throw new TypeError('authenticated cTrader session required');
+  const positionId = String(context.brokerPositionId ?? '').trim();
+  const accountId = String(context.accountId ?? '').trim();
+  const protocolLotSize = Number(context.protocolLotSize);
+  const side = String(context.side ?? '').toUpperCase();
+  if (!/^\d+$/.test(positionId) || !/^\d+$/.test(accountId) || !(protocolLotSize > 0) || !['BUY', 'SELL'].includes(side)) {
+    return unresolved(context, 'POSITION_CLOSE_REQUEST_INVALID');
+  }
+  const position = Number(positionId);
+  const account = Number(accountId);
+  const fromTimestamp = Math.max(0, Math.trunc(Number(context.openedAt ?? context.createdAt ?? 0)));
+  const toTimestamp = Math.trunc(Number(context.nowMs ?? Date.now()));
+  const requestId = (prefix) => context.session.nextClientMsgId?.(prefix)
+    || `${prefix}-${positionId}-${toTimestamp}-${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
+  try {
+    const [dealResponse, orderResponse, reconcile] = await Promise.all([
+      context.session.request(buildDealsByPositionMessage({ clientMsgId: requestId('tp-deals'), accountId: account, positionId: position, fromTimestamp, toTimestamp }), { successPayloadTypes: [2180] }),
+      context.session.request(buildOrdersByPositionMessage({ clientMsgId: requestId('tp-orders'), accountId: account, positionId: position, fromTimestamp, toTimestamp }), { successPayloadTypes: [2184] }),
+      context.session.request(buildReconcileMessage({ clientMsgId: requestId('tp-reconcile'), accountId: account, returnProtectionOrders: true }), { successPayloadTypes: [2125] }),
+    ]);
+    const validResponse = (response, type) => Number(response?.payloadType) === type
+      && String(response?.payload?.ctidTraderAccountId ?? '') === accountId
+      && response?.payload?.hasMore !== true;
+    if (!validResponse(dealResponse, 2180) || !validResponse(orderResponse, 2184)
+      || Number(reconcile?.payloadType) !== 2125
+      || String(reconcile?.payload?.ctidTraderAccountId ?? '') !== accountId
+      || !Array.isArray(reconcile?.payload?.position)) return unresolved(context, 'POSITION_CLOSE_HISTORY_UNRESOLVED');
+    const rawDeals = dealResponse.payload.deal;
+    const rawOrders = orderResponse.payload.order;
+    if (!Array.isArray(rawDeals) || !Array.isArray(rawOrders)) return unresolved(context, 'POSITION_CLOSE_HISTORY_UNRESOLVED');
+    const open = reconcile.payload.position.some((row) => String(row?.positionId ?? '') === positionId);
+    const closingSide = side === 'BUY' ? 2 : 1;
+    const openingDeals = rawDeals.filter((deal) => String(deal?.positionId ?? '') === positionId
+      && Number(deal?.dealStatus) === 2 && Number(deal?.tradeSide) !== closingSide);
+    const closingDeals = rawDeals.filter((deal) => String(deal?.positionId ?? '') === positionId
+      && Number(deal?.dealStatus) === 2 && Number(deal?.tradeSide) === closingSide);
+    if (openingDeals.length + closingDeals.length !== rawDeals.length) return unresolved(context, 'POSITION_DEAL_IDENTITY_OR_STATUS_INVALID');
+    const ordersById = new Map(rawOrders.map((order) => [String(order?.orderId ?? ''), order]));
+    const deals = closingDeals.map((deal) => ({
+      dealId: String(deal.dealId ?? ''), positionId, lots: Number(deal.filledVolume) / protocolLotSize,
+      executionPrice: deal.executionPrice == null ? null : Number(deal.executionPrice), orderId: String(deal.orderId ?? ''),
+    }));
+    const closingOrders = [...new Set(deals.map((deal) => deal.orderId))].map((orderId) => {
+      const order = ordersById.get(orderId);
+      if (!order) return null;
+      return { orderId, positionId: String(order.positionId ?? ''), closingOrder: order.closingOrder === true,
+        orderType: String(order.orderType ?? ''), takeProfit: order.takeProfit == null ? null : Number(order.takeProfit),
+        stopLoss: order.stopLoss == null ? null : Number(order.stopLoss), isStopOut: order.isStopOut === true };
+    });
+    if (closingOrders.some((order) => !order)) return unresolved(context, 'POSITION_CLOSING_ORDER_UNAVAILABLE');
+    const closeVolumes = closingDeals.map((deal) => Number(deal?.closePositionDetail?.closedVolume ?? deal?.filledVolume));
+    if (closeVolumes.some((value) => !(value > 0))) return unresolved(context, 'POSITION_CLOSE_VOLUME_INVALID');
+    const initialLots = openingDeals.reduce((sum, deal) => sum + Number(deal.filledVolume) / protocolLotSize, 0);
+    const closedLots = closingDeals.reduce((sum, deal) => sum + Number(deal.closePositionDetail?.closedVolume ?? deal.filledVolume) / protocolLotSize, 0);
+    return {
+      ...context,
+      snapshot: { accountId, positionId, environment: String(context.environment || ''), isLive: context.isLive === true,
+        isOpen: open, initialLots, closedLots, deals, closingOrders,
+        tickSize: Number(context.tickSize) || null, observedAt: toTimestamp },
+    };
+  } catch {
+    return unresolved(context, 'BROKER_POSITION_HISTORY_UNAVAILABLE');
   }
 }

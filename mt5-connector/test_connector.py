@@ -104,6 +104,24 @@ class FakeMT5:
 
 
 class ConnectorTests(unittest.TestCase):
+    def test_position_close_status_request_returns_read_only_tp_history_and_terminal_identity(self):
+        connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None,
+            {'gateway_url': module.DEFAULT_GATEWAY, 'connection_token': 'token'})
+        calls = []
+        connector.engine = SimpleNamespace(broker_position_close_status=lambda position_id, opened_at: (
+            calls.append((position_id, opened_at)) or {'positionId': str(position_id), 'isOpen': False,
+                'initialLots': 0.1, 'closedLots': 0.1, 'deals': [{'dealId': '8', 'positionId': str(position_id),
+                    'lots': 0.1, 'entry': 'OUT', 'reason': 'TP'}]}))
+        result = connector.handle_message({'type': 'position_close_status_request', 'requestId': 'req-1',
+            'positionId': '7001', 'openedAt': 1770000000000})
+        self.assertEqual(calls, [('7001', 1770000000000)])
+        self.assertEqual(result['type'], 'position_close_status_result')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['snapshot']['accountId'], '123456')
+        self.assertEqual(result['snapshot']['positionId'], '7001')
+        self.assertEqual(result['snapshot']['environment'], 'demo')
+        self.assertEqual(result['snapshot']['deals'][0]['reason'], 'TP')
+
     def test_terminal_identity_and_catalog_come_from_terminal_not_env(self):
         mt5 = FakeMT5()
         identity = module.terminal_identity(mt5)

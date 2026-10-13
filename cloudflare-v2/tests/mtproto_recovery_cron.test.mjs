@@ -6,7 +6,7 @@ import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 const RECOVERY_CRON = '* * * * *';
 const LEGACY_CRON = '*/15 * * * *';
 
-test('one-minute cron runs MTProto, destination retry, state binding repair, and pending lifecycle independently', async () => {
+test('one-minute cron runs MTProto, destination retry, state binding repair, pending lifecycle, and broker TP protection independently', async () => {
   let mtprotoCalls = 0;
   let destinationCalls = 0;
   let bindingRepairCalls = 0;
@@ -19,6 +19,7 @@ test('one-minute cron runs MTProto, destination retry, state binding repair, and
     recoveryRuntime: async () => { mtprotoCalls += 1; return { checked: 1 }; },
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'BROKER_EXECUTION_DISABLED' }; },
     bindingRepairRuntime: async () => { bindingRepairCalls += 1; return { scanned: 1, repaired: 1, failed: 0 }; },
+    brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
   });
 
   const result = await entry.scheduled({ cron: RECOVERY_CRON }, {
@@ -31,6 +32,7 @@ test('one-minute cron runs MTProto, destination retry, state binding repair, and
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
     pendingOrderLifecycle: 'fulfilled',
+    brokerTpProtection: 'fulfilled',
   });
   assert.equal(mtprotoCalls, 1);
   assert.equal(destinationCalls, 1);
@@ -46,6 +48,7 @@ test('one recovery failure cannot prevent sibling one-minute recovery runtimes',
     recoveryRuntime: async () => { throw new Error('mtproto failure'); },
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'COMPLETED' }; },
     bindingRepairRuntime: async () => { bindingRepairCalls += 1; return { repaired: 1 }; },
+    brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
   });
 
   const result = await entry.scheduled({ cron: RECOVERY_CRON }, {}, {});
@@ -56,6 +59,7 @@ test('one recovery failure cannot prevent sibling one-minute recovery runtimes',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
     pendingOrderLifecycle: 'fulfilled',
+    brokerTpProtection: 'fulfilled',
   });
 });
 
@@ -67,6 +71,7 @@ test('state binding repair failure cannot prevent MTProto or destination retry r
     recoveryRuntime: async () => { mtprotoCalls += 1; return { checked: 1 }; },
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'COMPLETED' }; },
     bindingRepairRuntime: async () => { throw new Error('state unavailable'); },
+    brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
   });
 
   const result = await entry.scheduled({ cron: RECOVERY_CRON }, {}, {});
@@ -77,6 +82,7 @@ test('state binding repair failure cannot prevent MTProto or destination retry r
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'rejected',
     pendingOrderLifecycle: 'fulfilled',
+    brokerTpProtection: 'fulfilled',
   });
 });
 
