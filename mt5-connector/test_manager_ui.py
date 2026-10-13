@@ -64,6 +64,40 @@ class ManagerUiTests(unittest.TestCase):
             self.model.pair_profile(profile.profile_id, "new-token", {"accountNumber": "1"}, confirmed=True)
         self.assertEqual(config.read_bytes(), original)
 
+    def test_pair_selection_resolves_explicit_terminal_to_existing_legacy_profile(self):
+        self.app_data.mkdir(parents=True)
+        config = self.app_data / LEGACY_CONFIG_NAME
+        original = b'{"connection_token":"old-token"}'
+        config.write_bytes(original)
+        legacy = load_profiles(self.app_data)[0]
+
+        with self.assertRaisesRegex(ValueError, "confirm the existing account"):
+            self.model.resolve_profile_selection(None, self.terminal)
+
+        self.assertIsNone(load_profiles(self.app_data)[0].terminal_path)
+        resolved = self.model.resolve_profile_selection(None, self.terminal, confirm_legacy_binding=True)
+
+        self.assertEqual(resolved.profile_id, legacy.profile_id)
+        self.assertEqual(resolved.terminal_path, self.terminal.resolve())
+        self.assertEqual(config.read_bytes(), original)
+
+    def test_pair_selection_resolves_terminal_to_matching_saved_profile(self):
+        saved = self.model.add_terminal(self.terminal)
+
+        resolved = self.model.resolve_profile_selection(None, self.terminal.parent / "." / "terminal64.exe")
+
+        self.assertEqual(resolved.profile_id, saved.profile_id)
+
+    def test_pair_selection_creates_profile_for_selected_installation(self):
+        resolved = self.model.resolve_profile_selection(None, self.terminal)
+
+        self.assertEqual(resolved.terminal_path, self.terminal.resolve())
+        self.assertEqual(load_profiles(self.app_data), [resolved])
+
+    def test_pair_selection_without_profile_or_terminal_requires_a_selection(self):
+        with self.assertRaisesRegex(ValueError, "choose a saved profile"):
+            self.model.resolve_profile_selection(None, None)
+
     def test_identity_sync_is_never_reported_as_done_by_local_manager(self):
         profile = self.model.add_terminal(self.terminal, "Demo account")
         row = self.model.profile_rows()[0]
