@@ -383,11 +383,18 @@ class MT5Engine:
         if open_positions is None:
             raise RuntimeError('MT5_PENDING_ORDER_POSITION_QUERY_UNCERTAIN')
         open_position_ids = {str(getattr(position, 'ticket', '')) for position in open_positions}
-        history = self.mt5.history_orders_get(ticket=ticket)
-        if history is None:
-            raise RuntimeError('MT5_PENDING_ORDER_HISTORY_UNCERTAIN')
-        orders = [*active, *history]
-        exact = [order for order in orders if str(getattr(order, 'ticket', '')) == str(ticket)]
+        exact_active = [order for order in active if str(getattr(order, 'ticket', '')) == str(ticket)]
+        exact = exact_active
+        if not exact:
+            history = self.mt5.history_orders_get(ticket=ticket)
+            exact = [order for order in (history or ()) if str(getattr(order, 'ticket', '')) == str(ticket)]
+            if history is None or not exact:
+                now = datetime.now(timezone.utc)
+                start = now - timedelta(days=MT5_RECONCILIATION_LOOKBACK_DAYS)
+                history_window = self.mt5.history_orders_get(start, now + timedelta(seconds=5))
+                if history_window is None:
+                    raise RuntimeError('MT5_PENDING_ORDER_HISTORY_UNCERTAIN')
+                exact = [order for order in history_window if str(getattr(order, 'ticket', '')) == str(ticket)]
         if not exact:
             return {'status': 'UNRESOLVED', 'brokerOrderId': str(ticket), 'fills': []}
         order = exact[-1]
