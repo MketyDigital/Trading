@@ -58,6 +58,44 @@ test('broker master fuse fails before account, authority, dispatch, or state dep
   assert.deepEqual(touched, []);
 });
 
+test('supersession opens the replacement side after a failed close, then retries only the old position', async () => {
+  const dispatched = [];
+  const closeKeys = [];
+  let closeAttempts = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-reversal', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      groupId: 'new-buy-group',
+      supersessionCloseActionCount: 1,
+      actions: [
+        { type: 'CLOSE_POSITION', symbol: 'EURJPY', lots: 0.01, legId: 'old-sell-leg', executionGroupId: 'old-sell-group', idempotencyKey: 'evt-reversal:old-close' },
+        openAction({ idempotencyKey: 'evt-reversal:new-buy', legId: 'new-buy-leg' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account(),
+    dispatchAction: async ({ groupId, action }) => {
+      dispatched.push({ groupId, type: action.type });
+      if (action.type === 'CLOSE_POSITION') {
+        closeAttempts += 1;
+        closeKeys.push(action.idempotencyKey);
+        return closeAttempts === 1 ? { ok: false, code: 'CLOSE_REJECTED' } : { ok: true, reconciledClosed: true };
+      }
+      return { ok: true, brokerPositionId: 'new-buy-position' };
+    },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+  assert.deepEqual(dispatched, [
+    { groupId: 'old-sell-group', type: 'CLOSE_POSITION' },
+    { groupId: 'new-buy-group', type: 'OPEN_POSITION' },
+    { groupId: 'old-sell-group', type: 'CLOSE_POSITION' },
+  ]);
+  assert.equal(closeKeys[0], 'evt-reversal:old-close');
+  assert.equal(closeKeys[1], 'evt-reversal:old-close:retry-after-entry');
+});
+
 test('exact workspace, active account, and account execution flag are revalidated before dispatch', async () => {
   const cases = [
     { name: 'workspace mismatch', row: account({ workspace_id: 'ws-b' }), reason: 'ACCOUNT_WORKSPACE_MISMATCH' },
