@@ -397,15 +397,24 @@ async function orchestrateMatchedManagement({
       && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING'
         && leg?.brokerOrderId && leg?.lifecycleTrackingEnabled === true);
     let lifecycleRefreshFailed = false;
+    let lifecycleRefreshError = null;
     if (requiresLifecycleRefresh && typeof refreshPendingOrderLifecycle !== 'function') {
       lifecycleRefreshFailed = true;
+      lifecycleRefreshError = 'LIFECYCLE_REFRESH_PROVIDER_UNAVAILABLE';
     } else if (needsFreshPendingState && typeof refreshPendingOrderLifecycle === 'function') {
       try {
         const refreshed = await refreshPendingOrderLifecycle({ group: matchedGroup, account, nowMs });
         if (refreshed?.id && String(refreshed.id) === String(matchedGroup.id)) matchedGroup = refreshed;
-        else if (requiresLifecycleRefresh) lifecycleRefreshFailed = true;
-      } catch {
+        else if (requiresLifecycleRefresh) {
+          lifecycleRefreshFailed = true;
+          lifecycleRefreshError = 'LIFECYCLE_REFRESH_GROUP_MISMATCH';
+        }
+      } catch (error) {
         lifecycleRefreshFailed = true;
+        lifecycleRefreshError = String(error?.code || error?.message || 'LIFECYCLE_REFRESH_FAILED')
+          .replace(/https?:\/\/\S+/gi, '[url]')
+          .replace(/bearer\s+\S+/gi, 'Bearer [redacted]')
+          .slice(0, 180);
       }
     }
     if (lifecycleRefreshFailed) {
@@ -413,6 +422,7 @@ async function orchestrateMatchedManagement({
         accountId: account.id,
         status: 'BLOCKED',
         reason: 'PENDING_LIFECYCLE_REFRESH_UNAVAILABLE',
+        error: lifecycleRefreshError,
         policy,
         actions: [],
       });
