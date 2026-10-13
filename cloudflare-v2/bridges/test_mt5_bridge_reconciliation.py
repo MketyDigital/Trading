@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from mt5_bridge import MT5Engine, command_marker
@@ -138,8 +139,11 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
             ORDER_STATE_REJECTED = 6
 
             def __init__(self):
-                self.historical = SimpleNamespace(ticket=903, time_setup=1770000000,
+                self.setup_time = int((datetime.now(timezone.utc) - timedelta(days=6)).timestamp())
+                self.historical = SimpleNamespace(ticket=903, time_setup=self.setup_time,
                     volume_initial=0.10, volume_current=0.0, state=2)
+                self.unrelated = SimpleNamespace(ticket=904, time_setup=self.setup_time,
+                    volume_initial=0.10, volume_current=0.0, state=4)
                 self.range_calls = []
 
             def orders_get(self, ticket=None): return ()
@@ -147,7 +151,9 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
             def history_orders_get(self, *args, ticket=None):
                 if ticket is not None: return None
                 self.range_calls.append((args[0], args[1]))
-                return (self.historical,)
+                start, end = args
+                return tuple(order for order in (self.historical, self.unrelated)
+                    if start <= datetime.fromtimestamp(order.time_setup, tz=timezone.utc) <= end)
             def history_deals_get(self, start, end, ticket=None): return ()
             def order_send(self, request): raise AssertionError('status reads must never send broker orders')
 
@@ -157,6 +163,13 @@ class MT5BridgeReconciliationTests(unittest.TestCase):
         self.assertEqual(snapshot['status'], 'CANCELLED')
         self.assertEqual(snapshot['brokerOrderId'], '903')
         self.assertEqual(len(mt5.range_calls), 1)
+        start, end = mt5.range_calls[0]
+        order_time = datetime.fromtimestamp(mt5.setup_time, tz=timezone.utc)
+        checked_at = datetime.now(timezone.utc)
+        self.assertLessEqual(start, order_time)
+        self.assertAlmostEqual((checked_at - start).total_seconds(), 7 * 24 * 60 * 60, delta=5)
+        self.assertGreaterEqual(end, checked_at)
+        self.assertLessEqual(end, checked_at + timedelta(seconds=10))
 
     def test_pending_order_status_is_exact_read_only_and_aggregates_position_deals(self):
         class StatusMT5:
