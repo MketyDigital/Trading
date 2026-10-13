@@ -393,7 +393,7 @@ async function orchestrateMatchedManagement({
     const managementType = String(interpretation.management?.type || '').toUpperCase();
     const needsFreshPendingState = ['CLOSE', 'CLOSE_ALL', 'CANCEL_PENDING'].includes(managementType)
       && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING' && leg?.brokerOrderId);
-    const requiresLifecycleRefresh = ['CLOSE', 'CLOSE_ALL'].includes(managementType)
+    const requiresLifecycleRefresh = ['CLOSE', 'CLOSE_ALL', 'CANCEL_PENDING'].includes(managementType)
       && (matchedGroup.legs || []).some((leg) => String(leg?.status || '').toUpperCase() === 'PENDING'
         && leg?.brokerOrderId && leg?.lifecycleTrackingEnabled === true);
     let lifecycleRefreshFailed = false;
