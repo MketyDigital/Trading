@@ -157,3 +157,32 @@ test('DEMO preflight ignores a broker identity mismatch without writing state', 
   assert.equal(writes, 0);
   assert.equal(finalized, 1);
 });
+
+test('DEMO preflight preserves a normalized broker lifecycle reason for diagnostics', async () => {
+  let writes = 0;
+  const stub = {
+    async fetch(url, init = {}) {
+      if (url.endsWith('/pending-order-snapshot')) writes++;
+      if (init.method === 'GET') return Response.json(group);
+      return Response.json({ outcome: 'UNCHANGED' });
+    },
+  };
+  const deps = await createV1SimulationDependencies({
+    env: {
+      PENDING_ORDER_LIFECYCLE_SYNC_ENABLED: 'true',
+      TRADE_STATE_INTERNAL_TOKEN: 'internal-token',
+      TRADE_STATE_NAMESPACE: { idFromName: (id) => id, get: () => stub },
+    },
+    supabase: { from() { throw new Error('not used'); } },
+    event: { workspace_hint: 'workspace-1' },
+    lifecycleDependenciesFactory: () => ({
+      async readPendingOrderLifecycleStatus() {
+        return { ...snapshot, status: 'UNRESOLVED', reason: 'BROKER_HISTORY_UNAVAILABLE' };
+      },
+      async finalizeExecutionBatch() {},
+    }),
+  });
+
+  await assert.rejects(() => deps.refreshPendingOrderLifecycle({ group, account }), /BROKER_HISTORY_UNAVAILABLE/);
+  assert.equal(writes, 0);
+});
