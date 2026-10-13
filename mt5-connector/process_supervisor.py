@@ -285,9 +285,24 @@ class ConnectorSupervisor:
             pid = self._read_lock_pid(self._lock_path(registered))
             if pid and self.pid_is_running(pid):
                 managed_pids.add(pid)
+        connector_processes = self.connector_process_reader()
+        current_pid = os.getpid()
+        # A PyInstaller --onefile app runs with a same-named bootloader parent.
+        # Exclude only that direct parent, and only when its image is this exact
+        # frozen executable; unrelated connector instances must still block.
+        bootloader_parent_pid = None
+        if getattr(sys, "frozen", False):
+            parent_pid = os.getppid()
+            executable_path = _canonical_path(Path(sys.executable))
+            if parent_pid != current_pid and any(
+                int(pid) == parent_pid and _canonical_path(Path(path)) == executable_path
+                for pid, path in connector_processes
+            ):
+                bootloader_parent_pid = parent_pid
         unmanaged = [
-            pid for pid, executable in self.connector_process_reader()
-            if int(pid) != os.getpid() and int(pid) not in managed_pids
+            pid for pid, executable in connector_processes
+            if int(pid) != current_pid and int(pid) != bootloader_parent_pid
+            and int(pid) not in managed_pids
             and Path(executable).name.casefold() == "mketymt5connector.exe"
         ]
         if unmanaged:
