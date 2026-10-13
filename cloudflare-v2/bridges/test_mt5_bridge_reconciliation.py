@@ -98,6 +98,66 @@ def broker_record(*, command_id, position_id=7001, order=9001, deal=9002, magic=
 
 
 class MT5BridgeReconciliationTests(unittest.TestCase):
+    def test_active_pending_order_does_not_require_ticket_history_lookup(self):
+        class ActiveOrderHistoryUnavailableMT5:
+            ORDER_STATE_FILLED = 4
+            ORDER_STATE_CANCELED = 2
+            ORDER_STATE_EXPIRED = 5
+            ORDER_STATE_REJECTED = 6
+
+            def __init__(self):
+                self.order = SimpleNamespace(ticket=902, time_setup=1770000000,
+                    volume_initial=0.10, volume_current=0.10, state=1)
+                self.ticket_history_calls = 0
+                self.range_history_calls = 0
+
+            def orders_get(self, ticket=None): return (self.order,) if ticket == 902 else ()
+            def positions_get(self): return ()
+            def history_orders_get(self, *args, ticket=None):
+                if ticket is not None:
+                    self.ticket_history_calls += 1
+                    return None
+                self.range_history_calls += 1
+                return ()
+            def history_deals_get(self, start, end, ticket=None): return ()
+            def order_send(self, request): raise AssertionError('status reads must never send broker orders')
+
+        mt5 = ActiveOrderHistoryUnavailableMT5()
+        snapshot = MT5Engine(mt5).pending_order_status('902')
+
+        self.assertEqual(snapshot['status'], 'PENDING')
+        self.assertEqual(snapshot['brokerOrderId'], '902')
+        self.assertEqual(mt5.ticket_history_calls, 0)
+        self.assertEqual(mt5.range_history_calls, 0)
+
+    def test_historical_order_uses_time_range_when_ticket_history_lookup_is_unavailable(self):
+        class HistoricalOrderHistoryFallbackMT5:
+            ORDER_STATE_FILLED = 4
+            ORDER_STATE_CANCELED = 2
+            ORDER_STATE_EXPIRED = 5
+            ORDER_STATE_REJECTED = 6
+
+            def __init__(self):
+                self.historical = SimpleNamespace(ticket=903, time_setup=1770000000,
+                    volume_initial=0.10, volume_current=0.0, state=2)
+                self.range_calls = []
+
+            def orders_get(self, ticket=None): return ()
+            def positions_get(self): return ()
+            def history_orders_get(self, *args, ticket=None):
+                if ticket is not None: return None
+                self.range_calls.append((args[0], args[1]))
+                return (self.historical,)
+            def history_deals_get(self, start, end, ticket=None): return ()
+            def order_send(self, request): raise AssertionError('status reads must never send broker orders')
+
+        mt5 = HistoricalOrderHistoryFallbackMT5()
+        snapshot = MT5Engine(mt5).pending_order_status('903')
+
+        self.assertEqual(snapshot['status'], 'CANCELLED')
+        self.assertEqual(snapshot['brokerOrderId'], '903')
+        self.assertEqual(len(mt5.range_calls), 1)
+
     def test_pending_order_status_is_exact_read_only_and_aggregates_position_deals(self):
         class StatusMT5:
             ORDER_STATE_FILLED = 4
