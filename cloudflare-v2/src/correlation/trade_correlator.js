@@ -23,6 +23,28 @@ function fastCompletionEligibleGroups(groups, nowMs, windowMs) {
   });
 }
 
+function correlateFastSupersession(groups, intent, nowMs, windowMs) {
+  const symbol = String(intent?.symbol?.canonical ?? '').trim().toUpperCase();
+  const side = String(intent?.side ?? '').trim().toUpperCase();
+  if (!symbol || !['BUY', 'SELL'].includes(side)) return null;
+  const opposite = side === 'BUY' ? 'SELL' : 'BUY';
+  const matches = (groups || []).filter((group) => {
+    const createdAt = Number(group?.createdAt ?? group?.updatedAt ?? 0);
+    const age = Number(nowMs) - createdAt;
+    return group?.incomplete === true
+      && String(group?.symbol ?? '').trim().toUpperCase() === symbol
+      && String(group?.side ?? '').trim().toUpperCase() === opposite
+      && createdAt > 0
+      && age >= -5000
+      && age <= Number(windowMs);
+  });
+  if (matches.length === 0) return null;
+  const cohorts = logicalCohorts(matches);
+  if (cohorts.length !== 1) return { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_SUPERSESSION' };
+  const target = targetForCohort(cohorts[0], 'FAST_ENTRY_SUPERSESSION');
+  return target || { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_SUPERSESSION' };
+}
+
 function isDuplicateSourceEvent(groups, event) {
   const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
   if (!externalEventId) return false;
@@ -298,6 +320,7 @@ export function correlateTradingEvent({
   nowMs = Date.now(),
   correlationWindowMs = 120000,
   fastCompletionWindowMs = 30 * 60 * 1000,
+  fastSupersessionWindowMs = 5 * 60 * 1000,
 } = {}) {
   const scoped = scopedGroups(activeGroups, event);
   const editedEventId = event?.thread?.edited_event_id != null ? String(event.thread.edited_event_id) : null;
@@ -388,7 +411,21 @@ export function correlateTradingEvent({
       );
       const completion = correlateFastCompletion(compatible);
       if (completion) return completion;
+      if (replyMatches.length === 0) {
+        const fallbackMatches = fastCompletionEligibleGroups(scoped, Number(nowMs), Number(fastCompletionWindowMs))
+          .filter((group) => group.incomplete === true
+            && String(group.symbol ?? '').trim().toUpperCase() === symbol
+            && String(group.side ?? '').trim().toUpperCase() === side);
+        const fallback = correlateFastCompletion(fallbackMatches);
+        if (fallback) return fallback;
+      }
+      const supersession = correlateFastSupersession(replyMatches, interpretation.intent, nowMs, fastSupersessionWindowMs);
+      if (supersession) return supersession;
       if (replyMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+    }
+    if (replyMatches.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+      const supersession = correlateFastSupersession(scoped, interpretation.intent, nowMs, fastSupersessionWindowMs);
+      if (supersession) return supersession;
     }
     const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
     if (target) return target;
@@ -410,7 +447,21 @@ export function correlateTradingEvent({
       );
       const completion = correlateFastCompletion(compatible);
       if (completion) return completion;
+      if (threadMatches.length === 0) {
+        const fallbackMatches = fastCompletionEligibleGroups(scoped, Number(nowMs), Number(fastCompletionWindowMs))
+          .filter((group) => group.incomplete === true
+            && String(group.symbol ?? '').trim().toUpperCase() === symbol
+            && String(group.side ?? '').trim().toUpperCase() === side);
+        const fallback = correlateFastCompletion(fallbackMatches);
+        if (fallback) return fallback;
+      }
+      const supersession = correlateFastSupersession(threadMatches, interpretation.intent, nowMs, fastSupersessionWindowMs);
+      if (supersession) return supersession;
       if (threadMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+    }
+    if (threadMatches.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+      const supersession = correlateFastSupersession(scoped, interpretation.intent, nowMs, fastSupersessionWindowMs);
+      if (supersession) return supersession;
     }
     const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
     if (target) return target;
@@ -441,6 +492,9 @@ export function correlateTradingEvent({
       const fastCompletion = correlateFastCompletion(fastCompletionMatches);
       if (fastCompletion) return fastCompletion;
     }
+
+    const supersession = correlateFastSupersession(scoped, interpretation.intent, nowMs, fastSupersessionWindowMs);
+    if (supersession) return supersession;
 
     const duplicateFastEntry = recentFastDuplicateTarget(recent, interpretation.intent);
     if (duplicateFastEntry) return duplicateFastEntry;
