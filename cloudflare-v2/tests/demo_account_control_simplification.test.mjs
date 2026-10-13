@@ -125,6 +125,10 @@ test('live account keeps real-money permission separate from its Trading ON/OFF 
 
 test('connections UI exposes one Trading toggle for demo and a separate real-money toggle only for live accounts', () => {
   const ui = withSimplifiedAccountControls(withUnifiedTradingConnections('<html><body></body></html>'));
+  assert.match(ui, /data-account-destination/);
+  assert.match(ui, /Use as destination/);
+  assert.match(ui, /concat\(\['execution'\]\)/);
+  assert.match(ui, /body:JSON\.stringify\(\{roles:nextRoles\}\)/);
   assert.match(ui, /data-account-trading/);
   assert.match(ui, /Trading ON/);
   assert.match(ui, /Trading OFF/);
