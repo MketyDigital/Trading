@@ -64,3 +64,51 @@ test('bare Delete and Cancel use the Close correlation path and target pending o
     }], text);
   }
 });
+
+test('tracked pending cancellation blocks when broker lifecycle refresh is unavailable', async () => {
+  const pendingGroup = {
+    id: 'tracked-pending-group',
+    tradeAccountId: 'acct-1',
+    workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1',
+    sourceEventIds: ['evt-pending-origin'],
+    symbol: 'EURUSD',
+    side: 'BUY',
+    orderType: 'LIMIT',
+    status: 'PENDING',
+    updatedAt: 1000,
+    legs: [{
+      legId: 'pending-leg', targetIndex: 1, status: 'PENDING',
+      brokerOrderId: 'broker-order-1', lifecycleTrackingEnabled: true,
+    }],
+  };
+  const event = {
+    external_event_id: 'evt-delete-no-refresh',
+    workspace_hint: 'workspace-1',
+    source: { instance_id: 'listener-1' },
+    thread: {},
+    text: 'Delete',
+  };
+  const interpretation = buildMachinePlan(event);
+  const result = await orchestrateTradingEventSimulation({ event, interpretation, nowMs: 3000 }, {
+    stateCoordinator: {
+      correlate: async (sourceEvent, intent, nowMs) => correlateTradingEvent({
+        event: sourceEvent, interpretation: intent, activeGroups: [pendingGroup], nowMs,
+      }),
+    },
+    stateStore: {
+      getGroup: async (id) => id === pendingGroup.id ? structuredClone(pendingGroup) : null,
+      putGroup: async (group) => group,
+    },
+    accountProvider: async () => [{
+      id: 'acct-1', execution_enabled: true,
+      safety_policy: { enabled: true, killSwitch: false, allowedSymbols: ['EURUSD'], maxLotsPerTrade: 1 },
+    }],
+    instrumentProvider: async () => { throw new Error('pending cancellation must not require market metadata'); },
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].status, 'BLOCKED');
+  assert.equal(result.accounts[0].reason, 'PENDING_LIFECYCLE_REFRESH_UNAVAILABLE');
+  assert.deepEqual(result.accounts[0].actions, []);
+});
