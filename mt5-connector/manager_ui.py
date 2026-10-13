@@ -95,6 +95,36 @@ class ManagerViewModel:
         bind_legacy_terminal(canonical, self.app_data_dir)
         return self._profile(profile_id)
 
+    def resolve_profile_selection(
+        self,
+        profile_id: str | None,
+        terminal_path: Path | None,
+        *,
+        confirm_legacy_binding: bool = False,
+    ) -> TerminalProfile:
+        """Resolve Pair/Start from either a saved profile or the selected installation.
+
+        The legacy profile represents an existing single-terminal connector. Binding its
+        executable only records the path; it never moves or replaces its config/ledger.
+        """
+        if profile_id:
+            return self._profile(profile_id)
+        if terminal_path is None:
+            raise ValueError("choose a saved profile, or select a terminal and add it first")
+        canonical = validate_terminal_path(terminal_path)
+        profiles = self.profiles()
+        canonical_key = str(canonical).casefold()
+        match = next((profile for profile in profiles
+                      if profile.terminal_path and str(profile.terminal_path.resolve(strict=False)).casefold() == canonical_key), None)
+        if match:
+            return match
+        legacy = next((profile for profile in profiles if profile.legacy and not profile.terminal_path), None)
+        if legacy:
+            if not confirm_legacy_binding:
+                raise ValueError("confirm the existing account before binding its saved connector to a terminal")
+            return self.bind_legacy(legacy.profile_id, canonical)
+        return self.add_terminal(canonical)
+
     def pair_profile(self, profile_id: str, token: str, observed_identity: dict, *, confirmed: bool) -> Path:
         profile = self._profile(profile_id)
         if not profile.terminal_path:
@@ -314,6 +344,12 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             ))
         root.after(3000, refresh_status_only)
 
+    def select_saved_profile(profile_id):
+        if profile_id in profiles_box.get_children():
+            profiles_box.selection_set(profile_id)
+            profiles_box.focus(profile_id)
+            profiles_box.see(profile_id)
+
     def refresh_status_only():
         for profile_id in profiles_box.get_children():
             row = next((row for row in model.profile_rows() if row["profile_id"] == profile_id), None)
@@ -351,14 +387,15 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         try:
             legacy = next((profile for profile in model.profiles() if profile.legacy and not profile.terminal_path), None)
             if legacy:
-                model.bind_legacy(legacy.profile_id, path)
+                profile = model.bind_legacy(legacy.profile_id, path)
             else:
-                model.add_terminal(path)
+                profile = model.add_terminal(path)
             if setup_mode.get() == "multiple":
                 flow_text.set("Terminal saved. Sign in, pair it, or select another terminal to add.")
             else:
                 flow_text.set("Terminal saved. Sign in inside MT5, then pair this profile with its Mkety token.")
             refresh_profiles()
+            select_saved_profile(profile.profile_id)
         except Exception as exc:
             messagebox.showerror("Could not add terminal", str(exc), parent=root)
 
@@ -374,6 +411,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
                 profile = model.add_terminal(Path(path))
             flow_text.set(f"Added {profile.label}. Sign in inside MT5 before pairing.")
             refresh_profiles()
+            select_saved_profile(profile.profile_id)
         except Exception as exc:
             messagebox.showerror("Could not add terminal", str(exc), parent=root)
 
@@ -418,17 +456,68 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         selection = profiles_box.selection()
         return selection[0] if selection else None
 
+    def clear_saved_profile_on_terminal_input(_event=None):
+        selection = profiles_box.selection()
+        if selection:
+            profiles_box.selection_remove(*selection)
+
+    def clear_terminal_on_profile_input(_event=None):
+        terminal_list.selection_clear(0, tk.END)
+
+    # The two lists represent different actions. Clear the other list's selection
+    # after direct user input so Pair/Start always has one unambiguous target.
+    terminal_list.bind("<ButtonRelease-1>", clear_saved_profile_on_terminal_input)
+    terminal_list.bind("<KeyRelease>", clear_saved_profile_on_terminal_input)
+    profiles_box.bind("<ButtonRelease-1>", clear_terminal_on_profile_input)
+    profiles_box.bind("<KeyRelease>", clear_terminal_on_profile_input)
+
     def pair_or_start():
-        profile_id = selected_profile_id()
-        if not profile_id:
-            messagebox.showinfo("Select a profile", "Choose a saved MT5 profile first.", parent=root)
-            return
         try:
-            profile = model._profile(profile_id)
+            selected_id = selected_profile_id()
+            terminal_path = selected_terminal_path()
+            legacy_needs_binding = False
+            if not selected_id and terminal_path is not None:
+                terminal_key = str(terminal_path.resolve(strict=False)).casefold()
+                profiles = model.profiles()
+                matching_profile = any(
+                    profile.terminal_path
+                    and str(profile.terminal_path.resolve(strict=False)).casefold() == terminal_key
+                    for profile in profiles
+                )
+                legacy_needs_binding = not matching_profile and any(
+                    profile.legacy and not profile.terminal_path for profile in profiles
+                )
+
+            legacy_identity = None
+            if legacy_needs_binding:
+                legacy_identity = probe_terminal_identity(terminal_path)
+                prompt = (
+                    "This saved connector has no recorded MT5 terminal. The selected terminal is logged in as:\n\n"
+                    f"Account: {legacy_identity['accountNumber']}\nServer: {legacy_identity['serverName']}\n"
+                    f"Environment: {legacy_identity['environment'].upper()}\n\n"
+                    "Compare this with the account already connected in Mkety. Continue only if it is the same account."
+                )
+                if not messagebox.askyesno("Confirm existing MT5 account", prompt, parent=root):
+                    return
+
+            profile = model.resolve_profile_selection(
+                selected_id,
+                terminal_path,
+                confirm_legacy_binding=legacy_needs_binding,
+            )
+            profile_id = profile.profile_id
+            refresh_profiles()
+            select_saved_profile(profile_id)
             if not profile.terminal_path:
                 raise ValueError("add or bind an MT5 terminal to this profile first")
             paths = profile_paths(profile, model.app_data_dir)
             if not paths.config_path.exists():
+                if not profile.legacy and not messagebox.askokcancel(
+                    "No saved pairing found",
+                    "No existing local connector credential was found for this terminal. If this account was already connected through an older connector, cancel and verify its saved config before creating another pairing.\n\nContinue only if you intend to create a new Mkety pairing for this account.",
+                    parent=root,
+                ):
+                    return
                 identity = probe_terminal_identity(profile.terminal_path)
                 prompt = (f"Account: {identity['accountNumber']}\nServer: {identity['serverName']}\n"
                           f"Environment: {identity['environment'].upper()}\n\nIs this the account you intended to pair?")
@@ -441,6 +530,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             model.start_profile(profile_id)
             flow_text.set("Connector worker started. Verify account and sync identity in Mkety.")
             refresh_profiles()
+            select_saved_profile(profile_id)
         except Exception as exc:
             messagebox.showerror("Could not start connector", str(exc), parent=root)
 
