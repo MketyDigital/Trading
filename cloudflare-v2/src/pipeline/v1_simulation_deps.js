@@ -719,7 +719,27 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
   return {
     ...state,
     ...(refreshPendingOrderLifecycle ? { refreshPendingOrderLifecycle } : {}),
-    async accountProvider() {
+    async accountProvider(requestedWorkspaceId, _requestedEvent, requestedInterpretation, options = {}) {
+      if (requestedWorkspaceId != null && text(requestedWorkspaceId) !== workspaceId) {
+        throw new Error('simulation account provider workspace mismatch');
+      }
+      const matchedAccountIds = String(requestedInterpretation?.status || '').toUpperCase() === 'MANAGEMENT'
+        && Array.isArray(options?.matchedAccountIds)
+        ? [...new Set(options.matchedAccountIds.map(text).filter(Boolean))]
+        : [];
+      if (matchedAccountIds.length > 0) {
+        const { data, error } = await supabase
+          .from('trade_accounts')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .eq('is_active', true)
+          .in('id', matchedAccountIds);
+        if (error) throw new Error(`failed to load matched management accounts: ${error.message || 'database error'}`);
+        const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
+        // Keep the result bounded to accounts on the already-correlated groups.
+        // Do not reapply signal-symbol route filters to a symbol-less reply.
+        return matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean);
+      }
       const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation });
       if (!accountIds.length) return [];
       const { data, error } = await supabase

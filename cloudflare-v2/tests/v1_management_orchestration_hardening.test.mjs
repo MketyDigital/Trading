@@ -146,3 +146,29 @@ test('matched management fans out to every broker-bound account group for the sa
   assert.ok(result.accounts.every((account) => account.actions[0]?.type === 'CLOSE_POSITION'));
   assert.equal(persisted.length, 2);
 });
+
+test('matched management asks account provider for only accounts bound to correlated groups', async () => {
+  const requested = [];
+  const result = await orchestrateTradingEventSimulation({
+    event,
+    interpretation: { status: 'MANAGEMENT', management: { type: 'CANCEL_PENDING' } },
+    eventId: 'db-management-bound-accounts',
+    nowMs: 3000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'REPLY_TARGET', groupIds: ['group-a', 'group-b'] }) },
+    stateStore: {
+      getGroup: async (id) => plannedGroup({ id, tradeAccountId: id === 'group-a' ? 'acct-a' : 'acct-b',
+        orderType: 'LIMIT', status: 'PENDING',
+        legs: [{ legId: `${id}-leg`, targetIndex: 1, lots: 0.03, status: 'PENDING', brokerOrderId: `${id}-order` }] }),
+      putGroup: async (group) => group,
+    },
+    accountProvider: async (...args) => {
+      requested.push(args);
+      return [enabledAccount({ id: 'acct-a' }), enabledAccount({ id: 'acct-b' })];
+    },
+    instrumentProvider: async () => { throw new Error('management must not require market metadata'); },
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.deepEqual(requested[0][3], { matchedAccountIds: ['acct-a', 'acct-b'] });
+});

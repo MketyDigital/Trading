@@ -353,7 +353,8 @@ async function orchestrateMatchedManagement({
     return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
   }
 
-  const accounts = await accountProvider(event.workspace_hint, event, interpretation);
+  const matchedAccountIds = [...new Set(loaded.groups.map((group) => String(group.tradeAccountId ?? '')).filter(Boolean))];
+  const accounts = await accountProvider(event.workspace_hint, event, interpretation, { matchedAccountIds });
   const accountById = new Map((Array.isArray(accounts) ? accounts : [])
     .map((account) => [String(account?.id ?? ''), account])
     .filter(([id]) => Boolean(id)));
