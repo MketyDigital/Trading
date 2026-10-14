@@ -108,7 +108,7 @@ test('two distinct compatible incomplete trades inside 30 minutes fail closed', 
   assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'AMBIGUOUS_FAST_ENTRY_COMPLETION' });
 });
 
-test('unresolved explicit reply completes the unique compatible fast trade in its source context', () => {
+test('unresolved explicit reply can complete the unique compatible fast trade in its source context', () => {
   const request = fullEvent({ event: { thread: { reply_to_event_id: 'telegram:-1001:missing' } } });
   const result = correlateTradingEvent({
     ...request,
@@ -118,6 +118,27 @@ test('unresolved explicit reply completes the unique compatible fast trade in it
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
 });
 
+test('EURJPY full follow-up with a missing middle reply updates the earlier fast source event', () => {
+  const request = fullEvent({
+    event: {
+      workspace_hint: 'ws-1',
+      source: { instance_id: 'main signal2' },
+      external_event_id: 'telegram:-1001888176046:10208',
+      thread: { reply_to_event_id: 'telegram:-1001888176046:10207' },
+    },
+    intent: { symbol: { canonical: 'EURJPY' }, side: 'BUY' },
+  });
+  const fast = fastGroup({
+    sourceInstanceId: 'main signal2',
+    sourceEventIds: ['telegram:-1001888176046:10206'],
+    symbol: 'EURJPY',
+    side: 'BUY',
+    createdAt: now - 4 * 60 * 1000,
+    updatedAt: now - 4 * 60 * 1000,
+  });
+  const result = correlateTradingEvent({ ...request, activeGroups: [fast], nowMs: now });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
+});
 
 test('source recovery replay uses original event time to preserve the fast-to-full interval', () => {
   const occurredAt = now - 60 * 60 * 1000;
@@ -135,6 +156,49 @@ test('source recovery replay uses original event time to preserve the fast-to-fu
     nowMs: now,
   });
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'g-fast' });
+});
+
+test('opposite fast signal supersedes one recent incomplete group in the same source context', () => {
+  const request = fullEvent({ intent: { side: 'BUY', incomplete: true, fastEntry: true } });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [fastGroup({ side: 'SELL', createdAt: now - 4 * 60 * 1000, updatedAt: now - 4 * 60 * 1000 })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_SUPERSESSION', groupId: 'g-fast' });
+});
+
+test('opposite fast signal does not supersede a group outside the five minute window', () => {
+  const request = fullEvent({ intent: { side: 'BUY', incomplete: true, fastEntry: true } });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [fastGroup({ side: 'SELL', createdAt: now - 5 * 60 * 1000 - 1, updatedAt: now - 5 * 60 * 1000 - 1 })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('opposite fast signal with an unresolved reply still supersedes its unique recent source-local group', () => {
+  const request = fullEvent({
+    event: { thread: { reply_to_event_id: 'telegram:-1001:101' } },
+    intent: { side: 'BUY', incomplete: true, fastEntry: true },
+  });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [fastGroup({ side: 'SELL', createdAt: now - 60_000, updatedAt: now - 60_000 })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_SUPERSESSION', groupId: 'g-fast' });
+});
+
+test('opposite fast signal from a different source instance does not supersede', () => {
+  const request = fullEvent({ intent: { side: 'BUY', incomplete: true, fastEntry: true } });
+  const result = correlateTradingEvent({
+    ...request,
+    activeGroups: [fastGroup({ side: 'SELL', sourceInstanceId: 'other-listener' })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
 test('explicit reply completion returns the whole logical multi-account fast cohort', () => {

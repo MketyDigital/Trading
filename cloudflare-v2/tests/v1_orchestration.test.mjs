@@ -194,6 +194,42 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
   assert.deepEqual(persisted.legs.map((leg) => leg.lots), [0.09, 0.09, 0.09]);
 });
 
+test('opposite fast signal closes the superseded position before planning the replacement entry', async () => {
+  const previous = {
+    id: 'fast-sell-group', tradeAccountId: 'acct-1', workspaceId: 'workspace-1',
+    sourceInstanceId: 'listener-1', sourceEventIds: ['evt-fast-sell'],
+    symbol: 'XAUUSD', side: 'SELL', orderType: 'MARKET', entryPrice: 2500,
+    status: 'OPEN', incomplete: true, createdAt: 1000, updatedAt: 1000,
+    legs: [{ legId: 'sell-leg-1', targetIndex: 1, lots: 0.03, status: 'OPEN', brokerPositionId: 'position-sell-1' }],
+  };
+  const saved = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1', external_event_id: 'evt-fast-buy' },
+    interpretation,
+    eventId: 'db-fast-buy',
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_SUPERSESSION', groupId: previous.id }) },
+    stateStore: {
+      getGroup: async (id) => id === previous.id ? structuredClone(previous) : null,
+      putGroup: async (group) => { saved.push(structuredClone(group)); return group; },
+    },
+    accountProvider: async () => [enabledAccount()],
+    instrumentProvider: async () => instrument,
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.status, 'SIMULATED');
+  assert.equal(result.accounts[0].groupId, 'db-fast-buy:acct-1');
+  assert.equal(result.accounts[0].supersessionCloseActionCount, 1);
+  assert.deepEqual(result.accounts[0].actions.slice(0, 2).map((action) => action.type), ['CLOSE_POSITION', 'OPEN_POSITION']);
+  assert.equal(result.accounts[0].actions[0].executionGroupId, previous.id);
+  assert.equal(result.accounts[0].actions[1].targetIndex, 1);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].side, 'BUY');
+});
+
 test('reply-targeted break-even management emits simulated risk-reducing actions even under drawdown lock', async () => {
   const existing = openGroup();
   let persisted;

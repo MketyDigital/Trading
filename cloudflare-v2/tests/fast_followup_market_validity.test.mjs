@@ -229,7 +229,7 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
 
   const modify = actions.find((action) => action.type === 'MODIFY_POSITION');
   assert.equal(modify.brokerPositionId, '138490038');
-  assert.equal(modify.stopLoss, 4379);
+  assert.equal(modify.stopLoss, 4363.78);
   assert.equal(Object.hasOwn(modify, 'takeProfit'), false);
 
   const opens = actions.filter((action) => action.type === 'OPEN_POSITION');
@@ -242,6 +242,7 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
   assert.deepEqual(saved[0].entry, { kind: 'MARKET', executedPrice: 4363.78 });
   assert.deepEqual(saved[0].sourceEventIds, ['telegram:-1001:932', 'telegram:-1001:933']);
   assert.equal(saved[0].legs[0].brokerPositionId, '138490038');
-  assert.equal(saved[0].legs[0].stopLoss, 4379);
+  assert.equal(saved[0].legs[0].stopLoss, 4363.78);
   assert.equal(saved[0].legs[0].takeProfit, null);
+  assert.deepEqual(saved[0].riskPlan.logicalTakeProfits, [4361, 4355, 4335]);
 });
