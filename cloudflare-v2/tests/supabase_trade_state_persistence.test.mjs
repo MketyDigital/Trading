@@ -44,7 +44,7 @@ const group = {
   status: 'OPEN',
   incomplete: false,
   positionMode: 'HEDGED',
-  riskPlan: { totalLots: 0.02 },
+  riskPlan: { totalLots: 0.02, logicalTakeProfits: [3510, 3520] },
   policySnapshot: { allowed: true },
   createdAt: 1_700_000_000_000,
   updatedAt: 1_700_000_001_000,
@@ -69,6 +69,7 @@ test('serializes composite runtime ids beside UUID relational keys and preserves
   assert.equal(rows.group.workspace_id, group.workspaceId);
   assert.equal(rows.group.source_event_id, group.sourceEventId);
   assert.deepEqual(rows.group.source_event_ids, ['100', '101']);
+  assert.deepEqual(rows.group.risk_plan.logicalTakeProfits, [3510, 3520]);
   assert.equal(rows.legs[0].runtime_leg_id, 'leg-1');
   assert.equal(rows.legs[0].broker_position_id, 'p-1');
   assert.equal(rows.legs[0].broker_order_id, 'o-1');
@@ -115,6 +116,7 @@ test('hydrates relational rows back to canonical correlation and lifecycle state
   assert.deepEqual(hydrated.sourceEventIds, ['100', '101']);
   assert.equal(hydrated.threadId, '77');
   assert.equal(hydrated.entryPrice, 3500);
+  assert.deepEqual(hydrated.riskPlan.logicalTakeProfits, [3510, 3520]);
   assert.equal(hydrated.legs[0].legId, 'leg-1');
   assert.equal(hydrated.legs[0].brokerPositionId, 'p-1');
   assert.equal(hydrated.legs[0].brokerOrderId, 'o-1');

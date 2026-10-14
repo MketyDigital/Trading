@@ -215,23 +215,35 @@ export function buildTargetProtectionActions(group, targetIndex) {
   const index = Number(targetIndex);
   if (!Number.isInteger(index) || index < 1) throw new Error('valid targetIndex is required');
 
+  const takeProfitAt = (target) => {
+    const leg = group.legs.find((candidate) => logicalTargetIndex(candidate) === target);
+    return finiteProtection(leg?.takeProfit)
+      ?? finiteProtection(group?.riskPlan?.logicalTakeProfits?.[target - 1]);
+  };
   const hitLeg = group.legs.find((leg) => logicalTargetIndex(leg) === index);
-  if (!hitLeg || !Number.isFinite(Number(hitLeg.takeProfit))) throw new Error('target-hit takeProfit is unavailable');
+  const hitTakeProfit = takeProfitAt(index);
+  if (!hitLeg || hitTakeProfit == null) throw new Error('target-hit takeProfit is unavailable');
+  const hasSkippedLogicalTargets = Array.isArray(group?.riskPlan?.logicalTakeProfits);
 
   let protectedStop;
   if (index === 1) {
-    if (!Number.isFinite(Number(group.entryPrice))) throw new Error('entryPrice is required for TP1 protection');
+    if (finiteProtection(group.entryPrice) == null) throw new Error('entryPrice is required for TP1 protection');
     protectedStop = Number(group.entryPrice);
   } else {
-    const previousLeg = group.legs.find((leg) => logicalTargetIndex(leg) === index - 1);
-    if (!previousLeg || !Number.isFinite(Number(previousLeg.takeProfit))) {
+    const previousTakeProfit = takeProfitAt(index - 1);
+    if (previousTakeProfit == null) {
       throw new Error('previous target takeProfit is unavailable');
     }
-    protectedStop = Number(previousLeg.takeProfit);
+    protectedStop = previousTakeProfit;
   }
 
   return group.legs
-    .filter((leg) => logicalTargetIndex(leg) > index && leg.status === 'OPEN' && leg.brokerPositionId)
+    .filter((leg) => leg.status === 'OPEN' && leg.brokerPositionId
+      && (logicalTargetIndex(leg) > index
+        || (hasSkippedLogicalTargets
+          && logicalTargetIndex(leg) < index
+          && finiteProtection(leg.takeProfit) == null
+          && finiteProtection(group.riskPlan.logicalTakeProfits[logicalTargetIndex(leg) - 1]) != null)))
     .filter((leg) => !sameProtectionPrice(currentStopLoss(group, leg), protectedStop))
     .map((leg) => ({
       type: 'MODIFY_POSITION',

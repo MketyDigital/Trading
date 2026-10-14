@@ -424,6 +424,8 @@ export function correlateTradingEvent({
             && String(group.side ?? '').trim().toUpperCase() === side);
         const fallback = correlateFastCompletion(fallbackMatches);
         if (fallback) return fallback;
+        const supersession = correlateFastSupersession(scoped, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
+        if (supersession) return supersession;
       }
       const supersession = correlateFastSupersession(replyMatches, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
       if (supersession) return supersession;
@@ -460,6 +462,8 @@ export function correlateTradingEvent({
             && String(group.side ?? '').trim().toUpperCase() === side);
         const fallback = correlateFastCompletion(fallbackMatches);
         if (fallback) return fallback;
+        const supersession = correlateFastSupersession(scoped, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
+        if (supersession) return supersession;
       }
       const supersession = correlateFastSupersession(threadMatches, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
       if (supersession) return supersession;

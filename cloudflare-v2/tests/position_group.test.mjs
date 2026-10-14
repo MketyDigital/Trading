@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateVolumeAcrossTargets, buildPositionGroup, reconcileFastEntry, buildManagementActions } from '../src/execution/position_group.js';
+import { allocateVolumeAcrossTargets, buildPositionGroup, reconcileFastEntry, buildManagementActions, buildTargetProtectionActions } from '../src/execution/position_group.js';
 
 const intent = {
   side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD', source: 'GOLD' }, entry: { kind: 'PRICE', value: 2526 },
@@ -49,6 +49,18 @@ test('generates break-even changes only for remaining open legs and retains symb
     { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '2', targetIndex: undefined, brokerPositionId: 'p2', symbol: 'XAUUSD', side: undefined, entryPrice: 2526, stopLoss: 2526 },
     { type: 'MODIFY_POSITION', managementType: 'MOVE_SL_TO_BE', legId: '3', targetIndex: undefined, brokerPositionId: 'p3', symbol: 'XAUUSD', side: undefined, entryPrice: 2526, stopLoss: 2526 }
   ]);
+});
+
+test('standard target progression does not modify an earlier leg that has no TP', () => {
+  const group = {
+    symbol: 'XAUUSD', entryPrice: 2526,
+    legs: [
+      { legId: '1', targetIndex: 1, brokerPositionId: 'p1', status: 'OPEN', takeProfit: null, stopLoss: 2500 },
+      { legId: '2', targetIndex: 2, brokerPositionId: 'p2', status: 'OPEN', takeProfit: 2535, stopLoss: 2500 },
+      { legId: '3', targetIndex: 3, brokerPositionId: 'p3', status: 'OPEN', takeProfit: 2545, stopLoss: 2535 },
+    ],
+  };
+  assert.deepEqual(buildTargetProtectionActions(group, 3), []);
 });
 
 test('full close actions preserve each open leg volume, identity, and symbol context', () => {

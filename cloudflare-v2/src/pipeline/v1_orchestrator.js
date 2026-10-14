@@ -156,10 +156,10 @@ function finitePositive(value) {
 }
 
 function fastCompletionProtectionReference(group, currentMarketPrice) {
-  return finitePositive(group?.entryPrice)
+  return finitePositive(currentMarketPrice)
+    ?? finitePositive(group?.entryPrice)
     ?? finitePositive(group?.entry?.executedPrice)
-    ?? finitePositive(group?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice)
-    ?? finitePositive(currentMarketPrice);
+    ?? finitePositive(group?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice);
 }
 
 function protectionValueValidAtMarket(side, kind, value, currentMarketPrice) {
@@ -196,6 +196,49 @@ function progressiveFastIntent(existing = {}, incoming = {}) {
   };
 }
 
+function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
+  const references = [
+    finitePositive(currentMarketPrice),
+    finitePositive(existing?.entryPrice),
+    finitePositive(existing?.entry?.executedPrice),
+    finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice),
+  ].filter((value) => value != null);
+  if (references.length === 0 || !Array.isArray(intent?.takeProfits) || intent.takeProfits.length === 0) {
+    return { intent, logicalTakeProfits: null };
+  }
+  const side = String(intent.side || existing?.side || '').toUpperCase();
+  let changed = false;
+  const passedIndexes = [];
+  const takeProfits = intent.takeProfits.map((value, index) => {
+    if (finitePositive(value) == null || references.every((reference) => protectionValueValidAtMarket(side, 'takeProfit', value, reference))) return value;
+    changed = true;
+    passedIndexes.push(index + 1);
+    return null;
+  });
+  if (!changed) return { intent, logicalTakeProfits: null };
+
+  let passedPrefixLength = 0;
+  while (passedIndexes.includes(passedPrefixLength + 1)) passedPrefixLength += 1;
+  const entryReference = finitePositive(intent.entry?.value)
+    ?? finitePositive(intent.entry?.referencePrice)
+    ?? finitePositive(existing?.entryPrice)
+    ?? finitePositive(existing?.entry?.executedPrice)
+    ?? finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice)
+    ?? references[0];
+  const breakEvenStop = passedPrefixLength > 1
+    ? finitePositive(intent.takeProfits[passedPrefixLength - 2]) ?? entryReference
+    : passedPrefixLength === 1 ? entryReference : null;
+
+  return {
+    intent: {
+      ...intent,
+      takeProfits,
+      ...(breakEvenStop == null ? {} : { stopLoss: breakEvenStop }),
+    },
+    logicalTakeProfits: [...intent.takeProfits],
+  };
+}
+
 function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
@@ -215,6 +258,13 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     ...(event?.external_event_id != null ? [String(event.external_event_id)] : []),
   ])];
   desired.incomplete = Boolean(plan.intent?.incomplete);
+  if (Array.isArray(plan.logicalTakeProfits)) {
+    desired.riskPlan = {
+      ...(desired.riskPlan && typeof desired.riskPlan === 'object' ? desired.riskPlan : {}),
+      ...(existing.riskPlan && typeof existing.riskPlan === 'object' ? existing.riskPlan : {}),
+      logicalTakeProfits: [...plan.logicalTakeProfits],
+    };
+  }
 
   const existingByTarget = new Map(
     (existing.legs || [])
@@ -322,6 +372,7 @@ function managementAuditGroup(group, event, nowMs, management = null) {
       next.legs = next.legs.map((leg) => {
         const targetIndex = Number(leg.targetIndex);
         if (!Number.isInteger(targetIndex) || targetIndex > hitIndex) return leg;
+        if (finitePositive(leg.takeProfit) == null) return leg;
         return {
           ...leg,
           status: 'CLOSED',
@@ -752,15 +803,22 @@ export async function orchestrateTradingEventSimulation({
     }
 
     let plan;
+    let completionIntent = planningIntent;
+    let logicalTakeProfits = null;
     const groupId = isFastCompletion && matchedGroup
       ? matchedGroup.id
       : `${eventId || event.external_event_id || 'event'}:${account.id}`;
     try {
-      plan = buildExecutionPlan(planningIntent, {
+      if (isFastCompletion && matchedGroup) {
+        const prepared = prepareFastCompletionIntent(matchedGroup, planningIntent, currentMarketPrice);
+        completionIntent = prepared.intent;
+        logicalTakeProfits = prepared.logicalTakeProfits;
+      }
+      plan = buildExecutionPlan(completionIntent, {
         account,
         instrument,
         currentMarketPrice,
-        ...(isFastCompletion && matchedGroup ? {
+        ...(matchedGroup ? {
           protectionReferencePrice: fastCompletionProtectionReference(matchedGroup, currentMarketPrice),
         } : {}),
         groupId,
@@ -787,7 +845,11 @@ export async function orchestrateTradingEventSimulation({
     if (isFastCompletion && matchedGroup) {
       let reconciliation;
       try {
-        reconciliation = reconcilePlannedFastEntry(matchedGroup, { ...plan, intent: planningIntent }, {
+        reconciliation = reconcilePlannedFastEntry(matchedGroup, {
+          ...plan,
+          intent: completionIntent,
+          logicalTakeProfits,
+        }, {
           event,
           eventId,
           account,
