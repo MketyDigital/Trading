@@ -52,7 +52,7 @@ function classifyCTrader(leg, snapshot) {
   const protectiveOrders = orders.filter((order) => order?.closingOrder === true
     && order?.isStopOut !== true
     && ['4', 'STOP_LOSS_TAKE_PROFIT', 'STOP_LOSS/TAKE_PROFIT'].includes(text(order?.orderType).toUpperCase())
-    && approx(order?.takeProfit, target, Math.max(tickSize / 2, 1e-9)));
+    && (number(order?.takeProfit) == null || approx(order?.takeProfit, target, Math.max(tickSize / 2, 1e-9))));
   if (protectiveOrders.length !== orders.length || protectiveOrders.length === 0) return unresolved('BROKER_CLOSE_NOT_CONFIRMED_AS_TP');
   const stop = number(leg?.stopLoss);
   const priceTolerance = Math.max(tickSize * 1.5, 1e-9);

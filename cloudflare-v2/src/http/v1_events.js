@@ -14,6 +14,7 @@ import { createV1DestinationDeliveryStore } from '../destinations/v1_destination
 import { runV1DestinationDeliveryAcceptanceStage } from '../destinations/v1_destination_delivery_acceptance.js';
 import { createOperationJournalStore } from '../operations/operation_journal.js';
 import { buildV1LifecycleEvidence, appendV1LifecycleEvidenceBestEffort } from '../operations/v1_lifecycle_evidence.js';
+import { resolveTradingAccessRuntimeControl, resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
 
 const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
 
@@ -82,6 +83,8 @@ export async function handleV1EventsRequest(request, env = {}, {
   executeProductionFn = executeProductionPlan,
   tradingAccessControlResolver,
   brokerExecutionControlResolver,
+  recoveryTradingAccessControlResolver = resolveTradingAccessRuntimeControl,
+  recoveryBrokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
   destinationStoreFactory = createV1DestinationDeliveryStore,
   destinationStageFn = runV1DestinationDeliveryAcceptanceStage,
   operationJournalStoreFactory = createOperationJournalStore,
@@ -162,6 +165,26 @@ export async function handleV1EventsRequest(request, env = {}, {
         ? { ...result, destinations }
         : result;
       return json(responseBody, result?.ok ? 200 : Number(result?.status || 500));
+    }
+
+    // A queued/manual recovery must re-read the authoritative global controls
+    // immediately before planning. This prevents a replay from persisting a
+    // PLANNED group after an operator has turned trading or broker execution off.
+    if (duplicateReplayRequested) {
+      const [tradingControl, brokerControl] = await Promise.all([
+        recoveryTradingAccessControlResolver({ env, supabase }),
+        recoveryBrokerExecutionControlResolver({ env, supabase }),
+      ]);
+      let recoveryBlockReason = null;
+      if (tradingControl?.ok !== true) recoveryBlockReason = 'TRADING_RUNTIME_CONTROL_UNAVAILABLE';
+      else if (tradingControl.enabled !== true) recoveryBlockReason = 'TRADING_ACCESS_DISABLED';
+      else if (brokerControl?.ok !== true) recoveryBlockReason = 'BROKER_RUNTIME_CONTROL_UNAVAILABLE';
+      else if (brokerControl.enabled !== true) recoveryBlockReason = 'BROKER_OWNER_SWITCH_OFF';
+      if (recoveryBlockReason) {
+        const simulation = { ...blockedSimulation(), reason: recoveryBlockReason };
+        await journalLifecycle({ result, destinations: skippedDuplicateDestinationStage(), simulation });
+        return json({ ...result, simulation, execution: { status: recoveryBlockReason } }, 200);
+      }
     }
 
     // Destination delivery is independent of broker planning/execution. Start it

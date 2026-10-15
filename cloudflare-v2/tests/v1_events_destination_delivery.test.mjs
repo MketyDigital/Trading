@@ -36,6 +36,8 @@ function dependencies(overrides = {}) {
     simulationDepsFactory: async () => ({}),
     orchestrateFn: async () => ({ status: 'NO_ACTION', executionEnabled: false, actions: [], accounts: [] }),
     executionStageFn: async () => ({ status: 'TRADING_ACCESS_DISABLED', executionEnabled: false }),
+    recoveryTradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
+    recoveryBrokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     ...overrides,
   };
 }
