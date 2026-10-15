@@ -4,6 +4,7 @@ import { normalizeSymbol, normalizeOrderIntent, normalizePrice, normalizeVolumeF
 
 test('normalizes common cross-broker symbol aliases without losing source symbol', () => {
   assert.deepEqual(normalizeSymbol('GOLD'), { canonical: 'XAUUSD', source: 'GOLD' });
+  assert.equal(normalizeSymbol('GPBAUD').canonical, 'GBPAUD');
   assert.deepEqual(normalizeSymbol('XAU/USD'), { canonical: 'XAUUSD', source: 'XAU/USD' });
   assert.equal(normalizeSymbol('XAUUSD.m').canonical, 'XAUUSD');
   assert.equal(normalizeSymbol('DJ30').canonical, 'US30');
