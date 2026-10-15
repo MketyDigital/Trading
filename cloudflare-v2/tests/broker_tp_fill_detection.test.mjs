@@ -44,6 +44,16 @@ test('cTrader allows broker slippage only when the fill is clearly closer to TP 
   assert.equal(result.status, 'TP_CONFIRMED');
 });
 
+test('cTrader accepts a protective close with omitted order TP only when the fill itself proves TP over SL', () => {
+  const result = classifyBrokerTpFill({ platform: 'ctrader', leg, snapshot: {
+    accountId: 'acct-1', positionId: 'p-1', isOpen: false, initialLots: 1, closedLots: 1,
+    deals: [{ dealId: 'd-2', positionId: 'p-1', lots: 1, executionPrice: 1.12 }],
+    closingOrders: [{ orderId: 'o-1', positionId: 'p-1', closingOrder: true, orderType: 'STOP_LOSS_TAKE_PROFIT', takeProfit: null, stopLoss: null }],
+    tickSize: 0.00001,
+  } });
+  assert.equal(result.status, 'TP_CONFIRMED');
+});
+
 test('cTrader refuses SL, manual close, partial fill, missing close order, and ambiguous execution price', () => {
   const base = { accountId: 'acct-1', positionId: 'p-1', isOpen: false, initialLots: 1, closedLots: 1,
     deals: [{ dealId: 'd-2', positionId: 'p-1', lots: 1, executionPrice: 1.12 }],
@@ -54,5 +64,6 @@ test('cTrader refuses SL, manual close, partial fill, missing close order, and a
     { ...base, closedLots: 0.5, deals: [{ ...base.deals[0], lots: 0.5 }] },
     { ...base, deals: [{ ...base.deals[0], executionPrice: 1.11 }] },
     { ...base, closingOrders: [{ ...base.closingOrders[0], closingOrder: false }] },
+    { ...base, closingOrders: [{ ...base.closingOrders[0], takeProfit: 1.13 }] },
   ]) assert.equal(classifyBrokerTpFill({ platform: 'ctrader', leg, snapshot }).status, 'UNRESOLVED');
 });

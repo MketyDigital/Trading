@@ -204,6 +204,8 @@ test('recovery marker orchestrates duplicate only when persisted recovery contex
     simulationDepsFactory: async () => ({ safe: true }),
     orchestrateFn: async () => { called = true; return { status: 'SIMULATED', accounts: [] }; },
     orchestrateDuplicates: true,
+    recoveryTradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
+    recoveryBrokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
   });
   const body = await response.json();
   assert.equal(response.status, 200);

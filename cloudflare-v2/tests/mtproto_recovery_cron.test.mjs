@@ -6,10 +6,11 @@ import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 const RECOVERY_CRON = '* * * * *';
 const LEGACY_CRON = '*/15 * * * *';
 
-test('one-minute cron runs MTProto, destination retry, state binding repair, pending lifecycle, and broker TP protection independently', async () => {
+test('one-minute cron runs MTProto, orphan signals, destination retry, state binding repair, pending lifecycle, and broker TP protection independently', async () => {
   let mtprotoCalls = 0;
   let destinationCalls = 0;
   let bindingRepairCalls = 0;
+  let orphanRecoveryCalls = 0;
   let legacyCalls = 0;
   const entry = createTradingV1Entrypoint({
     legacy: {
@@ -19,6 +20,7 @@ test('one-minute cron runs MTProto, destination retry, state binding repair, pen
     recoveryRuntime: async () => { mtprotoCalls += 1; return { checked: 1 }; },
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'BROKER_EXECUTION_DISABLED' }; },
     bindingRepairRuntime: async () => { bindingRepairCalls += 1; return { scanned: 1, repaired: 1, failed: 0 }; },
+    orphanSignalRecoveryRuntime: async () => { orphanRecoveryCalls += 1; return { enqueued: 1 }; },
     brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
   });
 
@@ -29,6 +31,7 @@ test('one-minute cron runs MTProto, destination retry, state binding repair, pen
 
   assert.deepEqual(result, {
     mtprotoRecovery: 'fulfilled',
+    orphanSignalRecovery: 'fulfilled',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
     pendingOrderLifecycle: 'fulfilled',
@@ -37,6 +40,7 @@ test('one-minute cron runs MTProto, destination retry, state binding repair, pen
   assert.equal(mtprotoCalls, 1);
   assert.equal(destinationCalls, 1);
   assert.equal(bindingRepairCalls, 1);
+  assert.equal(orphanRecoveryCalls, 1);
   assert.equal(legacyCalls, 0);
 });
 
@@ -46,6 +50,7 @@ test('one recovery failure cannot prevent sibling one-minute recovery runtimes',
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => new Response('ok') },
     recoveryRuntime: async () => { throw new Error('mtproto failure'); },
+    orphanSignalRecoveryRuntime: async () => ({ enqueued: 1 }),
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'COMPLETED' }; },
     bindingRepairRuntime: async () => { bindingRepairCalls += 1; return { repaired: 1 }; },
     brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
@@ -56,6 +61,7 @@ test('one recovery failure cannot prevent sibling one-minute recovery runtimes',
   assert.equal(bindingRepairCalls, 1);
   assert.deepEqual(result, {
     mtprotoRecovery: 'rejected',
+    orphanSignalRecovery: 'fulfilled',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'fulfilled',
     pendingOrderLifecycle: 'fulfilled',
@@ -69,6 +75,7 @@ test('state binding repair failure cannot prevent MTProto or destination retry r
   const entry = createTradingV1Entrypoint({
     legacy: { fetch: async () => new Response('ok') },
     recoveryRuntime: async () => { mtprotoCalls += 1; return { checked: 1 }; },
+    orphanSignalRecoveryRuntime: async () => ({ enqueued: 1 }),
     destinationRetryRuntime: async () => { destinationCalls += 1; return { status: 'COMPLETED' }; },
     bindingRepairRuntime: async () => { throw new Error('state unavailable'); },
     brokerTpProtectionRuntime: async () => ({ status: 'ok' }),
@@ -79,6 +86,7 @@ test('state binding repair failure cannot prevent MTProto or destination retry r
   assert.equal(destinationCalls, 1);
   assert.deepEqual(result, {
     mtprotoRecovery: 'fulfilled',
+    orphanSignalRecovery: 'fulfilled',
     destinationRetryRecovery: 'fulfilled',
     bindingRepairRecovery: 'rejected',
     pendingOrderLifecycle: 'fulfilled',

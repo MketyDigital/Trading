@@ -42,6 +42,8 @@ test('internal queue replay can re-orchestrate an authenticated duplicate using 
       interpretation,
     }),
     orchestrateDuplicates: true,
+    recoveryTradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
+    recoveryBrokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     simulationDepsFactory: async () => ({ safe: true }),
     orchestrateFn: async () => {
       orchestrated += 1;
@@ -54,6 +56,29 @@ test('internal queue replay can re-orchestrate an authenticated duplicate using 
   assert.equal(orchestrated, 1);
   assert.equal(body.duplicate, true);
   assert.equal(body.simulation.status, 'SIMULATED');
+});
+
+test('recovery rechecks persisted controls immediately before orchestration and leaves no planned group', async () => {
+  let orchestrated = 0;
+  const response = await handleV1EventsRequest(request(), { TRADING_MASTER_KEY: 'master' }, {
+    supabaseFactory: async () => ({ from() {} }),
+    storesFactory: () => ({ sourceStore: {}, eventStore: {} }),
+    ingestFn: async () => ({
+      ok: true, duplicate: true, recoveryReady: true, eventId: 'event-db-1',
+      event: { workspace_hint: 'ws-1' },
+      interpretation: { status: 'READY', intent: { incomplete: false, stopLoss: 1, takeProfits: [2] } },
+    }),
+    orchestrateDuplicates: true,
+    recoveryTradingAccessControlResolver: async () => ({ ok: true, enabled: false }),
+    recoveryBrokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
+    orchestrateFn: async () => { orchestrated += 1; return {}; },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(orchestrated, 0);
+  assert.equal(body.simulation.status, 'BLOCKED');
+  assert.equal(body.simulation.reason, 'TRADING_ACCESS_DISABLED');
+  assert.equal(body.execution.status, 'TRADING_ACCESS_DISABLED');
 });
 
 test('public duplicate requests remain no-op even when event and interpretation are available', async () => {

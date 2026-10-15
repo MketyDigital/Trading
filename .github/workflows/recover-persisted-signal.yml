@@ -1,0 +1,47 @@
+name: Recover Persisted Trading Signal
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: Persisted complete READY trading event UUID to recover
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recover-persisted-signal-${{ inputs.event_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    env:
+      RECOVERY_EVENT_ID: ${{ inputs.event_id }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
+      TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
+      TRADING_WORKER_BASE_URL: https://trade.mkety.com
+    steps:
+      - name: Checkout main only
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Refuse non-main recovery
+        run: test "$(git branch --show-current)" = "main"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Recover exact persisted signal through signed idempotent ingress
+        run: node scripts/recover_persisted_signal.mjs

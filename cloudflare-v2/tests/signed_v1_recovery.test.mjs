@@ -68,6 +68,8 @@ test('authenticated recovery-marked duplicate re-enters orchestration while ordi
       interpretation: { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } },
     }),
     simulationDepsFactory: async () => ({}),
+    recoveryTradingAccessControlResolver: async () => ({ ok: true, enabled: true }),
+    recoveryBrokerExecutionControlResolver: async () => ({ ok: true, enabled: true }),
     orchestrateFn: async () => {
       calls += 1;
       return { status: 'SIMULATED', executionEnabled: false, actions: [], accounts: [] };
