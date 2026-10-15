@@ -61,6 +61,32 @@ test('writes every state mutation through to durable relational persistence', as
   assert.equal(persisted.updatedAt, now + 2);
 });
 
+test('broker observations update authoritative state monotonically and cannot roll back to an older poll', async () => {
+  const persistence = new MemoryPersistence();
+  const store = new TradeStateStore(new MemoryStorage(), { persistence });
+  await store.putGroup(fastGroup());
+
+  const newer = await store.recordBrokerObservation('g1', 'leg-1', {
+    observedAt: now + 200,
+    status: 'TP_CONFIRMED',
+    sourceVersion: null,
+    dealIds: ['deal-2'],
+  });
+  const older = await store.recordBrokerObservation('g1', 'leg-1', {
+    observedAt: now + 100,
+    status: 'UNRESOLVED',
+    sourceVersion: 'BROKER_POSITION_HISTORY_UNAVAILABLE',
+    dealIds: [],
+  });
+
+  assert.equal(newer.outcome, 'APPLIED');
+  assert.equal(older.outcome, 'STALE');
+  const leg = (await store.getGroup('g1')).legs[0];
+  assert.equal(leg.lastBrokerObservedAt, now + 200);
+  assert.equal(leg.lastBrokerStatus, 'TP_CONFIRMED');
+  assert.deepEqual(leg.brokerDealIds, ['deal-2']);
+});
+
 test('recovers an individual group from relational persistence when local durable state is missing', async () => {
   const persistence = new MemoryPersistence([fastGroup()]);
   const storage = new MemoryStorage();

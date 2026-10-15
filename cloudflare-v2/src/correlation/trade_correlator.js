@@ -437,7 +437,7 @@ export function correlateTradingEvent({
     }
     const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
     if (target) return target;
-    if (scoped.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+    if (interpretation.status === 'READY' && interpretation.intent?.incomplete === false) {
       return { status: 'NEW_GROUP' };
     }
     return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };
@@ -475,7 +475,7 @@ export function correlateTradingEvent({
     }
     const target = matchedManagementTarget(threadMatches, 'THREAD_TARGET', 'AMBIGUOUS_THREAD_TARGET');
     if (target) return target;
-    if (scoped.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
+    if (interpretation.status === 'READY' && interpretation.intent?.incomplete === false) {
       return { status: 'NEW_GROUP' };
     }
     return { status: 'NEEDS_REVIEW', reason: 'NO_THREAD_TARGET' };

@@ -411,6 +411,42 @@ export class TradeStateStore {
     group.updatedAt = Number(nowMs);
     return this.putGroup(group);
   }
+
+  async recordBrokerObservation(groupId, legId, observation = {}) {
+    const group = await this.getGroup(groupId);
+    if (!group) throw new Error('position group not found');
+    const index = group.legs.findIndex((leg) => String(leg.legId) === String(legId));
+    if (index < 0) throw new Error('position leg not found');
+    const observedAt = Number(observation.observedAt);
+    const status = String(observation.status || '').trim().toUpperCase();
+    if (!(Number.isFinite(observedAt) && observedAt >= 0) || !status || status.length > 80) {
+      throw new TypeError('valid broker observation is required');
+    }
+    const current = group.legs[index];
+    const priorObservedAt = Number(current.lastBrokerObservedAt);
+    if (Number.isFinite(priorObservedAt) && observedAt < priorObservedAt) {
+      return { outcome: 'STALE', group };
+    }
+    const sourceVersion = observation.sourceVersion == null ? null : String(observation.sourceVersion).slice(0, 200);
+    const dealIds = Array.isArray(observation.dealIds)
+      ? [...new Set(observation.dealIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 100)
+      : [];
+    if (Number.isFinite(priorObservedAt) && observedAt === priorObservedAt) {
+      const same = String(current.lastBrokerStatus || '').toUpperCase() === status
+        && (current.lastBrokerSourceVersion ?? null) === sourceVersion
+        && JSON.stringify(current.brokerDealIds || []) === JSON.stringify(dealIds.length ? dealIds : (current.brokerDealIds || []));
+      return { outcome: same ? 'UNCHANGED' : 'STALE', group };
+    }
+    const nextLeg = {
+      ...current,
+      lastBrokerObservedAt: observedAt,
+      lastBrokerStatus: status,
+      lastBrokerSourceVersion: sourceVersion,
+      ...(dealIds.length ? { brokerDealIds: dealIds } : {}),
+    };
+    group.legs = group.legs.map((leg, legIndex) => legIndex === index ? nextLeg : { ...leg });
+    return { outcome: 'APPLIED', group: await this.putGroup(group) };
+  }
 }
 
 export class TradeStateCoordinator {

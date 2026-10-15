@@ -115,6 +115,18 @@ export class TradeStateNode {
       return json(result);
     }
 
+    const brokerObservationMatch = path.match(/^\/groups\/([^/]+)\/legs\/([^/]+)\/broker-observation$/);
+    if (method === 'POST' && brokerObservationMatch) {
+      if (!headerWorkspaceId) return json({ error: 'workspace header required' }, 400);
+      const payload = await body(request) || {};
+      const result = await store.recordBrokerObservation(
+        decodeURIComponent(brokerObservationMatch[1]),
+        decodeURIComponent(brokerObservationMatch[2]),
+        payload,
+      );
+      return json(result);
+    }
+
     const groupMatch = path.match(/^\/groups\/([^/]+)$/);
     if (method === 'GET' && groupMatch) {
       const group = await store.getGroup(decodeURIComponent(groupMatch[1]));
