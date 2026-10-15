@@ -89,3 +89,71 @@ test('detected TP1 and TP2 fills reach the existing stop progression planner', a
   assert.deepEqual(tp2.accounts[0].actions.map((action) => [action.brokerPositionId, action.stopLoss]), [['p3', 1.12]]);
   assert.equal(group.legs[1].status, 'CLOSED');
 });
+
+test('polls only the next open target in a group so stale later legs cannot exhaust the scan', async () => {
+  const reads = [];
+  const { run } = runtime({
+    loadCandidates: async () => [
+      { ...candidate, legId: 'l3', targetIndex: 3, brokerPositionId: 'p3', takeProfit: 1.16 },
+      { ...candidate, legId: 'l1', targetIndex: 1, brokerPositionId: 'p1', takeProfit: 1.12 },
+      { ...candidate, legId: 'l2', targetIndex: 2, brokerPositionId: 'p2', takeProfit: 1.14 },
+    ],
+    readPositionCloseStatus: async ({ candidate: row }) => {
+      reads.push(row.legId);
+      return { ...snapshot, positionId: row.brokerPositionId, isOpen: true, closedLots: 0, deals: [] };
+    },
+  });
+
+  const result = await run({});
+  assert.deepEqual(reads, ['l1']);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.skipped, 1);
+});
+
+test('reports the broker classification for every observed next target without blocking protection', async () => {
+  const observations = [];
+  const { run } = runtime({
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    recordObservation: async (observation) => { observations.push(observation); },
+  });
+
+  const result = await run({});
+  assert.equal(result.skipped, 1);
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0].candidate.legId, 'l1');
+  assert.equal(observations[0].status, 'UNRESOLVED');
+  assert.equal(observations[0].reason, 'BROKER_POSITION_IDENTITY_MISMATCH');
+});
+
+test('bounds the default minute scan so broker history polling cannot overrun the cron', async () => {
+  const candidates = Array.from({ length: 51 }, (_, index) => ({
+    ...candidate,
+    groupId: `g-${String(index).padStart(2, '0')}`,
+    legId: `l-${index}`,
+    brokerPositionId: String(1000 + index),
+  }));
+  const { run } = runtime({
+    loadCandidates: async () => candidates,
+    readPositionCloseStatus: async ({ candidate: row }) => ({
+      ...snapshot,
+      positionId: row.brokerPositionId,
+      isOpen: true,
+      closedLots: 0,
+      deals: [],
+    }),
+  });
+
+  const result = await run({});
+  assert.equal(result.scanned, 50);
+});
+
+test('passes the current minute as the database page seed so rotation happens before any loader cap', async () => {
+  let options;
+  const { run } = runtime({
+    loadCandidates: async (input) => { options = input; return []; },
+    clock: () => 4 * 60_000,
+  });
+
+  await run({});
+  assert.deepEqual(options, { limit: 50, pageSeed: 4 });
+});

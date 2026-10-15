@@ -78,7 +78,9 @@ test('serializes composite runtime ids beside UUID relational keys and preserves
   assert.equal(rows.legs[0].requested_lots, 0.01);
   assert.equal(rows.legs[0].executed_lots, 0.01);
   assert.equal(rows.legs[0].remaining_lots, 0.01);
-  assert.deepEqual(rows.legs.map((row) => row.broker_deal_ids), [[], []]);
+  assert.deepEqual(rows.legs.map((row) => row.broker_deal_ids), [undefined, undefined]);
+  assert.equal(Object.hasOwn(rows.legs[0], 'last_broker_status'), false);
+  assert.equal(Object.hasOwn(rows.legs[0], 'last_broker_source_version'), false);
   assert.equal(rows.legs[1].lifecycle_tracking_enabled, true);
 });
 
@@ -86,6 +88,24 @@ test('does not write a non-UUID external source id into the UUID source_event_id
   const rows = groupToPersistenceRows({ ...group, sourceEventId: 'telegram:-1001822170589:25151' });
   assert.equal(rows.group.source_event_id, undefined);
   assert.equal(rows.group.runtime_group_id, group.id);
+});
+
+test('stale hydrated null observation fields cannot erase newer broker evidence on upsert', () => {
+  const rows = groupToPersistenceRows({
+    ...group,
+    legs: [{
+      ...group.legs[0],
+      lastBrokerObservedAt: null,
+      lastBrokerSourceVersion: null,
+      lastBrokerStatus: null,
+      lastBrokerSnapshotFingerprint: null,
+      brokerDealIds: [],
+    }],
+  });
+  const row = rows.legs[0];
+  assert.equal(Object.hasOwn(row, 'last_broker_observed_at'), false);
+  assert.equal(Object.hasOwn(row, 'last_broker_status'), false);
+  assert.equal(Object.hasOwn(row, 'broker_deal_ids'), false);
 });
 
 test('allows fully closed legs to persist with zero remaining lots', () => {
@@ -152,4 +172,46 @@ test('round trips lifecycle child identity and broker observation metadata while
   assert.equal(hydratedLegacy.lifecycleRole, null);
   assert.equal(hydratedLegacy.logicalTargetIndex, undefined);
   assert.equal(hydratedLegacy.lifecycleTrackingEnabled, false);
+});
+
+test('broker TP candidate scan rotates its bounded page in the database and expands selected groups to their first target', async () => {
+  const calls = [];
+  const rawRows = [
+    { workspace_id: 'w1', position_group_id: 'db-g2', runtime_leg_id: 'g2-l2', logical_target_index: 2, broker_position_id: 'p22', take_profit: 1.2,
+      position_groups: { runtime_group_id: 'g2', trade_account_id: 'a1', source_event_id: 'e2', canonical_symbol: 'EURUSD', side: 'BUY', order_type: 'MARKET', status: 'OPEN' } },
+  ];
+  const expandedRows = [
+    { ...rawRows[0], runtime_leg_id: 'g2-l1', logical_target_index: 1, broker_position_id: 'p21', take_profit: 1.1 },
+    rawRows[0],
+  ];
+  let awaited = 0;
+  const supabase = { from(table) {
+    assert.equal(table, 'position_legs');
+    const builder = {
+      select(value, options) { calls.push(['select', value, options]); return this; },
+      eq(...args) { calls.push(['eq', ...args]); return this; },
+      not(...args) { calls.push(['not', ...args]); return this; },
+      in(...args) { calls.push(['in', ...args]); return this; },
+      order(...args) { calls.push(['order', ...args]); return this; },
+      range(...args) { calls.push(['range', ...args]); return this; },
+      then(resolve) {
+        awaited += 1;
+        const result = awaited === 1
+          ? { data: null, count: 6, error: null }
+          : awaited === 2
+            ? { data: rawRows, error: null }
+            : { data: expandedRows, error: null };
+        return Promise.resolve(result).then(resolve);
+      },
+    };
+    return builder;
+  } };
+  const persistence = new SupabaseTradeStatePersistence(supabase);
+
+  const candidates = await persistence.listBrokerTpProtectionCandidates({ pageSize: 2, pageSeed: 4 });
+
+  assert.ok(calls.some((call) => call[0] === 'select' && call[2]?.count === 'exact' && call[2]?.head === true));
+  assert.ok(calls.some((call) => call[0] === 'range' && call[1] === 2 && call[2] === 3));
+  assert.ok(calls.some((call) => call[0] === 'in' && call[1] === 'position_group_id' && call[2][0] === 'db-g2'));
+  assert.deepEqual(candidates.map((row) => row.legId), ['g2-l1', 'g2-l2']);
 });

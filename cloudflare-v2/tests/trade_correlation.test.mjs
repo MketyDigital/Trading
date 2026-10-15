@@ -363,7 +363,7 @@ test('self-contained READY reply with no active broker trade starts a new group'
   assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
-test('unmatched READY reply still fails closed when another active trade exists', () => {
+test('complete READY reply opens a new group when its reply target is absent and active trades are unrelated', () => {
   const result = correlateTradingEvent({
     event: {
       source: { instance_id: 'listener-1' },
@@ -386,7 +386,7 @@ test('unmatched READY reply still fails closed when another active trade exists'
     activeGroups: [group()],
     nowMs: now,
   });
-  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
 

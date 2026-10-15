@@ -12,7 +12,7 @@ function queryResult(data) {
 }
 
 test('broker TP production runtime records a stable event then invokes the existing orchestration and execution stages', async () => {
-  const calls = { upserts: [], simulation: [], orchestrated: [], executed: [] };
+  const calls = { upserts: [], simulation: [], orchestrated: [], executed: [], observations: [] };
   const supabase = { from(table) {
     if (table === 'trading_events') {
       const q = queryResult(table === 'trading_events' && calls.upserts.length
@@ -62,7 +62,14 @@ test('broker TP production runtime records a stable event then invokes the exist
     return chain;
   };
 
-  const result = await runtime({});
+  const stateStub = { async fetch(url, options) {
+    calls.observations.push({ url: String(url), body: JSON.parse(options.body) });
+    return Response.json({ outcome: 'APPLIED' });
+  } };
+  const result = await runtime({
+    TRADE_STATE_INTERNAL_TOKEN: 'state-token',
+    TRADE_STATE_NAMESPACE: { idFromName: (id) => id, get: () => stateStub },
+  });
   assert.equal(result.confirmed, 1);
   assert.equal(result.applied, 1);
   assert.equal(calls.upserts.length, 1);
@@ -72,4 +79,8 @@ test('broker TP production runtime records a stable event then invokes the exist
   assert.equal(calls.simulation[0].sourceId, 'source-1');
   assert.equal(calls.orchestrated[0].input.interpretation.management.brokerPositionId, '7001');
   assert.equal(calls.executed[0].result.eventId, 'persisted-tp-event');
+  assert.equal(calls.observations.length, 1);
+  assert.match(calls.observations[0].url, /\/groups\/group-1\/legs\/leg-1\/broker-observation$/);
+  assert.equal(calls.observations[0].body.status, 'TP_CONFIRMED');
+  assert.deepEqual(calls.observations[0].body.dealIds, ['deal-1']);
 });

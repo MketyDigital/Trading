@@ -105,3 +105,22 @@ test('pending order snapshot route rejects workspace mismatch without changing s
   assert.equal(saved.legs.length, 1);
   assert.equal(saved.legs[0].status, 'PENDING');
 });
+
+test('records broker observations through the workspace-authoritative state route', async () => {
+  const n = node();
+  await n.fetch(req('/groups', {
+    id: 'group-1', workspaceId: 'ws1', tradeAccountId: 'account-1', symbol: 'EURUSD', side: 'BUY', status: 'OPEN',
+    legs: [{ legId: 'leg-1', targetIndex: 1, status: 'OPEN', brokerPositionId: 'position-1' }],
+  }, 'secret', 'POST', 'ws1'));
+
+  const response = await n.fetch(req('/groups/group-1/legs/leg-1/broker-observation', {
+    observedAt: 300, status: 'TP_CONFIRMED', sourceVersion: 'broker-history', dealIds: ['deal-1'],
+  }, 'secret', 'POST', 'ws1'));
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.outcome, 'APPLIED');
+  assert.equal(payload.group.legs[0].lastBrokerObservedAt, 300);
+  assert.equal(payload.group.legs[0].lastBrokerStatus, 'TP_CONFIRMED');
+  assert.deepEqual(payload.group.legs[0].brokerDealIds, ['deal-1']);
+});

@@ -15,6 +15,25 @@ async function stableEventKey(candidate, detection) {
   return `broker-tp:${candidate.tradeAccountId}:${candidate.brokerPositionId}:${hash}`;
 }
 
+async function applyBrokerObservation(env, { candidate, status, reason, dealIds, nowMs }) {
+  const token = text(env.TRADE_STATE_INTERNAL_TOKEN);
+  const namespace = env.TRADE_STATE_NAMESPACE;
+  if (!token || !namespace?.idFromName || !namespace?.get) throw new Error('TRADE_STATE_UNAVAILABLE');
+  const stub = namespace.get(namespace.idFromName(candidate.workspaceId));
+  const response = await stub.fetch(
+    `https://trade-state.internal/groups/${encodeURIComponent(candidate.groupId)}/legs/${encodeURIComponent(candidate.legId)}/broker-observation`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-mkety-internal-token': token, 'x-mkety-workspace-id': candidate.workspaceId },
+      body: JSON.stringify({ observedAt: Number(nowMs), status, sourceVersion: text(reason) || null,
+        dealIds: Array.isArray(dealIds) ? dealIds.map(String) : [] }),
+    },
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`TRADE_STATE_${response.status}`);
+  return result;
+}
+
 export function createProductionBrokerTpProtectionRuntime({
   persistenceFactory = createSupabaseTradeStatePersistence,
   simulationDepsFactory = createV1SimulationDependencies,
@@ -91,7 +110,7 @@ export function createProductionBrokerTpProtectionRuntime({
     const depsByWorkspace = new Map();
     const accountLoadById = new Map();
     const runtime = createBrokerTpProtectionRuntime({
-      loadCandidates: async () => persistence.listBrokerTpProtectionCandidates({ maxRows: 5000 }),
+      loadCandidates: async ({ limit, pageSeed }) => persistence.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed }),
       loadAccount: async (workspaceId, accountId) => {
         if (!depsByWorkspace.has(workspaceId)) depsByWorkspace.set(workspaceId,
           (executionDepsFactory || createProductionExecutionDependencies)({ env, supabase, workspaceId }));
@@ -101,6 +120,7 @@ export function createProductionBrokerTpProtectionRuntime({
         return accountLoadById.get(key);
       },
       loadSourceEvent,
+      recordObservation: (input) => applyBrokerObservation(env, input),
       readPositionCloseStatus: async ({ account, candidate, nowMs }) => {
         const workspaceDeps = depsByWorkspace.get(candidate.workspaceId);
         if (typeof workspaceDeps?.readBrokerPositionCloseStatus !== 'function') return null;

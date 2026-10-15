@@ -73,6 +73,10 @@ export function groupToPersistenceRows(group = {}) {
     if (!leg?.legId) throw new TypeError('leg id is required');
     const currentLots = Number(leg.lots);
     if (!Number.isFinite(currentLots) || currentLots < 0) throw new TypeError('leg lots must be zero or positive');
+    const lastBrokerObservedAt = iso(leg.lastBrokerObservedAt);
+    const brokerDealIds = Array.isArray(leg.brokerDealIds)
+      ? [...new Set(leg.brokerDealIds.map(String))].filter(Boolean)
+      : [];
     return compact({
       workspace_id: String(group.workspaceId),
       runtime_leg_id: String(leg.legId),
@@ -97,11 +101,13 @@ export function groupToPersistenceRows(group = {}) {
       lifecycle_tracking_enabled: leg.lifecycleTrackingEnabled === true,
       originating_order_id: nonEmpty(leg.originatingOrderId),
       logical_target_index: nullableFiniteNumber(leg.logicalTargetIndex),
-      last_broker_observed_at: iso(leg.lastBrokerObservedAt),
-      last_broker_source_version: nonEmpty(leg.lastBrokerSourceVersion),
-      last_broker_status: nonEmpty(leg.lastBrokerStatus),
-      last_broker_snapshot_fingerprint: nonEmpty(leg.lastBrokerSnapshotFingerprint),
-      broker_deal_ids: Array.isArray(leg.brokerDealIds) ? [...new Set(leg.brokerDealIds.map(String))] : [],
+      ...(lastBrokerObservedAt ? {
+        last_broker_observed_at: lastBrokerObservedAt,
+        last_broker_source_version: nonEmpty(leg.lastBrokerSourceVersion),
+        last_broker_status: nonEmpty(leg.lastBrokerStatus),
+        last_broker_snapshot_fingerprint: nonEmpty(leg.lastBrokerSnapshotFingerprint),
+      } : {}),
+      ...(brokerDealIds.length ? { broker_deal_ids: brokerDealIds } : {}),
       opened_at: iso(leg.openedAt),
       closed_at: iso(leg.closedAt),
       updated_at: iso(group.updatedAt),
@@ -239,23 +245,34 @@ export class SupabaseTradeStatePersistence {
     })).filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
 
-  async listBrokerTpProtectionCandidates({ batchSize = 500, maxRows = 5000 } = {}) {
-    const limit = Math.max(1, Math.min(1000, Math.trunc(Number(batchSize)) || 500));
-    const maximum = Math.max(limit, Math.min(20000, Math.trunc(Number(maxRows)) || 5000));
-    const rows = [];
-    for (let offset = 0; offset < maximum; offset += limit) {
-      const end = Math.min(offset + limit, maximum) - 1;
-      const { data, error } = await this.supabase.from('position_legs')
-        .select('workspace_id,position_group_id,runtime_leg_id,target_index,logical_target_index,lots,executed_lots,broker_position_id,stop_loss,take_profit,created_at,position_groups!inner(runtime_group_id,trade_account_id,source_event_id,source_instance_id,source_event_ids,thread_id,canonical_symbol,side,order_type,entry,stop_loss,status,created_at,updated_at)')
-        .eq('status', 'OPEN').eq('position_groups.status', 'OPEN')
-        .not('broker_position_id', 'is', null).not('take_profit', 'is', null)
-        .order('created_at', { ascending: true }).range(offset, end);
-      if (error) throw new Error(`broker TP candidate scan failed: ${error.message}`);
-      const page = Array.isArray(data) ? data : [];
-      rows.push(...page.map((row) => {
+  async listBrokerTpProtectionCandidates({ pageSize = 50, pageSeed = 0 } = {}) {
+    const limit = Math.max(1, Math.min(500, Math.trunc(Number(pageSize)) || 50));
+    const seed = Math.max(0, Math.trunc(Number(pageSeed)) || 0);
+    const selection = 'workspace_id,position_group_id,runtime_leg_id,target_index,logical_target_index,lots,executed_lots,broker_position_id,stop_loss,take_profit,created_at,position_groups!inner(runtime_group_id,trade_account_id,source_event_id,source_instance_id,source_event_ids,thread_id,canonical_symbol,side,order_type,entry,stop_loss,status,created_at,updated_at)';
+    const query = (options) => this.supabase.from('position_legs')
+      .select(selection, options)
+      .eq('status', 'OPEN').eq('position_groups.status', 'OPEN')
+      .not('broker_position_id', 'is', null).not('take_profit', 'is', null);
+
+    const { count, error: countError } = await query({ count: 'exact', head: true });
+    if (countError) throw new Error(`broker TP candidate count failed: ${countError.message}`);
+    const total = Math.max(0, Number(count) || 0);
+    if (total === 0) return [];
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const offset = (seed % pages) * limit;
+    const { data: selected, error: selectedError } = await query()
+      .order('created_at', { ascending: true }).order('id', { ascending: true }).range(offset, offset + limit - 1);
+    if (selectedError) throw new Error(`broker TP candidate page failed: ${selectedError.message}`);
+    const groupIds = [...new Set((selected || []).map((row) => String(row.position_group_id || '')).filter(Boolean))];
+    if (groupIds.length === 0) return [];
+    const { data, error } = await query().in('position_group_id', groupIds)
+      .order('position_group_id', { ascending: true }).order('logical_target_index', { ascending: true });
+    if (error) throw new Error(`broker TP candidate expansion failed: ${error.message}`);
+    const rows = (Array.isArray(data) ? data : []).map((row) => {
         const group = row.position_groups || {};
         return {
           workspaceId: String(row.workspace_id || ''), groupId: String(group.runtime_group_id || row.position_group_id || ''),
+          persistenceGroupId: String(row.position_group_id || ''),
           tradeAccountId: String(group.trade_account_id || ''), sourceEventId: String(group.source_event_id || ''),
           sourceInstanceId: group.source_instance_id == null ? null : String(group.source_instance_id),
           sourceEventIds: Array.isArray(group.source_event_ids) ? group.source_event_ids.map(String) : [],
@@ -270,9 +287,7 @@ export class SupabaseTradeStatePersistence {
           stopLoss: row.stop_loss == null ? (group.stop_loss == null ? null : Number(group.stop_loss)) : Number(row.stop_loss),
           takeProfit: Number(row.take_profit), createdAt: millis(row.created_at),
         };
-      }));
-      if (page.length < limit) break;
-    }
+      });
     return rows.filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId
       && row.brokerPositionId && Number.isInteger(row.targetIndex) && row.targetIndex > 0
       && Number.isFinite(row.takeProfit) && row.takeProfit > 0);
