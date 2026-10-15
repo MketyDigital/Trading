@@ -1,4 +1,8 @@
 const SYMBOL_ALIASES = new Map([
+  // Common transposition typo in the GBP currency code. GPB is not a valid
+  // ISO currency code; keep the source text while routing as the valid pair.
+  ['GPBAUD', 'GBPAUD'],
+
   // Metals
   ['GOLD', 'XAUUSD'],
   ['XAU', 'XAUUSD'],

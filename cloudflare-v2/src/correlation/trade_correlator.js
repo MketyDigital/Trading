@@ -69,7 +69,26 @@ function eventObservedAtMs(event = {}) {
   return null;
 }
 
-function freshUnmatchedRevisionCanOpen(event = {}, interpretation = {}, nowMs = Date.now(), windowMs = 120000) {
+function hasCompleteSelfContainedTradeIntent(intent = {}) {
+  const symbol = String(intent?.symbol?.canonical ?? intent?.symbol ?? '').trim();
+  const side = String(intent?.side ?? '').trim().toUpperCase();
+  const stopLoss = Number(intent?.stopLoss);
+  const takeProfits = Array.isArray(intent?.takeProfits) ? intent.takeProfits : [];
+  const hasEntry = intent?.entry != null && (typeof intent.entry !== 'object' || intent.entry.kind || intent.entry.value != null);
+  return Boolean(symbol)
+    && ['BUY', 'SELL'].includes(side)
+    && hasEntry
+    && Number.isFinite(stopLoss) && stopLoss > 0
+    && takeProfits.some((value) => Number.isFinite(Number(value)) && Number(value) > 0);
+}
+
+function freshUnmatchedRevisionCanOpen(
+  event = {},
+  interpretation = {},
+  nowMs = Date.now(),
+  windowMs = 120000,
+  fastCompletionWindowMs = 30 * 60 * 1000,
+) {
   if (String(interpretation?.status || '').toUpperCase() !== 'READY' || !interpretation?.intent) return false;
   const editedEventId = event?.thread?.edited_event_id == null ? '' : String(event.thread.edited_event_id);
   const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
@@ -77,6 +96,9 @@ function freshUnmatchedRevisionCanOpen(event = {}, interpretation = {}, nowMs = 
   const observedAt = eventObservedAtMs(event);
   if (!(observedAt > 0)) return false;
   const age = Number(nowMs) - observedAt;
+  if (hasCompleteSelfContainedTradeIntent(interpretation.intent)) {
+    return age >= -5000 && age <= Math.max(Number(windowMs) || 0, Number(fastCompletionWindowMs) || 0);
+  }
   return age >= -5000 && age <= Math.max(Number(windowMs) || 0, 120000);
 }
 
@@ -286,7 +308,7 @@ function fastFollowupProtection(intent = {}) {
 function isFastCompletionSignal(interpretation = {}) {
   if (interpretation?.status !== 'READY' || !interpretation?.intent) return false;
   const intent = interpretation.intent;
-  if (intent.fastEntry !== true && intent.incomplete === false) return true;
+  if (intent.fastEntry !== true && (intent.incomplete === false || hasCompleteSelfContainedTradeIntent(intent))) return true;
 
   // Fast trades are progressively enrichable. A genuine same-trade follow-up
   // carrying only SL, only TP(s), or both is useful protection data and must
@@ -346,10 +368,11 @@ export function correlateTradingEvent({
     const externalEventId = event?.external_event_id == null ? '' : String(event.external_event_id);
     const isSelfEditedReply = editedEventId === externalEventId && replyMatches.length > 0;
     const isFreshSelfEditedSignal = editedEventId === externalEventId
-      && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs);
+      && freshUnmatchedRevisionCanOpen(event, interpretation, nowMs, correlationWindowMs, fastCompletionWindowMs);
     if (!isSelfEditedReply && !isFreshSelfEditedSignal) {
       // Unmatched edits stay fail-closed unless this is a fresh, self-contained
-      // READY signal. Let that signal continue through normal correlation so an
+      // READY signal (or a complete reply still within its follow-up window).
+      // Let that signal continue through normal correlation so an
       // unrelated active trade cannot suppress it and a compatible fast trade
       // can still be promoted.
       return { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' };
@@ -437,7 +460,10 @@ export function correlateTradingEvent({
     }
     const target = matchedManagementTarget(replyMatches, 'REPLY_TARGET', 'AMBIGUOUS_REPLY_TARGET');
     if (target) return target;
-    if (interpretation.status === 'READY' && interpretation.intent?.incomplete === false) {
+    if (interpretation.status === 'READY' && (
+      interpretation.intent?.incomplete === false
+      || hasCompleteSelfContainedTradeIntent(interpretation.intent)
+    )) {
       return { status: 'NEW_GROUP' };
     }
     return { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' };

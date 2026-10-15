@@ -389,6 +389,93 @@ test('complete READY reply opens a new group when its reply target is absent and
   assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
+test('complete edited reply within the fast follow-up window opens when its fast order never created a group', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:504',
+      occurred_at: new Date(now - 5 * 60 * 1000).toISOString(),
+      thread: {
+        edited_event_id: 'telegram:-1001:504',
+        reply_to_event_id: 'telegram:-1001:503',
+      },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.91715 },
+        stopLoss: 1.92252,
+        takeProfits: [1.91122, 1.90569, 1.90096],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('complete self-edited signal without a reply remains recoverable during the follow-up window', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:506',
+      occurred_at: new Date(now - 5 * 60 * 1000).toISOString(),
+      thread: { edited_event_id: 'telegram:-1001:506' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.91715 },
+        stopLoss: 1.92252,
+        takeProfits: [1.91122, 1.90569],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('complete edited reply outside the fast follow-up window stays fail-closed without an edit target', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:505',
+      occurred_at: new Date(now - 31 * 60 * 1000).toISOString(),
+      thread: {
+        edited_event_id: 'telegram:-1001:505',
+        reply_to_event_id: 'telegram:-1001:504',
+      },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.91715 },
+        stopLoss: 1.92252,
+        takeProfits: [1.91122],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_EDIT_TARGET' });
+});
+
 
 test('SL-only READY reply enriches an existing incomplete fast trade', () => {
   const result = correlateTradingEvent({
