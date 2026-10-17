@@ -128,6 +128,8 @@ CREATE TABLE IF NOT EXISTS trading_storage."source_connections" (
   UNIQUE (workspace_id, source_instance_id)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_connections_workspace_id_unique ON trading_storage.source_connections (workspace_id, id);
+
 CREATE TABLE IF NOT EXISTS trading_storage."trading_events" (
   "id" uuid DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id" uuid NOT NULL,
@@ -600,7 +602,6 @@ CREATE INDEX IF NOT EXISTS idx_source_connections_workspace_active ON trading_st
 
 CREATE INDEX IF NOT EXISTS idx_source_connections_workspace_family_active ON trading_storage.source_connections (workspace_id, source_family, is_active, priority, id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_source_connections_workspace_id_unique ON trading_storage.source_connections (workspace_id, id);
 
 CREATE INDEX IF NOT EXISTS idx_trading_events_source_connection ON trading_storage.trading_events (source_connection_id);
 
