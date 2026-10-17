@@ -40,7 +40,8 @@ async function parseJson(request) {
   }
 }
 
-async function createStore(env, supabaseFactory, storeFactory) {
+async function createStore(env, supabaseFactory, storeFactory, injectedStore = null) {
+  if (injectedStore) return injectedStore;
   const supabase = await supabaseFactory(env);
   return storeFactory(supabase, env);
 }
@@ -81,6 +82,7 @@ async function issueSession(result, env, nowSec, mode, { includeRefreshCookie = 
 export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   storeFactory = createTradingAccessCodeStore,
+  store: injectedStore = null,
   now = new Date(),
   nowSec = Math.floor(Date.now() / 1000),
   refreshVerifier = verifyTradingRefreshToken,
@@ -107,7 +109,7 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
     let store;
     try {
-      store = await createStore(env, supabaseFactory, storeFactory);
+      store = await createStore(env, supabaseFactory, storeFactory, injectedStore);
     } catch {
       return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
     }
@@ -149,7 +151,7 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
   let store;
   try {
-    store = await createStore(env, supabaseFactory, storeFactory);
+    store = await createStore(env, supabaseFactory, storeFactory, injectedStore);
   } catch {
     return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
   }

@@ -253,6 +253,41 @@ function routeActionMatch(pathname) {
 }
 
 export function createAdminDestinationStore(supabase) {
+  if (supabase?.destinations && supabase?.routes) {
+    const { destinations, routes } = supabase;
+    return {
+      listDestinations: (workspaceId) => destinations.listDestinations(workspaceId),
+      createDestination: (workspaceId, input, cipher) => destinations.createDestination(workspaceId, input, cipher),
+      updateDestination: (workspaceId, id, input) => destinations.updateDestination(workspaceId, id, input),
+      setDestinationEnabled: (workspaceId, id, enabled) => destinations.setDestinationEnabled(workspaceId, id, enabled),
+      replaceDestinationCredentials: (workspaceId, id, cipher) => destinations.replaceDestinationCredentials(workspaceId, id, cipher),
+      removeDestination: (workspaceId, id) => destinations.removeDestination(workspaceId, id),
+      listTemplates: (workspaceId) => destinations.listTemplates(workspaceId),
+      createTemplate: (workspaceId, input) => destinations.createTemplate(workspaceId, input),
+      updateTemplate: (workspaceId, id, input) => destinations.updateTemplate(workspaceId, id, input),
+      listRoutes: (workspaceId) => routes.list(workspaceId),
+      async createRoute(workspaceId, input) {
+        const authority = await routes.validateAuthority(workspaceId, input.sourceConnectionId, input.destinationId, input.sourceFeedId ? [input.sourceFeedId] : []);
+        if (!authority.ok) throw new Error(authority.reason || 'ROUTE_AUTHORITY_INVALID');
+        return routes.insert({
+          workspace_id: String(workspaceId),
+          source_connection_id: input.sourceConnectionId,
+          source_feed_id: input.sourceFeedId || null,
+          destination_id: input.destinationId,
+          route_name: input.routeName,
+          priority: input.priority ?? 100,
+          is_active: true,
+          filters: input.filters || {},
+        });
+      },
+      setRouteEnabled: (workspaceId, id, enabled) => routes.update(workspaceId, id, { is_active: Boolean(enabled) }),
+      async removeRoute(workspaceId, id) {
+        if (!(await routes.list(workspaceId)).some((route) => String(route.id) === String(id))) return false;
+        await routes.delete(workspaceId, id);
+        return true;
+      },
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listDestinations(workspaceId) {

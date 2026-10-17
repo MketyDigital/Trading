@@ -164,6 +164,10 @@ function parseAccountCreation(body) {
 }
 
 export function createAdminAccountStore(supabase) {
+  // The persistence runtime already exposes this repository contract. Keep the
+  // Supabase adapter below for the legacy runtime, while allowing the selected
+  // database authority to serve account operations directly.
+  if (supabase?.listAccounts && supabase?.getAccount && supabase?.createAccount) return supabase;
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   async function getAccount(workspaceId, accountId) {

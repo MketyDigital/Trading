@@ -14,12 +14,26 @@ function normalizeFeedRow(row = {}) {
     providerFeedId: text(row.provider_feed_id ?? row.providerFeedId),
     displayName: text(row.display_name ?? row.displayName) || null,
     feedType: text(row.feed_type ?? row.feedType) || 'telegram_chat',
-    isActive: (row.is_active ?? row.isActive) === true,
+    isActive: (row.is_active ?? row.isActive) === true || Number(row.is_active ?? row.isActive) === 1,
     metadata: safeObject(row.metadata),
   };
 }
 
 export function createSourceFeedStore(supabase) {
+  if (typeof supabase?.findActiveFeed === 'function' && typeof supabase?.listFeeds === 'function' && typeof supabase?.upsertAllowedFeeds === 'function') {
+    return {
+      async findActiveFeed(workspaceId, sourceConnectionId, providerFeedId) {
+        const row = await supabase.findActiveFeed(workspaceId, sourceConnectionId, providerFeedId);
+        return row ? normalizeFeedRow(row) : null;
+      },
+      async listFeeds(workspaceId, sourceConnectionId) {
+        return (await supabase.listFeeds(workspaceId, sourceConnectionId)).map(normalizeFeedRow);
+      },
+      async upsertAllowedFeeds(workspaceId, sourceConnectionId, providerFeedIds, options) {
+        return (await supabase.upsertAllowedFeeds(workspaceId, sourceConnectionId, providerFeedIds, options)).map(normalizeFeedRow);
+      },
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   return {

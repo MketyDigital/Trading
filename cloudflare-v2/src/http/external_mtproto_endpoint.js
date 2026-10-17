@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { signSourcePayload } from '../security/source_auth.js';
 import { handleV1EventsRequest } from './v1_events.js';
@@ -145,6 +144,7 @@ async function defaultResolveActiveSource(sourceId, env = {}) {
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   const masterKey = env.TRADING_MASTER_KEY;
   if (!url || !key || !masterKey) throw new Error('SOURCE_RUNTIME_UNAVAILABLE');
+  const { createClient } = await import('@supabase/supabase-js');
   const supabase = createClient(url, key);
   const stores = createSupabaseIngestStores(supabase, { masterKey });
   return stores.sourceStore.getActiveSource(sourceId);

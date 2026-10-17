@@ -98,6 +98,9 @@ const FILTER_COLUMNS = Object.freeze([
 ]);
 
 export function createMketyAdminOperationsStore(supabase) {
+  if (typeof supabase?.list === 'function' && !supabase?.from) {
+    return { async list(filters = {}) { return (await supabase.list(filters)).map(safeOperationRow); } };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   return {
@@ -151,6 +154,7 @@ function filtersFromUrl(url) {
 export async function handleMketyAdminOperationsRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   operationsStoreFactory = createMketyAdminOperationsStore,
+  operationsStore = null,
 } = {}) {
   const authorization = authorizeMketyAdmin(request, env);
   if (!authorization.ok) return json({ ok: false, reason: authorization.reason }, authorization.status);
@@ -163,8 +167,8 @@ export async function handleMketyAdminOperationsRequest(request, env = {}, {
   if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
 
   try {
-    const supabase = await supabaseFactory(env);
-    const operations = await operationsStoreFactory(supabase).list(parsed.filters);
+    const store = operationsStore || operationsStoreFactory(await supabaseFactory(env));
+    const operations = await store.list(parsed.filters);
     const nextBefore = operations.length > 0 ? operations[operations.length - 1].observedAt ?? null : null;
     return json({ ok: true, operations, nextBefore });
   } catch (error) {

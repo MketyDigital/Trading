@@ -298,11 +298,12 @@ function currentEntryPrice(action = {}) {
 export function createProductionExecutionDependencies({
   env = {},
   supabase,
+  persistenceRuntime = null,
   workspaceId,
   tradingEventId = null,
 } = {}, {
   decryptCredentialsFn = decryptConnectionCredentials,
-  deliveryStoreFactory = createSupabaseDeliveryStore,
+  deliveryStoreFactory = null,
   mt5ContextLoader = defaultMt5ContextLoader,
   mt5Executor = executeMT5Action,
   ctraderRuntimeFactory = createCTraderRuntime,
@@ -313,10 +314,13 @@ export function createProductionExecutionDependencies({
 } = {}) {
   const boundWorkspaceId = text(workspaceId);
   const boundTradingEventId = text(tradingEventId);
+  const effectiveDeliveryStoreFactory = deliveryStoreFactory || (persistenceRuntime
+    ? (_supabase, options) => persistenceRuntime.delivery(options)
+    : createSupabaseDeliveryStore);
   if (!boundWorkspaceId) throw new TypeError('workspaceId is required');
-  if (!supabase?.from) throw new TypeError('Supabase client is required');
+  if (!supabase?.from && !persistenceRuntime) throw new TypeError('Trading persistence is required');
   if (typeof decryptCredentialsFn !== 'function') throw new TypeError('decryptCredentialsFn is required');
-  if (typeof deliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
+  if (typeof effectiveDeliveryStoreFactory !== 'function') throw new TypeError('deliveryStoreFactory is required');
   if (typeof ctraderCbotExecutor !== 'function') throw new TypeError('ctraderCbotExecutor is required');
   if (!executionSnapshotCache?.get || !executionSnapshotCache?.put) {
     throw new TypeError('executionSnapshotCache is required');
@@ -421,6 +425,7 @@ export function createProductionExecutionDependencies({
     if (!authorityLoaderImpl) {
       authorityLoaderImpl = createProductionExecutionAuthorityLoader({
         supabase,
+        persistenceRuntime,
         workspaceId: boundWorkspaceId,
         tradingEventId: boundTradingEventId,
       });
@@ -434,6 +439,8 @@ export function createProductionExecutionDependencies({
     }
     const id = text(accountId);
     if (!id) throw new TypeError('accountId is required');
+
+    if (persistenceRuntime?.accounts) return persistenceRuntime.accounts.getAccount(boundWorkspaceId, id);
 
     const { data, error } = await supabase
       .from('trade_accounts')
@@ -565,7 +572,7 @@ export function createProductionExecutionDependencies({
     const bridgeSecret = required(credentials.bridgeSecret, 'trade account MT5 bridgeSecret');
     const brokerAccountId = required(brokerAccountIdOf(account), 'trade account account_id');
     const deliveryStore = deliveryStoreFor({
-      factory: deliveryStoreFactory,
+      factory: effectiveDeliveryStoreFactory,
       supabase,
       workspaceId: boundWorkspaceId,
       account,
@@ -604,7 +611,7 @@ export function createProductionExecutionDependencies({
       throw new Error('cTrader cBot trade account environment must be demo or live');
     }
     const deliveryStore = deliveryStoreFor({
-      factory: deliveryStoreFactory,
+      factory: effectiveDeliveryStoreFactory,
       supabase,
       workspaceId: boundWorkspaceId,
       account,
@@ -641,7 +648,7 @@ export function createProductionExecutionDependencies({
 
     if (!runtime) {
       const deliveryStore = deliveryStoreFor({
-        factory: deliveryStoreFactory,
+        factory: effectiveDeliveryStoreFactory,
         supabase,
         workspaceId: boundWorkspaceId,
         account,

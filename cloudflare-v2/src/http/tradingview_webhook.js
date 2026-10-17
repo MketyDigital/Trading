@@ -105,6 +105,7 @@ export async function handleTradingViewWebhookRequest(request, env = {}, {
   probeLogger = defaultProbeLogger,
   nowMs = () => Date.now(),
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  persistenceRuntime = null,
 } = {}) {
   if (request.method !== 'POST') {
     return response({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
@@ -134,7 +135,14 @@ export async function handleTradingViewWebhookRequest(request, env = {}, {
   let store;
   let source;
   try {
-    store = sourceStore || await defaultSourceStore(env, supabaseFactory);
+    store = sourceStore || (persistenceRuntime ? {
+      async getActiveTradingViewSourceByPublicHandle(publicHandle) {
+        const sourceRow = await persistenceRuntime.sourceConnections.getActiveTradingViewSourceByPublicHandle(publicHandle);
+        if (!sourceRow?.id) return null;
+        const credentialRow = await persistenceRuntime.ingest.sourceStore.getActiveSource(sourceRow.id);
+        return credentialRow?.secret ? { ...sourceRow, secret: credentialRow.secret } : null;
+      },
+    } : await defaultSourceStore(env, supabaseFactory));
     source = await store.getActiveTradingViewSourceByPublicHandle(handle);
   } catch {
     return response({ ok: false, reason: 'TRADINGVIEW_SOURCE_UNAVAILABLE' }, 503);

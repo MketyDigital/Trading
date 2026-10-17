@@ -160,7 +160,27 @@ export function selectCompletedRepairEvent(events = [], { symbol = null, side = 
     })[0] || null;
 }
 
-async function loadGroupIntentAndAccount(supabase, workspaceId, groupId) {
+async function loadGroupIntentAndAccount(supabase, workspaceId, groupId, persistenceRuntime = null) {
+  if (persistenceRuntime?.tradeState && persistenceRuntime?.accounts && persistenceRuntime?.ingest?.eventStore) {
+    const group = await persistenceRuntime.tradeState.loadGroup(String(workspaceId), String(groupId));
+    if (!group) throw new Error('POSITION_GROUP_NOT_FOUND');
+    const account = (await persistenceRuntime.accounts.listAccounts(String(workspaceId))).find(row => String(row.id) === String(group.tradeAccountId));
+    if (!account) throw new Error('TRADE_ACCOUNT_NOT_FOUND');
+    const events = [];
+    if (group.sourceEventId) {
+      const event = await persistenceRuntime.ingest.eventStore.getById(String(workspaceId), String(group.sourceEventId));
+      if (event) events.push(event);
+    }
+    for (const externalId of [...new Set((group.sourceEventIds || []).map(String).filter(Boolean))]) {
+      const match = await persistenceRuntime.ingest.eventStore.findByExternalEventId(String(workspaceId), [externalId]);
+      if (!match?.id || events.some(item => String(item.id) === String(match.id))) continue;
+      const event = await persistenceRuntime.ingest.eventStore.getById(String(workspaceId), String(match.id));
+      if (event) events.push(event);
+    }
+    const event = selectCompletedRepairEvent(events, { symbol: group.symbol, side: group.side });
+    if (!event) throw new Error('COMPLETED_SIGNAL_INTENT_NOT_FOUND');
+    return { groupRow: group, account, event, intent: event.canonical_intent, runtimeGroupId: String(group.id) };
+  }
   const select = 'id,runtime_group_id,workspace_id,trade_account_id,source_event_id,source_event_ids,canonical_symbol,side,stop_loss,status';
   let lookup = await supabase
     .from('position_groups')
@@ -245,19 +265,20 @@ function ensureLeg(group, leg) {
   }
 }
 
-async function controlsAllowLive(env, supabase) {
+async function controlsAllowLive(env, supabase, persistenceRuntime = null) {
+  const controlOptions = { env, supabase, runtimeControls: persistenceRuntime?.runtimeControls };
   const [trading, broker, live] = await Promise.all([
-    resolveTradingAccessRuntimeControl({ env, supabase }),
-    resolveBrokerExecutionRuntimeControl({ env, supabase }),
-    resolveLiveBrokerExecutionRuntimeControl({ env, supabase }),
+    resolveTradingAccessRuntimeControl(controlOptions),
+    resolveBrokerExecutionRuntimeControl(controlOptions),
+    resolveLiveBrokerExecutionRuntimeControl(controlOptions),
   ]);
   return trading?.ok === true && trading.enabled === true
     && broker?.ok === true && broker.enabled === true
     && live?.ok === true && live.enabled === true;
 }
 
-async function executeOne({ env, supabase, workspaceId, eventId, accountId, groupId, action }) {
-  const dependencies = await createProductionExecutionDependencies({ env, supabase, workspaceId, tradingEventId: eventId });
+async function executeOne({ env, supabase, persistenceRuntime = null, workspaceId, eventId, accountId, groupId, action }) {
+  const dependencies = await createProductionExecutionDependencies({ env, supabase, persistenceRuntime, workspaceId, tradingEventId: eventId });
   const stateBinder = createProductionTradeStateBinder({ env, workspaceId });
   const result = await executeProductionPlan({
     workspaceId,
@@ -276,12 +297,12 @@ async function executeOne({ env, supabase, workspaceId, eventId, accountId, grou
   return result;
 }
 
-export async function repairLivePositionGroup({ env, supabase, workspaceId, groupId, confirmLive = false } = {}) {
+export async function repairLivePositionGroup({ env, supabase, persistenceRuntime = null, workspaceId, groupId, confirmLive = false } = {}) {
   if (confirmLive !== true) return { ok: false, reason: 'LIVE_CONFIRMATION_REQUIRED' };
   if (!workspaceId || !groupId) return { ok: false, reason: 'WORKSPACE_AND_GROUP_REQUIRED' };
-  if (!(await controlsAllowLive(env, supabase))) return { ok: false, reason: 'LIVE_EXECUTION_GATES_NOT_ENABLED' };
+  if (!(await controlsAllowLive(env, supabase, persistenceRuntime))) return { ok: false, reason: 'LIVE_EXECUTION_GATES_NOT_ENABLED' };
 
-  const { account, event, intent, runtimeGroupId } = await loadGroupIntentAndAccount(supabase, workspaceId, groupId);
+  const { account, event, intent, runtimeGroupId } = await loadGroupIntentAndAccount(supabase, workspaceId, groupId, persistenceRuntime);
   if (account.environment !== 'live' || account.platform !== 'mt5' || account.provider_mode !== 'mt5_connector') {
     return { ok: false, reason: 'REPAIR_PROVIDER_NOT_SUPPORTED' };
   }
@@ -329,7 +350,7 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
           targetIndex: 1,
           idempotencyKey: `repair:${group.id}:target:1:protect`,
         };
-    await executeOne({ env, supabase, workspaceId, eventId, accountId, groupId: group.id, action: firstAction });
+    await executeOne({ env, supabase, persistenceRuntime, workspaceId, eventId, accountId, groupId: group.id, action: firstAction });
   }
 
   group = await state.getGroup(runtimeGroupId);
@@ -379,7 +400,7 @@ export async function repairLivePositionGroup({ env, supabase, workspaceId, grou
       targetIndex: index,
       idempotencyKey: `repair:${group.id}:target:${index}:open`,
     };
-    await executeOne({ env, supabase, workspaceId, eventId, accountId, groupId: group.id, action });
+    await executeOne({ env, supabase, persistenceRuntime, workspaceId, eventId, accountId, groupId: group.id, action });
     group = await state.getGroup(runtimeGroupId);
   }
 

@@ -37,8 +37,8 @@ function safeSource(row = {}) {
     webhookPath: row.public_source_handle ? `/api/v1/webhooks/telegram-bot/${encodeURIComponent(row.public_source_handle)}` : null,
     config: row.config || {},
     enabled: row.is_active === true,
-    credentialConfigured: Boolean(row.provider_secret_ciphertext),
-    credentialsConfigured: Boolean(row.provider_secret_ciphertext),
+    credentialConfigured: Boolean(row.provider_secret_ciphertext ?? row.provider_secret_configured),
+    credentialsConfigured: Boolean(row.provider_secret_ciphertext ?? row.provider_secret_configured),
     health: { status: row.health_status ?? (row.is_active ? 'STARTING' : 'DISABLED'), lastErrorCode: row.last_error_code ?? null },
   };
 }
@@ -55,7 +55,8 @@ async function defaultSupabaseFactory(env = {}) {
   const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 }
-async function sourceById(supabase, workspaceId, sourceId) {
+async function sourceById(supabase, workspaceId, sourceId, persistenceRuntime = null) {
+  if (persistenceRuntime) return persistenceRuntime.sourceConnections.getSourceForAdmin(workspaceId, sourceId);
   const { data, error } = await supabase.from('source_connections').select(SOURCE_SELECT).eq('workspace_id', workspaceId).eq('id', sourceId).maybeSingle();
   if (error) throw new Error('SOURCE_READ_FAILED');
   return data || null;
@@ -90,6 +91,7 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
   sourceFeedStoreFactory = createSourceFeedStore,
   generateHandle = () => randomHex(18),
   generateWebhookSecret = () => randomHex(24),
+  persistenceRuntime = null,
 } = {}) {
   const url = new URL(request.url);
   const createRoute = url.pathname === '/api/v1/admin/sources' && request.method === 'POST';
@@ -102,10 +104,9 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
     if (!createBody || text(createBody.providerType ?? createBody.provider_type) !== BOT_PROVIDER) return null;
   }
 
-  let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
-  const authorization = await authorizeFn(request, env, { supabase });
+  let supabase = null;
+  if (!persistenceRuntime) { try { supabase = await supabaseFactory(env); } catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); } }
+  const authorization = await authorizeFn(request, env, { supabase, ...(persistenceRuntime ? { workspaceAccess: persistenceRuntime.workspaceAccess, accessCodeStore: persistenceRuntime.accessCodes, membershipStore: persistenceRuntime.workspaceAccess, hostnameStore: persistenceRuntime.hostnames } : {}) });
   if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   if (!hasTradingPermission(authorization.membership?.role, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   const workspaceId = text(authorization.workspace?.id);
@@ -158,25 +159,25 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
       provider_secret_ciphertext: providerCiphertext,
       health_status: 'DISABLED',
     };
-    const { data, error } = await supabase.from('source_connections').insert(row).select(SOURCE_SELECT).maybeSingle();
-    if (error || !data) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+    let data;
     try {
-      const feedStore = sourceFeedStoreFactory(supabase);
+      if (persistenceRuntime) data = await persistenceRuntime.sourceConnections.createSource(workspaceId, row);
+      else { const result = await supabase.from('source_connections').insert(row).select(SOURCE_SELECT).maybeSingle(); if (result.error) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503); data = result.data; }
+    } catch { return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503); }
+    if (!data) return json({ ok: false, reason: 'SOURCE_CREATE_FAILED' }, 503);
+    try {
+      const feedStore = sourceFeedStoreFactory(persistenceRuntime ? persistenceRuntime.sourceFeeds : supabase);
       await feedStore.upsertAllowedFeeds(workspaceId, data.id, chatIds);
     } catch {
       try {
-        await supabase
-          .from('source_connections')
-          .delete()
-          .eq('workspace_id', workspaceId)
-          .eq('id', data.id);
+        if (!persistenceRuntime) await supabase.from('source_connections').delete().eq('workspace_id', workspaceId).eq('id', data.id);
       } catch {
         // The source remains disabled, so a failed compensating delete cannot
         // make it operational. Surface the feed failure and let operators repair.
       }
       return json({ ok: false, reason: 'SOURCE_FEED_UPSERT_FAILED' }, 503);
     }
-    return json({ ok: true, workspaceId, source: safeSource(data) }, 201);
+    return json({ ok: true, workspaceId, source: safeSource({ ...data, provider_secret_configured: true, secret_configured: true }) }, 201);
   }
 
   let sourceId;
@@ -184,7 +185,7 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
   catch { return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404); }
   const action = actionMatch[2];
   let source;
-  try { source = await sourceById(supabase, workspaceId, sourceId); }
+  try { source = await sourceById(supabase, workspaceId, sourceId, persistenceRuntime); }
   catch { return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503); }
   if (!source || source.provider_type !== BOT_PROVIDER) return null;
   if (!canUseSourceProvider(authorization, { sourceFamily: BOT_FAMILY, providerType: BOT_PROVIDER })) {
@@ -201,16 +202,18 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
     let ciphertext;
     try { ciphertext = await encryptCredentials('telegram_bot', credentials, env.TRADING_MASTER_KEY); }
     catch { return json({ ok: false, reason: 'SOURCE_CREDENTIALS_INVALID' }, 400); }
-    const { data, error } = await supabase.from('source_connections').update({ provider_secret_ciphertext: ciphertext, health_status: 'DISABLED', last_error_code: null }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle();
-    if (error || !data) return json({ ok: false, reason: 'SOURCE_CREDENTIAL_REPLACE_FAILED' }, 503);
-    return json({ ok: true, workspaceId, source: safeSource(data) });
+    let data;
+    try { if (persistenceRuntime) data = await persistenceRuntime.sourceConnections.update(workspaceId, sourceId, { provider_secret_ciphertext: ciphertext, health_status: 'DISABLED', last_error_code: null }); else { const result = await supabase.from('source_connections').update({ provider_secret_ciphertext: ciphertext, health_status: 'DISABLED', last_error_code: null }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle(); if (result.error) return json({ ok: false, reason: 'SOURCE_CREDENTIAL_REPLACE_FAILED' }, 503); data = result.data; } } catch { return json({ ok: false, reason: 'SOURCE_CREDENTIAL_REPLACE_FAILED' }, 503); }
+    if (!data) return json({ ok: false, reason: 'SOURCE_CREDENTIAL_REPLACE_FAILED' }, 503);
+    return json({ ok: true, workspaceId, source: safeSource({ ...data, provider_secret_configured: Boolean(source.provider_secret_ciphertext), secret_configured: Boolean(source.secret_ciphertext) }) });
   }
 
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
 
   if (action === 'disable') {
-    const { data, error } = await supabase.from('source_connections').update({ is_active: false, is_default: false, health_status: 'DISABLED' }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle();
-    if (error || !data) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503);
+    let data;
+    try { if (persistenceRuntime) data = await persistenceRuntime.sourceConnections.update(workspaceId, sourceId, { is_active: false, is_default: false, health_status: 'DISABLED' }); else { const result = await supabase.from('source_connections').update({ is_active: false, is_default: false, health_status: 'DISABLED' }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle(); if (result.error) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503); data = result.data; } } catch { return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503); }
+    if (!data) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503);
     try {
       const credentials = await decryptCredentials('telegram_bot', source.provider_secret_ciphertext, env.TRADING_MASTER_KEY);
       await telegramApi(credentials.botToken, 'deleteWebhook', { drop_pending_updates: false }, fetchFn, 2500);
@@ -218,7 +221,7 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
       // DB disable is authoritative. Telegram cleanup is best-effort and must not
       // turn a successfully disabled source back into an operational failure.
     }
-    return json({ ok: true, workspaceId, source: safeSource(data) });
+    return json({ ok: true, workspaceId, source: safeSource({ ...data, provider_secret_configured: Boolean(source.provider_secret_ciphertext), secret_configured: Boolean(source.secret_ciphertext) }) });
   }
 
   const chatIds = Array.isArray(source.config?.chat_ids) ? source.config.chat_ids.map(text).filter(Boolean) : [];
@@ -240,10 +243,12 @@ export async function handleTelegramBotAdminRequest(request, env = {}, {
     drop_pending_updates: false,
   }, fetchFn, 5000);
   if (!registered.ok) {
-    await supabase.from('source_connections').update({ is_active: false, health_status: 'DEGRADED', last_error_code: registered.reason }).eq('workspace_id', workspaceId).eq('id', sourceId);
+    if (persistenceRuntime) { try { await persistenceRuntime.sourceConnections.update(workspaceId, sourceId, { is_active: false, health_status: 'DEGRADED', last_error_code: registered.reason }); } catch {} }
+    else await supabase.from('source_connections').update({ is_active: false, health_status: 'DEGRADED', last_error_code: registered.reason }).eq('workspace_id', workspaceId).eq('id', sourceId);
     return json({ ok: false, reason: registered.reason }, 503);
   }
-  const { data, error } = await supabase.from('source_connections').update({ is_active: true, health_status: 'HEALTHY', last_error_code: null, last_connected_at: new Date().toISOString() }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle();
-  if (error || !data) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503);
-  return json({ ok: true, workspaceId, source: safeSource(data) });
+  let data;
+  try { if (persistenceRuntime) data = await persistenceRuntime.sourceConnections.update(workspaceId, sourceId, { is_active: true, health_status: 'HEALTHY', last_error_code: null, last_connected_at: new Date().toISOString() }); else { const result = await supabase.from('source_connections').update({ is_active: true, health_status: 'HEALTHY', last_error_code: null, last_connected_at: new Date().toISOString() }).eq('workspace_id', workspaceId).eq('id', sourceId).select(SOURCE_SELECT).maybeSingle(); if (result.error) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503); data = result.data; } } catch { return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503); }
+  if (!data) return json({ ok: false, reason: 'SOURCE_STATE_UPDATE_FAILED' }, 503);
+  return json({ ok: true, workspaceId, source: safeSource({ ...data, provider_secret_configured: Boolean(source.provider_secret_ciphertext), secret_configured: Boolean(source.secret_ciphertext) }) });
 }

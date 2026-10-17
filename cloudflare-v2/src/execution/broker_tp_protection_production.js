@@ -42,14 +42,24 @@ export function createProductionBrokerTpProtectionRuntime({
   executionDepsFactory,
   clock = Date.now,
 } = {}) {
-  return async function run(env = {}) {
+  return async function run(env = {}, { persistenceRuntime = null } = {}) {
     if (env.BROKER_TP_PROTECTION_ENABLED === 'false') return { status: 'disabled', scanned: 0, confirmed: 0, applied: 0, skipped: 0 };
-    const persistence = await persistenceFactory(env);
-    const supabase = persistence.supabase;
-    if (!supabase) throw new Error('broker TP persistence client unavailable');
+    const persistence = persistenceRuntime ? null : await persistenceFactory(env);
+    const supabase = persistence?.supabase || null;
+    if (!persistenceRuntime && !supabase) throw new Error('broker TP persistence client unavailable');
 
     async function loadSourceEvent(candidate) {
       if (!candidate.sourceEventId) return null;
+      if (persistenceRuntime) {
+        const sourceEvent = await persistenceRuntime.ingest.eventStore.getById(candidate.workspaceId, candidate.sourceEventId);
+        if (!sourceEvent?.source_connection_id) return null;
+        const sourceConnection = await persistenceRuntime.sourceConnections.getSource(candidate.workspaceId, sourceEvent.source_connection_id);
+        if (!sourceConnection) return null;
+        return { sourceId: String(sourceConnection.id), sourceInstanceId: candidate.sourceInstanceId || sourceConnection.source_instance_id || sourceConnection.sourceInstanceId || null,
+          sourceEventId: String(sourceEvent.id), sourceType: String(sourceEvent.source_type || 'BROKER'),
+          sourceExternalId: String(sourceEvent.source_external_id || sourceEvent.external_event_id || ''),
+          metadata: sourceEvent.metadata && typeof sourceEvent.metadata === 'object' ? sourceEvent.metadata : {} };
+      }
       const { data: sourceEvent, error } = await supabase.from('trading_events')
         .select('id,source_connection_id,source_type,source_external_id,external_event_id,occurred_at,metadata')
         .eq('workspace_id', candidate.workspaceId).eq('id', candidate.sourceEventId).maybeSingle();
@@ -79,21 +89,27 @@ export function createProductionBrokerTpProtectionRuntime({
         thread: {}, metadata: { ...sourceEvent.metadata, broker_fill: { kind: 'TAKE_PROFIT',
           tradeAccountId: candidate.tradeAccountId, brokerPositionId: detection.positionId,
           targetIndex: candidate.targetIndex, dealIds: detection.dealIds } },
-        processing_status: 'BROKER_TP_DETECTED',
+        processing_status: 'MANAGEMENT',
         canonical_intent: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: candidate.targetIndex,
           brokerPositionId: detection.positionId, tradeAccountId: candidate.tradeAccountId } },
       };
+      let eventId;
+      if (persistenceRuntime) {
+        const reserved = await persistenceRuntime.ingest.eventStore.reserve(eventBody);
+        eventId = text(reserved?.eventId);
+      } else {
       const { data: inserted, error: insertError } = await supabase.from('trading_events')
         .upsert(eventBody, { onConflict: 'workspace_id,source_connection_id,external_event_id', ignoreDuplicates: true })
         .select('id').maybeSingle();
       errorOf(insertError, 'broker TP event persistence failed');
-      let eventId = text(inserted?.id);
+      eventId = text(inserted?.id);
       if (!eventId) {
         const { data: existing, error } = await supabase.from('trading_events').select('id')
           .eq('workspace_id', candidate.workspaceId).eq('source_connection_id', sourceEvent.sourceId)
           .eq('external_event_id', externalEventId).maybeSingle();
         errorOf(error, 'broker TP event recovery failed');
         eventId = text(existing?.id);
+      }
       }
       if (!eventId) throw new Error('broker TP event id unavailable');
       const event = {
@@ -110,10 +126,12 @@ export function createProductionBrokerTpProtectionRuntime({
     const depsByWorkspace = new Map();
     const accountLoadById = new Map();
     const runtime = createBrokerTpProtectionRuntime({
-      loadCandidates: async ({ limit, pageSeed }) => persistence.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed }),
+      loadCandidates: async ({ limit, pageSeed }) => persistenceRuntime
+        ? persistenceRuntime.tradeState.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed })
+        : persistence.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed }),
       loadAccount: async (workspaceId, accountId) => {
         if (!depsByWorkspace.has(workspaceId)) depsByWorkspace.set(workspaceId,
-          (executionDepsFactory || createProductionExecutionDependencies)({ env, supabase, workspaceId }));
+          (executionDepsFactory || createProductionExecutionDependencies)({ env, supabase, persistenceRuntime, workspaceId }));
         const key = `${workspaceId}:${accountId}`;
         if (!accountLoadById.has(key)) accountLoadById.set(key,
           Promise.resolve(depsByWorkspace.get(workspaceId).accountLoader(workspaceId, accountId)));
@@ -130,13 +148,13 @@ export function createProductionBrokerTpProtectionRuntime({
       },
       recordManagementEvent,
       applyTargetHit: async ({ candidate, event, sourceEvent }) => {
-        const simulationDependencies = await simulationDepsFactory({ env, supabase, event: event.event,
+        const simulationDependencies = await simulationDepsFactory({ env, supabase, persistenceRuntime, event: event.event,
           interpretation: event.interpretation, eventId: event.eventId, sourceId: event.sourceId });
         const simulation = await orchestrateFn({ event: event.event, interpretation: event.interpretation,
           eventId: event.eventId, nowMs: Number(clock()) }, simulationDependencies);
         const result = { ok: true, duplicate: false, eventId: event.eventId, sourceId: sourceEvent?.sourceId,
           event: event.event, interpretation: event.interpretation };
-        const execution = await executionStageFn({ env, supabase, result, simulation });
+        const execution = await executionStageFn({ env, supabase, persistenceRuntime, result, simulation });
         return { simulation, execution };
       },
       clock,

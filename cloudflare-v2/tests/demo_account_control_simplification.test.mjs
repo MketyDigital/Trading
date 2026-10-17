@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections_account_controls.js';
+import { finalizeCTraderOAuthResponse, handleV1AdminConnectionsRequest } from '../src/http/v1_admin_connections_account_controls.js';
 import { withUnifiedTradingConnections } from '../src/dashboard_unified_connections.js';
 import { withSimplifiedAccountControls } from '../src/dashboard_simplified_account_controls.js';
 
@@ -121,6 +121,54 @@ test('live account keeps real-money permission separate from its Trading ON/OFF 
   assert.deepEqual(second.supabase.updates.at(-1), { live_execution_enabled: true });
   const body = await second.response.json();
   assert.equal(body.account.liveExecutionEnabled, true);
+});
+
+test('storage-runtime cTrader OAuth completion repairs credentials through the selected repository', async () => {
+  let supabaseCalls = 0;
+  const updates = [];
+  const persistenceRuntime = {
+    workspaceAccess: {},
+    accounts: {
+      async listAccounts(workspaceId) {
+        assert.equal(workspaceId, 'ws-1');
+        return [{ id: 'acc-1', platform: 'ctrader', provider_mode: 'ctrader_oauth', credential_ciphertext: 'tokens-only' }];
+      },
+      async updateAccount(...args) { updates.push(args); },
+    },
+  };
+  const response = Response.json({ ok: true, accounts: [{ id: 'acc-1' }] });
+  const result = await finalizeCTraderOAuthResponse(response, new Request('https://trade.mkety.com'), {
+    TRADING_MASTER_KEY: 'master-key',
+    CTRADER_CLIENT_ID: 'client-id',
+    CTRADER_CLIENT_SECRET: 'client-secret',
+  }, {
+    persistenceRuntime,
+    supabaseFactory: async () => { supabaseCalls += 1; throw new Error('must not open Supabase'); },
+    authorizeFn: async (_request, _env, stores) => {
+      assert.equal(stores.workspaceAccess, persistenceRuntime.workspaceAccess);
+      return authorization;
+    },
+    decryptCredentials: async (platform, ciphertext, key) => {
+      assert.equal(platform, 'ctrader');
+      assert.equal(ciphertext, 'tokens-only');
+      assert.equal(key, 'master-key');
+      return { accessToken: 'access', refreshToken: 'refresh' };
+    },
+    encryptCredentials: async (platform, credentials, key) => {
+      assert.equal(platform, 'ctrader');
+      assert.deepEqual(credentials, {
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+      });
+      assert.equal(key, 'master-key');
+      return 'fully-encrypted';
+    },
+  });
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.equal(supabaseCalls, 0);
+  assert.deepEqual(updates, [['ws-1', 'acc-1', { credential_ciphertext: 'fully-encrypted' }]]);
 });
 
 test('connections UI exposes one Trading toggle for demo and a separate real-money toggle only for live accounts', () => {

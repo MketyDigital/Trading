@@ -91,6 +91,7 @@ async function resolveRuntimeControl(resolver, { env, supabase }, unavailableRea
 export async function runV1ProductionExecutionStage({
   env = {},
   supabase,
+  persistenceRuntime = null,
   result,
   simulation,
   executionDepsFactory = createProductionExecutionDependencies,
@@ -112,9 +113,10 @@ export async function runV1ProductionExecutionStage({
     return summary('NOT_EXECUTABLE', { transportMode });
   }
 
+  const controlContext = { env, supabase, runtimeControls: persistenceRuntime?.runtimeControls };
   const tradingAccessControl = await resolveRuntimeControl(
     tradingAccessControlResolver,
-    { env, supabase },
+    controlContext,
     'TRADING_RUNTIME_CONTROL_UNAVAILABLE',
   );
   if (!tradingAccessControl?.ok) {
@@ -126,7 +128,7 @@ export async function runV1ProductionExecutionStage({
 
   const brokerExecutionControl = await resolveRuntimeControl(
     brokerExecutionControlResolver,
-    { env, supabase },
+    controlContext,
     'RUNTIME_CONTROL_UNAVAILABLE',
   );
   if (!brokerExecutionControl?.ok) {
@@ -138,7 +140,7 @@ export async function runV1ProductionExecutionStage({
 
   const liveBrokerExecutionControl = await resolveRuntimeControl(
     liveBrokerExecutionControlResolver,
-    { env, supabase },
+    controlContext,
     'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE',
   );
 
@@ -152,9 +154,10 @@ export async function runV1ProductionExecutionStage({
     ? safeSimulationDepsFactory
     : executionDepsFactory;
 
-  const dependencies = await selectedFactory({ env, supabase, workspaceId, tradingEventId });
+  const dependencies = await selectedFactory({ env, supabase, persistenceRuntime, workspaceId, tradingEventId });
   const bindingRepairRecorder = dependencies?.bindingRepairRecorder || bindingRepairRecorderFactory({
     supabase,
+    persistenceRuntime,
     workspaceId,
     tradingEventId,
   });

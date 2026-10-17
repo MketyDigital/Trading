@@ -1,4 +1,5 @@
 import { sanitizeOperationString } from '../operations/operation_journal.js';
+import { verifyTradingStorageAuthority } from '../persistence/trading_storage_authority.js';
 
 const DELIVERY_STATUSES = Object.freeze(['PENDING', 'SUCCEEDED', 'RETRYABLE', 'UNCERTAIN', 'FAILED']);
 const FAILURE_STATUSES = Object.freeze(['RETRYABLE', 'UNCERTAIN', 'FAILED']);
@@ -611,6 +612,84 @@ export function createAdminOperationsStore(supabase, {
           actorHistoryRecorded: false,
         },
       };
+    },
+  };
+}
+
+// Read-only operations view over the currently selected D1 or PostgreSQL
+// authority. All SQL is workspace-scoped; response shaping remains shared with
+// the legacy store so persisted secrets and payload bodies stay filtered.
+export function createTradingAdminOperationsStore({ authority, postgresDatabase, nowFn = () => new Date(), recentLimit = 10, resilienceMetricsSource = null } = {}) {
+  if (!authority || !['d1', 'postgres'].includes(authority.kind)) throw new TypeError('Resolved D1 or PostgreSQL authority is required');
+  if (authority.kind === 'postgres' && !postgresDatabase) throw new TypeError('Connected PostgreSQL database is required');
+  const d1 = authority.kind === 'd1';
+  const schema = d1 ? '' : 'trading_storage.';
+  const limit = safeLimit(recentLimit);
+  async function rows(sql, params = []) {
+    const result = d1
+      ? await authority.binding.prepare(sql).bind(...params).all()
+      : await postgresDatabase.query(sql, params);
+    return d1 ? (result.results || []).map(parseStoredJson) : (result.rows || []).map(parseStoredJson);
+  }
+  async function one(sql, params = []) {
+    const result = d1
+      ? await authority.binding.prepare(sql).bind(...params).first()
+      : (await postgresDatabase.query(sql, params)).rows?.[0] || null;
+    return result ? parseStoredJson(result) : null;
+  }
+  function parseStoredJson(row) {
+    const out = { ...row };
+    for (const key of ['canonical_intent', 'source_event_ids', 'safety_policy', 'details']) {
+      if (typeof out[key] === 'string') { try { out[key] = JSON.parse(out[key]); } catch { out[key] = key === 'source_event_ids' ? [] : {}; } }
+    }
+    for (const key of ['is_active', 'execution_enabled', 'incomplete', 'retryable']) if (out[key] != null) out[key] = Boolean(out[key]);
+    return out;
+  }
+  const ph = (n) => d1 ? '?' : `$${n}`;
+  return {
+    async snapshot(workspaceId) {
+      await verifyTradingStorageAuthority(authority, { postgresDatabase });
+      const w = text(workspaceId);
+      if (!w) throw new TypeError('workspaceId is required');
+      const observedAt = validObservedAt(nowFn);
+      const statusCounts = Object.fromEntries(DELIVERY_STATUSES.map(status => [status, 0]));
+      for (const row of await rows(`SELECT status,COUNT(*) AS count FROM ${schema}destination_deliveries WHERE workspace_id=${ph(1)} GROUP BY status`, [w])) {
+        if (Object.hasOwn(statusCounts, String(row.status))) statusCounts[String(row.status)] = Number(row.count || 0);
+      }
+      const overdue = await one(`SELECT COUNT(*) AS count FROM ${schema}destination_deliveries WHERE workspace_id=${ph(1)} AND status='RETRYABLE' AND next_attempt_at<=${ph(2)}`, [w, observedAt]);
+      const recentFailures = (await rows(`SELECT id,workspace_id,trading_event_id,destination_type,destination_ref,status,error_code,failure_class,attempt_count,next_attempt_at,last_attempt_at,updated_at FROM ${schema}destination_deliveries WHERE workspace_id=${ph(1)} AND status IN ('RETRYABLE','UNCERTAIN','FAILED') ORDER BY updated_at DESC LIMIT ${limit}`, [w])).filter(r => r.error_code || r.failure_class).map(safeRecentFailure);
+      const accounts = await rows(`SELECT id,workspace_id,account_label,platform,is_active,execution_enabled,safety_policy FROM ${schema}trade_accounts WHERE workspace_id=${ph(1)} ORDER BY id`, [w]);
+      const blocked = accounts.map(accountSafetyBlock).filter(Boolean);
+      const events = await rows(`SELECT id,workspace_id,source_connection_id,external_event_id,source_type,source_external_id,received_at,processing_status,canonical_intent,error_code,created_at FROM ${schema}trading_events WHERE workspace_id=${ph(1)} ORDER BY received_at DESC LIMIT ${limit}`, [w]);
+      const eventIds = events.map(e => String(e.id));
+      const sourceIds = [...new Set(events.map(e => e.source_connection_id).filter(Boolean))];
+      const sourceRows = sourceIds.length ? await rows(`SELECT id,workspace_id,source_type,provider_type,source_instance_id,display_name FROM ${schema}source_connections WHERE workspace_id=${ph(1)} AND id IN (${sourceIds.map((_,i)=>ph(i+2)).join(',')})`, [w,...sourceIds]) : [];
+      const groupRows = eventIds.length ? await rows(`SELECT id,workspace_id,trade_account_id,source_event_id,source_event_ids,correlation_key,canonical_symbol,side,order_type,status,updated_at FROM ${schema}position_groups WHERE workspace_id=${ph(1)} AND (source_event_id IN (${eventIds.map((_,i)=>ph(i+2)).join(',')}) OR ${d1 ? `EXISTS (SELECT 1 FROM json_each(COALESCE(source_event_ids,'[]')) WHERE value IN (${eventIds.map((_,i)=>ph(i+2+eventIds.length)).join(',')}))` : `source_event_ids && ARRAY[${eventIds.map((_,i)=>ph(i+eventIds.length+2)).join(',')}]::text[]`})`, [w,...eventIds,...eventIds]) : [];
+      const uniqueGroups = [...new Map(groupRows.map(g=>[String(g.id),g])).values()];
+      const groupIds = uniqueGroups.map(g=>g.id);
+      const accountIds = [...new Set(uniqueGroups.map(g=>g.trade_account_id).filter(Boolean))];
+      const recentAccounts = accountIds.length ? await rows(`SELECT id,workspace_id,account_label,platform FROM ${schema}trade_accounts WHERE workspace_id=${ph(1)} AND id IN (${accountIds.map((_,i)=>ph(i+2)).join(',')})`,[w,...accountIds]) : [];
+      const deliveries = eventIds.length ? await rows(`SELECT id,workspace_id,trading_event_id,destination_type,destination_ref,status,error_code,failure_class,updated_at FROM ${schema}destination_deliveries WHERE workspace_id=${ph(1)} AND trading_event_id IN (${eventIds.map((_,i)=>ph(i+2)).join(',')}) ORDER BY updated_at DESC`,[w,...eventIds]) : [];
+      const journal = await rows(`SELECT workspace_id,correlation_id,trading_event_id,stage,operation,status,error_code,failure_class,retryable,summary,details,observed_at FROM ${schema}operation_journal WHERE workspace_id=${ph(1)} ORDER BY observed_at DESC LIMIT ${limit}`,[w]);
+      const sourcesById = new Map(sourceRows.map(r=>[String(r.id),r]));
+      const accountsById = new Map(recentAccounts.map(r=>[String(r.id),r]));
+      const recentEvents = events.map(event => safeRecentEvent(event,{source:sourcesById.get(String(event.source_connection_id))||null,groups:uniqueGroups.filter(g=>g.source_event_id===event.id||(Array.isArray(g.source_event_ids)&&g.source_event_ids.map(String).includes(String(event.id)))),accountsById,deliveries:deliveries.filter(d=>String(d.trading_event_id)===String(event.id))}));
+      return { workspaceId:w, observedAt, recentEvents, operationTimeline:journal.map(safeOperationTimelineRow), deliveries:{counts:statusCounts,overdueRetryable:Number(overdue?.count||0),recentFailures}, accountSafety:{blocked,blockedCount:blocked.length}, resilience:await loadResilienceSummary(resilienceMetricsSource,w) };
+    },
+    async auditEvent(workspaceId,eventId) {
+      await verifyTradingStorageAuthority(authority, { postgresDatabase });
+      const w=text(workspaceId), id=text(eventId);
+      if (!w || !id) throw new TypeError('workspaceId and eventId are required');
+      const event=await one(`SELECT id,workspace_id,source_connection_id,external_event_id,event_version,source_type,source_external_id,occurred_at,received_at,processing_status,canonical_intent,error_code,created_at FROM ${schema}trading_events WHERE workspace_id=${ph(1)} AND id=${ph(2)}`,[w,id]);
+      if (!event) return null;
+      const source=await one(`SELECT id,workspace_id,source_type,source_family,provider_type,source_instance_id,display_name,external_identity FROM ${schema}source_connections WHERE workspace_id=${ph(1)} AND id=${ph(2)}`,[w,event.source_connection_id]);
+      const groups=await rows(`SELECT id,workspace_id,trade_account_id,source_event_id,source_event_ids,source_instance_id,correlation_key,canonical_symbol,side,order_type,stop_loss,status,incomplete,position_mode,created_at,updated_at FROM ${schema}position_groups WHERE workspace_id=${ph(1)} AND (source_event_id=${ph(2)} OR ${d1 ? `EXISTS (SELECT 1 FROM json_each(COALESCE(source_event_ids,'[]')) WHERE value=${ph(2)})` : `source_event_ids @> ARRAY[${ph(3)}]::text[]`})`,[w,id,...(d1?[]:[id])]);
+      const groupIds=groups.map(g=>g.id);
+      const legs=groupIds.length?await rows(`SELECT id,workspace_id,position_group_id,target_index,lots,stop_loss,take_profit,status,broker_position_id,broker_order_id,opened_at,closed_at,created_at,updated_at FROM ${schema}position_legs WHERE workspace_id=${ph(1)} AND position_group_id IN (${groupIds.map((_,i)=>ph(i+2)).join(',')}) ORDER BY target_index`,[w,...groupIds]):[];
+      const deliveries=await rows(`SELECT id,workspace_id,trading_event_id,destination_type,destination_ref,status,error_code,failure_class,attempt_count,next_attempt_at,last_attempt_at,created_at,updated_at FROM ${schema}destination_deliveries WHERE workspace_id=${ph(1)} AND trading_event_id=${ph(2)} ORDER BY created_at`,[w,id]);
+      const journal=await rows(`SELECT workspace_id,correlation_id,trading_event_id,stage,operation,status,error_code,failure_class,retryable,summary,details,observed_at FROM ${schema}operation_journal WHERE workspace_id=${ph(1)} AND trading_event_id=${ph(2)} ORDER BY observed_at`,[w,id]);
+      const byGroup=new Map(); for(const leg of legs){const key=String(leg.position_group_id);const list=byGroup.get(key)||[];list.push(safeAuditLeg(leg));byGroup.set(key,list);}
+      return {workspaceId:w,event:safeAuditEvent(event),source:source?safeAuditSource(source):null,positionGroups:groups.map(g=>safeAuditGroup(g,byGroup.get(String(g.id))||[])),deliveries:deliveries.map(safeAuditDelivery),operationTimeline:journal.map(safeOperationTimelineRow),historyCoverage:{actorHistoryRecorded:false}};
     },
   };
 }

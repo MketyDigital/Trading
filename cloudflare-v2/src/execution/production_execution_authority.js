@@ -16,10 +16,11 @@ async function exactSingle(query, unavailableMessage) {
 
 export function createProductionExecutionAuthorityLoader({
   supabase,
+  persistenceRuntime = null,
   workspaceId,
   tradingEventId,
 } = {}) {
-  if (!supabase?.from) throw new TypeError('Supabase client is required');
+  if (!supabase?.from && !persistenceRuntime) throw new TypeError('Trading persistence is required');
 
   const boundWorkspaceId = text(workspaceId);
   const boundTradingEventId = text(tradingEventId);
@@ -40,6 +41,25 @@ export function createProductionExecutionAuthorityLoader({
 
     const accountRef = text(accountId);
     if (!accountRef) throw authorityError('execution account authority unavailable');
+
+    if (persistenceRuntime?.ingest?.eventStore && persistenceRuntime?.sourceConnections && persistenceRuntime?.workspaceAccess && persistenceRuntime?.accounts) {
+      const event = await persistenceRuntime.ingest.eventStore.getById(boundWorkspaceId, boundTradingEventId);
+      const [source, workspace, account] = await Promise.all([
+        event?.source_connection_id ? persistenceRuntime.sourceConnections.getSource(boundWorkspaceId, event.source_connection_id) : null,
+        persistenceRuntime.workspaceAccess.getWorkspace(boundWorkspaceId),
+        persistenceRuntime.accounts.getAccount(boundWorkspaceId, accountRef),
+      ]);
+      const active = value => value === true || Number(value) === 1;
+      if (!event || text(event.workspace_id) !== boundWorkspaceId) throw authorityError('execution event workspace authority unavailable');
+      if (!source || text(source.workspace_id) !== boundWorkspaceId) throw authorityError('execution source authority unavailable');
+      if (!active(source.is_active)) throw authorityError('execution source inactive');
+      if (!workspace) throw authorityError('execution workspace authority unavailable');
+      if (!active(workspace.trading_access_enabled)) throw authorityError('execution workspace entitlement disabled');
+      if (!account || text(account.workspace_id) !== boundWorkspaceId) throw authorityError('execution account authority unavailable');
+      if (!active(account.is_active)) throw authorityError('execution account inactive');
+      if (!active(account.execution_enabled)) throw authorityError('execution account execution disabled');
+      return { event, source, workspace, account };
+    }
 
     const event = await exactSingle(
       supabase

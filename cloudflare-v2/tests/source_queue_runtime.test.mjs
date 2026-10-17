@@ -89,3 +89,28 @@ test('runtime retries every message when encryption/runtime configuration is mis
   assert.equal(a.retried, 1);
   assert.equal(b.retried, 1);
 });
+
+test('storage runtime dispatches through repositories without constructing Supabase', async () => {
+  const msg = message();
+  let factoryCalls = 0;
+  const stores = {
+    sourceStore: { async getActiveSource(id) { assert.equal(id, 'src-1'); return {
+      id, secret: 'decrypted-source-secret', source_type: 'telegram_mtproto', source_instance_id: 'telegram-account-1',
+    }; } },
+  };
+  const persistenceRuntime = { ingest: stores };
+  const runtime = createSourceQueueRuntime({
+    supabaseFactory: async () => { factoryCalls += 1; throw new Error('Supabase must not be used'); },
+    async eventsHandler(request, env, options) {
+      assert.equal(options.persistenceRuntime, persistenceRuntime);
+      assert.equal(options.supabaseFactory, undefined);
+      assert.equal(request.headers.get('X-Mkety-Source-Id'), 'src-1');
+      return Response.json({ ok: true, eventId: 'evt-1' });
+    },
+  });
+
+  const result = await runtime({ messages: [msg] }, { TRADING_MASTER_KEY: 'master' }, { persistenceRuntime });
+
+  assert.deepEqual(result, { processed: 1, acknowledged: 1, retried: 0 });
+  assert.equal(factoryCalls, 0);
+});

@@ -22,6 +22,30 @@ test('connection entry intercepts public cTrader callback without sending it to 
   assert.equal(baseCalls, 0);
 });
 
+test('MT5 bridge pairing uses the selected persistence runtime in storage mode', async () => {
+  const runtime = { accounts: { getAccountById() {} }, closeCalls: 0, async close() { this.closeCalls += 1; } };
+  let factoryCalls = 0;
+  let handlerRuntime = null;
+  const worker = createTradingConnectionsEntrypoint({
+    base: { fetch: async () => response('{}') },
+    persistenceRuntimeFactory: async () => { factoryCalls += 1; return runtime; },
+    persistenceRuntimeEnabled: () => true,
+    mt5BridgeHandler: async (_request, _env, options) => {
+      handlerRuntime = options.persistenceRuntime;
+      return response('{"ok":true}');
+    },
+  });
+  const r = await worker.fetch(
+    new Request('https://trade.mkety.com/api/v1/external/mt5/bridge/row-1', { method: 'POST' }),
+    { TRADING_ACCESS_ENABLED: 'true' },
+    {},
+  );
+  assert.equal(r.status, 200);
+  assert.equal(factoryCalls, 1);
+  assert.equal(handlerRuntime, runtime);
+  assert.equal(runtime.closeCalls, 1);
+});
+
 test('portal response receives unified connection management UI while preserving base portal', async () => {
   const worker = createTradingConnectionsEntrypoint({
     base: { fetch: async () => response('<html><body><div id="accountRows"></div></body></html>', 'text/html; charset=utf-8') },

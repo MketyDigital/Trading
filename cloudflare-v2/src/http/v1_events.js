@@ -89,6 +89,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   destinationStageFn = runV1DestinationDeliveryAcceptanceStage,
   operationJournalStoreFactory = createOperationJournalStore,
   orchestrateDuplicates = false,
+  persistenceRuntime = null,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -105,14 +106,13 @@ export async function handleV1EventsRequest(request, env = {}, {
   if (!masterKey) {
     return json({ ok: false, reason: 'TRADING_MASTER_KEY_NOT_CONFIGURED' }, 503);
   }
-
   try {
     const rawBody = await request.text();
-    const supabase = await supabaseFactory(env);
-    const stores = storesFactory(supabase, { masterKey });
+    const supabase = persistenceRuntime ? null : await supabaseFactory(env);
+    const stores = persistenceRuntime?.ingest || storesFactory(supabase, { masterKey });
     let operationJournal = null;
     try {
-      operationJournal = operationJournalStoreFactory(supabase);
+      operationJournal = operationJournalStoreFactory(persistenceRuntime?.operationJournal || supabase);
     } catch {
       operationJournal = null;
     }
@@ -135,7 +135,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       if (!trustedWorkspaceId) return Promise.resolve(null);
       if (!workspaceAiRouterPromise || workspaceAiRouterWorkspaceId !== trustedWorkspaceId) {
         workspaceAiRouterWorkspaceId = trustedWorkspaceId;
-        workspaceAiRouterPromise = Promise.resolve(workspaceAiFactory(supabase, trustedWorkspaceId, {
+        workspaceAiRouterPromise = Promise.resolve(workspaceAiFactory(persistenceRuntime?.aiProviders || supabase, trustedWorkspaceId, {
           masterKey,
           env,
           circuitBreaker: aiCircuitBreaker,
@@ -172,8 +172,8 @@ export async function handleV1EventsRequest(request, env = {}, {
     // PLANNED group after an operator has turned trading or broker execution off.
     if (duplicateReplayRequested) {
       const [tradingControl, brokerControl] = await Promise.all([
-        recoveryTradingAccessControlResolver({ env, supabase }),
-        recoveryBrokerExecutionControlResolver({ env, supabase }),
+        recoveryTradingAccessControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
+        recoveryBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
       ]);
       let recoveryBlockReason = null;
       if (tradingControl?.ok !== true) recoveryBlockReason = 'TRADING_RUNTIME_CONTROL_UNAVAILABLE';
@@ -194,7 +194,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       ? Promise.resolve(skippedDuplicateDestinationStage())
       : (async () => {
           try {
-            const destinationStore = destinationStoreFactory(supabase, { masterKey });
+            const destinationStore = destinationStoreFactory(supabase, { masterKey, persistenceRuntime });
             const aiFormatterFactory = async () => {
               const router = await aiRouterForWorkspace(result?.event?.workspace_hint);
               return createTelegramDestinationAiFormatter(router);
@@ -208,6 +208,7 @@ export async function handleV1EventsRequest(request, env = {}, {
             }, {
               destinationStore,
               supabase,
+              persistenceRuntime,
               decryptCredentials: decryptDestinationCredentialsCompat,
               aiFormatterFactory,
               aiCircuitBreaker,
@@ -222,6 +223,7 @@ export async function handleV1EventsRequest(request, env = {}, {
       const dependencies = await simulationDepsFactory({
         env,
         supabase,
+        persistenceRuntime,
         event: result.event,
         interpretation: result.interpretation,
         eventId: result.eventId,
@@ -243,6 +245,7 @@ export async function handleV1EventsRequest(request, env = {}, {
     const execution = await executionStageFn({
       env,
       supabase,
+      persistenceRuntime,
       result: executionResult,
       simulation,
       executionDepsFactory,

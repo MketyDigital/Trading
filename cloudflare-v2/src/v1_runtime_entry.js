@@ -1,6 +1,8 @@
 import innerWorker from './v1_connections_entry.js';
+import { createTradingConnectionsEntrypoint } from './v1_connections_entry.js';
 import { resolveTradingAccessRuntimeControl } from './persistence/supabase_runtime_control_store.js';
 import { tradingAccessDisabledResponse } from './security/trading_runtime_access.js';
+import { createTradingPersistenceRuntime } from './persistence/trading_persistence_runtime.js';
 
 export { MTProtoListenerNode, TradeStateNode, MtprotoContainerRuntime } from './v1_connections_entry.js';
 
@@ -29,11 +31,18 @@ export function requiresTradingRuntimeGate(pathname = '') {
 }
 
 export function createRuntimeControlledTradingEntrypoint({
-  base = innerWorker,
+  base = null,
   supabaseFactory = createSupabase,
   tradingAccessResolver = resolveTradingAccessRuntimeControl,
+  persistenceRuntimeFactory = null,
+  persistenceRuntimeEnabled = (env = {}) => /^(1|true|yes|on)$/i.test(String(env.TRADING_STORAGE_RUNTIME_ENABLED || '').trim()),
 } = {}) {
-  async function authorizedEnv(env = {}) {
+  const runtimeFactory = persistenceRuntimeFactory;
+  const usePersistenceRuntime = (env = {}) => Boolean(runtimeFactory && persistenceRuntimeEnabled(env));
+  const activeBase = base || (runtimeFactory
+    ? createTradingConnectionsEntrypoint({ persistenceRuntimeFactory: runtimeFactory, persistenceRuntimeEnabled })
+    : innerWorker);
+  async function legacyAuthorizedEnv(env = {}) {
     let supabase;
     try {
       supabase = await supabaseFactory(env);
@@ -58,24 +67,41 @@ export function createRuntimeControlledTradingEntrypoint({
   return {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
-      if (!requiresTradingRuntimeGate(url.pathname)) return base.fetch(request, env, ctx);
-      const runtime = await authorizedEnv(env);
+      if (!requiresTradingRuntimeGate(url.pathname)) return activeBase.fetch(request, env, ctx);
+      if (usePersistenceRuntime(env)) {
+        let persistenceRuntime;
+        try {
+          persistenceRuntime = await runtimeFactory(env);
+          const control = await tradingAccessResolver({ env, runtimeControls: persistenceRuntime.runtimeControls });
+          if (!control?.ok) return tradingRuntimeUnavailableResponse();
+          if (control.enabled !== true) return tradingAccessDisabledResponse();
+          const requestCtx = Object.assign(Object.create(ctx ? Object.getPrototypeOf(ctx) : Object.prototype), ctx || {}, { tradingPersistenceRuntime: persistenceRuntime });
+          return await activeBase.fetch(request, { ...env, TRADING_ACCESS_ENABLED: 'true' }, requestCtx);
+        } catch {
+          return tradingRuntimeUnavailableResponse();
+        } finally {
+          try { await persistenceRuntime?.close?.(); } catch { /* Preserve the request response. */ }
+        }
+      }
+      const runtime = await legacyAuthorizedEnv(env);
       if (!runtime.ok) return runtime.response;
-      return base.fetch(request, runtime.env, ctx);
+      return activeBase.fetch(request, runtime.env, ctx);
     },
 
     async queue(batch, env, ctx) {
-      if (typeof base.queue !== 'function') return undefined;
+      if (typeof activeBase.queue !== 'function') return undefined;
       // Queue work may continue canonicalization while the global switch is OFF;
       // broker execution itself independently re-checks the DB switch fail-closed.
-      return base.queue(batch, env, ctx);
+      return activeBase.queue(batch, env, ctx);
     },
 
     async scheduled(event, env, ctx) {
-      if (typeof base.scheduled !== 'function') return undefined;
-      return base.scheduled(event, env, ctx);
+      if (typeof activeBase.scheduled !== 'function') return undefined;
+      return activeBase.scheduled(event, env, ctx);
     },
   };
 }
 
-export default createRuntimeControlledTradingEntrypoint();
+export default createRuntimeControlledTradingEntrypoint({
+  persistenceRuntimeFactory: createTradingPersistenceRuntime,
+});

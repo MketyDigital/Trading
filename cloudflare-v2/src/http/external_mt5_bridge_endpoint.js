@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { decryptConnectionCredentials, encryptConnectionCredentials } from '../security/connection_credentials.js';
 import { signMT5MetadataRequest } from '../adapters/mt5_bridge_protocol.js';
 
@@ -54,6 +53,7 @@ async function defaultSupabase(env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error('BRIDGE_DATABASE_UNAVAILABLE');
+  const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);
 }
 
@@ -79,6 +79,7 @@ export async function handleExternalMt5BridgeRequest(request, env = {}, {
   encryptCredentials = encryptConnectionCredentials,
   fetchImpl = fetch,
   now = () => new Date(),
+  persistenceRuntime = null,
 } = {}) {
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
   if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'BRIDGE_ENCRYPTION_NOT_CONFIGURED' }, 503);
@@ -103,13 +104,17 @@ export async function handleExternalMt5BridgeRequest(request, env = {}, {
   try { runtimeBridgeUrl = normalizeRuntimeBridgeUrl(body?.bridgeUrl); }
   catch { return json({ ok: false, reason: 'MT5_BRIDGE_URL_INVALID' }, 400); }
 
-  let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'BRIDGE_DATABASE_UNAVAILABLE' }, 503); }
-
-  const select = 'id,workspace_id,platform,provider_mode,account_id,server_name,credential_ciphertext,provider_config,is_active,execution_enabled,safety_policy';
-  const { data: account, error: readError } = await supabase.from('trade_accounts').select(select).eq('id', rowId).maybeSingle();
-  if (readError) return json({ ok: false, reason: 'MT5_BRIDGE_ACCOUNT_READ_FAILED' }, 503);
+  let supabase = null;
+  let account;
+  if (persistenceRuntime) account = await persistenceRuntime.accounts.getAccountById(rowId);
+  else {
+    try { supabase = await supabaseFactory(env); }
+    catch { return json({ ok: false, reason: 'BRIDGE_DATABASE_UNAVAILABLE' }, 503); }
+    const select = 'id,workspace_id,platform,provider_mode,account_id,server_name,credential_ciphertext,provider_config,is_active,execution_enabled,safety_policy';
+    const result = await supabase.from('trade_accounts').select(select).eq('id', rowId).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'MT5_BRIDGE_ACCOUNT_READ_FAILED' }, 503);
+    account = result.data;
+  }
   if (!account || account.platform !== 'mt5' || account.provider_mode !== 'mt5_bridge' || !account.credential_ciphertext) {
     return json({ ok: false, reason: 'MT5_BRIDGE_ACCOUNT_NOT_FOUND' }, 404);
   }
@@ -169,8 +174,16 @@ export async function handleExternalMt5BridgeRequest(request, env = {}, {
     provider_config: providerConfig,
     credential_ciphertext: credentialCiphertext,
   };
-  const { data, error } = await supabase.from('trade_accounts').update(update).eq('id', rowId).select('id,account_id,server_name,environment,provider_mode,provider_config,is_active,execution_enabled,safety_policy').maybeSingle();
-  if (error || !data) return json({ ok: false, reason: 'MT5_BRIDGE_PAIRING_FAILED' }, 503);
+  let data;
+  if (persistenceRuntime) {
+    try { data = await persistenceRuntime.accounts.updateAccount(String(account.workspace_id), rowId, update); }
+    catch { return json({ ok: false, reason: 'MT5_BRIDGE_PAIRING_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trade_accounts').update(update).eq('id', rowId).select('id,account_id,server_name,environment,provider_mode,provider_config,is_active,execution_enabled,safety_policy').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'MT5_BRIDGE_PAIRING_FAILED' }, 503);
+    data = result.data;
+  }
+  if (!data) return json({ ok: false, reason: 'MT5_BRIDGE_PAIRING_FAILED' }, 503);
 
   return json({
     ok: true,

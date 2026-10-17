@@ -66,6 +66,21 @@ const telegramEvent = {
   metadata: { native_identity: { chat_id: '-100200' } },
 };
 
+test('partial storage runtime fails closed instead of falling back to Supabase routing', async () => {
+  let supabaseCalls = 0;
+  const supabase = { from() { supabaseCalls += 1; throw new Error('Supabase must not be used in storage mode'); } };
+  const deps = await createV1SimulationDependencies({
+    env: env(),
+    supabase,
+    persistenceRuntime: { routes: {}, sourceFeeds: {} },
+    sourceId: 'source-1',
+    event: telegramEvent,
+  });
+
+  await assert.rejects(deps.accountProvider(), /TRADING_ROUTING_REPOSITORIES_UNAVAILABLE/);
+  assert.equal(supabaseCalls, 0);
+});
+
 test('feed-selective routing for one destination does not suppress an unrelated all-channels destination', async () => {
   const supabase = supabaseFor({
     routes: [

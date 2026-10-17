@@ -74,18 +74,21 @@ function sameFilters(left, right) {
   return JSON.stringify(normalizeFilters(left)) === JSON.stringify(normalizeFilters(right));
 }
 
-async function listLogicalRoutes(supabase, workspaceId) {
-  const { data, error } = await supabase
-    .from('source_destination_routes')
-    .select('id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters')
-    .eq('workspace_id', workspaceId)
-    .order('priority', { ascending: true });
+async function listLogicalRoutes(supabase, workspaceId, persistenceRuntime = null) {
+  if (persistenceRuntime) return groupLogicalRoutes(await persistenceRuntime.routes.list(String(workspaceId)));
+  const { data, error } = await supabase.from('source_destination_routes').select('id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters').eq('workspace_id', workspaceId).order('priority', { ascending: true });
   if (error) throw new Error('LOGICAL_ROUTE_LIST_FAILED');
   return groupLogicalRoutes(data || []);
 }
 
-async function validateAuthorityObjects(supabase, authorization, sourceConnectionId, destinationId, selectedFeedIds) {
+async function validateAuthorityObjects(supabase, authorization, sourceConnectionId, destinationId, selectedFeedIds, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
+  if (persistenceRuntime) {
+    const result = await persistenceRuntime.routes.validateAuthority(workspaceId, sourceConnectionId, destinationId, selectedFeedIds);
+    if (!result.ok) return { ok: false, status: result.reason === 'SOURCE_NOT_FOUND' || result.reason === 'DESTINATION_NOT_FOUND' ? 404 : 400, reason: result.reason };
+    if (isAccessCodeProvisionedWorkspace(authorization) && !canUseDestinationType(authorization, result.destinationType)) return { ok: false, status: 403, reason: 'TRADING_ENTITLEMENT_REQUIRED' };
+    return { ok: true };
+  }
   const [{ data: source, error: sourceError }, { data: destination, error: destinationError }] = await Promise.all([
     supabase.from('source_connections').select('id').eq('workspace_id', workspaceId).eq('id', sourceConnectionId).maybeSingle(),
     supabase.from('trading_destinations').select('id,destination_type').eq('workspace_id', workspaceId).eq('id', destinationId).maybeSingle(),
@@ -114,7 +117,8 @@ async function validateAuthorityObjects(supabase, authorization, sourceConnectio
   return { ok: true };
 }
 
-async function readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId) {
+async function readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId, persistenceRuntime = null) {
+  if (persistenceRuntime) return persistenceRuntime.routes.listPair(String(workspaceId), String(sourceConnectionId), String(destinationId));
   const { data, error } = await supabase.from('source_destination_routes')
     .select('id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters')
     .eq('workspace_id', workspaceId)
@@ -125,7 +129,7 @@ async function readRoutePair(supabase, workspaceId, sourceConnectionId, destinat
   return data || [];
 }
 
-async function reconcileLogicalRoute(request, authorization, supabase) {
+async function reconcileLogicalRoute(request, authorization, supabase, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
@@ -156,12 +160,12 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   if (!Number.isFinite(priority)) return json({ ok: false, reason: 'ROUTE_PRIORITY_INVALID' }, 400);
 
   let authority;
-  try { authority = await validateAuthorityObjects(supabase, authorization, sourceConnectionId, destinationId, selectedFeedIds); }
+  try { authority = await validateAuthorityObjects(supabase, authorization, sourceConnectionId, destinationId, selectedFeedIds, persistenceRuntime); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_AUTHORITY_LOOKUP_FAILED' }, 503); }
   if (!authority.ok) return json({ ok: false, reason: authority.reason }, authority.status);
 
   let previousPairRows;
-  try { previousPairRows = await readRoutePair(supabase, workspaceId, previousSourceConnectionId, previousDestinationId); }
+  try { previousPairRows = await readRoutePair(supabase, workspaceId, previousSourceConnectionId, previousDestinationId, persistenceRuntime); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
 
   const scope = inspectLogicalRouteEdit({
@@ -197,7 +201,7 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   if (moving) {
     if (!scope.editingRows.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
     let targetRows;
-    try { targetRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId); }
+    try { targetRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId, persistenceRuntime); }
     catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
     if (targetRows.length) {
       return json({ ok: false, reason: 'LOGICAL_ROUTE_TARGET_EXISTS' }, 409);
@@ -228,35 +232,23 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   // are never included in the change set. A partial failure can narrow authority
   // but cannot silently broaden it; retrying the same request is idempotent.
   if (plan.deleteIds.length) {
-    const { error } = await supabase.from('source_destination_routes').delete()
-      .eq('workspace_id', workspaceId).in('id', plan.deleteIds);
-    if (error) return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503);
+    try { if (persistenceRuntime) { for (const id of plan.deleteIds) await persistenceRuntime.routes.delete(workspaceId, id); } else { const { error } = await supabase.from('source_destination_routes').delete().eq('workspace_id', workspaceId).in('id', plan.deleteIds); if (error) throw error; } }
+    catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503); }
   }
 
   for (const item of plan.updates) {
-    const { error } = await supabase.from('source_destination_routes')
-      .update({ ...item.patch, updated_at: new Date().toISOString() })
-      .eq('workspace_id', workspaceId)
-      .eq('id', item.id);
-    if (error) return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503);
+    try { if (persistenceRuntime) await persistenceRuntime.routes.update(workspaceId, item.id, item.patch); else { const { error } = await supabase.from('source_destination_routes').update({ ...item.patch, updated_at: new Date().toISOString() }).eq('workspace_id', workspaceId).eq('id', item.id); if (error) throw error; } }
+    catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503); }
   }
 
   for (const item of plan.inserts) {
-    const { error } = await supabase.from('source_destination_routes').insert({
-      workspace_id: workspaceId,
-      source_connection_id: item.source_connection_id || sourceConnectionId,
-      destination_id: item.destination_id || destinationId,
-      source_feed_id: item.source_feed_id,
-      route_name: item.route_name,
-      priority: item.priority,
-      filters: safeObject(item.filters),
-      is_active: item.is_active,
-    });
-    if (error) return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503);
+    const route = { workspace_id: workspaceId, source_connection_id: item.source_connection_id || sourceConnectionId, destination_id: item.destination_id || destinationId, source_feed_id: item.source_feed_id, route_name: item.route_name, priority: item.priority, filters: safeObject(item.filters), is_active: item.is_active };
+    try { if (persistenceRuntime) await persistenceRuntime.routes.insert(route); else { const { error } = await supabase.from('source_destination_routes').insert(route); if (error) throw error; } }
+    catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503); }
   }
 
   let logicalRoutes;
-  try { logicalRoutes = await listLogicalRoutes(supabase, workspaceId); }
+  try { logicalRoutes = await listLogicalRoutes(supabase, workspaceId, persistenceRuntime); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_LIST_FAILED' }, 503); }
   const logicalRoute = logicalRoutes.find((item) =>
     item.sourceConnectionId === sourceConnectionId
@@ -270,7 +262,7 @@ async function reconcileLogicalRoute(request, authorization, supabase) {
   return json({ ok: true, workspaceId, logicalRoute });
 }
 
-async function deleteLogicalRoute(request, authorization, supabase) {
+async function deleteLogicalRoute(request, authorization, supabase, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
@@ -283,20 +275,15 @@ async function deleteLogicalRoute(request, authorization, supabase) {
   if (!previousRouteIds.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_NOT_FOUND' }, 404);
 
   let pairRows;
-  try { pairRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId); }
+  try { pairRows = await readRoutePair(supabase, workspaceId, sourceConnectionId, destinationId, persistenceRuntime); }
   catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_READ_FAILED' }, 503); }
 
   const found = new Set(pairRows.map((row) => text(row.id)).filter(Boolean));
   const missing = previousRouteIds.filter((id) => !found.has(id));
   if (missing.length) return json({ ok: false, reason: 'LOGICAL_ROUTE_STALE_EDIT', missingRouteIds: missing }, 409);
 
-  const { error } = await supabase.from('source_destination_routes')
-    .delete()
-    .eq('workspace_id', workspaceId)
-    .eq('source_connection_id', sourceConnectionId)
-    .eq('destination_id', destinationId)
-    .in('id', previousRouteIds);
-  if (error) return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503);
+  try { if (persistenceRuntime) { for (const id of previousRouteIds) await persistenceRuntime.routes.delete(workspaceId, id); } else { const { error } = await supabase.from('source_destination_routes').delete().eq('workspace_id', workspaceId).eq('source_connection_id', sourceConnectionId).eq('destination_id', destinationId).in('id', previousRouteIds); if (error) throw error; } }
+  catch { return json({ ok: false, reason: 'LOGICAL_ROUTE_RECONCILE_FAILED' }, 503); }
 
   return json({ ok: true, workspaceId, deleted: true, routeIds: previousRouteIds });
 }
@@ -310,19 +297,19 @@ export function isLogicalRouteAdminRequest(request) {
 export async function handleV1AdminLogicalRoutesRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   authorizeFn = authorizeV1AdminRequest,
+  persistenceRuntime = null,
 } = {}) {
   if (!isLogicalRouteAdminRequest(request)) return null;
-  let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
-  const authorization = await authorizeFn(request, env, { supabase });
+  let supabase = null;
+  if (!persistenceRuntime) { try { supabase = await supabaseFactory(env); } catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); } }
+  const authorization = await authorizeFn(request, env, { supabase, ...(persistenceRuntime ? { workspaceAccess: persistenceRuntime.workspaceAccess, accessCodeStore: persistenceRuntime.accessCodes, membershipStore: persistenceRuntime.workspaceAccess, hostnameStore: persistenceRuntime.hostnames } : {}) });
   if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
 
   const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/logical-routes' && request.method === 'GET') {
     if (!permission(authorization, 'sources.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
     try {
-      return json({ ok: true, workspaceId: String(authorization.workspace.id), logicalRoutes: await listLogicalRoutes(supabase, String(authorization.workspace.id)) });
+      return json({ ok: true, workspaceId: String(authorization.workspace.id), logicalRoutes: await listLogicalRoutes(supabase, String(authorization.workspace.id), persistenceRuntime) });
     } catch {
       return json({ ok: false, reason: 'LOGICAL_ROUTE_LIST_FAILED' }, 503);
     }
@@ -330,8 +317,8 @@ export async function handleV1AdminLogicalRoutesRequest(request, env = {}, {
 
   if (url.pathname === '/api/v1/admin/logical-routes/reconcile' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
     if (!permission(authorization, 'sources.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
-    if (request.method === 'DELETE') return deleteLogicalRoute(request, authorization, supabase);
-    return reconcileLogicalRoute(request, authorization, supabase);
+    if (request.method === 'DELETE') return deleteLogicalRoute(request, authorization, supabase, persistenceRuntime);
+    return reconcileLogicalRoute(request, authorization, supabase, persistenceRuntime);
   }
 
   return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);

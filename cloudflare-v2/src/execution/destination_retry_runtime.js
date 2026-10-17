@@ -50,7 +50,7 @@ export function createDestinationRetryRuntime({
   const safeBatchLimit = Math.max(1, Math.min(100, Math.trunc(Number(batchLimit) || 10)));
   const safeLeaseMs = Math.max(1000, Math.min(300000, Math.trunc(Number(leaseMs) || 30000)));
 
-  return async function runDestinationRetry(env = {}, { nowMs = Date.now() } = {}) {
+  return async function runDestinationRetry(env = {}, { nowMs = Date.now(), persistenceRuntime = null } = {}) {
     // Legacy callers may retain the deployment fuse, but production injects
     // the persisted Mkety admin runtime control as the operational authority.
     if (!brokerExecutionControlResolver && !isEnabled(env?.BROKER_EXECUTION_ENABLED)) return disabledSummary();
@@ -59,18 +59,18 @@ export function createDestinationRetryRuntime({
     if (!Number.isFinite(timestamp)) throw new TypeError('nowMs must be finite');
     const now = new Date(timestamp).toISOString();
     const leaseUntil = new Date(timestamp + safeLeaseMs).toISOString();
-    const supabase = await supabaseFactory(env);
+    const supabase = persistenceRuntime ? null : await supabaseFactory(env);
     if (brokerExecutionControlResolver) {
       let runtimeControl;
       try {
-        runtimeControl = await brokerExecutionControlResolver({ env, supabase });
+        runtimeControl = await brokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls });
       } catch {
         runtimeControl = { ok: false, enabled: false, reason: 'RUNTIME_CONTROL_UNAVAILABLE' };
       }
       if (!runtimeControl?.ok) return { ...disabledSummary(), status: 'BROKER_RUNTIME_CONTROL_UNAVAILABLE' };
       if (runtimeControl.enabled !== true) return { ...disabledSummary(), status: 'BROKER_OWNER_SWITCH_OFF' };
     }
-    const listed = await listDueFn({ supabase, now, limit: safeBatchLimit });
+    const listed = await listDueFn({ supabase, now, limit: safeBatchLimit, persistenceRuntime });
     const due = Array.isArray(listed) ? listed.slice(0, safeBatchLimit) : [];
 
     let claimed = 0;
@@ -89,7 +89,7 @@ export function createDestinationRetryRuntime({
 
       let claim;
       try {
-        claim = await claimFn({ supabase, delivery, now, leaseUntil });
+        claim = await claimFn({ supabase, delivery, now, leaseUntil, persistenceRuntime });
       } catch {
         failed += 1;
         continue;
@@ -105,7 +105,7 @@ export function createDestinationRetryRuntime({
 
       dispatched += 1;
       try {
-        const result = await recoverFn({ env, supabase, delivery: claimedRow, now });
+        const result = await recoverFn({ env, supabase, delivery: claimedRow, now, persistenceRuntime });
         const status = String(result?.status ?? '').toUpperCase();
         if (status === 'SUCCEEDED' || status === 'DUPLICATE') succeeded += 1;
         else failed += 1;
