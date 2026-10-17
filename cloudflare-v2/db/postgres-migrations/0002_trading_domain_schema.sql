@@ -732,7 +732,7 @@ END;
 $function$
 
 
-CREATE TRIGGER trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trading_storage.trade_accounts FOR EACH ROW EXECUTE FUNCTION trading_storage.enforce_connected_demo_execution();
+CREATE TRIGGER trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trading_storage.trade_accounts FOR EACH ROW EXECUTE PROCEDURE trading_storage.enforce_connected_demo_execution();
 
 CREATE OR REPLACE FUNCTION trading_storage.sync_trading_workspace_access_code_status()
  RETURNS trigger
@@ -761,7 +761,7 @@ END;
 $function$
 
 
-CREATE TRIGGER trading_access_code_workspace_lock AFTER UPDATE OF status ON trading_storage.trading_access_codes FOR EACH ROW EXECUTE FUNCTION trading_storage.sync_trading_workspace_access_code_status();
+CREATE TRIGGER trading_access_code_workspace_lock AFTER UPDATE OF status ON trading_storage.trading_access_codes FOR EACH ROW EXECUTE PROCEDURE trading_storage.sync_trading_workspace_access_code_status();
 
 REVOKE ALL ON FUNCTION trading_storage.sync_trading_workspace_access_code_status() FROM PUBLIC;
 
