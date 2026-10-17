@@ -49,6 +49,15 @@ test('Postgres migration keeps credentials encrypted and preserves restricted fu
   assert.match(sql, /trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trading_storage\.trade_accounts/);
 });
 
+test('Postgres triggers use syntax supported by the existing Coolify server', () => {
+  const triggerStatements = [...sql.matchAll(/^CREATE TRIGGER\\b[^\\n]*$/gim)].map(([statement]) => statement);
+  assert.equal(triggerStatements.length, 2);
+  for (const statement of triggerStatements) {
+    assert.match(statement, /\\bEXECUTE PROCEDURE\\b/i);
+  }
+  assert.doesNotMatch(sql, /\\bEXECUTE FUNCTION\\b/i);
+});
+
 test('all PostgreSQL migrations stay inside the Trading schema on the existing database', () => {
   const combined = migrations.map(([, contents]) => contents).join('\n');
   const executableSql = combined.replace(/^\s*--.*$/gm, '');
