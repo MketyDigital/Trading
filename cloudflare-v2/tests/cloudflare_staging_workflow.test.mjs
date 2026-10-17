@@ -221,7 +221,7 @@ test('ordinary CI stays lightweight and docs-only edits do not trigger branch or
   assert.match(triggerBlock, /cloudflare-v2\/scripts\/\*\*/);
 });
 
-test('existing mkety schema apply is manual, exact-confirmation-only and branch-bound', async () => {
+test('existing mkety inspect is read-only and schema apply remains exact-confirmation-only and branch-bound', async () => {
   const workflow = await readCiWorkflow();
   const triggerBlock = workflow.slice(0, workflow.indexOf('permissions:'));
   const testStart = workflow.indexOf('  test:');
@@ -233,7 +233,9 @@ test('existing mkety schema apply is manual, exact-confirmation-only and branch-
   assert.match(triggerBlock, /confirmation:[\s\S]*?APPLY_TRADING_STORAGE_SCHEMA/);
   assert.match(testBlock, /github\.event_name == 'workflow_dispatch'/);
   assert.match(testBlock, /github\.ref == 'refs\/heads\/feat\/trading-d1-cutover-implementation'/);
+  assert.match(testBlock, /inputs\.mode == 'inspect'/);
   assert.match(testBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
   assert.match(inventoryBlock, /successful backup from the last 24 hours/);
