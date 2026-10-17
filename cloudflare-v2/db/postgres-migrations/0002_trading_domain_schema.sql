@@ -729,7 +729,7 @@ BEGIN
 
   RETURN NEW;
 END;
-$function$
+$function$;
 
 
 CREATE TRIGGER trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trading_storage.trade_accounts FOR EACH ROW EXECUTE PROCEDURE trading_storage.enforce_connected_demo_execution();
@@ -758,7 +758,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$function$
+$function$;
 
 
 CREATE TRIGGER trading_access_code_workspace_lock AFTER UPDATE OF status ON trading_storage.trading_access_codes FOR EACH ROW EXECUTE PROCEDURE trading_storage.sync_trading_workspace_access_code_status();
@@ -901,7 +901,7 @@ BEGIN
 
     RETURN v_created;
 END;
-$function$
+$function$;
 
 
 REVOKE ALL ON FUNCTION trading_storage.rotate_trading_access_code(uuid, text, text, text, text, jsonb, integer, timestamptz, jsonb) FROM PUBLIC;
@@ -942,7 +942,7 @@ BEGIN
 
     RETURN target;
 END;
-$function$
+$function$;
 
 
 -- Grant EXECUTE on these functions only to the dedicated Trading Worker role when that role is provisioned.
