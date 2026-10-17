@@ -6,7 +6,12 @@ const IDENTITY_QUERY = `
     current_schema() AS schema_name,
     current_setting('transaction_read_only') AS transaction_read_only,
     EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'trading_storage') AS trading_schema_exists,
-    COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false) AS role_is_superuser
+    COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false) AS role_is_superuser,
+    COALESCE((
+      SELECT array_agg(datname ORDER BY datname)
+      FROM pg_database
+      WHERE datistemplate = false AND datname ~* '(trading|stage|staging|test)'
+    ), ARRAY[]::text[]) AS available_trading_database_names
 `;
 
 function safeIdentifier(value) {
@@ -98,7 +103,10 @@ export async function checkStagingPostgresConnection({
       schemaName: safeIdentifier(identity.schema_name),
       transactionReadOnly: true,
       tradingSchemaExists: identity.trading_schema_exists === true,
-      roleIsSuperuser: identity.role_is_superuser === true
+      roleIsSuperuser: identity.role_is_superuser === true,
+      availableTradingDatabaseNames: Array.isArray(identity.available_trading_database_names)
+        ? identity.available_trading_database_names.map(safeIdentifier)
+        : []
     };
   } catch (error) {
     failure = error;

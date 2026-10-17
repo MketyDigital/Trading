@@ -9,7 +9,7 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
     async connect() { calls.push(['connect']); }
     async query(sql) {
       calls.push(['query', sql]);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: false }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: false, available_trading_database_names: ['trading_stage'] }] };
       return { rows: [] };
     }
     async end() { calls.push(['end']); }
@@ -27,7 +27,8 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
     schemaName: 'public',
     transactionReadOnly: true,
     tradingSchemaExists: false,
-    roleIsSuperuser: false
+    roleIsSuperuser: false,
+    availableTradingDatabaseNames: ['trading_stage']
   });
   assert.equal(calls[0][0], 'constructor');
   assert.deepEqual(calls[0][1], {
@@ -47,6 +48,8 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
   assert.match(calls[3][1], /current_user/);
   assert.match(calls[3][1], /pg_namespace/);
   assert.match(calls[3][1], /pg_roles/);
+  assert.match(calls[3][1], /pg_database/);
+  assert.doesNotMatch(calls[3][1], /CREATE|ALTER|DROP|INSERT|UPDATE|DELETE/i);
   assert.doesNotMatch(calls[3][1], /INSERT|UPDATE|DELETE|CREATE|ALTER|DROP/i);
   assert.doesNotMatch(JSON.stringify(result), /secret-user|secret-password|private\.invalid/);
 });
@@ -57,7 +60,7 @@ test('staging PostgreSQL probe refuses a connection that is not read-only and st
     async connect() { calls.push('connect'); }
     async query(sql) {
       calls.push(sql);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'off', trading_schema_exists: false, role_is_superuser: false }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'off', trading_schema_exists: false, role_is_superuser: false, available_trading_database_names: ['trading_stage'] }] };
       return { rows: [] };
     }
     async end() { calls.push('end'); }
