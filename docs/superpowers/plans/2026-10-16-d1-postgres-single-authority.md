@@ -81,8 +81,8 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 
 ### Existing Coolify PostgreSQL constraint (2026-10-17)
 
-- Coolify's read-only inventory found the existing `mkety-postgres` service healthy and private. The Trading PostgreSQL staging URL secret is configured; a protected CI step now verifies the connection inside a read-only transaction and reports only sanitized database/schema metadata.
-- No PostgreSQL migration or schema change has been applied, and no new Coolify database resource has been provisioned. Continue only after the probe confirms the staging target and route.
+- Coolify's read-only inventory found the existing `mkety-postgres` service healthy and private. The Trading PostgreSQL staging URL secret is configured. A GitHub-hosted runner cannot resolve the private DB hostname (`EAI_AGAIN`), so the protected staging workflow creates a short-lived, exact-commit Coolify application attached to the existing private Docker network and runs only a read-only identity probe there. The app is deleted in an unconditional cleanup step.
+- No PostgreSQL migration or schema change has been applied, and no new Coolify database resource has been provisioned. Continue only after the private-network probe confirms the intended staging target and route.
 
 ### Implementation-pass updates (2026-10-17)
 

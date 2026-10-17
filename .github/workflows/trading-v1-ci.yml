@@ -102,6 +102,10 @@ jobs:
       }}
     runs-on: ubuntu-latest
     environment: staging
+    concurrency:
+      group: trading-coolify-postgres-staging
+      cancel-in-progress: false
+    timeout-minutes: 35
     permissions:
       contents: read
     defaults:
@@ -197,19 +201,6 @@ jobs:
           if [ -n "${STAGING_DATABASE_URL:-}" ]; then
             echo 'A generic staging database credential is configured; it is not approved for Trading use.'
           fi
-      - name: Probe existing Trading PostgreSQL staging connection (read-only)
-        env:
-          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing dedicated Trading PostgreSQL staging credential; PostgreSQL verification is blocked.'; exit 1; }
-          node --input-type=module <<'READ_ONLY_PG_PROBE'
-          import { checkStagingPostgresConnection } from './scripts/check_staging_postgres_connection.mjs';
-
-          const identity = await checkStagingPostgresConnection();
-          console.log(`Existing PostgreSQL staging connection verified in read-only mode: ${JSON.stringify(identity)}`);
-          READ_ONLY_PG_PROBE
       - name: Inventory Coolify database resources (read-only)
         env:
           OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
@@ -326,6 +317,189 @@ jobs:
           SAFE_COOLIFY_DESTINATIONS
             fi
           fi
+      - name: Create ephemeral private-network Trading PostgreSQL probe host
+        id: postgres-probe-app
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP"/trading-pg-probe-*.json' EXIT
+          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing dedicated Trading PostgreSQL staging credential.'; exit 1; }
+          test -n "${OCI_COOLIFY_URL:-}" || { echo 'Missing Coolify URL for the private-network PostgreSQL probe.'; exit 1; }
+          test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'Missing Coolify token for the private-network PostgreSQL probe.'; exit 1; }
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'PostgreSQL probe requires the exact reviewed commit SHA.'; exit 1; }
+          if [[ "$TRADING_PG_STAGING_DATABASE_URL" == *$'\n'* ]]; then
+            echo 'The dedicated Trading PostgreSQL staging URL must be a single line.'
+            exit 1
+          fi
+          echo "::add-mask::$TRADING_PG_STAGING_DATABASE_URL"
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+            "$api/databases/hgxwkiyxgbmb2i3pl57kmxc8" > "$RUNNER_TEMP/trading-pg-probe-db.json"
+          DB_PATH="$RUNNER_TEMP/trading-pg-probe-db.json" node <<'VERIFY_EXISTING_COOLIFY_DB'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.DB_PATH, 'utf8'));
+          const db = payload?.database ?? payload?.data ?? payload;
+          const environmentUuid = db?.environment_uuid ?? db?.environment?.uuid;
+          if (db?.name !== 'mkety-postgres' || db?.is_public !== false || !String(db?.status || '').toLowerCase().includes('healthy')) {
+            throw new Error('Existing Coolify PostgreSQL service identity, privacy, or health check failed.');
+          }
+          if (environmentUuid !== 'rtebcetyfvzlaiqitzcp0gl8') {
+            throw new Error('Existing Coolify PostgreSQL service is not in the expected project environment.');
+          }
+          console.log('Verified the existing private, healthy mkety-postgres service for the transient probe.');
+          VERIFY_EXISTING_COOLIFY_DB
+
+          TARGET_SHA="$TARGET_SHA" node <<'BUILD_PROBE_APP_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-app.json"
+          const sha = process.env.TARGET_SHA;
+          process.stdout.write(JSON.stringify({
+            project_uuid: '0zqhpkprlhtvlacmsgmfyyhs',
+            server_uuid: 'ynkdc4tx6bi7cyxf0kuy8kte',
+            environment_uuid: 'rtebcetyfvzlaiqitzcp0gl8',
+            git_repository: 'https://github.com/MketyDigital/Trading',
+            git_branch: 'feat/trading-d1-cutover-implementation',
+            git_commit_sha: sha,
+            build_pack: 'dockerfile',
+            dockerfile_location: '/ops/coolify-staging-postgres-probe/Dockerfile',
+            ports_exposes: '3000',
+            name: `trading-pg-ro-probe-${sha.slice(0, 12)}`,
+            description: `Ephemeral read-only Trading PostgreSQL probe for ${sha}`,
+            autogenerate_domain: false,
+            connect_to_docker_network: true,
+            instant_deploy: false
+          }));
+          BUILD_PROBE_APP_PAYLOAD
+
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-create.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-app.json" "$api/applications/public")"
+          [ "$code" = '201' ] || { echo "Coolify transient PostgreSQL probe host creation failed with HTTP $code."; exit 2; }
+          APP_UUID="$(node -e "const x=require(process.argv[1]);if(!/^[a-z0-9-]{8,64}$/i.test(String(x.uuid||'')))process.exit(1);process.stdout.write(x.uuid)" "$RUNNER_TEMP/trading-pg-probe-create.json")"
+          echo "app_uuid=$APP_UUID" >> "$GITHUB_OUTPUT"
+
+          DB_URL="$TRADING_PG_STAGING_DATABASE_URL" node <<'BUILD_PROBE_SECRET_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_STAGING_DATABASE_URL',
+            value: process.env.DB_URL,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: true
+          }));
+          BUILD_PROBE_SECRET_PAYLOAD
+          chmod 600 "$RUNNER_TEMP/trading-pg-probe-env.json"
+          env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-env-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$env_code" = '201' ] || { echo "Coolify transient probe secret injection failed with HTTP $env_code."; exit 3; }
+          echo 'Staging URL attached only to the transient private-network probe app.'
+      - name: Deploy exact-commit Trading PostgreSQL read-only probe
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          APP_UUID: ${{ steps.postgres-probe-app.outputs.app_uuid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$APP_UUID" || { echo 'Transient PostgreSQL probe app was not created.'; exit 1; }
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-deploy.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deploy?uuid=$APP_UUID&force=true")"
+          [ "$code" = '200' ] || { echo "Coolify transient PostgreSQL probe deployment failed with HTTP $code."; exit 2; }
+          deployment_uuid="$(node -e "const x=require(process.argv[1]);const d=Array.isArray(x.deployments)?x.deployments[0]:null;if(!/^[a-z0-9-]{8,64}$/i.test(String(d?.deployment_uuid||'')))process.exit(1);process.stdout.write(d.deployment_uuid)" "$RUNNER_TEMP/trading-pg-probe-deploy.json")"
+
+          fetch_logs() {
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+              "$api/applications/$APP_UUID/logs?lines=1000&show_timestamps=false" \
+              -o "$RUNNER_TEMP/trading-pg-probe-logs.json"
+          }
+          print_safe_failure() {
+            node <<'SAFE_PROBE_FAILURE'
+          const fs = require('node:fs');
+          let logs = '';
+          try { logs = String(JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8')).logs || ''); } catch {}
+          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|must be read-only|TRADING_PG_PROBE_OK=/.test(line));
+          for (const line of safe.slice(-5)) console.error(line.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://***'));
+          SAFE_PROBE_FAILURE
+          }
+
+          deployment_done='no'
+          for i in $(seq 1 120); do
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deployments/$deployment_uuid" \
+              -o "$RUNNER_TEMP/trading-pg-probe-deployment-status.json"
+            status="$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.status||''))" "$RUNNER_TEMP/trading-pg-probe-deployment-status.json")"
+            case "${status,,}" in
+              finished|success|successful|succeeded|completed) deployment_done='yes'; break ;;
+              failed|failure|error|cancelled|canceled)
+                fetch_logs || true
+                print_safe_failure
+                echo "Transient PostgreSQL probe deployment failed with status $status."
+                exit 3
+                ;;
+            esac
+            sleep 5
+          done
+          if [ "$deployment_done" != 'yes' ]; then
+            fetch_logs || true
+            print_safe_failure
+            echo 'Timed out waiting for transient PostgreSQL probe deployment.'
+            exit 4
+          fi
+
+          probe_done='no'
+          for i in $(seq 1 60); do
+            if fetch_logs && node <<'VERIFY_SAFE_PROBE_RESULT'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
+          const logs = String(payload.logs || '');
+          const line = logs.split(/\r?\n/).find((entry) => entry.startsWith('TRADING_PG_PROBE_OK='));
+          if (!line) process.exit(1);
+          const result = JSON.parse(line.slice('TRADING_PG_PROBE_OK='.length));
+          if (result.transactionReadOnly !== true || typeof result.databaseName !== 'string' || typeof result.roleIsSuperuser !== 'boolean') {
+            throw new Error('Read-only PostgreSQL probe did not confirm database identity metadata.');
+          }
+          console.log(`Existing PostgreSQL staging connection verified inside Coolify: ${JSON.stringify(result)}`);
+          VERIFY_SAFE_PROBE_RESULT
+            then
+              probe_done='yes'
+              break
+            fi
+            sleep 3
+          done
+          if [ "$probe_done" != 'yes' ]; then
+            print_safe_failure
+            echo 'The transient Coolify app did not report a verified read-only PostgreSQL identity.'
+            exit 5
+          fi
+      - name: Delete ephemeral Trading PostgreSQL probe host
+        if: always() && steps.postgres-probe-app.outputs.app_uuid != ''
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          APP_UUID: ${{ steps.postgres-probe-app.outputs.app_uuid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 60 \
+            -X DELETE -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+            "$api/applications/$APP_UUID" >/dev/null
+          echo 'Ephemeral Trading PostgreSQL probe host deleted.'
 
   cloudflare-inspect:
     if: >-

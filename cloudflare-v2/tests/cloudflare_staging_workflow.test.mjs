@@ -5,6 +5,8 @@ import { readFile } from 'node:fs/promises';
 const workflowPath = new URL('../../.github/workflows/cloudflare-staging-gate.yml', import.meta.url);
 const ciWorkflowPath = new URL('../../.github/workflows/trading-v1-ci.yml', import.meta.url);
 const stagingConfigPath = new URL('../wrangler.trading-staging.toml', import.meta.url);
+const coolifyProbeDockerfilePath = new URL('../../ops/coolify-staging-postgres-probe/Dockerfile', import.meta.url);
+const coolifyProbeScriptPath = new URL('../../ops/coolify-staging-postgres-probe/probe.mjs', import.meta.url);
 
 async function readWorkflow() {
   return readFile(workflowPath, 'utf8');
@@ -14,7 +16,7 @@ async function readCiWorkflow() {
   return readFile(ciWorkflowPath, 'utf8');
 }
 
-test('Trading storage PR provisions and migrates only the isolated staging D1', async () => {
+test('Trading storage PR stages D1 and probes existing PostgreSQL without creating a Coolify database', async () => {
   const workflow = await readCiWorkflow();
   const start = workflow.indexOf('  cloudflare-storage-inventory:');
   const end = workflow.indexOf('\n  cloudflare-inspect:', start);
@@ -45,11 +47,28 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /Dedicated Trading PostgreSQL staging credential is not configured/);
   assert.match(block, /generic staging database credential is configured; it is not approved for Trading use/);
   assert.doesNotMatch(block, /echo [^\n]*\$\{(?:TRADING_PG_STAGING_DATABASE_URL|STAGING_DATABASE_URL)/);
-  assert.match(block, /Probe existing Trading PostgreSQL staging connection \(read-only\)/);
-  assert.match(block, /Missing dedicated Trading PostgreSQL staging credential; PostgreSQL verification is blocked/);
-  assert.match(block, /check_staging_postgres_connection\.mjs/);
-  assert.match(block, /Existing PostgreSQL staging connection verified in read-only mode/);
+  assert.match(block, /Create ephemeral private-network Trading PostgreSQL probe host/);
+  assert.match(block, /connect_to_docker_network:\s*true/);
+  assert.match(block, /\/applications\/public/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
+  assert.match(block, /\/applications\/\$APP_UUID\/envs/);
+  assert.match(block, /Deploy exact-commit Trading PostgreSQL read-only probe/);
+  assert.match(block, /TRADING_PG_PROBE_OK=/);
+  assert.match(block, /Delete ephemeral Trading PostgreSQL probe host/);
+  assert.match(block, /if: always\(\) && steps\.postgres-probe-app\.outputs\.app_uuid != ''/);
+  assert.doesNotMatch(block, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
+  assert.match(block, /concurrency:\s*\n\s+group: trading-coolify-postgres-staging/);
+  assert.match(block, /timeout-minutes:\s*35/);
+  assert.match(block, /git_commit_sha:\s*sha,/);
+  assert.match(block, /autogenerate_domain:\s*false/);
+  assert.match(block, /-X DELETE/);
+  assert.match(block, /applications\/\$APP_UUID/);
+  const dockerfile = await readFile(coolifyProbeDockerfilePath, 'utf8');
+  assert.match(dockerfile, /cloudflare-v2\/package-lock\.json/);
+  const probeScript = await readFile(coolifyProbeScriptPath, 'utf8');
+  assert.match(probeScript, /checkStagingPostgresConnection/);
+  assert.match(probeScript, /TRADING_PG_PROBE_OK=/);
+  assert.doesNotMatch(probeScript, /postgres-migrations|CREATE DATABASE|CREATE SCHEMA|INSERT INTO|UPDATE .* SET|DELETE FROM/i);
   assert.match(block, /Inventory Coolify database resources \(read-only\)/);
   assert.match(block, /OCI_COOLIFY_URL: \$\{\{ secrets\.OCI_COOLIFY_URL \}\}/);
   assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
