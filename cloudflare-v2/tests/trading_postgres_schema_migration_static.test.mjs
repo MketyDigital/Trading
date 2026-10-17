@@ -49,6 +49,12 @@ test('Postgres migration keeps credentials encrypted and preserves restricted fu
   assert.match(sql, /trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trading_storage\.trade_accounts/);
 });
 
+test('PostgreSQL function bodies terminate each CREATE FUNCTION statement', () => {
+  const functionClosures = [...sql.matchAll(/^\$function\$;?$/gm)].map(([closure]) => closure);
+  assert.equal(functionClosures.length, 4);
+  assert.ok(functionClosures.every((closure) => closure === '$function$;'));
+});
+
 test('Postgres triggers use syntax supported by the existing Coolify server', () => {
   const triggerStatements = [...sql.matchAll(/^CREATE TRIGGER\b[^\n]*$/gim)].map(([statement]) => statement);
   assert.equal(triggerStatements.length, 2);
