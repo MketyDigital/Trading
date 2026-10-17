@@ -31,12 +31,15 @@ export async function checkStagingPostgresConnection({
   let connected = false;
   let transactionStarted = false;
   let failure;
+  let stage = 'connect';
 
   try {
     await client.connect();
     connected = true;
+    stage = 'begin read-only transaction';
     await client.query('BEGIN READ ONLY');
     transactionStarted = true;
+    stage = 'read database identity';
     const result = await client.query(IDENTITY_QUERY);
     const identity = result?.rows?.[0];
     if (!identity) throw new Error('Database identity query returned no row');
@@ -44,6 +47,7 @@ export async function checkStagingPostgresConnection({
       throw new Error('Staging PostgreSQL session must be read-only');
     }
 
+    stage = 'rollback read-only transaction';
     await client.query('ROLLBACK');
     transactionStarted = false;
     return {
@@ -59,7 +63,10 @@ export async function checkStagingPostgresConnection({
       try { await client.query('ROLLBACK'); } catch { /* preserve the original error */ }
     }
     if (error?.message === 'Staging PostgreSQL session must be read-only') throw error;
-    throw new Error('Staging PostgreSQL connection probe failed; verify staging network access and secret configuration.');
+    const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{2,16}$/i.test(error.code)
+      ? error.code.toUpperCase()
+      : 'UNKNOWN';
+    throw new Error(`Staging PostgreSQL probe failed during ${stage} (code ${code}).`);
   } finally {
     if (connected) {
       try { await client.end(); } catch {

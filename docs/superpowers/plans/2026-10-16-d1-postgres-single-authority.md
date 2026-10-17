@@ -55,7 +55,7 @@ Progress checkpoints are recorded below. No production authority or Worker deplo
 - [~] Replace active Trading Supabase callsites with backend-neutral repositories and remove Supabase from storage-mode Worker runtime composition. Legacy-mode fallbacks remain for rollback; zero-runtime scan and unreachable-path review remain.
 - [~] Instrument durable repository writes with atomic authority-local outbox records and domain-specific secret-safe payload projections. Repository coverage is implemented and locally tested; final write-path audit remains.
 - [~] Add bounded scheduled replication, checkpoint storage, poison-event quarantine, and lag/authority health reporting. Core mechanisms are implemented locally; external alert delivery and operational dashboard integration remain.
-- [ ] Provision separate nonproduction D1 and dedicated PostgreSQL/Hyperdrive resources; apply migrations and seed authority rows there only.
+- [ ] Use the existing isolated nonproduction Trading D1 and existing Coolify `mkety-postgres` service; do not provision any new Coolify database resource. Verify `TRADING_PG_STAGING_DATABASE_URL` read-only, then use only a Trading-owned schema and least-privilege role inside the existing PostgreSQL database. Create a dedicated Hyperdrive only after the database identity and private route are verified; apply PostgreSQL migrations and seed authority rows only on the verified staging target.
 - [ ] Import snapshots and validate row counts, per-key checksums, constraints, open positions, pending orders, routes, access controls, and recovery evidence.
 - [ ] Run both repository conformance suites plus all existing trading tests against D1 and PostgreSQL.
 - [ ] Shadow replicate, measure lag/RPO and behavior parity, and rehearse D1 -> PostgreSQL -> D1 with queue/cron fencing and rollback.
@@ -74,10 +74,15 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 
 ### External non-production prerequisites
 
-1. Provision a Trading-only D1 database and a dedicated Hyperdrive resource for a least-privilege Trading PostgreSQL role/schema. The latter may target the self-hosted Mkety PostgreSQL cluster through its established private VPC path, but must not reuse the Mkety app's `MKETY_DB` Hyperdrive resource or schema.
+1. Reuse the existing Trading-only D1 database and existing Coolify `mkety-postgres` service; do not create a new Coolify database resource. Verify the dedicated staging URL and private route before any PostgreSQL DDL. Use only a Trading-owned schema and least-privilege role inside the existing PostgreSQL database, and never reuse the Mkety app's `MKETY_DB` Hyperdrive identity or application schema.
 2. Apply the D1 and PostgreSQL migrations, seed matching authority rows with trading access and all broker execution controls disabled, and verify schema/index parity.
 3. Add those staging resource IDs as explicit `DB` and `TRADING_PG` bindings to a dedicated staging Worker config/workflow. Keep the current production and Free configs untouched until staging conformance passes.
 4. Run local and staging acceptance with a dedicated non-production workspace and DEMO broker accounts only; do not point acceptance scripts at the live trading service.
+
+### Existing Coolify PostgreSQL constraint (2026-10-17)
+
+- Coolify's read-only inventory found the existing `mkety-postgres` service healthy and private. The Trading PostgreSQL staging URL secret is configured; a protected CI step now verifies the connection inside a read-only transaction and reports only sanitized database/schema metadata.
+- No PostgreSQL migration or schema change has been applied, and no new Coolify database resource has been provisioned. Continue only after the probe confirms the staging target and route.
 
 ### Implementation-pass updates (2026-10-17)
 

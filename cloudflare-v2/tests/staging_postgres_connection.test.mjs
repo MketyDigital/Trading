@@ -72,3 +72,22 @@ test('staging PostgreSQL probe refuses a connection that is not read-only and st
 test('staging PostgreSQL probe requires its explicitly scoped staging URL', async () => {
   await assert.rejects(checkStagingPostgresConnection({ connectionString: '' }), /TRADING_PG_STAGING_DATABASE_URL/);
 });
+
+test('staging PostgreSQL probe surfaces only a safe failure stage and code', async () => {
+  class Client {
+    async connect() {
+      throw Object.assign(new Error('failed for postgres://secret-user:secret-password@private.invalid/stage'), { code: 'ECONNREFUSED' });
+    }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://secret-user:secret-password@private.invalid/stage', ClientClass: Client }),
+    error => {
+      assert.match(error.message, /connect.*ECONNREFUSED/i);
+      assert.doesNotMatch(error.message, /secret-user|secret-password|private\.invalid/);
+      return true;
+    }
+  );
+});
