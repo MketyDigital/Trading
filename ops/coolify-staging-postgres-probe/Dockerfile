@@ -6,6 +6,8 @@ COPY cloudflare-v2/package-lock.json ./package-lock.json
 RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY cloudflare-v2/scripts/check_staging_postgres_connection.mjs ./scripts/check_staging_postgres_connection.mjs
+COPY cloudflare-v2/scripts/apply_trading_postgres_migrations.mjs ./scripts/apply_trading_postgres_migrations.mjs
+COPY cloudflare-v2/db/postgres-migrations ./db/postgres-migrations
 COPY ops/coolify-staging-postgres-probe/probe.mjs ./probe.mjs
 
 EXPOSE 3000
