@@ -91,3 +91,22 @@ test('staging PostgreSQL probe surfaces only a safe failure stage and code', asy
     }
   );
 });
+
+test('staging PostgreSQL probe safely classifies TLS failures without exposing host details', async () => {
+  class Client {
+    async connect() {
+      throw new Error('self-signed certificate in certificate chain for private-db.internal');
+    }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', ClientClass: Client }),
+    error => {
+      assert.match(error.message, /connect.*TLS_CERTIFICATE/i);
+      assert.doesNotMatch(error.message, /self-signed|private-db\.internal/);
+      return true;
+    }
+  );
+});

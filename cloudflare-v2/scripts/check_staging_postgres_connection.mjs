@@ -12,6 +12,28 @@ function safeIdentifier(value) {
   return /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/.test(identifier) ? identifier : '[redacted]';
 }
 
+function safeFailureCode(error) {
+  const chain = [];
+  let current = error;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    chain.push(current);
+    current = current.cause;
+  }
+  for (const candidate of chain) {
+    const code = candidate?.code ?? candidate?.errno;
+    if (typeof code === 'string' && /^[A-Z0-9_-]{2,16}$/i.test(code)) return code.toUpperCase();
+  }
+  const messages = chain.map(candidate => String(candidate?.message || '')).join(' ').toLowerCase();
+  if (/certificate|self.signed|unknown ca|unable to verify|issuer certificate/.test(messages)) return 'TLS_CERTIFICATE';
+  if (/ssl|tls|handshake/.test(messages)) return 'TLS';
+  if (/enotfound|eai_again|could not translate host|name or service not known/.test(messages)) return 'DNS';
+  if (/econnrefused|connection refused/.test(messages)) return 'CONNECTION_REFUSED';
+  if (/etimedout|timed? ?out|timeout/.test(messages)) return 'TIMEOUT';
+  if (/password authentication|authentication failed|no pg_hba/.test(messages)) return 'AUTH_REJECTED';
+  if (/connection terminated|server closed|socket/.test(messages)) return 'CONNECTION_LOST';
+  return 'UNKNOWN';
+}
+
 /** Connect to an explicitly scoped staging URL and prove the target via a read-only transaction. */
 export async function checkStagingPostgresConnection({
   connectionString = process.env.TRADING_PG_STAGING_DATABASE_URL,
@@ -63,9 +85,7 @@ export async function checkStagingPostgresConnection({
       try { await client.query('ROLLBACK'); } catch { /* preserve the original error */ }
     }
     if (error?.message === 'Staging PostgreSQL session must be read-only') throw error;
-    const code = typeof error?.code === 'string' && /^[A-Z0-9_-]{2,16}$/i.test(error.code)
-      ? error.code.toUpperCase()
-      : 'UNKNOWN';
+    const code = safeFailureCode(error);
     throw new Error(`Staging PostgreSQL probe failed during ${stage} (code ${code}).`);
   } finally {
     if (connected) {
