@@ -52,6 +52,7 @@ test('Postgres migration keeps credentials encrypted and preserves restricted fu
 test('all PostgreSQL migrations stay inside the Trading schema on the existing database', () => {
   const combined = migrations.map(([, contents]) => contents).join('\n');
   const executableSql = combined.replace(/^\s*--.*$/gm, '');
+  assert.doesNotMatch(executableSql, /^\s*CREATE\s+SCHEMA\b/im, 'the installer creates trading_storage before switching to the restricted owner role');
   assert.doesNotMatch(executableSql, /^\s*(?:ALTER|DROP|TRUNCATE|COMMENT|GRANT|DO|CALL|COPY)\b/im);
   assert.doesNotMatch(executableSql, /\bpublic\s*\./i, 'must not modify Mkety shared public objects');
   const revokeCommands = [...executableSql.matchAll(/^\s*REVOKE\b[^;]*;?/gim)];
