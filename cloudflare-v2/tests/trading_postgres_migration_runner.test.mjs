@@ -49,7 +49,9 @@ test('PostgreSQL schema installer applies only approved migrations in one transa
     async connect() { calls.push(['connect']); }
     async query(sql) {
       calls.push(['query', sql]);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', ...restrictedOwner }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', owner_role_exists: false, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
+      if (sql.includes('pg_has_role')) return { rows: [{ is_member: true }] };
       if (sql.includes('SELECT current_user')) return { rows: [{ current_role: 'trading_owner' }] };
       if (sql.includes('FROM trading_storage.authority_control')) return { rows: [safeSchemaState] };
       return { rows: [] };
@@ -73,6 +75,7 @@ test('PostgreSQL schema installer applies only approved migrations in one transa
   assert.ok(queries.includes('COMMIT'));
   assert.equal(queries.filter((sql) => sql === 'ROLLBACK').length, 0);
   assert.ok(queries.includes('SELECT pg_advisory_xact_lock(hashtext($1))'));
+  assert.ok(queries.includes('CREATE ROLE trading_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT'));
   assert.ok(queries.includes('CREATE SCHEMA trading_storage AUTHORIZATION trading_owner'));
   assert.ok(queries.includes('SET LOCAL ROLE trading_owner'));
   assert.ok(migrations.every(({ sql }) => queries.includes(sql)));
@@ -101,13 +104,13 @@ test('PostgreSQL schema installer refuses a different database and rolls back', 
   assert.equal(calls.some((sql) => typeof sql === 'string' && sql.startsWith('CREATE')), false);
 });
 
-test('PostgreSQL schema installer refuses a missing or privileged owner role', async () => {
+test('PostgreSQL schema installer refuses to create the owner role without a superuser connection', async () => {
   const calls = [];
   class Client {
     async connect() {}
     async query(sql) {
       calls.push(sql);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', ...restrictedOwner, owner_is_superuser: true }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', owner_role_exists: false, current_role_is_superuser: false }] };
       return { rows: [] };
     }
     async end() {}
@@ -115,17 +118,39 @@ test('PostgreSQL schema installer refuses a missing or privileged owner role', a
 
   await assert.rejects(
     applyTradingPostgresMigrations({ connectionString: 'postgres://user:secret@private.invalid/mkety', expectedDatabaseName: 'mkety', confirmation: 'APPLY_TRADING_STORAGE_SCHEMA', caCertificate: 'synthetic CA', ClientClass: Client, migrations }),
-    /restricted non-login trading_owner role is not provisioned/i
+    /current database role cannot provision trading_owner/i
   );
   assert.ok(calls.includes('ROLLBACK'));
-  assert.equal(calls.some((sql) => typeof sql === 'string' && sql.startsWith('CREATE')), false);
+  assert.equal(calls.some((sql) => typeof sql === 'string' && sql.startsWith('CREATE ROLE')), false);
+});
+
+test('PostgreSQL schema installer refuses an existing owner role with unsafe privileges', async () => {
+  const calls = [];
+  class Client {
+    async connect() {}
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', owner_role_exists: true, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [{ ...restrictedOwner, owner_is_superuser: true }] };
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  await assert.rejects(
+    applyTradingPostgresMigrations({ connectionString: 'postgres://user:secret@private.invalid/mkety', expectedDatabaseName: 'mkety', confirmation: 'APPLY_TRADING_STORAGE_SCHEMA', caCertificate: 'synthetic CA', ClientClass: Client, migrations }),
+    /trading owner role has unsafe privileges/i
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.some((sql) => typeof sql === 'string' && sql.startsWith('CREATE SCHEMA')), false);
 });
 
 test('PostgreSQL schema installer refuses an untracked pre-existing Trading schema', async () => {
   class Client {
     async connect() {}
     async query(sql) {
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', ...restrictedOwner }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
       if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: false }] };
       return { rows: [] };
     }
@@ -148,7 +173,8 @@ test('PostgreSQL schema installer skips an exact checksum-matched migration ledg
     async connect() { calls.push('connect'); }
     async query(sql) {
       calls.push(sql);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', ...restrictedOwner }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
       if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: true }] };
       if (sql.includes('SELECT version, checksum')) return { rows: ledger };
       if (sql.includes('FROM trading_storage.authority_control')) return { rows: [safeSchemaState] };
@@ -178,7 +204,8 @@ test('PostgreSQL schema installer does not report an unsafe applied schema as sa
     async connect() {}
     async query(sql) {
       calls.push(sql);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', ...restrictedOwner }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
       if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: true }] };
       if (sql.includes('SELECT version, checksum')) return { rows: ledger };
       if (sql.includes('FROM trading_storage.authority_control')) return { rows: [{ ...safeSchemaState, writes_fenced: false }] };
