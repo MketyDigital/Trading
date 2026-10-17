@@ -36,6 +36,9 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /migrations_dir = "db\/d1-migrations"/);
   assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
   assert.match(block, /npx wrangler d1 migrations list trading-staging --remote --config wrangler\.trading-staging\.toml/);
+  assert.match(block, /wrangler d1 execute trading-staging --remote --config wrangler\.trading-staging\.toml --command .*sqlite_master/);
+  assert.match(block, /COUNT\(\*\) >= 34/);
+  assert.match(block, /Remote Trading D1 schema check passed/);
   assert.match(block, /Check for a dedicated Trading PostgreSQL staging secret/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /Dedicated Trading PostgreSQL staging credential is configured/);
