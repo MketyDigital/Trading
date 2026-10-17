@@ -55,6 +55,12 @@ test('PostgreSQL function bodies terminate each CREATE FUNCTION statement', () =
   assert.ok(functionClosures.every((closure) => closure === '$function$;'));
 });
 
+test('composite foreign keys have a unique target before dependent table creation', () => {
+  const targetIndex = sql.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS idx_source_connections_workspace_id_unique');
+  const dependentTable = sql.indexOf('CREATE TABLE IF NOT EXISTS trading_storage."source_feeds"');
+  assert.ok(targetIndex >= 0 && dependentTable > targetIndex);
+});
+
 test('Postgres triggers use syntax supported by the existing Coolify server', () => {
   const triggerStatements = [...sql.matchAll(/^CREATE TRIGGER\b[^\n]*$/gim)].map(([statement]) => statement);
   assert.equal(triggerStatements.length, 2);
