@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const workflowPath = new URL('../../.github/workflows/cloudflare-staging-gate.yml', import.meta.url);
 const ciWorkflowPath = new URL('../../.github/workflows/trading-v1-ci.yml', import.meta.url);
+const stagingConfigPath = new URL('../wrangler.trading-staging.toml', import.meta.url);
 
 async function readWorkflow() {
   return readFile(workflowPath, 'utf8');
@@ -48,6 +49,29 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.ok(installAt >= 0, 'dependencies must be installed');
   assert.ok(credentialsAt > installAt, 'Cloudflare credentials must be scoped only after dependency installation');
   assert.doesNotMatch(block.slice(0, credentialsAt), /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/);
+});
+
+test('Trading D1 staging Worker config remains private, fenced and broker-disabled', async () => {
+  const config = await readFile(stagingConfigPath, 'utf8');
+  assert.match(config, /^name = "mkety-trading-storage-staging"$/m);
+  assert.match(config, /^workers_dev = false$/m);
+  assert.match(config, /^preview_urls = false$/m);
+  assert.match(config, /^binding = "DB"$/m);
+  assert.match(config, /^database_name = "trading-staging"$/m);
+  assert.match(config, /^database_id = "4f00d59a-3d90-4146-832d-36230d5648bb"$/m);
+  assert.match(config, /^TRADING_STORAGE_RUNTIME_ENABLED = "true"$/m);
+  assert.match(config, /^TRADING_STORAGE_AUTHORITY = "d1"$/m);
+  assert.match(config, /^TRADING_STORAGE_AUTHORITY_EPOCH = "1"$/m);
+  for (const setting of [
+    'TRADING_ACCESS_ENABLED',
+    'BROKER_EXECUTION_ENABLED',
+    'LIVE_BROKER_EXECUTION_ENABLED',
+    'TRADINGVIEW_DIRECT_INGRESS_ENABLED',
+    'TRADINGVIEW_CERT_PROBE_ENABLED',
+  ]) assert.match(config, new RegExp(`^${setting} = "false"$`, 'm'));
+  assert.doesNotMatch(config, /^\[\[queues\./m);
+  assert.doesNotMatch(config, /^\[triggers\]/m);
+  assert.doesNotMatch(config, /^\[\[hyperdrive\]\]/m);
 });
 
 test('Cloudflare staging gate is manual-only and protected by the staging environment', async () => {
