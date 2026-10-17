@@ -135,6 +135,7 @@ test('ordinary CI stays lightweight and docs-only edits do not trigger branch or
   assert.match(triggerBlock, /pull_request:[\s\S]*?paths:/);
   assert.match(triggerBlock, /cloudflare-v2\/db\/d1-migrations\/\*\*/);
   assert.match(triggerBlock, /cloudflare-v2\/db\/postgres-migrations\/\*\*/);
+  assert.match(triggerBlock, /cloudflare-v2\/wrangler\.trading-staging\.toml/);
   assert.match(triggerBlock, /cloudflare-v2\/scripts\/\*\*/);
 });
 

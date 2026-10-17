@@ -19,6 +19,7 @@ on:
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
       - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/wrangler.trading-staging.toml'
       - 'cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md'
       - 'cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md'
       - '.github/workflows/trading-v1-ci.yml'
@@ -37,6 +38,7 @@ on:
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
       - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/wrangler.trading-staging.toml'
       - '.github/workflows/trading-v1-ci.yml'
 
 permissions:
