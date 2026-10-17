@@ -23,7 +23,7 @@ test('Postgres migration covers every inventoried relation and observed index', 
     for (const index of table.indexes || []) {
       const name = index.match(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+([^\s]+)/i)?.[1];
       if (!name || name.endsWith('_pkey') || table.constraints?.some(c => (c.type === 'u' || c.type === 'p') && c.name === name)) continue;
-      assert.match(sql, new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${name}\\b`), `missing PostgreSQL index ${name}`);
+      assert.match(sql, new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${name}\b`), `missing PostgreSQL index ${name}`);
     }
   }
 });
@@ -50,12 +50,12 @@ test('Postgres migration keeps credentials encrypted and preserves restricted fu
 });
 
 test('Postgres triggers use syntax supported by the existing Coolify server', () => {
-  const triggerStatements = [...sql.matchAll(/^CREATE TRIGGER\\b[^\\n]*$/gim)].map(([statement]) => statement);
+  const triggerStatements = [...sql.matchAll(/^CREATE TRIGGER\b[^\n]*$/gim)].map(([statement]) => statement);
   assert.equal(triggerStatements.length, 2);
   for (const statement of triggerStatements) {
-    assert.match(statement, /\\bEXECUTE PROCEDURE\\b/i);
+    assert.match(statement, /\bEXECUTE PROCEDURE\b/i);
   }
-  assert.doesNotMatch(sql, /\\bEXECUTE FUNCTION\\b/i);
+  assert.doesNotMatch(sql, /\bEXECUTE FUNCTION\b/i);
 });
 
 test('all PostgreSQL migrations stay inside the Trading schema on the existing database', () => {
