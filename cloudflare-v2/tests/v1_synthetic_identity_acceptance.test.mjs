@@ -78,6 +78,8 @@ test('synthetic Mkety owner identity is accepted only through the server-owned a
     audience: undefined,
     jwksUrl: undefined,
     requestedWorkspaceId: WORKSPACE_ID,
+    accessCodeStore: null,
+    workspaceAccess: null,
   }]);
 
   const body = await response.json();
