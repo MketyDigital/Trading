@@ -17,6 +17,19 @@ function safeCode(error) {
     : 'UNKNOWN';
 }
 
+function migrationErrorLocation(error, sql) {
+  const position = Number(error?.position);
+  if (!Number.isSafeInteger(position) || position < 1 || typeof sql !== 'string') return '';
+  const line = Buffer.from(sql, 'utf8').subarray(0, position - 1).toString('utf8').split('\n').length;
+  return ` at line ${line}`;
+}
+
+function safePermissionTarget(error) {
+  if (safeCode(error) !== '42501') return '';
+  const match = String(error?.message || '').match(/permission denied for (schema|table|sequence|function|language|database|type|extension) ([A-Za-z0-9_.\"-]+)/i);
+  return match ? `permission denied for ${match[1]} ${match[2]}` : '';
+}
+
 async function loadMigrations(directory = join(here, '../db/postgres-migrations')) {
   const names = (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort();
   if (names.length !== MIGRATION_NAMES.length || names.some((name, index) => name !== MIGRATION_NAMES[index])) {
@@ -161,6 +174,7 @@ export async function applyTradingPostgresMigrations({
     }
     for (let index = 0; index < migrationSet.length; index += 1) {
       const migration = migrationSet[index];
+      stage = `apply migration ${migration.name}`;
       await client.query(migration.sql);
       if (index === 0) {
         await client.query('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())');
@@ -191,7 +205,11 @@ export async function applyTradingPostgresMigrations({
       'PostgreSQL schema did not retain the required restricted, fenced/off defaults'
     ]);
     if (safeMessages.has(error?.message)) throw error;
-    throw new Error(`PostgreSQL schema migration failed during ${stage} (code ${safeCode(error)}).`);
+    const migration = migrationSet.find(({ name }) => stage === `apply migration ${name}`);
+    const location = migration ? migrationErrorLocation(error, migration.sql) : '';
+    const permissionTarget = safePermissionTarget(error);
+    const details = [location.trim(), permissionTarget].filter(Boolean).join('; ');
+    throw new Error(`PostgreSQL schema migration failed during ${stage}${details ? ` (${details})` : ''} (code ${safeCode(error)}).`);
   } finally {
     if (connected) {
       try { await client.end(); } catch { /* connection cleanup must not mask migration result */ }
