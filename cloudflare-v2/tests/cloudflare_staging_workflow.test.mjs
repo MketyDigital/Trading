@@ -91,6 +91,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /\$api\/databases\/\$target_uuid\/backups\/\$backup_uuid\/executions/);
   assert.match(block, /Coolify PostgreSQL backup schedules \(safe fields only\)/);
   assert.match(block, /Coolify PostgreSQL backup executions \(safe fields only\)/);
+  assert.match(block, /backupUuid, count: safe\.length, latest: safe\[0\]/);
   assert.match(block, /Coolify central PostgreSQL metadata \(safe fields only\)/);
   assert.match(block, /hasDatabasePassword: keys\.has\('POSTGRES_PASSWORD'\)/);
   assert.match(block, /\$api\/projects\/\$project_uuid\/environments/);

@@ -282,9 +282,11 @@ jobs:
               curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
                 -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
                 "$api/databases/$target_uuid/backups/$backup_uuid/executions" > "$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json"
-              BACKUP_EXECUTIONS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json" node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'
+              BACKUP_UUID="$backup_uuid" BACKUP_EXECUTIONS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json" node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'
           import { readFile } from 'node:fs/promises';
 
+          const backupUuid = process.env.BACKUP_UUID;
+          if (!/^[a-z0-9-]{8,64}$/i.test(String(backupUuid || ''))) throw new Error('Unexpected Coolify PostgreSQL backup identifier');
           const payload = JSON.parse(await readFile(process.env.BACKUP_EXECUTIONS_PATH, 'utf8'));
           const executions = Array.isArray(payload) ? payload : payload.executions ?? payload.data ?? payload.result;
           if (!Array.isArray(executions)) throw new Error('Unexpected Coolify PostgreSQL backup execution response shape');
@@ -292,8 +294,8 @@ jobs:
             createdAt: typeof row?.created_at === 'string' ? row.created_at : null,
             status: typeof row?.status === 'string' ? row.status : null,
             sizeBytes: Number.isFinite(Number(row?.size)) ? Number(row.size) : null
-          }));
-          console.log(`Coolify PostgreSQL backup executions (safe fields only): ${JSON.stringify(safe)}`);
+          })).sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+          console.log(`Coolify PostgreSQL backup executions (safe fields only): ${JSON.stringify({ backupUuid, count: safe.length, latest: safe[0] ?? null })}`);
           SAFE_COOLIFY_BACKUP_EXECUTIONS
             done < "$RUNNER_TEMP/coolify-mkety-postgres-backup-uuids.txt"
             node --input-type=module <<'SAFE_COOLIFY_POSTGRES_DETAILS'
