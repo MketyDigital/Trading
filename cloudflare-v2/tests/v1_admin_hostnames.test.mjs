@@ -113,6 +113,7 @@ test('verify resolves persisted hostname by exact workspace and activates only w
 
 test('verify remains pending when either Cloudflare hostname or SSL is not active', async () => {
   let synced = null;
+  const probes = [];
   const hostnameStore = {
     async get(workspaceId, id) { return { id, workspace_id: workspaceId, hostname: 'trading.customer.com', status: 'pending' }; },
     async syncVerification(workspaceId, id, active) {
@@ -123,11 +124,20 @@ test('verify remains pending when either Cloudflare hostname or SSL is not activ
   const providerClientFactory = () => ({ async getByHostname() { return provider({ hostnameStatus: 'active', sslStatus: 'pending_validation' }); } });
   const response = await handleAuthorizedV1AdminHostnamesRequest(
     new Request('https://trade.mkety.com/api/v1/admin/hostnames/h-1/verify', { method: 'POST' }), AUTH,
-    { hostnameStore, env: ENV, providerClientFactory },
+    {
+      hostnameStore,
+      env: ENV,
+      providerClientFactory,
+      routeProbeFn: async (hostname, workspaceId) => {
+        probes.push([hostname, workspaceId]);
+        return { ok: false, reason: 'CUSTOM_HOSTNAME_ROUTE_PROBE_FAILED' };
+      },
+    },
   );
   assert.equal(response.status, 200);
   assert.equal((await response.json()).verified, false);
   assert.equal(synced, false);
+  assert.deepEqual(probes, [['trading.customer.com', 'ws-1']]);
 });
 
 test('failed local create performs best-effort cleanup of the newly provisioned Cloudflare hostname', async () => {
