@@ -312,7 +312,7 @@ jobs:
                 -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
                 "$api/databases/$target_uuid/backups/$backup_uuid/executions" > "$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json"
               BACKUP_UUID="$backup_uuid" BACKUP_EXECUTIONS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json" node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'
-          import { readFile } from 'node:fs/promises';
+          import { readFile, writeFile } from 'node:fs/promises';
 
           const backupUuid = process.env.BACKUP_UUID;
           if (!/^[a-z0-9-]{8,64}$/i.test(String(backupUuid || ''))) throw new Error('Unexpected Coolify PostgreSQL backup identifier');
