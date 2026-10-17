@@ -36,6 +36,12 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /migrations_dir = "db\/d1-migrations"/);
   assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
   assert.match(block, /npx wrangler d1 migrations list trading-staging --remote --config wrangler\.trading-staging\.toml/);
+  assert.match(block, /Check for a dedicated Trading PostgreSQL staging secret/);
+  assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
+  assert.match(block, /Dedicated Trading PostgreSQL staging credential is configured/);
+  assert.match(block, /Dedicated Trading PostgreSQL staging credential is not configured/);
+  assert.match(block, /generic staging database credential is configured; it is not approved for Trading use/);
+  assert.doesNotMatch(block, /echo [^\n]*\$\{(?:TRADING_PG_STAGING_DATABASE_URL|STAGING_DATABASE_URL)/);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
   assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
   assert.doesNotMatch(block, /npx wrangler hyperdrive list\s*\n/);

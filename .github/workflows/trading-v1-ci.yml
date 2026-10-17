@@ -175,6 +175,20 @@ jobs:
           npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
           npx wrangler hyperdrive list > "$RUNNER_TEMP/trading-hyperdrive-inventory.txt"
           node -e 'console.log("Hyperdrive inventory completed; resource details withheld from CI logs")'
+      - name: Check for a dedicated Trading PostgreSQL staging secret
+        env:
+          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        shell: bash
+        run: |
+          if [ -n "${TRADING_PG_STAGING_DATABASE_URL:-}" ]; then
+            echo 'Dedicated Trading PostgreSQL staging credential is configured.'
+          else
+            echo 'Dedicated Trading PostgreSQL staging credential is not configured.'
+          fi
+          if [ -n "${STAGING_DATABASE_URL:-}" ]; then
+            echo 'A generic staging database credential is configured; it is not approved for Trading use.'
+          fi
 
   cloudflare-inspect:
     if: >-
