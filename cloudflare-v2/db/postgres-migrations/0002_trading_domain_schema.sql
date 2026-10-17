@@ -765,6 +765,8 @@ $function$
 
 CREATE TRIGGER trading_access_code_workspace_lock AFTER UPDATE OF status ON trading_storage.trading_access_codes FOR EACH ROW EXECUTE FUNCTION trading_storage.sync_trading_workspace_access_code_status();
 
+REVOKE ALL ON FUNCTION trading_storage.sync_trading_workspace_access_code_status() FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION trading_storage.rotate_trading_access_code(p_workspace_id uuid, p_owner_email text, p_workspace_display_name text, p_owner_name text, p_code_hash text, p_entitlements jsonb, p_max_redemptions integer, p_expires_at timestamp with time zone, p_metadata jsonb DEFAULT '{}'::jsonb)
  RETURNS trading_storage.trading_access_codes
  LANGUAGE plpgsql

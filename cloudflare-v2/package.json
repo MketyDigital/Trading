@@ -8,6 +8,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:storage": "node --test tests/trading_*.test.mjs tests/*repository*.test.mjs tests/*replication*.test.mjs tests/*storage*.test.mjs tests/v1_broker_feed_routing_authority.test.mjs tests/edit_in_place_admin_contracts.test.mjs tests/v1_admin_persistence_runtime.test.mjs tests/v1_connections_entry_storage_routes.test.mjs tests/access_subscription_lifecycle.test.mjs tests/demo_account_control_simplification.test.mjs tests/source_queue_runtime.test.mjs tests/orphan_signal_recovery_runtime.test.mjs tests/mtproto_recovery_runtime.test.mjs tests/broker_tp_protection_production.test.mjs",
     "test:ci": "node scripts/test_ci_diagnostic.mjs",
+    "migrate:postgres:existing": "node scripts/apply_trading_postgres_migrations.mjs",
     "accept:zitadel:gate4": "node scripts/gate4_zitadel_acceptance.mjs",
     "accept:mtproto:gate5": "node scripts/gate5_mtproto_soak.mjs",
     "accept:ctrader:source:gate6": "node scripts/gate6_ctrader_source_acceptance.mjs",

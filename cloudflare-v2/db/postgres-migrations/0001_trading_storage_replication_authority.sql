@@ -1,5 +1,6 @@
 -- Dedicated schema for the future Trading Worker storage authority.
--- Never point this migration at Mkety's shared application database/schema.
+-- This may share Mkety's existing central PostgreSQL database, but it must
+-- only create or mutate objects inside trading_storage; never alter public.
 CREATE SCHEMA IF NOT EXISTS trading_storage;
 
 CREATE TABLE IF NOT EXISTS trading_storage.authority_control (

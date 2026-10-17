@@ -113,6 +113,8 @@ test('duplicate response is terminal success and source-local retry does not reb
 test('two custom producer instances keep credentials retry health and failures independent', async () => {
   let releaseA;
   const blockedA = new Promise((resolve) => { releaseA = resolve; });
+  let markASleeping;
+  const aSleeping = new Promise((resolve) => { markASleeping = resolve; });
   const requestsA = [];
   const requestsB = [];
 
@@ -121,7 +123,10 @@ test('two custom producer instances keep credentials retry health and failures i
     sourceId: 'source-a',
     sourceSecret: 'secret-a',
     retryDelaysMs: [1],
-    sleep: async () => blockedA,
+    sleep: async () => {
+      markASleeping();
+      return blockedA;
+    },
     nowMs: () => 1770001000000,
     transport: async (request) => {
       requestsA.push(request);
@@ -141,7 +146,7 @@ test('two custom producer instances keep credentials retry health and failures i
   });
 
   const aPending = a.publish(customEvent({ eventId: 'same-native-id' }));
-  await Promise.resolve();
+  await aSleeping;
   const bResult = await b.publish(customEvent({ eventId: 'same-native-id' }));
 
   assert.equal(bResult.ok, true);

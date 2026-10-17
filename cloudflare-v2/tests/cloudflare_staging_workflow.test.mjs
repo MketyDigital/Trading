@@ -41,10 +41,10 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /wrangler d1 execute trading-staging --remote --config wrangler\.trading-staging\.toml --command .*sqlite_master/);
   assert.match(block, /COUNT\(\*\) >= 34/);
   assert.match(block, /Remote Trading D1 schema check passed/);
-  assert.match(block, /Check for a dedicated Trading PostgreSQL staging secret/);
+  assert.match(block, /Check access to the existing Coolify PostgreSQL database/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
-  assert.match(block, /Dedicated Trading PostgreSQL staging credential is configured/);
-  assert.match(block, /Dedicated Trading PostgreSQL staging credential is not configured/);
+  assert.match(block, /Existing Coolify PostgreSQL connection secret is configured/);
+  assert.match(block, /Existing Coolify PostgreSQL connection secret is not configured/);
   assert.match(block, /generic staging database credential is configured; it is not approved for Trading use/);
   assert.doesNotMatch(block, /echo [^\n]*\$\{(?:TRADING_PG_STAGING_DATABASE_URL|STAGING_DATABASE_URL)/);
   assert.match(block, /Create ephemeral private-network Trading PostgreSQL probe host/);
@@ -56,6 +56,8 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /data\/coolify\/ssl\/coolify-ca\.crt/);
   assert.match(block, /applications\/\$APP_UUID\/storages/);
   assert.match(block, /TRADING_PG_CA_FILE/);
+  assert.match(block, /TRADING_PG_EXPECTED_DATABASE/);
+  assert.match(block, /EXPECTED_DATABASE='mkety'/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /\/applications\/\$APP_UUID\/envs/);
   assert.match(block, /Deploy exact-commit Trading PostgreSQL read-only probe/);

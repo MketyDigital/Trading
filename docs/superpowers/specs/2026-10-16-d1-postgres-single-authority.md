@@ -8,6 +8,7 @@
 - Preserve current source, routing, execution, management, recovery, admin, customer-copy, and safety behavior.
 - Remove all runtime Supabase dependency only after schema, data, behavior, and recovery parity are proven.
 - Perform the work with a measured cutover and minimal downtime. Do not promise zero RPO or near-zero downtime before rehearsals establish the measured values.
+- Reuse the PostgreSQL database already running in Coolify. Do not provision a second Coolify database for staging or later delete it; isolate Trading in `trading_storage` and leave shared schemas untouched.
 
 ## Current repository facts (2026-10-16)
 
@@ -22,7 +23,7 @@
 ## Architecture
 
 1. **Final authority selection:** `TRADING_STORAGE_AUTHORITY` explicitly selects `d1` or `postgres`; absence defaults to D1 only for the future D1-first runtime. Unknown values and missing bindings fail closed.
-2. **Dedicated resources:** create a Trading-owned D1 database and a Trading-owned PostgreSQL schema/least-privilege role on the existing self-hosted Mkety PostgreSQL cluster, using the established Workers VPC route and a new dedicated Hyperdrive binding/ID. Mkety's `mksaas` repository confirms its production Worker uses `MKETY_DB` for PostgreSQL + pgvector through Hyperdrive. Preserve that binding and application schema unchanged; the Trading Worker must not borrow the app's Hyperdrive identity or access its application tables. Migrate only Trading-owned relations and explicitly retained Trading legacy paths, not unrelated Mkety product/Academy tables. Cloudflare currently recommends `node-postgres` (`pg`) and documents 8.16.3 as the minimum supported version.
+2. **Dedicated resources:** use the existing Trading D1 database and the existing Coolify PostgreSQL service/database; do not create another Coolify database. Isolate Trading in a dedicated `trading_storage` schema and use a least-privilege role plus a dedicated Hyperdrive binding/ID over the established Workers VPC route. Preserve the existing Mkety application schema and `MKETY_DB` binding unchanged; Trading must not borrow the app's Hyperdrive identity or access its application tables. Migrate only Trading-owned relations and explicitly retained Trading legacy paths, not unrelated Mkety product/Academy tables. Cloudflare currently recommends `node-postgres` (`pg`) and documents 8.16.3 as the minimum supported version.
 3. **Single writer:** each runtime version uses exactly one selected authority for all domain reads and writes. No repository-level catch-and-fallback to the other backend. Trading is denied if selected authority health or persisted epoch disagrees with the configured epoch.
 4. **Passive replication:** every durable mutation is recorded transactionally in the active authority's ordered outbox with an idempotency key and authority epoch. A bounded worker replays in order, validates gaps, records checkpoints only after idempotent apply, and surfaces poison events. Direction reverses after promotion.
 5. **Secret isolation:** replication payloads use table/domain allowlists. Provider and broker secrets are excluded or copied only as ciphertext. No generic trigger may serialize rows containing plaintext credentials.

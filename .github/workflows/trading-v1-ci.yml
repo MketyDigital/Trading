@@ -187,16 +187,16 @@ jobs:
           CHECK_TRADING_D1_SCHEMA
           npx wrangler hyperdrive list > "$RUNNER_TEMP/trading-hyperdrive-inventory.txt"
           node -e 'console.log("Hyperdrive inventory completed; resource details withheld from CI logs")'
-      - name: Check for a dedicated Trading PostgreSQL staging secret
+      - name: Check access to the existing Coolify PostgreSQL database
         env:
           TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
           STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
         shell: bash
         run: |
           if [ -n "${TRADING_PG_STAGING_DATABASE_URL:-}" ]; then
-            echo 'Dedicated Trading PostgreSQL staging credential is configured.'
+            echo 'Existing Coolify PostgreSQL connection secret is configured.'
           else
-            echo 'Dedicated Trading PostgreSQL staging credential is not configured.'
+            echo 'Existing Coolify PostgreSQL connection secret is not configured.'
           fi
           if [ -n "${STAGING_DATABASE_URL:-}" ]; then
             echo 'A generic staging database credential is configured; it is not approved for Trading use.'
@@ -328,12 +328,12 @@ jobs:
         run: |
           set -euo pipefail
           trap 'rm -f "$RUNNER_TEMP"/trading-pg-probe-*.json' EXIT
-          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing dedicated Trading PostgreSQL staging credential.'; exit 1; }
+          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing connection secret for the existing Coolify PostgreSQL database.'; exit 1; }
           test -n "${OCI_COOLIFY_URL:-}" || { echo 'Missing Coolify URL for the private-network PostgreSQL probe.'; exit 1; }
           test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'Missing Coolify token for the private-network PostgreSQL probe.'; exit 1; }
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'PostgreSQL probe requires the exact reviewed commit SHA.'; exit 1; }
           if [[ "$TRADING_PG_STAGING_DATABASE_URL" == *$'\n'* ]]; then
-            echo 'The dedicated Trading PostgreSQL staging URL must be a single line.'
+            echo 'The existing Coolify PostgreSQL connection URL must be a single line.'
             exit 1
           fi
           echo "::add-mask::$TRADING_PG_STAGING_DATABASE_URL"
@@ -426,6 +426,22 @@ jobs:
             --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-mount.json" "$api/applications/$APP_UUID/storages")"
           [ "$mount_code" = '201' ] || { echo "Coolify PostgreSQL CA mount failed with HTTP $mount_code."; exit 3; }
 
+          EXPECTED_DATABASE='mkety' node <<'BUILD_EXPECTED_DATABASE_ENV' > "$RUNNER_TEMP/trading-pg-probe-expected-database-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_EXPECTED_DATABASE',
+            value: process.env.EXPECTED_DATABASE,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: false
+          }));
+          BUILD_EXPECTED_DATABASE_ENV
+          expected_db_env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-expected-database-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-expected-database-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$expected_db_env_code" = '201' ] || { echo "Coolify PostgreSQL expected-database guard setup failed with HTTP $expected_db_env_code."; exit 3; }
+
           DB_URL="$TRADING_PG_STAGING_DATABASE_URL" node <<'BUILD_PROBE_SECRET_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-env.json"
           process.stdout.write(JSON.stringify({
             key: 'TRADING_PG_STAGING_DATABASE_URL',
@@ -458,7 +474,7 @@ jobs:
             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
             --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-env.json" "$api/applications/$APP_UUID/envs")"
           [ "$ca_env_code" = '201' ] || { echo "Coolify PostgreSQL CA path setup failed with HTTP $ca_env_code."; exit 3; }
-          echo 'Staging URL and verified existing Coolify CA attached only to the transient private-network probe app.'
+          echo 'Existing Coolify database URL and trusted CA attached only to the transient private-network probe app.'
       - name: Deploy exact-commit Trading PostgreSQL read-only probe
         env:
           OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}

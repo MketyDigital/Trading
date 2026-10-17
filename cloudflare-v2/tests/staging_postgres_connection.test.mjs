@@ -9,7 +9,7 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
     async connect() { calls.push(['connect']); }
     async query(sql) {
       calls.push(['query', sql]);
-      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: false, available_trading_database_names: ['trading_stage'] }] };
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: false, trading_owner_is_superuser: false, trading_owner_can_login: false, trading_owner_can_create_database: false, trading_owner_can_create_roles: false, trading_owner_bypasses_rls: false, trading_owner_inherits_roles: false, available_trading_database_names: ['trading_stage'] }] };
       return { rows: [] };
     }
     async end() { calls.push(['end']); }
@@ -28,6 +28,7 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
     transactionReadOnly: true,
     tradingSchemaExists: false,
     roleIsSuperuser: false,
+    tradingOwnerRoleIsRestricted: true,
     availableTradingDatabaseNames: ['trading_stage']
   });
   assert.equal(calls[0][0], 'constructor');
@@ -49,8 +50,8 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
   assert.match(calls[3][1], /pg_namespace/);
   assert.match(calls[3][1], /pg_roles/);
   assert.match(calls[3][1], /pg_database/);
-  assert.doesNotMatch(calls[3][1], /CREATE|ALTER|DROP|INSERT|UPDATE|DELETE/i);
-  assert.doesNotMatch(calls[3][1], /INSERT|UPDATE|DELETE|CREATE|ALTER|DROP/i);
+  assert.match(calls[3][1], /trading_owner/);
+  assert.doesNotMatch(calls[3][1], /^\s*(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/im);
   assert.doesNotMatch(JSON.stringify(result), /secret-user|secret-password|private\.invalid/);
 });
 
@@ -69,6 +70,32 @@ test('staging PostgreSQL probe refuses a connection that is not read-only and st
   await assert.rejects(
     checkStagingPostgresConnection({ connectionString: 'postgres://staging', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
     /must be read-only/
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.at(-1), 'end');
+});
+
+test('existing Coolify database probe refuses an unexpected database identity', async () => {
+  const calls = [];
+  class Client {
+    async connect() { calls.push('connect'); }
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'other_db', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: true }] };
+      return { rows: [] };
+    }
+    async end() { calls.push('end'); }
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({
+      connectionString: 'postgres://secret-user:secret-password@private.invalid/mkety',
+      caFilePath: '/etc/ssl/certs/coolify-ca.crt',
+      caCertificate: 'synthetic trusted CA certificate',
+      expectedDatabaseName: 'mkety',
+      ClientClass: Client
+    }),
+    /expected database identity/i
   );
   assert.ok(calls.includes('ROLLBACK'));
   assert.equal(calls.at(-1), 'end');

@@ -7,6 +7,12 @@ const IDENTITY_QUERY = `
     current_setting('transaction_read_only') AS transaction_read_only,
     EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'trading_storage') AS trading_schema_exists,
     COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false) AS role_is_superuser,
+    COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_is_superuser,
+    COALESCE((SELECT rolcanlogin FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_can_login,
+    COALESCE((SELECT rolcreatedb FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_can_create_database,
+    COALESCE((SELECT rolcreaterole FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_can_create_roles,
+    COALESCE((SELECT rolbypassrls FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_bypasses_rls,
+    COALESCE((SELECT rolinherit FROM pg_roles WHERE rolname = 'trading_owner'), true) AS trading_owner_inherits_roles,
     COALESCE((
       SELECT array_agg(datname ORDER BY datname)
       FROM pg_database
@@ -44,6 +50,7 @@ function safeFailureCode(error) {
 /** Connect to an explicitly scoped staging URL and prove the target via a read-only transaction. */
 export async function checkStagingPostgresConnection({
   connectionString = process.env.TRADING_PG_STAGING_DATABASE_URL,
+  expectedDatabaseName = process.env.TRADING_PG_EXPECTED_DATABASE,
   ClientClass,
   caFilePath = process.env.TRADING_PG_CA_FILE,
   caCertificate
@@ -94,6 +101,9 @@ export async function checkStagingPostgresConnection({
     if (identity.transaction_read_only !== 'on') {
       throw new Error('Staging PostgreSQL session must be read-only');
     }
+    if (expectedDatabaseName && identity.database_name !== expectedDatabaseName) {
+      throw new Error('PostgreSQL probe found an unexpected database identity');
+    }
 
     stage = 'rollback read-only transaction';
     await client.query('ROLLBACK');
@@ -104,6 +114,12 @@ export async function checkStagingPostgresConnection({
       transactionReadOnly: true,
       tradingSchemaExists: identity.trading_schema_exists === true,
       roleIsSuperuser: identity.role_is_superuser === true,
+      tradingOwnerRoleIsRestricted: identity.trading_owner_is_superuser === false
+        && identity.trading_owner_can_login === false
+        && identity.trading_owner_can_create_database === false
+        && identity.trading_owner_can_create_roles === false
+        && identity.trading_owner_bypasses_rls === false
+        && identity.trading_owner_inherits_roles === false,
       availableTradingDatabaseNames: Array.isArray(identity.available_trading_database_names)
         ? identity.available_trading_database_names.map(safeIdentifier)
         : []
@@ -113,7 +129,8 @@ export async function checkStagingPostgresConnection({
     if (transactionStarted) {
       try { await client.query('ROLLBACK'); } catch { /* preserve the original error */ }
     }
-    if (error?.message === 'Staging PostgreSQL session must be read-only') throw error;
+    if (error?.message === 'Staging PostgreSQL session must be read-only'
+      || error?.message === 'PostgreSQL probe found an unexpected database identity') throw error;
     const code = safeFailureCode(error);
     throw new Error(`Staging PostgreSQL probe failed during ${stage} (code ${code}).`);
   } finally {
