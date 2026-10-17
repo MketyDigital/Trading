@@ -13,7 +13,7 @@ async function readCiWorkflow() {
   return readFile(ciWorkflowPath, 'utf8');
 }
 
-test('Trading storage PR gets a same-repository, read-only D1 and Hyperdrive inventory', async () => {
+test('Trading storage PR provisions and migrates only the isolated staging D1', async () => {
   const workflow = await readCiWorkflow();
   const start = workflow.indexOf('  cloudflare-storage-inventory:');
   const end = workflow.indexOf('\n  cloudflare-inspect:', start);
@@ -30,12 +30,18 @@ test('Trading storage PR gets a same-repository, read-only D1 and Hyperdrive inv
   assert.match(block, /npx wrangler whoami/);
   assert.match(block, /npx wrangler d1 list --json > "\$RUNNER_TEMP\/trading-d1-inventory\.json"/);
   assert.match(block, /node --input-type=module <<'D1_INVENTORY'/);
+  assert.match(block, /npx wrangler d1 create trading-staging/);
+  assert.match(block, /database_name = "trading-staging"/);
+  assert.match(block, /migrations_dir = "db\/d1-migrations"/);
+  assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
+  assert.match(block, /npx wrangler d1 migrations list trading-staging --remote --config wrangler\.trading-staging\.toml/);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
   assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
   assert.doesNotMatch(block, /npx wrangler hyperdrive list\s*\n/);
   assert.doesNotMatch(block, /cat\s+"?\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt/);
   assert.doesNotMatch(block, /console\.log\([^\n]*(?:host|hostname|user|username|password|connection string)/i);
-  assert.doesNotMatch(block, /wrangler\s+(?:deploy|delete|create|update|migrations\s+apply)/);
+  assert.doesNotMatch(block, /wrangler\s+(?:deploy|delete|update)/);
+  assert.doesNotMatch(block, /npx wrangler d1 create (?!trading-staging)[^\s]+/);
 
   const installAt = block.indexOf('npm ci');
   const credentialsAt = block.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');

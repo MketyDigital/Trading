@@ -117,7 +117,7 @@ jobs:
       - name: Install dependencies without Cloudflare credentials
         run: npm ci --no-audit --no-fund
 
-      - name: Inventory Cloudflare D1 and Hyperdrive resources (read-only)
+      - name: Prepare isolated Trading D1 staging schema and inspect Hyperdrive
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -136,6 +136,41 @@ jobs:
           const safeDatabases = databases.map(({ name, uuid, num_tables }) => ({ name, uuid, num_tables }));
           console.log(`D1 inventory (safe fields only): ${JSON.stringify(safeDatabases)}`);
           D1_INVENTORY
+          node --input-type=module <<'CHECK_TRADING_D1' || npx wrangler d1 create trading-staging
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
+          if (!databases.some(({ name }) => name === 'trading-staging')) process.exit(1);
+          CHECK_TRADING_D1
+          npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
+          node --input-type=module <<'D1_CONFIG'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          const database = databases?.find(({ name }) => name === 'trading-staging');
+          if (!database?.uuid) throw new Error('Trading staging D1 is missing after provisioning');
+          const config = [
+            'name = "mkety-trading-staging-migrations"',
+            'main = "src/v1_runtime_entry.js"',
+            'compatibility_date = "2026-10-17"',
+            'compatibility_flags = ["nodejs_compat"]',
+            '',
+            '[[d1_databases]]',
+            'binding = "TRADING_DB"',
+            'database_name = "trading-staging"',
+            `database_id = "${database.uuid}"`,
+            'migrations_dir = "db/d1-migrations"',
+            ''
+          ].join('\n');
+          await writeFile('wrangler.trading-staging.toml', config, { mode: 0o600 });
+          console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
+          D1_CONFIG
+          trap 'rm -f wrangler.trading-staging.toml' EXIT
+          npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+          npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
           npx wrangler hyperdrive list > "$RUNNER_TEMP/trading-hyperdrive-inventory.txt"
           node -e 'console.log("Hyperdrive inventory completed; resource details withheld from CI logs")'
 
