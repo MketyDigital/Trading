@@ -360,6 +360,7 @@ jobs:
 
           TARGET_SHA="$TARGET_SHA" node <<'BUILD_PROBE_APP_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-app.json"
           const sha = process.env.TARGET_SHA;
+          const appName = `trading-pg-ro-probe-${sha.slice(0, 12)}`;
           process.stdout.write(JSON.stringify({
             project_uuid: '0zqhpkprlhtvlacmsgmfyyhs',
             server_uuid: 'ynkdc4tx6bi7cyxf0kuy8kte',
@@ -370,7 +371,7 @@ jobs:
             build_pack: 'dockerfile',
             dockerfile_location: '/ops/coolify-staging-postgres-probe/Dockerfile',
             ports_exposes: '3000',
-            name: `trading-pg-ro-probe-${sha.slice(0, 12)}`,
+            name: appName,
             description: `Ephemeral read-only Trading PostgreSQL probe for ${sha}`,
             autogenerate_domain: false,
             connect_to_docker_network: true,
@@ -382,8 +383,33 @@ jobs:
             --connect-timeout 10 --max-time 60 \
             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
             --data-binary "@$RUNNER_TEMP/trading-pg-probe-app.json" "$api/applications/public")"
-          [ "$code" = '201' ] || { echo "Coolify transient PostgreSQL probe host creation failed with HTTP $code."; exit 2; }
-          APP_UUID="$(node -e "const x=require(process.argv[1]);if(!/^[a-z0-9-]{8,64}$/i.test(String(x.uuid||'')))process.exit(1);process.stdout.write(x.uuid)" "$RUNNER_TEMP/trading-pg-probe-create.json")"
+          APP_UUID=''
+          if [ "$code" = '201' ]; then
+            APP_UUID="$(node -e "const x=require(process.argv[1]);if(/^[a-z0-9-]{8,64}$/i.test(String(x.uuid||'')))process.stdout.write(x.uuid)" "$RUNNER_TEMP/trading-pg-probe-create.json")"
+          fi
+          if [ -z "$APP_UUID" ]; then
+            echo "Coolify probe-host create response was uncertain (HTTP $code); checking the exact ephemeral name before retrying or stopping."
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/applications" > "$RUNNER_TEMP/trading-pg-probe-applications.json"
+            RECOVERED_UUID="$(TARGET_SHA="$TARGET_SHA" node <<'RECOVER_EXACT_PROBE_APP'
+          const fs = require('node:fs');
+          const sha = process.env.TARGET_SHA;
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-applications.json', 'utf8'));
+          const rows = Array.isArray(payload) ? payload : payload.applications ?? payload.data ?? payload.result;
+          if (!Array.isArray(rows)) process.exit(2);
+          const expected = `trading-pg-ro-probe-${sha.slice(0, 12)}`;
+          const matches = rows.filter((row) => row?.name === expected && /^[a-z0-9-]{8,64}$/i.test(String(row?.uuid || '')));
+          if (matches.length === 1) process.stdout.write(matches[0].uuid);
+          RECOVER_EXACT_PROBE_APP
+            )"
+            if [ -z "$RECOVERED_UUID" ]; then
+              echo 'Coolify did not confirm the exact transient probe application after an uncertain create.'
+              exit 2
+            fi
+            APP_UUID="$RECOVERED_UUID"
+            echo 'Recovered the exact transient probe application from Coolify inventory.'
+          fi
           echo "app_uuid=$APP_UUID" >> "$GITHUB_OUTPUT"
 
           DB_URL="$TRADING_PG_STAGING_DATABASE_URL" node <<'BUILD_PROBE_SECRET_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-env.json"
@@ -429,10 +455,20 @@ jobs:
           print_safe_failure() {
             node <<'SAFE_PROBE_FAILURE'
           const fs = require('node:fs');
+          const redact = (value) => String(value || '')
+            .replace(/postgres(?:ql)?:\/\/[^\s"'`]+/gi, 'postgresql://***')
+            .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer ***')
+            .replace(/((?:password|secret|token|authorization)\s*[=:]\s*)[^\s"'`]+/gi, '$1***');
+          try {
+            const deployment = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-deployment-status.json', 'utf8'));
+            console.error(`Sanitized Coolify deployment status: ${redact(deployment.status || 'unknown')}`);
+            const deploymentLogs = String(deployment.logs || '').split(/\r?\n/).filter(Boolean).slice(-80).map(redact);
+            if (deploymentLogs.length) console.error(deploymentLogs.join('\n'));
+          } catch {}
           let logs = '';
           try { logs = String(JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8')).logs || ''); } catch {}
           const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|must be read-only|TRADING_PG_PROBE_OK=/.test(line));
-          for (const line of safe.slice(-5)) console.error(line.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://***'));
+          for (const line of safe.slice(-5)) console.error(redact(line));
           SAFE_PROBE_FAILURE
           }
 
