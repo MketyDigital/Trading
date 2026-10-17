@@ -204,6 +204,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/coolify-database-inventory.json" "$RUNNER_TEMP/coolify-mkety-postgres.json" "$RUNNER_TEMP/coolify-mkety-postgres-envs.json" "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt"' EXIT
           if [[ -z "${OCI_COOLIFY_URL:-}" && -z "${OCI_COOLIFY_TOKEN:-}" ]]; then
             echo 'Coolify credentials are not available in the staging environment.'
             exit 0
@@ -220,7 +221,7 @@ jobs:
             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
             "$api/databases" > "$RUNNER_TEMP/coolify-database-inventory.json"
           INVENTORY_PATH="$RUNNER_TEMP/coolify-database-inventory.json" node <<'SAFE_COOLIFY_INVENTORY'
-          import { readFile } from 'node:fs/promises';
+          import { readFile, writeFile } from 'node:fs/promises';
 
           const payload = JSON.parse(await readFile(process.env.INVENTORY_PATH, 'utf8'));
           const databases = Array.isArray(payload) ? payload : payload.databases ?? payload.data ?? payload.result;
@@ -235,7 +236,44 @@ jobs:
           const candidates = safe.filter(({ name, type }) => /trading|postgres|postgresql|mkety/i.test(`${name || ''} ${type || ''}`));
           console.log(`Coolify database resource count: ${safe.length}`);
           console.log(`Coolify Trading/PostgreSQL candidates (safe fields only): ${JSON.stringify(candidates)}`);
+          const central = databases.find((row) => String(row?.name || '').trim().toLowerCase() === 'mkety-postgres');
+          if (central?.uuid) {
+            if (!/^[a-z0-9-]+$/i.test(central.uuid)) throw new Error('Unexpected Coolify PostgreSQL resource identifier');
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-mkety-postgres-uuid.txt`, central.uuid, { mode: 0o600 });
+          }
           SAFE_COOLIFY_INVENTORY
+          if [ -f "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt" ]; then
+            target_uuid="$(cat "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt")"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid" > "$RUNNER_TEMP/coolify-mkety-postgres.json"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid/envs" > "$RUNNER_TEMP/coolify-mkety-postgres-envs.json"
+            node --input-type=module <<'SAFE_COOLIFY_POSTGRES_DETAILS'
+          import { readFile } from 'node:fs/promises';
+
+          const readJson = async (name) => JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
+          const raw = await readJson('coolify-mkety-postgres.json');
+          const resource = raw?.database ?? raw?.data ?? raw;
+          const envPayload = await readJson('coolify-mkety-postgres-envs.json');
+          const envs = Array.isArray(envPayload) ? envPayload : envPayload.envs ?? envPayload.data ?? envPayload.result;
+          if (!Array.isArray(envs)) throw new Error('Unexpected Coolify database environment response shape');
+          const keys = new Set(envs.map((row) => String(row?.key || '').toUpperCase()));
+          const details = {
+            name: typeof resource?.name === 'string' ? resource.name : 'mkety-postgres',
+            uuid: typeof resource?.uuid === 'string' ? resource.uuid : null,
+            type: typeof resource?.database_type === 'string' ? resource.database_type : typeof resource?.type === 'string' ? resource.type : null,
+            status: typeof resource?.status === 'string' ? resource.status : null,
+            environment: typeof resource?.environment_name === 'string' ? resource.environment_name : typeof resource?.environment?.name === 'string' ? resource.environment.name : null,
+            publicAccess: typeof resource?.is_public === 'boolean' ? resource.is_public : null,
+            hasDatabaseName: keys.has('POSTGRES_DB'),
+            hasDatabaseUser: keys.has('POSTGRES_USER'),
+            hasDatabasePassword: keys.has('POSTGRES_PASSWORD')
+          };
+          console.log(`Coolify central PostgreSQL metadata (safe fields only): ${JSON.stringify(details)}`);
+          SAFE_COOLIFY_POSTGRES_DETAILS
+          fi
 
   cloudflare-inspect:
     if: >-

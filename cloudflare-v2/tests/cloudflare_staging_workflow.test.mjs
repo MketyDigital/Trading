@@ -50,7 +50,11 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
   assert.match(block, /\"\$api\/databases\" > \"\$RUNNER_TEMP\/coolify-database-inventory\.json\"/);
   assert.match(block, /Coolify Trading\/PostgreSQL candidates \(safe fields only\)/);
-  assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:envs|start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:envs|start|stop|delete)/i);
+  assert.match(block, /\$api\/databases\/\$target_uuid/);
+  assert.match(block, /\$api\/databases\/\$target_uuid\/envs/);
+  assert.match(block, /Coolify central PostgreSQL metadata \(safe fields only\)/);
+  assert.match(block, /hasDatabasePassword: keys\.has\('POSTGRES_PASSWORD'\)/);
+  assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:start|stop|delete)/i);
   assert.doesNotMatch(block, /console\.log\([^\n]*(?:password|connection_string|postgres_user|postgres_password|docker_compose)/i);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
   assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
