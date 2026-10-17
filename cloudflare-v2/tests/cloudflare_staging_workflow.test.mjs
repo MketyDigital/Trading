@@ -92,6 +92,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /Coolify PostgreSQL backup schedules \(safe fields only\)/);
   assert.match(block, /Coolify PostgreSQL backup executions \(safe fields only\)/);
   assert.match(block, /backupUuid, count: safe\.length, latest: safe\[0\]/);
+  assert.match(block, /BACKUP_EXECUTIONS_PATH=.*node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'\n\s+import \{ readFile, writeFile \} from 'node:fs\/promises'/);
   assert.match(block, /last 24 hours/);
   assert.match(block, /trading-pg-backup-preflight\.json/);
   assert.match(block, /APPLY_MODE: \$\{\{ inputs\.mode \}\}/);
