@@ -197,6 +197,19 @@ jobs:
           if [ -n "${STAGING_DATABASE_URL:-}" ]; then
             echo 'A generic staging database credential is configured; it is not approved for Trading use.'
           fi
+      - name: Probe existing Trading PostgreSQL staging connection (read-only)
+        env:
+          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing dedicated Trading PostgreSQL staging credential; PostgreSQL verification is blocked.'; exit 1; }
+          node --input-type=module <<'READ_ONLY_PG_PROBE'
+          import { checkStagingPostgresConnection } from './scripts/check_staging_postgres_connection.mjs';
+
+          const identity = await checkStagingPostgresConnection();
+          console.log(`Existing PostgreSQL staging connection verified in read-only mode: ${JSON.stringify(identity)}`);
+          READ_ONLY_PG_PROBE
       - name: Inventory Coolify database resources (read-only)
         env:
           OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}

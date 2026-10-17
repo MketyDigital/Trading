@@ -45,6 +45,11 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /Dedicated Trading PostgreSQL staging credential is not configured/);
   assert.match(block, /generic staging database credential is configured; it is not approved for Trading use/);
   assert.doesNotMatch(block, /echo [^\n]*\$\{(?:TRADING_PG_STAGING_DATABASE_URL|STAGING_DATABASE_URL)/);
+  assert.match(block, /Probe existing Trading PostgreSQL staging connection \(read-only\)/);
+  assert.match(block, /Missing dedicated Trading PostgreSQL staging credential; PostgreSQL verification is blocked/);
+  assert.match(block, /check_staging_postgres_connection\.mjs/);
+  assert.match(block, /Existing PostgreSQL staging connection verified in read-only mode/);
+  assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /Inventory Coolify database resources \(read-only\)/);
   assert.match(block, /OCI_COOLIFY_URL: \$\{\{ secrets\.OCI_COOLIFY_URL \}\}/);
   assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
