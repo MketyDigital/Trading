@@ -50,10 +50,14 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /Create ephemeral private-network Trading PostgreSQL probe host/);
   assert.match(block, /connect_to_docker_network:\s*true/);
   assert.match(block, /\/applications\/public/);
+  assert.match(block, /Coolify probe-host create response was uncertain/);
+  assert.match(block, /RECOVERED_UUID/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /\/applications\/\$APP_UUID\/envs/);
   assert.match(block, /Deploy exact-commit Trading PostgreSQL read-only probe/);
   assert.match(block, /TRADING_PG_PROBE_OK=/);
+  assert.match(block, /Sanitized Coolify deployment status/);
+  assert.match(block, /postgresql:\/\/\*\*/);
   assert.match(block, /Delete ephemeral Trading PostgreSQL probe host/);
   assert.match(block, /if: always\(\) && steps\.postgres-probe-app\.outputs\.app_uuid != ''/);
   assert.doesNotMatch(block, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
