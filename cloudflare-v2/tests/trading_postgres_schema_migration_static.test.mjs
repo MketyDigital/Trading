@@ -23,7 +23,7 @@ test('Postgres migration covers every inventoried relation and observed index', 
     for (const index of table.indexes || []) {
       const name = index.match(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+([^\s]+)/i)?.[1];
       if (!name || name.endsWith('_pkey') || table.constraints?.some(c => (c.type === 'u' || c.type === 'p') && c.name === name)) continue;
-      assert.match(sql, new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${name}\b`), `missing PostgreSQL index ${name}`);
+      assert.match(sql, new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${name}\\b`), `missing PostgreSQL index ${name}`);
     }
   }
 });
