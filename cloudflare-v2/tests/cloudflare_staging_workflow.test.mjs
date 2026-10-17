@@ -60,7 +60,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /EXPECTED_DATABASE='mkety'/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /\/applications\/\$APP_UUID\/envs/);
-  assert.match(block, /Deploy exact-commit Trading PostgreSQL read-only probe/);
+  assert.match(block, /Deploy exact-commit Trading PostgreSQL (?:read-only probe|probe or schema-only migration)/);
   assert.match(block, /TRADING_PG_PROBE_OK=/);
   assert.match(block, /Sanitized Coolify deployment status/);
   assert.match(block, /postgresql:\/\/\*\*/);
@@ -92,12 +92,29 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /Coolify PostgreSQL backup schedules \(safe fields only\)/);
   assert.match(block, /Coolify PostgreSQL backup executions \(safe fields only\)/);
   assert.match(block, /backupUuid, count: safe\.length, latest: safe\[0\]/);
+  assert.match(block, /last 24 hours/);
+  assert.match(block, /trading-pg-backup-preflight\.json/);
+  assert.match(block, /APPLY_MODE: \$\{\{ inputs\.mode \}\}/);
+  assert.match(block, /MIGRATION_CONFIRMATION: \$\{\{ inputs\.confirmation \}\}/);
+  assert.match(block, /APPLY_TRADING_STORAGE_SCHEMA/);
+  assert.match(block, /TRADING_PG_MIGRATION_OK=/);
+  assert.match(block, /Existing mkety Trading schema migration verified/);
   assert.match(block, /Coolify central PostgreSQL metadata \(safe fields only\)/);
   assert.match(block, /hasDatabasePassword: keys\.has\('POSTGRES_PASSWORD'\)/);
   assert.match(block, /\$api\/projects\/\$project_uuid\/environments/);
   assert.match(block, /Coolify central project environments \(safe fields only\)/);
   assert.match(block, /\$api\/servers\/\$server_uuid\/destinations/);
   assert.match(block, /Coolify central server destinations \(safe fields only\)/);
+  const inventoryStart = block.indexOf('name: Inventory Coolify database resources (read-only)');
+  const probeStart = block.indexOf('name: Create ephemeral private-network Trading PostgreSQL probe host', inventoryStart);
+  assert.ok(inventoryStart >= 0 && probeStart > inventoryStart, 'inventory must precede the temporary probe host');
+  const inventoryStep = block.slice(inventoryStart, probeStart);
+  const probeStep = block.slice(probeStart);
+  assert.match(inventoryStep, /trap '[^']*coolify-\*\.json/);
+  assert.match(inventoryStep, /trading-pg-backup-preflight\.json/);
+  assert.doesNotMatch(inventoryStep, /trap '[^']*trading-pg-backup-preflight\.json/);
+  assert.match(probeStep, /trap '[^']*trading-pg-backup-preflight\.json/);
+  assert.match(probeStep, /test -s "\$RUNNER_TEMP\/trading-pg-backup-preflight\.json"/);
   assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:start|stop|delete)/i);
   assert.doesNotMatch(block, /console\.log\([^\n]*(?:password|connection_string|postgres_user|postgres_password|docker_compose)/i);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
@@ -201,6 +218,27 @@ test('ordinary CI stays lightweight and docs-only edits do not trigger branch or
   assert.match(triggerBlock, /cloudflare-v2\/db\/postgres-migrations\/\*\*/);
   assert.match(triggerBlock, /cloudflare-v2\/wrangler\.trading-staging\.toml/);
   assert.match(triggerBlock, /cloudflare-v2\/scripts\/\*\*/);
+});
+
+test('existing mkety schema apply is manual, exact-confirmation-only and branch-bound', async () => {
+  const workflow = await readCiWorkflow();
+  const triggerBlock = workflow.slice(0, workflow.indexOf('permissions:'));
+  const testStart = workflow.indexOf('  test:');
+  const inventoryStart = workflow.indexOf('  cloudflare-storage-inventory:');
+  const testBlock = workflow.slice(testStart, inventoryStart);
+  const inventoryBlock = workflow.slice(inventoryStart, workflow.indexOf('\n  cloudflare-inspect:', inventoryStart));
+
+  assert.match(triggerBlock, /workflow_dispatch:[\s\S]*?default: inspect[\s\S]*?apply-existing-mkety-schema/);
+  assert.match(triggerBlock, /confirmation:[\s\S]*?APPLY_TRADING_STORAGE_SCHEMA/);
+  assert.match(testBlock, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(testBlock, /github\.ref == 'refs\/heads\/feat\/trading-d1-cutover-implementation'/);
+  assert.match(testBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
+  assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(inventoryBlock, /successful backup from the last 24 hours/);
+  assert.match(inventoryBlock, /TRADING_PG_SCHEMA_MIGRATION_CONFIRM/);
+  assert.doesNotMatch(inventoryBlock, /npx wrangler (?:deploy --config wrangler\.toml|deploy --config wrangler\.free\.toml)/);
+  assert.doesNotMatch(inventoryBlock, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
 });
 
 test('feature branch regression runs once via PR while exact push gates still retain test dependency', async () => {
