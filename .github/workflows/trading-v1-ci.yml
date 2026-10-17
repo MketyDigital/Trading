@@ -66,8 +66,13 @@ jobs:
         (
           github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/feat/trading-d1-cutover-implementation' &&
-          inputs.mode == 'apply-existing-mkety-schema' &&
-          inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+          (
+            inputs.mode == 'inspect' ||
+            (
+              inputs.mode == 'apply-existing-mkety-schema' &&
+              inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+            )
+          )
         ) ||
         github.ref == 'refs/heads/main' ||
         (
@@ -123,8 +128,13 @@ jobs:
         ) || (
           github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/feat/trading-d1-cutover-implementation' &&
-          inputs.mode == 'apply-existing-mkety-schema' &&
-          inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+          (
+            inputs.mode == 'inspect' ||
+            (
+              inputs.mode == 'apply-existing-mkety-schema' &&
+              inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+            )
+          )
         )
       }}
     runs-on: ubuntu-latest
