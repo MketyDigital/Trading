@@ -52,6 +52,10 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /\/applications\/public/);
   assert.match(block, /Coolify probe-host create response was uncertain/);
   assert.match(block, /RECOVERED_UUID/);
+  assert.match(block, /Coolify PostgreSQL CA mount/);
+  assert.match(block, /data\/coolify\/ssl\/coolify-ca\.crt/);
+  assert.match(block, /applications\/\$APP_UUID\/storages/);
+  assert.match(block, /TRADING_PG_CA_FILE/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /\/applications\/\$APP_UUID\/envs/);
   assert.match(block, /Deploy exact-commit Trading PostgreSQL read-only probe/);
@@ -69,6 +73,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /applications\/\$APP_UUID/);
   const dockerfile = await readFile(coolifyProbeDockerfilePath, 'utf8');
   assert.match(dockerfile, /cloudflare-v2\/package-lock\.json/);
+  assert.match(dockerfile, /USER node/);
   const probeScript = await readFile(coolifyProbeScriptPath, 'utf8');
   assert.match(probeScript, /checkStagingPostgresConnection/);
   assert.match(probeScript, /TRADING_PG_PROBE_OK=/);

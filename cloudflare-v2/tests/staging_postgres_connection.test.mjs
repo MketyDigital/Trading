@@ -17,6 +17,8 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
 
   const result = await checkStagingPostgresConnection({
     connectionString: 'postgres://secret-user:secret-password@private.invalid/stage',
+    caFilePath: '/etc/ssl/certs/coolify-ca.crt',
+    caCertificate: 'synthetic trusted CA certificate',
     ClientClass: Client
   });
 
@@ -29,7 +31,7 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
   });
   assert.equal(calls[0][0], 'constructor');
   assert.deepEqual(calls[0][1], {
-    connectionString: 'postgres://secret-user:secret-password@private.invalid/stage',
+    connectionString: 'postgres://secret-user:secret-password@private.invalid/stage?sslmode=verify-ca&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fcoolify-ca.crt&uselibpqcompat=true',
     connectionTimeoutMillis: 10000,
     query_timeout: 10000,
     statement_timeout: 10000
@@ -62,7 +64,7 @@ test('staging PostgreSQL probe refuses a connection that is not read-only and st
   }
 
   await assert.rejects(
-    checkStagingPostgresConnection({ connectionString: 'postgres://staging', ClientClass: Client }),
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
     /must be read-only/
   );
   assert.ok(calls.includes('ROLLBACK'));
@@ -71,6 +73,21 @@ test('staging PostgreSQL probe refuses a connection that is not read-only and st
 
 test('staging PostgreSQL probe requires its explicitly scoped staging URL', async () => {
   await assert.rejects(checkStagingPostgresConnection({ connectionString: '' }), /TRADING_PG_STAGING_DATABASE_URL/);
+});
+
+test('staging PostgreSQL probe refuses to connect without the trusted Coolify CA', async () => {
+  let connected = false;
+  class Client {
+    async connect() { connected = true; }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', ClientClass: Client, caFilePath: '' }),
+    /load trusted Coolify PostgreSQL CA/i
+  );
+  assert.equal(connected, false);
 });
 
 test('staging PostgreSQL probe surfaces only a safe failure stage and code', async () => {
@@ -83,7 +100,7 @@ test('staging PostgreSQL probe surfaces only a safe failure stage and code', asy
   }
 
   await assert.rejects(
-    checkStagingPostgresConnection({ connectionString: 'postgres://secret-user:secret-password@private.invalid/stage', ClientClass: Client }),
+    checkStagingPostgresConnection({ connectionString: 'postgres://secret-user:secret-password@private.invalid/stage', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
     error => {
       assert.match(error.message, /connect.*ECONNREFUSED/i);
       assert.doesNotMatch(error.message, /secret-user|secret-password|private\.invalid/);
@@ -102,7 +119,7 @@ test('staging PostgreSQL probe safely classifies TLS failures without exposing h
   }
 
   await assert.rejects(
-    checkStagingPostgresConnection({ connectionString: 'postgres://staging', ClientClass: Client }),
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
     error => {
       assert.match(error.message, /connect.*TLS_CERTIFICATE/i);
       assert.doesNotMatch(error.message, /self-signed|private-db\.internal/);

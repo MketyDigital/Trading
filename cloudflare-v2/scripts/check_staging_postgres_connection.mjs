@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 const IDENTITY_QUERY = `
   SELECT
     current_database() AS database_name,
@@ -37,10 +39,29 @@ function safeFailureCode(error) {
 /** Connect to an explicitly scoped staging URL and prove the target via a read-only transaction. */
 export async function checkStagingPostgresConnection({
   connectionString = process.env.TRADING_PG_STAGING_DATABASE_URL,
-  ClientClass
+  ClientClass,
+  caFilePath = process.env.TRADING_PG_CA_FILE,
+  caCertificate
 } = {}) {
   if (typeof connectionString !== 'string' || !connectionString.trim()) {
     throw new Error('TRADING_PG_STAGING_DATABASE_URL is required for the staging PostgreSQL probe');
+  }
+
+  let stage = 'load trusted Coolify PostgreSQL CA';
+  let trustedCa = caCertificate;
+  try {
+    if (typeof trustedCa !== 'string' || !trustedCa.trim()) {
+      if (typeof caFilePath !== 'string' || !caFilePath.trim()) throw new Error('TRADING_PG_CA_FILE is required');
+      trustedCa = await readFile(caFilePath, 'utf8');
+    }
+    const verifiedUrl = new URL(connectionString);
+    if (!['postgres:', 'postgresql:'].includes(verifiedUrl.protocol)) throw new Error('PostgreSQL URL required');
+    verifiedUrl.searchParams.set('sslmode', 'verify-ca');
+    verifiedUrl.searchParams.set('sslrootcert', caFilePath || '/injected/coolify-postgres-ca.crt');
+    verifiedUrl.searchParams.set('uselibpqcompat', 'true');
+    connectionString = verifiedUrl.toString();
+  } catch (error) {
+    throw new Error(`Staging PostgreSQL probe failed during ${stage} (code ${safeFailureCode(error)}).`);
   }
 
   const Client = ClientClass || (await import('pg')).Client;
@@ -53,7 +74,7 @@ export async function checkStagingPostgresConnection({
   let connected = false;
   let transactionStarted = false;
   let failure;
-  let stage = 'connect';
+  stage = 'connect';
 
   try {
     await client.connect();

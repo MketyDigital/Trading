@@ -412,6 +412,20 @@ jobs:
           fi
           echo "app_uuid=$APP_UUID" >> "$GITHUB_OUTPUT"
 
+          node <<'BUILD_COOLIFY_CA_MOUNT' > "$RUNNER_TEMP/trading-pg-probe-ca-mount.json"
+          process.stdout.write(JSON.stringify({
+            type: 'file',
+            is_host_file: true,
+            fs_path: '/data/coolify/ssl/coolify-ca.crt',
+            mount_path: '/etc/ssl/certs/coolify-ca.crt'
+          }));
+          BUILD_COOLIFY_CA_MOUNT
+          mount_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-ca-mount-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-mount.json" "$api/applications/$APP_UUID/storages")"
+          [ "$mount_code" = '201' ] || { echo "Coolify PostgreSQL CA mount failed with HTTP $mount_code."; exit 3; }
+
           DB_URL="$TRADING_PG_STAGING_DATABASE_URL" node <<'BUILD_PROBE_SECRET_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-env.json"
           process.stdout.write(JSON.stringify({
             key: 'TRADING_PG_STAGING_DATABASE_URL',
@@ -428,7 +442,23 @@ jobs:
             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
             --data-binary "@$RUNNER_TEMP/trading-pg-probe-env.json" "$api/applications/$APP_UUID/envs")"
           [ "$env_code" = '201' ] || { echo "Coolify transient probe secret injection failed with HTTP $env_code."; exit 3; }
-          echo 'Staging URL attached only to the transient private-network probe app.'
+          CA_FILE_PATH='/etc/ssl/certs/coolify-ca.crt' node <<'BUILD_COOLIFY_CA_ENV_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-ca-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_CA_FILE',
+            value: process.env.CA_FILE_PATH,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: false
+          }));
+          BUILD_COOLIFY_CA_ENV_PAYLOAD
+          chmod 600 "$RUNNER_TEMP/trading-pg-probe-ca-env.json"
+          ca_env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-ca-env-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$ca_env_code" = '201' ] || { echo "Coolify PostgreSQL CA path setup failed with HTTP $ca_env_code."; exit 3; }
+          echo 'Staging URL and verified existing Coolify CA attached only to the transient private-network probe app.'
       - name: Deploy exact-commit Trading PostgreSQL read-only probe
         env:
           OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
