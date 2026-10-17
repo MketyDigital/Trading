@@ -13,6 +13,32 @@ async function readCiWorkflow() {
   return readFile(ciWorkflowPath, 'utf8');
 }
 
+test('Trading storage PR gets a same-repository, read-only D1 and Hyperdrive inventory', async () => {
+  const workflow = await readCiWorkflow();
+  const start = workflow.indexOf('  cloudflare-storage-inventory:');
+  const end = workflow.indexOf('\n  cloudflare-inspect:', start);
+  assert.ok(start >= 0, 'cloudflare-storage-inventory job must exist');
+  assert.ok(end > start, 'storage inventory job must end before the existing inspection job');
+  const block = workflow.slice(start, end);
+
+  assert.match(block, /github\.event_name == 'pull_request'/);
+  assert.match(block, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(block, /github\.event\.pull_request\.head\.ref == 'feat\/trading-d1-cutover-implementation'/);
+  assert.match(block, /environment:\s*staging/);
+  assert.match(block, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(block, /npm ci[^\n]*\n/);
+  assert.match(block, /npx wrangler whoami/);
+  assert.match(block, /npx wrangler d1 list/);
+  assert.match(block, /npx wrangler hyperdrive list/);
+  assert.doesNotMatch(block, /wrangler\s+(?:deploy|delete|create|update|migrations\s+apply)/);
+
+  const installAt = block.indexOf('npm ci');
+  const credentialsAt = block.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
+  assert.ok(installAt >= 0, 'dependencies must be installed');
+  assert.ok(credentialsAt > installAt, 'Cloudflare credentials must be scoped only after dependency installation');
+  assert.doesNotMatch(block.slice(0, credentialsAt), /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/);
+});
+
 test('Cloudflare staging gate is manual-only and protected by the staging environment', async () => {
   const workflow = await readWorkflow();
   assert.match(workflow, /workflow_dispatch:/);
@@ -62,8 +88,8 @@ test('Cloudflare staging gate validates both Wrangler profiles before any deploy
 test('ordinary CI stays lightweight and docs-only edits do not trigger branch or PR CI', async () => {
   const workflow = await readCiWorkflow();
   const testStart = workflow.indexOf('  test:');
-  const inspectStart = workflow.indexOf('  cloudflare-inspect:');
-  const testBlock = workflow.slice(testStart, inspectStart);
+  const inventoryStart = workflow.indexOf('  cloudflare-storage-inventory:');
+  const testBlock = workflow.slice(testStart, inventoryStart);
   const triggerBlock = workflow.slice(0, workflow.indexOf('jobs:'));
 
   assert.doesNotMatch(testBlock, /\bwrangler\b/i);
@@ -72,13 +98,16 @@ test('ordinary CI stays lightweight and docs-only edits do not trigger branch or
   assert.doesNotMatch(triggerBlock, /docs\/superpowers/);
   assert.match(triggerBlock, /push:[\s\S]*?paths:/);
   assert.match(triggerBlock, /pull_request:[\s\S]*?paths:/);
+  assert.match(triggerBlock, /cloudflare-v2\/db\/d1-migrations\/\*\*/);
+  assert.match(triggerBlock, /cloudflare-v2\/db\/postgres-migrations\/\*\*/);
+  assert.match(triggerBlock, /cloudflare-v2\/scripts\/\*\*/);
 });
 
 test('feature branch regression runs once via PR while exact push gates still retain test dependency', async () => {
   const workflow = await readCiWorkflow();
   const testStart = workflow.indexOf('  test:');
-  const inspectStart = workflow.indexOf('  cloudflare-inspect:');
-  const testBlock = workflow.slice(testStart, inspectStart);
+  const inventoryStart = workflow.indexOf('  cloudflare-storage-inventory:');
+  const testBlock = workflow.slice(testStart, inventoryStart);
 
   assert.match(testBlock, /github\.event_name == 'pull_request'/);
   assert.match(testBlock, /github\.ref == 'refs\/heads\/main'/);

@@ -11,6 +11,10 @@ on:
       - 'cloudflare-v2/bridges/**'
       - 'cloudflare-v2/containers/**'
       - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/db/d1-migrations/**'
+      - 'cloudflare-v2/db/postgres-migrations/**'
+      - 'cloudflare-v2/db/schema.sql'
+      - 'cloudflare-v2/scripts/**'
       - 'cloudflare-v2/package.json'
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
@@ -25,6 +29,10 @@ on:
       - 'cloudflare-v2/bridges/**'
       - 'cloudflare-v2/containers/**'
       - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/db/d1-migrations/**'
+      - 'cloudflare-v2/db/postgres-migrations/**'
+      - 'cloudflare-v2/db/schema.sql'
+      - 'cloudflare-v2/scripts/**'
       - 'cloudflare-v2/package.json'
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
@@ -81,6 +89,45 @@ jobs:
         run: |
           PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
           PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  cloudflare-storage-inventory:
+    needs: test
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'feat/trading-d1-cutover-implementation'
+      }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout reviewed PR head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies without Cloudflare credentials
+        run: npm ci --no-audit --no-fund
+
+      - name: Inventory Cloudflare D1 and Hyperdrive resources (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+          npx wrangler whoami
+          npx wrangler d1 list
+          npx wrangler hyperdrive list
 
   cloudflare-inspect:
     if: >-
