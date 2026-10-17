@@ -10,8 +10,9 @@
  */
 
 export class VIPMembershipManager {
-    constructor(supabaseClient, botToken, adminChannelId, vipChatId, workspaceId) { this.workspaceId = workspaceId;
+    constructor(supabaseClient, botToken, adminChannelId, vipChatId, workspaceId, { vipStore = null } = {}) { this.workspaceId = workspaceId;
         this.supabase = supabaseClient;
+        this.vipStore = vipStore;
         this.botToken = botToken;
         this.adminChannelId = adminChannelId;
         this.vipChatId = vipChatId;
@@ -98,11 +99,10 @@ export class VIPMembershipManager {
      * Checks and sends user subscription parameters
      */
     async sendSubscriptionStatus(chatId) {
-        const { data: member, error } = await this.supabase
-            .from("vip_members")
-            .select("*")
-            .eq("workspace_id", this.workspaceId).eq("telegram_id", chatId)
-            .maybeSingle();
+        const result = this.vipStore
+            ? { data: await this.vipStore.getMembership(this.workspaceId, chatId), error: null }
+            : await this.supabase.from("vip_members").select("*").eq("workspace_id", this.workspaceId).eq("telegram_id", chatId).maybeSingle();
+        const { data: member, error } = result;
 
         if (error || !member) {
             await this.telegramPost("sendMessage", {
@@ -140,11 +140,10 @@ export class VIPMembershipManager {
      */
     async processFreeTrialRequest(chatId, username, firstName) {
         // Step 1: Check database to ensure trial hasn't already been used
-        const { data: member, error } = await this.supabase
-            .from("vip_members")
-            .select("*")
-            .eq("workspace_id", this.workspaceId).eq("telegram_id", chatId)
-            .maybeSingle();
+        const result = this.vipStore
+            ? { data: await this.vipStore.getMembership(this.workspaceId, chatId), error: null }
+            : await this.supabase.from("vip_members").select("*").eq("workspace_id", this.workspaceId).eq("telegram_id", chatId).maybeSingle();
+        const { data: member, error } = result;
 
         if (member && member.trial_used) {
             await this.telegramPost("sendMessage", {
@@ -188,9 +187,11 @@ export class VIPMembershipManager {
             updated_at: new Date().toISOString()
         };
 
-        const { error: upsertError } = await this.supabase
-            .from("vip_members")
-            .upsert(payload, { onConflict: 'workspace_id, telegram_id' });
+        let upsertError = null;
+        try {
+            if (this.vipStore) await this.vipStore.upsertMembership(payload);
+            else ({ error: upsertError } = await this.supabase.from("vip_members").upsert(payload, { onConflict: 'workspace_id, telegram_id' }));
+        } catch (error) { upsertError = error; }
 
         if (upsertError) {
             await this.telegramPost("sendMessage", {
@@ -242,18 +243,19 @@ export class VIPMembershipManager {
         const planRequested = "1 Month VIP (Manual)";
 
         // Step 1: Create a pending deposit entry in Supabase
-        const { data, error } = await this.supabase
-            .from("bank_deposits")
-            .insert({
+        const depositPayload = {
                 workspace_id: this.workspaceId, telegram_id: chatId,
                 username,
                 amount,
                 plan_requested: planRequested,
                 receipt_photo_file_id: photoFileId,
                 status: 'pending'
-            })
-            .select()
-            .single();
+            };
+        let data, error;
+        try {
+            if (this.vipStore) data = await this.vipStore.createDeposit(depositPayload);
+            else ({ data, error } = await this.supabase.from("bank_deposits").insert(depositPayload).select().single());
+        } catch (caught) { error = caught; }
 
         if (error) {
             await this.telegramPost("sendMessage", {
@@ -334,11 +336,16 @@ export class VIPMembershipManager {
                 const expiresAt = new Date();
                 expiresAt.setMonth(expiresAt.getMonth() + months);
 
-                // Update Deposit Status
-                await this.supabase
-                    .from("bank_deposits")
-                    .update({ status: 'approved', reviewed_at: new Date().toISOString() })
-                    .eq("workspace_id", this.workspaceId).eq("id", recordId);
+                // A duplicate/stale approval must not generate a second invite.
+                if (this.vipStore) {
+                    const reviewed = await this.vipStore.reviewDeposit(this.workspaceId, recordId, 'approved');
+                    if (!reviewed) {
+                        await this.telegramPost("answerCallbackQuery", { callback_query_id: cbQuery.id, text: "This deposit was already reviewed or could not be found." });
+                        return;
+                    }
+                } else {
+                    await this.supabase.from("bank_deposits").update({ status: 'approved' }).eq("workspace_id", this.workspaceId).eq("id", recordId);
+                }
 
                 // Create Single-Use VIP Invite Link
                 const inviteRes = await this.telegramPost("createChatInviteLink", {
@@ -349,16 +356,16 @@ export class VIPMembershipManager {
                 const inviteLink = inviteRes?.result?.invite_link || "";
 
                 // Upsert VIP Member Access
-                await this.supabase
-                    .from("vip_members")
-                    .upsert({
+                const memberPayload = {
                         workspace_id: this.workspaceId, telegram_id: userId,
                         status: 'active',
                         subscription_tier: months === 1 ? 'monthly' : 'quarterly',
                         expires_at: expiresAt.toISOString(),
                         invite_link: inviteLink,
                         updated_at: new Date().toISOString()
-                    }, { onConflict: 'workspace_id, telegram_id' });
+                    };
+                if (this.vipStore) await this.vipStore.upsertMembership(memberPayload);
+                else await this.supabase.from("vip_members").upsert(memberPayload, { onConflict: 'workspace_id, telegram_id' });
 
                 // Direct Message VIP link to User
                 await this.telegramPost("sendMessage", {
@@ -376,11 +383,14 @@ export class VIPMembershipManager {
                 });
 
             } else if (action === "reject") {
-                // Update Deposit Record to Rejected
-                await this.supabase
-                    .from("bank_deposits")
-                    .update({ status: 'rejected', reviewed_at: new Date().toISOString() })
-                    .eq("workspace_id", this.workspaceId).eq("id", recordId);
+                // Reject only a pending record; stale buttons do not repeat the action.
+                if (this.vipStore) {
+                    const reviewed = await this.vipStore.reviewDeposit(this.workspaceId, recordId, 'rejected');
+                    if (!reviewed) {
+                        await this.telegramPost("answerCallbackQuery", { callback_query_id: cbQuery.id, text: "This deposit was already reviewed or could not be found." });
+                        return;
+                    }
+                } else await this.supabase.from("bank_deposits").update({ status: 'rejected' }).eq("workspace_id", this.workspaceId).eq("id", recordId);
 
                 // Notify User of Rejection
                 await this.telegramPost("sendMessage", {
@@ -426,11 +436,9 @@ export class VIPMembershipManager {
         const now = new Date();
 
         // 1. KICK EXPIRED USERS
-        const { data: expiredUsers, error } = await this.supabase
-            .from("vip_members")
-            .select("*")
-            .in("status", ["active", "trial"])
-            .lt("expires_at", now.toISOString());
+        const expiredUsers = this.vipStore
+            ? await this.vipStore.listExpired(this.workspaceId, now.toISOString())
+            : (await this.supabase.from("vip_members").select("*").eq("workspace_id", this.workspaceId).in("status", ["active", "trial"]).lt("expires_at", now.toISOString())).data;
 
         if (expiredUsers && expiredUsers.length > 0) {
             for (const user of expiredUsers) {
@@ -449,10 +457,8 @@ export class VIPMembershipManager {
                     });
 
                     // Update Status in Supabase
-                    await this.supabase
-                        .from("vip_members")
-                        .update({ status: 'expired', updated_at: now.toISOString() })
-                        .eq("id", user.id);
+                    if (this.vipStore) await this.vipStore.upsertMembership({ ...user, status: 'expired', updated_at: now.toISOString() });
+                    else await this.supabase.from("vip_members").update({ status: 'expired', updated_at: now.toISOString() }).eq("workspace_id", this.workspaceId).eq("id", user.id);
 
                     // Notify Expired User Private DM
                     await this.telegramPost("sendMessage", {
@@ -478,11 +484,11 @@ export class VIPMembershipManager {
             targetTime.setDate(targetTime.getDate() + range.days);
             const targetIso = targetTime.toISOString().split("T")[0]; // Match Date block
 
-            const { data: warningUsers } = await this.supabase
-                .from("vip_members")
-                .select("*")
-                .in("status", ["active", "trial"])
-                .like("expires_at", `${targetIso}%`); // Match users expiring on that exact day
+            const start = `${targetIso}T00:00:00.000Z`;
+            const end = new Date(Date.parse(start) + 24 * 60 * 60 * 1000).toISOString();
+            const warningUsers = this.vipStore
+                ? await this.vipStore.listExpiring(this.workspaceId, start, end)
+                : (await this.supabase.from("vip_members").select("*").eq("workspace_id", this.workspaceId).in("status", ["active", "trial"]).gte("expires_at", start).lt("expires_at", end)).data;
 
             if (warningUsers && warningUsers.length > 0) {
                 for (const user of warningUsers) {

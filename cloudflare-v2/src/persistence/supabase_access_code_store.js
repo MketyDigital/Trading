@@ -38,6 +38,7 @@ function subscriptionFailure(record, now = new Date()) {
 }
 
 export function createTradingAccessCodeStore(supabase) {
+  if (typeof supabase?.redeem === 'function' && typeof supabase?.restoreSession === 'function') return supabase;
   requireSupabase(supabase);
 
   async function restoreSession({ workspaceId, subject, accessCodeId, now = new Date() } = {}) {

@@ -69,7 +69,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Run Worker and trading-core tests
         run: npm run test:ci
@@ -109,7 +109,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
@@ -187,7 +187,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
@@ -246,7 +246,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Require staging credentials without printing values
         shell: bash
@@ -437,7 +437,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Require Cloudflare staging credentials without printing values
         shell: bash

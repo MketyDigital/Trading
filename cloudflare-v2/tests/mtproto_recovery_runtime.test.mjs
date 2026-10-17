@@ -27,7 +27,7 @@ test('runtime composes one Supabase client, tenant-scoped store, lifecycle servi
 
   assert.deepEqual(result, { checked: 2, restarted: 1 });
   assert.equal(seen.storeSupabase, supabase);
-  assert.deepEqual(seen.lifecycleArgs, { supabase, namespace, env });
+  assert.deepEqual(seen.lifecycleArgs, { supabase, sourceRepository: null, namespace, env });
   assert.deepEqual(seen.supervisorArgs, { lifecycle, store });
   assert.equal(seen.supabaseEnv, env);
 });
@@ -43,4 +43,27 @@ test('runtime fails closed by configuration name before constructing recovery de
     /SUPABASE_URL|SUPABASE_SERVICE_ROLE|TRADING_MASTER_KEY|MTPROTO_CONTAINER_NAMESPACE/,
   );
   assert.equal(factoryCalls, 0);
+});
+
+test('storage runtime uses the source repository without constructing Supabase', async () => {
+  let factoryCalls = 0;
+  const sourceRepository = { marker: 'd1-source-repository' };
+  const namespace = { marker: 'namespace' };
+  let lifecycleArgs;
+  const runtime = createMtprotoRecoveryRuntime({
+    supabaseFactory: async () => { factoryCalls += 1; throw new Error('Supabase must not be used'); },
+    storeFactory: (repository) => { assert.equal(repository, sourceRepository); return { marker: 'store' }; },
+    lifecycleFactory: (args) => { lifecycleArgs = args; return { marker: 'lifecycle' }; },
+    supervisorFactory: () => ({ async run() { return { checked: 0, restarted: 0 }; } }),
+  });
+
+  const result = await runtime({
+    TRADING_MASTER_KEY: 'master',
+    MTPROTO_CONTAINER_NAMESPACE: namespace,
+  }, { persistenceRuntime: { sourceConnections: sourceRepository } });
+
+  assert.deepEqual(result, { checked: 0, restarted: 0 });
+  assert.equal(factoryCalls, 0);
+  assert.deepEqual(lifecycleArgs, { supabase: null, sourceRepository, namespace,
+    env: { TRADING_MASTER_KEY: 'master', MTPROTO_CONTAINER_NAMESPACE: namespace } });
 });

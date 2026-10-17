@@ -25,6 +25,7 @@ import { createAdminAIStore, handleAuthorizedV1AdminAIRequest } from './v1_admin
 import { createBrandingStore, handleAuthorizedBrandingRequest } from './v1_branding.js';
 import {
   createAdminOperationsStore,
+  createTradingAdminOperationsStore,
   handleAuthorizedV1AdminOperationsRequest,
   handleAuthorizedV1AdminEventAuditRequest,
 } from './v1_admin_operations.js';
@@ -163,6 +164,10 @@ function isLocalAccessCodeAuth(auth = {}) {
 
 export async function authorizeV1AdminRequest(request, env = {}, {
   supabase,
+  workspaceAccess = null,
+  accessCodeStore = null,
+  membershipStore = null,
+  hostnameStore: injectedHostnameStore = null,
   authenticateFn = authenticateTradingAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
   hostnameStoreFactory = createTradingHostnameStore,
@@ -170,11 +175,11 @@ export async function authorizeV1AdminRequest(request, env = {}, {
 } = {}) {
   const workspaceId = request.headers.get('X-Mkety-Workspace-Id');
   if (!workspaceId) return { ok: false, status: 400, reason: 'MISSING_WORKSPACE_SELECTOR' };
-  if (!supabase?.from) return { ok: false, status: 503, reason: 'ADMIN_DATABASE_UNAVAILABLE' };
+  if (!workspaceAccess && !supabase?.from) return { ok: false, status: 503, reason: 'ADMIN_DATABASE_UNAVAILABLE' };
 
   const customHostnamesEnabled = enabled(env.TRADING_CUSTOM_HOSTNAMES_ENABLED);
-  let hostnameStore = null;
-  if (customHostnamesEnabled) {
+  let hostnameStore = injectedHostnameStore;
+  if (customHostnamesEnabled && !hostnameStore) {
     try { hostnameStore = hostnameStoreFactory(supabase); }
     catch { return { ok: false, status: 503, reason: 'TRADING_HOSTNAME_STORE_UNAVAILABLE' }; }
   }
@@ -201,23 +206,32 @@ export async function authorizeV1AdminRequest(request, env = {}, {
     return { ok: false, status: 503, reason: 'MKETY_ACCESS_GATE_NOT_CONFIGURED' };
   }
 
-  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, { issuer, audience, jwksUrl, requestedWorkspaceId: String(workspaceId) });
+  const auth = await authenticateV1AdminRequest(authenticateFn, request, env, {
+    issuer,
+    audience,
+    jwksUrl,
+    requestedWorkspaceId: String(workspaceId),
+    accessCodeStore,
+    workspaceAccess,
+  });
   if (!auth?.ok) {
     const unauthorized = ['MISSING_BEARER_TOKEN', 'MALFORMED_TOKEN', 'INVALID_SIGNATURE', 'TOKEN_EXPIRED', 'TOKEN_NOT_YET_VALID', 'INVALID_ISSUER', 'INVALID_AUDIENCE', 'SIGNING_KEY_NOT_FOUND', 'JWKS_FETCH_FAILED', 'LOCAL_TRADING_BEARER_NOT_CONFIGURED'];
     return { ok: false, status: unauthorized.includes(auth?.reason) ? 401 : 403, reason: auth?.reason || 'ADMIN_FORBIDDEN' };
   }
   if (String(auth.workspaceId) !== String(workspaceId)) return { ok: false, status: 403, reason: 'WORKSPACE_ASSERTION_MISMATCH' };
 
-  const { data: workspace, error } = await supabase.from('trading_workspace_access').select('*').eq('id', String(workspaceId)).maybeSingle();
+  let workspace, error;
+  if (workspaceAccess) workspace = await workspaceAccess.getWorkspace(String(workspaceId));
+  else ({ data: workspace, error } = await supabase.from('trading_workspace_access').select('*').eq('id', String(workspaceId)).maybeSingle());
   if (error || !workspace?.id) return { ok: false, status: 404, reason: 'WORKSPACE_NOT_FOUND' };
   if (!workspace.trading_access_enabled) return { ok: false, status: 403, reason: 'TRADING_ACCESS_DISABLED' };
 
-  let membershipStore;
-  try { membershipStore = membershipStoreFactory(supabase); }
+  let resolvedMembershipStore = membershipStore;
+  try { if (!resolvedMembershipStore) resolvedMembershipStore = membershipStoreFactory(supabase); }
   catch { return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }; }
 
   let membership;
-  try { membership = await membershipStore.getMembership(workspace.id, auth.subject); }
+  try { membership = await resolvedMembershipStore.getMembership(workspace.id, auth.subject); }
   catch { return { ok: false, status: 503, reason: 'TRADING_MEMBERSHIP_LOOKUP_FAILED' }; }
 
   if (!membership?.enabled || String(membership.workspaceId) !== String(workspace.id) || String(membership.subject) !== String(auth.subject)) {
@@ -235,7 +249,8 @@ export async function authorizeV1AdminRequest(request, env = {}, {
   return { ok: true, workspace, auth, membership };
 }
 
-export async function handleV1AdminRequest(request, env = {}, {
+async function handleV1AdminRequestWithStores(request, env = {}, {
+  persistenceRuntime = null,
   supabaseFactory = defaultSupabaseFactory,
   authenticateFn = authenticateTradingAccessBearer,
   membershipStoreFactory = createTradingMembershipStore,
@@ -250,14 +265,41 @@ export async function handleV1AdminRequest(request, env = {}, {
   brandingStoreFactory = createBrandingStore,
   operationsStoreFactory = createAdminOperationsStore,
 } = {}) {
+  const url = new URL(request.url);
+  if (persistenceRuntime) {
+    const supported = url.pathname === '/api/v1/admin/workspace'
+      || url.pathname === '/api/v1/admin/branding'
+      || url.pathname === '/api/v1/admin/ai-providers' || url.pathname.startsWith('/api/v1/admin/ai-providers/')
+      || url.pathname === '/api/v1/admin/members' || url.pathname.startsWith('/api/v1/admin/members/')
+      || url.pathname === '/api/v1/admin/hostnames' || url.pathname.startsWith('/api/v1/admin/hostnames/')
+      || url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')
+      || url.pathname === '/api/v1/admin/destination-connections' || url.pathname.startsWith('/api/v1/admin/destination-connections/')
+      || url.pathname === '/api/v1/admin/destinations' || url.pathname.startsWith('/api/v1/admin/destinations/')
+      || url.pathname === '/api/v1/admin/templates' || url.pathname.startsWith('/api/v1/admin/templates/')
+      || url.pathname === '/api/v1/admin/routes' || url.pathname.startsWith('/api/v1/admin/routes/');
+    const operationsDomain = url.pathname === '/api/v1/admin/operations' || /^\/api\/v1\/admin\/events\/[^/]+\/audit$/.test(url.pathname);
+    const accountDomain = url.pathname === '/api/v1/admin/accounts' || url.pathname.startsWith('/api/v1/admin/accounts/');
+    if (!supported && !accountDomain && !operationsDomain) return json({ ok: false, reason: 'STORAGE_DOMAIN_NOT_MIGRATED' }, 503);
+  }
   let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
+  if (!persistenceRuntime) {
+    try { supabase = await supabaseFactory(env); }
+    catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
+  }
 
-  const authorization = await authorizeV1AdminRequest(request, env, { supabase, authenticateFn, membershipStoreFactory, hostnameStoreFactory, resolveHostnameFn });
+  const authorization = await authorizeV1AdminRequest(request, env, {
+    supabase,
+    workspaceAccess: persistenceRuntime?.workspaceAccess,
+    accessCodeStore: persistenceRuntime?.accessCodes,
+    membershipStore: persistenceRuntime?.workspaceAccess,
+    hostnameStore: persistenceRuntime?.hostnames,
+    authenticateFn,
+    membershipStoreFactory,
+    hostnameStoreFactory,
+    resolveHostnameFn,
+  });
   if (!authorization.ok) return json({ ok: false, reason: authorization.reason }, authorization.status);
 
-  const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/workspace' && request.method === 'GET') {
     if (!hasTradingPermission(authorization.membership?.role, 'workspace.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
     return json({ ok: true, subject: authorization.auth.subject, workspace: publicWorkspace(authorization.workspace) });
@@ -265,21 +307,21 @@ export async function handleV1AdminRequest(request, env = {}, {
 
   if (url.pathname === '/api/v1/admin/branding') {
     let brandingStore;
-    try { brandingStore = brandingStoreFactory(supabase); }
+    try { brandingStore = brandingStoreFactory(persistenceRuntime ? { workspaceAccess: persistenceRuntime.workspaceAccess, hostnames: persistenceRuntime.hostnames } : supabase); }
     catch { return json({ ok: false, reason: 'BRANDING_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedBrandingRequest(request, authorization, { brandingStore });
   }
 
   if (url.pathname === '/api/v1/admin/ai-providers' || url.pathname.startsWith('/api/v1/admin/ai-providers/')) {
     let aiStore;
-    try { aiStore = aiStoreFactory(supabase); }
+    try { aiStore = aiStoreFactory(persistenceRuntime?.aiProviders || supabase); }
     catch { return json({ ok: false, reason: 'AI_PROVIDER_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminAIRequest(request, authorization, { aiStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/operations') {
     let operationsStore;
-    try { operationsStore = operationsStoreFactory(supabase); }
+    try { operationsStore = persistenceRuntime ? createTradingAdminOperationsStore(persistenceRuntime) : operationsStoreFactory(supabase); }
     catch { return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminOperationsRequest(request, authorization, { operationsStore });
   }
@@ -291,35 +333,35 @@ export async function handleV1AdminRequest(request, env = {}, {
     catch { return json({ ok: false, reason: 'INVALID_EVENT_ID' }, 400); }
     if (!String(eventId).trim()) return json({ ok: false, reason: 'INVALID_EVENT_ID' }, 400);
     let operationsStore;
-    try { operationsStore = operationsStoreFactory(supabase); }
+    try { operationsStore = persistenceRuntime ? createTradingAdminOperationsStore(persistenceRuntime) : operationsStoreFactory(supabase); }
     catch { return json({ ok: false, reason: 'OPERATIONS_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminEventAuditRequest(request, authorization, { eventId, operationsStore });
   }
 
   if (url.pathname === '/api/v1/admin/members' || url.pathname.startsWith('/api/v1/admin/members/')) {
     let membershipStore;
-    try { membershipStore = membershipStoreFactory(supabase); }
+    try { membershipStore = persistenceRuntime?.workspaceAccess || membershipStoreFactory(supabase); }
     catch { return json({ ok: false, reason: 'TRADING_MEMBERSHIP_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminMembersRequest(request, authorization, { membershipStore });
   }
 
   if (url.pathname === '/api/v1/admin/sources' || url.pathname.startsWith('/api/v1/admin/sources/')) {
     let sourceStore;
-    try { sourceStore = sourceStoreFactory(supabase, env); }
+    try { sourceStore = sourceStoreFactory(persistenceRuntime?.adminSources || supabase, env); }
     catch { return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminSourcesRequest(request, authorization, { sourceStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/accounts' || url.pathname.startsWith('/api/v1/admin/accounts/')) {
     let accountStore;
-    try { accountStore = accountStoreFactory(supabase); }
+    try { accountStore = accountStoreFactory(persistenceRuntime?.accounts || supabase); }
     catch { return json({ ok: false, reason: 'ACCOUNT_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminAccountsRequest(request, authorization, { accountStore, env });
   }
 
   if (url.pathname === '/api/v1/admin/destination-connections' || url.pathname.startsWith('/api/v1/admin/destination-connections/')) {
     let connectionStore;
-    try { connectionStore = destinationConnectionStoreFactory(supabase, env); }
+    try { connectionStore = destinationConnectionStoreFactory(persistenceRuntime?.destinations || supabase, env); }
     catch { return json({ ok: false, reason: 'DESTINATION_CONNECTION_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminDestinationConnectionsRequest(request, authorization, { connectionStore, env });
   }
@@ -329,7 +371,7 @@ export async function handleV1AdminRequest(request, env = {}, {
     || url.pathname.startsWith('/api/v1/admin/destinations/') || url.pathname.startsWith('/api/v1/admin/templates/') || url.pathname.startsWith('/api/v1/admin/routes/')
   ) {
     let destinationStore;
-    try { destinationStore = destinationStoreFactory(supabase, env); }
+    try { destinationStore = destinationStoreFactory(persistenceRuntime?.adminDestinations || supabase, env); }
     catch { return json({ ok: false, reason: 'DESTINATION_STORE_UNAVAILABLE' }, 503); }
     const entitlementFailure = await enforceDestinationEntitlement(request, authorization, destinationStore);
     if (entitlementFailure) return entitlementFailure;
@@ -338,10 +380,25 @@ export async function handleV1AdminRequest(request, env = {}, {
 
   if (url.pathname === '/api/v1/admin/hostnames' || url.pathname.startsWith('/api/v1/admin/hostnames/')) {
     let hostnameStore;
-    try { hostnameStore = adminHostnameStoreFactory(supabase); }
+    try { hostnameStore = adminHostnameStoreFactory(persistenceRuntime?.hostnames || supabase); }
     catch { return json({ ok: false, reason: 'CUSTOM_HOSTNAME_STORE_UNAVAILABLE' }, 503); }
     return handleAuthorizedV1AdminHostnamesRequest(request, authorization, { hostnameStore, env });
   }
 
   return json({ ok: false, reason: 'ADMIN_ROUTE_NOT_FOUND' }, 404);
+}
+
+export async function handleV1AdminRequest(request, env = {}, options = {}) {
+  if (options.persistenceRuntime) return handleV1AdminRequestWithStores(request, env, options);
+  const factory = options.persistenceRuntimeFactory;
+  if (!factory) return handleV1AdminRequestWithStores(request, env, options);
+  let runtime;
+  try {
+    runtime = await factory(env);
+    return await handleV1AdminRequestWithStores(request, env, { ...options, persistenceRuntime: runtime });
+  } catch {
+    return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503);
+  } finally {
+    try { await runtime?.close?.(); } catch { /* Preserve the response; the next request will surface authority health. */ }
+  }
 }

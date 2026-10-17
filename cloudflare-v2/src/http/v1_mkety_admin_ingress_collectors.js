@@ -59,6 +59,14 @@ function safeCollector(row = {}) {
 const SELECT = 'id,collector_name,is_active,metadata,last_seen_at,created_at,updated_at';
 
 export function createIngressCollectorStore(supabase) {
+  if (typeof supabase?.list === 'function' && typeof supabase?.create === 'function' && typeof supabase?.update === 'function') {
+    return {
+      listCollectors: (...args) => supabase.list(...args),
+      createCollector: (...args) => supabase.create(...args),
+      rotateCollector: (id, tokenHash) => supabase.update(id, { token_hash: tokenHash, updated_at: new Date().toISOString() }),
+      setCollectorActive: (id, enabled) => supabase.update(id, { is_active: Boolean(enabled), updated_at: new Date().toISOString() }),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listCollectors() {

@@ -293,8 +293,30 @@ export function readTradingRefreshCookie(request) {
   return '';
 }
 
-async function validateLocalSubscription(auth, env = {}, { now = new Date() } = {}) {
+async function validateLocalSubscription(auth, env = {}, { now = new Date(), accessCodeStore = null, workspaceAccess = null } = {}) {
   if (!auth?.ok || !auth.accessCodeId) return auth;
+  if (accessCodeStore?.getAccessCodeById) {
+    try {
+      const code = await accessCodeStore.getAccessCodeById(auth.accessCodeId);
+      if (!code?.id || String(code.workspace_id || '') !== String(auth.workspaceId) || String(code.product || '') !== 'trading') {
+        return { ok: false, reason: 'ACCESS_SUBSCRIPTION_INVALID' };
+      }
+      if (String(code.status || '') !== 'active') return { ok: false, reason: 'ACCESS_SUBSCRIPTION_REVOKED' };
+      if (code.expires_at && new Date(code.expires_at).getTime() <= new Date(now).getTime()) {
+        if (workspaceAccess?.updateWorkspace) {
+          try { await workspaceAccess.updateWorkspace(String(auth.workspaceId), { trading_access_enabled: false }); }
+          catch { /* The subscription remains denied even if the workspace lock cannot be synchronized. */ }
+        }
+        return { ok: false, reason: 'ACCESS_SUBSCRIPTION_EXPIRED' };
+      }
+      return auth;
+    } catch {
+      return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
+    }
+  }
+  // A storage-runtime request must fail closed when its subscription repository
+  // is missing; it must never silently bypass expiration/revocation checks.
+  if (workspaceAccess) return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) return auth;
@@ -331,5 +353,9 @@ export async function authenticateLocalTradingAccessBearer(request, env = {}, op
   const header = request?.headers?.get?.('Authorization') || '';
   if (!header.startsWith('Bearer ')) return { ok: false, reason: 'MISSING_BEARER_TOKEN' };
   const verified = await verifyLocalTradingBearer(header.slice(7).trim(), env.TRADING_ACCESS_CODE_SESSION_SECRET, options);
-  return validateLocalSubscription(verified, env, { now: options.now || new Date() });
+  return validateLocalSubscription(verified, env, {
+    now: options.now || new Date(),
+    accessCodeStore: options.accessCodeStore || null,
+    workspaceAccess: options.workspaceAccess || null,
+  });
 }

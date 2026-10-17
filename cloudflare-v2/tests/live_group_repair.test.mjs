@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLiveRepairDecision, selectCompletedRepairEvent } from '../src/execution/live_group_repair.js';
+import { buildLiveRepairDecision, repairLivePositionGroup, selectCompletedRepairEvent } from '../src/execution/live_group_repair.js';
 
 const group = {
   id: 'g1',
@@ -82,4 +82,21 @@ test('live repair chooses the completed full signal over the original fast-entry
   assert.equal(selectCompletedRepairEvent([fast, full])?.id, 'full-db');
   assert.equal(selectCompletedRepairEvent([full, fast])?.id, 'full-db');
   assert.equal(selectCompletedRepairEvent([fast]), null);
+});
+
+test('live repair resolves authority data without constructing or using Supabase', async () => {
+  const calls = [];
+  const persistenceRuntime = {
+    runtimeControls: {
+      async getTradingAccessEnabled() { return { ok: true, enabled: true }; },
+      async getBrokerExecutionEnabled() { return { ok: true, enabled: true }; },
+      async getLiveBrokerExecutionEnabled() { return { ok: true, enabled: true }; },
+    },
+    tradeState: { async loadGroup(workspaceId, groupId) { calls.push(['group', workspaceId, groupId]); return { id: 'runtime-g1', workspaceId, tradeAccountId: 'a1', sourceEventId: 'e1', sourceEventIds: [], symbol: 'EURUSD', side: 'BUY' }; } },
+    accounts: { async listAccounts(workspaceId) { calls.push(['accounts', workspaceId]); return [{ id: 'a1', environment: 'demo', platform: 'mt5', provider_mode: 'mt5_connector' }]; } },
+    ingest: { eventStore: { async getById(workspaceId, id) { calls.push(['event', workspaceId, id]); return { id, canonical_intent: { symbol: { canonical: 'EURUSD' }, side: 'BUY', stopLoss: 1, takeProfits: [2] } }; }, async findByExternalEventId() { return null; } } },
+  };
+  const result = await repairLivePositionGroup({ env: {}, persistenceRuntime, workspaceId: 'ws1', groupId: 'runtime-g1', confirmLive: true });
+  assert.equal(result.reason, 'REPAIR_PROVIDER_NOT_SUPPORTED');
+  assert.deepEqual(calls.map(call => call[0]), ['group', 'accounts', 'event']);
 });

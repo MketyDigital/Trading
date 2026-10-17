@@ -69,6 +69,7 @@ async function readJson(request) {
 }
 
 export function createAdminHostnameStore(supabase) {
+  if (supabase?.list && supabase?.get && supabase?.create && supabase?.syncVerification) return supabase;
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async list(workspaceId) {

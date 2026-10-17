@@ -188,6 +188,7 @@ function toDatabaseRow(evidence) {
 }
 
 export function createOperationJournalStore(supabase, { nowFn = () => new Date() } = {}) {
+  if (typeof supabase?.append === 'function') return supabase;
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (typeof nowFn !== 'function') throw new TypeError('nowFn is required');
 

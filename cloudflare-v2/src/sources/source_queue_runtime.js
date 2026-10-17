@@ -67,7 +67,7 @@ export function createSourceQueueRuntime({
   eventsHandler = handleV1EventsRequest,
   now = Date.now,
 } = {}) {
-  return async function consumeSourceQueue(batch, env = {}) {
+  return async function consumeSourceQueue(batch, env = {}, { persistenceRuntime = null } = {}) {
     if (!env?.TRADING_MASTER_KEY) {
       return retryAll(batch, new Error('TRADING_MASTER_KEY_NOT_CONFIGURED'));
     }
@@ -75,8 +75,11 @@ export function createSourceQueueRuntime({
     let supabase;
     let stores;
     try {
-      supabase = await supabaseFactory(env);
-      stores = storesFactory(supabase, { masterKey: env.TRADING_MASTER_KEY });
+      if (persistenceRuntime) stores = persistenceRuntime.ingest;
+      else {
+        supabase = await supabaseFactory(env);
+        stores = storesFactory(supabase, { masterKey: env.TRADING_MASTER_KEY });
+      }
       if (!stores?.sourceStore?.getActiveSource) {
         throw new Error('source store is unavailable');
       }
@@ -89,8 +92,10 @@ export function createSourceQueueRuntime({
       now,
       dispatch: async (signed) => {
         const response = await eventsHandler(signedRequest(signed), env, {
-          supabaseFactory: async () => supabase,
-          storesFactory: () => stores,
+          ...(persistenceRuntime ? { persistenceRuntime } : {
+            supabaseFactory: async () => supabase,
+            storesFactory: () => stores,
+          }),
           orchestrateDuplicates: true,
         });
 

@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { signSourcePayload } from '../security/source_auth.js';
 import { handleV1EventsRequest } from './v1_events.js';
@@ -121,6 +120,7 @@ async function defaultSupabase(env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error('COLLECTOR_RUNTIME_UNAVAILABLE');
+  const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);
 }
 

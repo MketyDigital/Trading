@@ -88,25 +88,29 @@ async function clearRepairMarker(supabase, row, now) {
  */
 export async function repairExecutionBindings({
   supabase,
+  persistenceRuntime = null,
   stateBinder,
   limit = 50,
   now = new Date().toISOString(),
 } = {}) {
-  if (!supabase?.from) throw new TypeError('supabase client is required');
+  if (!supabase?.from && !persistenceRuntime) throw new TypeError('Trading persistence is required');
   if (typeof stateBinder !== 'function') throw new TypeError('stateBinder is required');
   const boundedLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 50)));
   const nowIso = new Date(now).toISOString();
 
-  const { data, error } = await supabase
-    .from('destination_deliveries')
-    .select('*')
-    .eq('status', 'SUCCEEDED')
-    .eq('failure_class', 'STATE_BINDING_PENDING')
-    .order('updated_at', { ascending: true })
-    .limit(boundedLimit);
-  if (error) throw new Error(`binding repair scan failed: ${error.message}`);
-
-  const rows = Array.isArray(data) ? data : [];
+  let rows;
+  if (persistenceRuntime) rows = await persistenceRuntime.listBindingRepairs({ limit: boundedLimit });
+  else {
+    const { data, error } = await supabase
+      .from('destination_deliveries')
+      .select('*')
+      .eq('status', 'SUCCEEDED')
+      .eq('failure_class', 'STATE_BINDING_PENDING')
+      .order('updated_at', { ascending: true })
+      .limit(boundedLimit);
+    if (error) throw new Error(`binding repair scan failed: ${error.message}`);
+    rows = Array.isArray(data) ? data : [];
+  }
   let repaired = 0;
   let failed = 0;
 
@@ -114,7 +118,10 @@ export async function repairExecutionBindings({
     try {
       const binding = persistedBinding(row);
       await stateBinder(binding);
-      await clearRepairMarker(supabase, row, nowIso);
+      if (persistenceRuntime) {
+        const store = persistenceRuntime.delivery({ workspaceId: row.workspace_id, destinationType: row.destination_type, destinationRef: row.destination_ref, tradingEventId: row.trading_event_id });
+        await store.clearBindingPending(row.idempotency_key);
+      } else await clearRepairMarker(supabase, row, nowIso);
       repaired += 1;
     } catch {
       // Leave SUCCEEDED + STATE_BINDING_PENDING intact for a later repair pass.

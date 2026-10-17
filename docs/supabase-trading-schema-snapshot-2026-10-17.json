@@ -1,0 +1,3352 @@
+{
+  "project": "Mkety Digital",
+  "projectRef": "vdblajgxrfndjesoyayy",
+  "snapshotDate": "2026-10-17",
+  "source": "Supabase read-only list_tables metadata; no row contents included",
+  "tables": [
+    {
+      "name": "workspaces",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "owner_email",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "custom_domain",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "tier",
+          "type": "text",
+          "nullable": true,
+          "default": "'free'::text",
+          "check": "tier = ANY (ARRAY['free'::text, 'pro'::text, 'enterprise'::text])"
+        },
+        {
+          "name": "tg_bot_token",
+          "type": "text",
+          "nullable": true,
+          "unique": true
+        },
+        {
+          "name": "tg_admin_chat_id",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "tg_vip_chat_id",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "vip_members_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "listener_nodes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "signal_routes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "bank_deposits_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "signal_logs_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ai_providers",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "provider_name",
+          "type": "text",
+          "nullable": false,
+          "check": "provider_name = ANY (ARRAY['openai'::text, 'azure_openai'::text, 'mkety_ai'::text, 'gemini'::text, 'google'::text, 'vertex_ai'::text, 'cloudflare_ai'::text, 'workers_ai'::text, 'aws_bedrock'::text, 'deepseek'::text, 'groq'::text, 'custom'::text])"
+        },
+        {
+          "name": "api_key",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "base_url",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "model_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "priority_rank",
+          "type": "integer",
+          "nullable": true,
+          "default": "1"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": true,
+          "default": "true"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        {
+          "name": "api_key_ciphertext",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "temperature",
+          "type": "numeric",
+          "nullable": false,
+          "default": "0.1"
+        },
+        {
+          "name": "max_output_tokens",
+          "type": "integer",
+          "nullable": false,
+          "default": "1000"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "uses_binding",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "provider_config",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "last_health_status",
+          "type": "text",
+          "nullable": true,
+          "check": "last_health_status IS NULL OR (last_health_status = ANY (ARRAY['HEALTHY'::text, 'FAILED'::text]))"
+        },
+        {
+          "name": "last_health_checked_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_health_diagnostic",
+          "type": "jsonb",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "operation_journal_ai_provider_id_fkey",
+          "columns": [
+            "ai_provider_id"
+          ],
+          "target": "ai_providers",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "ai_providers_workspace_id_trading_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "signal_routes",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "route_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_chat_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "destination_chat_id",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "destination_type",
+          "type": "text",
+          "nullable": false,
+          "check": "destination_type = ANY (ARRAY['telegram_vip'::text, 'deriv_ws'::text, 'ctrader_ws'::text, 'mt5_webhook'::text])"
+        },
+        {
+          "name": "custom_footer",
+          "type": "text",
+          "nullable": true,
+          "default": "'~~~ \\n<b>Starpips Forex</b>'::text"
+        },
+        {
+          "name": "transform_ai",
+          "type": "boolean",
+          "nullable": true,
+          "default": "true"
+        },
+        {
+          "name": "route_settings",
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": true,
+          "default": "true"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "signal_routes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trade_accounts",
+      "rows": 7,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "account_label",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "platform",
+          "type": "text",
+          "nullable": false,
+          "check": "platform = ANY (ARRAY['deriv'::text, 'ctrader'::text, 'mt5'::text])"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "api_token_encrypted",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "lot_sizing_type",
+          "type": "text",
+          "nullable": true,
+          "default": "'fixed'::text",
+          "check": "lot_sizing_type = ANY (ARRAY['fixed'::text, 'adaptive_percent'::text, 'symbol_equivalent'::text, 'balance_percent'::text, 'multiplier'::text, 'risk_percent'::text])"
+        },
+        {
+          "name": "lot_value",
+          "type": "numeric",
+          "nullable": true,
+          "default": "0.01"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": true,
+          "default": "true"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        {
+          "name": "execution_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "safety_policy",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{\"enabled\": true, \"killSwitch\": false}'::jsonb"
+        },
+        {
+          "name": "fast_entry_policy",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "entry_zone_policy",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "credential_ciphertext",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "server_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "provider_mode",
+          "type": "text",
+          "nullable": false,
+          "default": "'legacy'::text",
+          "check": "provider_mode = ANY (ARRAY['legacy'::text, 'ctrader_oauth'::text, 'ctrader_cbot'::text, 'mt5_bridge'::text, 'mt5_cloud'::text, 'mt5_connector'::text])"
+        },
+        {
+          "name": "environment",
+          "type": "text",
+          "nullable": true,
+          "check": "environment IS NULL OR (environment = ANY (ARRAY['demo'::text, 'live'::text]))) NOT VALI"
+        },
+        {
+          "name": "roles",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[\"execution\"]'::jsonb"
+        },
+        {
+          "name": "provider_config",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "live_execution_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "lot_sizing_config",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trade_accounts_workspace_id_trading_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_trade_account_id_fkey",
+          "columns": [
+            "trade_account_id"
+          ],
+          "target": "trade_accounts",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_trade_account_id_fkey",
+          "columns": [
+            "trade_account_id"
+          ],
+          "target": "trade_accounts",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vip_members",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "telegram_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "username",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "first_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": true,
+          "default": "'active'::text"
+        },
+        {
+          "name": "trial_used",
+          "type": "boolean",
+          "nullable": true,
+          "default": "false"
+        },
+        {
+          "name": "subscription_tier",
+          "type": "text",
+          "nullable": true,
+          "default": "'monthly'::text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "invite_link",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "vip_members_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "bank_deposits",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "telegram_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "username",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "amount",
+          "type": "numeric",
+          "nullable": false
+        },
+        {
+          "name": "plan_requested",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "receipt_photo_file_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": true,
+          "default": "'pending'::text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "bank_deposits_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "signal_logs",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "source_chat_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "source_message_id",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "raw_text",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": true,
+          "default": "'processed'::text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "signal_logs_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "workspaces",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_workspace_access",
+      "rows": 2,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "owner_email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "zitadel_org_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "trading_access_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "trading_required_role",
+          "type": "text",
+          "nullable": false,
+          "default": "'trading_access'::text"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_destination_templates_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_workspace_memberships_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "destination_deliveries_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_legs_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_events_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_connections_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destinations_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "ai_providers_workspace_id_trading_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_ctrader_oauth_states_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_feeds_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destination_connections_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_event_revisions_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_access_code_redemptions_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_access_codes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_workspace_hostnames_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trade_accounts_workspace_id_trading_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "source_connections",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_instance_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "settings",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "source_family",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "nullable": false,
+          "default": "100"
+        },
+        {
+          "name": "external_identity",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "config",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "health_status",
+          "type": "text",
+          "nullable": false,
+          "default": "'UNCONFIGURED'::text"
+        },
+        {
+          "name": "last_heartbeat_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_event_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_connected_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_disconnected_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "restart_count",
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "last_error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "provider_secret_ciphertext",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "recovery_attempt_count",
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "recovery_next_attempt_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_recovery_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_recovery_error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "public_source_handle",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "source_feeds_workspace_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "trading_events_source_connection_id_fkey",
+          "columns": [
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_connections_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_source_connection_id_fkey",
+          "columns": [
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_events",
+      "rows": 6800,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_connection_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "external_event_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "event_version",
+          "type": "text",
+          "nullable": false,
+          "default": "'1.0'::text"
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_external_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "raw_text",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "structured_payload",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "thread",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "processing_status",
+          "type": "text",
+          "nullable": false,
+          "default": "'RECEIVED'::text"
+        },
+        {
+          "name": "canonical_intent",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "canonical_event_id",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "destination_deliveries_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_event_revisions_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_source_event_id_fkey",
+          "columns": [
+            "source_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_events_source_connection_id_fkey",
+          "columns": [
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_events_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "position_groups",
+      "rows": 1036,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "trade_account_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "source_event_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "correlation_key",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "canonical_symbol",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "side",
+          "type": "text",
+          "nullable": false,
+          "check": "side = ANY (ARRAY['BUY'::text, 'SELL'::text])"
+        },
+        {
+          "name": "order_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "entry",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "stop_loss",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'PLANNED'::text"
+        },
+        {
+          "name": "risk_plan",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "policy_snapshot",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "source_instance_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "source_event_ids",
+          "type": "ARRAY",
+          "nullable": false,
+          "default": "'{}'::text[]"
+        },
+        {
+          "name": "thread_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "incomplete",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "position_mode",
+          "type": "text",
+          "nullable": false,
+          "default": "'HEDGED'::text",
+          "check": "position_mode = ANY (ARRAY['HEDGED'::text, 'NETTED'::text, 'SPREAD_BETTING'::text])"
+        },
+        {
+          "name": "runtime_group_id",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "position_legs_position_group_id_fkey",
+          "columns": [
+            "position_group_id"
+          ],
+          "target": "position_groups",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_position_group_id_fkey",
+          "columns": [
+            "position_group_id"
+          ],
+          "target": "position_groups",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_trade_account_id_fkey",
+          "columns": [
+            "trade_account_id"
+          ],
+          "target": "trade_accounts",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_groups_source_event_id_fkey",
+          "columns": [
+            "source_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "position_legs",
+      "rows": 1854,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "position_group_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "target_index",
+          "type": "integer",
+          "nullable": false,
+          "check": "target_index > 0"
+        },
+        {
+          "name": "lots",
+          "type": "numeric",
+          "nullable": false,
+          "check": "lots >= 0::numeric"
+        },
+        {
+          "name": "stop_loss",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "take_profit",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'PLANNED'::text"
+        },
+        {
+          "name": "broker_position_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "broker_order_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "runtime_leg_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "broker_deal_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "fill_price",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "requested_lots",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "executed_lots",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "remaining_lots",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "volume_step_lots",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "minimum_lots",
+          "type": "numeric",
+          "nullable": true
+        },
+        {
+          "name": "action_type",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "failure_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "parent_leg_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "lifecycle_role",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "lifecycle_tracking_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "originating_order_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "logical_target_index",
+          "type": "integer",
+          "nullable": true
+        },
+        {
+          "name": "last_broker_observed_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_broker_source_version",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "last_broker_status",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "last_broker_snapshot_fingerprint",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "broker_deal_ids",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "position_legs_position_group_id_fkey",
+          "columns": [
+            "position_group_id"
+          ],
+          "target": "position_groups",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "position_legs_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "destination_deliveries",
+      "rows": 5551,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "trading_event_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "destination_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "destination_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'PENDING'::text"
+        },
+        {
+          "name": "request_payload",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "response_payload",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_attempt_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "failure_class",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "destination_deliveries_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "destination_deliveries_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_workspace_memberships",
+      "rows": 2,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "zitadel_subject",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "trading_role",
+          "type": "text",
+          "nullable": false,
+          "check": "trading_role = ANY (ARRAY['owner'::text, 'admin'::text, 'operator'::text, 'viewer'::text])"
+        },
+        {
+          "name": "membership_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_workspace_memberships_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_workspace_hostnames",
+      "rows": 1,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "hostname",
+          "type": "text",
+          "nullable": false,
+          "check": "hostname = lower(hostname)",
+          "unique": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text",
+          "check": "status = ANY (ARRAY['pending'::text, 'active'::text, 'disabled'::text])"
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_workspace_hostnames_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_access_codes",
+      "rows": 4,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "code_hash",
+          "type": "text",
+          "nullable": false,
+          "unique": true
+        },
+        {
+          "name": "product",
+          "type": "text",
+          "nullable": false,
+          "default": "'trading'::text",
+          "check": "product = 'trading'::text"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text",
+          "check": "status = ANY (ARRAY['active'::text, 'disabled'::text, 'revoked'::text])"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "workspace_display_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "owner_email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "owner_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "nullable": false,
+          "default": "'owner'::text",
+          "check": "role = 'owner'::text"
+        },
+        {
+          "name": "entitlements",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "max_redemptions",
+          "type": "integer",
+          "nullable": false,
+          "default": "1",
+          "check": "max_redemptions > 0"
+        },
+        {
+          "name": "redeemed_count",
+          "type": "integer",
+          "nullable": false,
+          "default": "0",
+          "check": "redeemed_count >= 0"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_redeemed_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_access_code_redemptions_access_code_id_fkey",
+          "columns": [
+            "access_code_id"
+          ],
+          "target": "trading_access_codes",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_access_codes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_access_code_redemptions",
+      "rows": 4,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "access_code_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "zitadel_subject",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "owner_email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "default": "'redeemed'::text",
+          "check": "status = ANY (ARRAY['redeemed'::text, 'rejected'::text])"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_access_code_redemptions_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_access_code_redemptions_access_code_id_fkey",
+          "columns": [
+            "access_code_id"
+          ],
+          "target": "trading_access_codes",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_destination_templates",
+      "rows": 5,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "template_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "formatting_mode",
+          "type": "text",
+          "nullable": false,
+          "default": "'template'::text",
+          "check": "formatting_mode = ANY (ARRAY['none'::text, 'clean'::text, 'template'::text, 'ai_then_fallback'::text, 'clean_ai_fallback'::text])"
+        },
+        {
+          "name": "parse_mode",
+          "type": "text",
+          "nullable": false,
+          "default": "'HTML'::text",
+          "check": "parse_mode = ANY (ARRAY['HTML'::text, 'Markdown'::text, 'MarkdownV2'::text, 'plain'::text])"
+        },
+        {
+          "name": "brand_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "header",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "footer",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "disclaimer",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "emoji_style",
+          "type": "text",
+          "nullable": false,
+          "default": "'standard'::text"
+        },
+        {
+          "name": "cleanup_rules",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "layout",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "is_default",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_destination_templates_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destinations_workspace_template_fk",
+          "columns": [
+            "workspace_id",
+            "template_id"
+          ],
+          "target": "trading_destination_templates",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_destinations",
+      "rows": 12,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "destination_type",
+          "type": "text",
+          "nullable": false,
+          "check": "destination_type = ANY (ARRAY['telegram'::text, 'broker_account'::text, 'internal_webhook'::text, 'audit_only'::text])"
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "destination_ref",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "template_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "credential_ciphertext",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "settings",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "health_status",
+          "type": "text",
+          "nullable": false,
+          "default": "'UNCONFIGURED'::text"
+        },
+        {
+          "name": "last_delivery_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "credential_connection_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_destinations_workspace_credential_connection_fk",
+          "columns": [
+            "workspace_id",
+            "credential_connection_id"
+          ],
+          "target": "trading_destination_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destinations_workspace_template_fk",
+          "columns": [
+            "workspace_id",
+            "template_id"
+          ],
+          "target": "trading_destination_templates",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destinations_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_destination_id_fkey",
+          "columns": [
+            "destination_id"
+          ],
+          "target": "trading_destinations",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_destination_fk",
+          "columns": [
+            "workspace_id",
+            "destination_id"
+          ],
+          "target": "trading_destinations",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "source_destination_routes",
+      "rows": 18,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_connection_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "destination_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "route_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "nullable": false,
+          "default": "100"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "filters",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "source_feed_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "source_destination_routes_workspace_destination_fk",
+          "columns": [
+            "workspace_id",
+            "destination_id"
+          ],
+          "target": "trading_destinations",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_route_id_fkey",
+          "columns": [
+            "route_id"
+          ],
+          "target": "source_destination_routes",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_feed_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_feed_id",
+            "source_connection_id"
+          ],
+          "target": "source_feeds",
+          "targetColumns": [
+            "workspace_id",
+            "id",
+            "source_connection_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_runtime_controls",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "control_key",
+          "type": "text",
+          "nullable": false,
+          "check": "control_key = ANY (ARRAY['broker_execution_enabled'::text, 'trading_access_enabled'::text, 'live_broker_execution_enabled'::text])"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "updated_by",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "control_key"
+      ],
+      "foreignKeys": []
+    },
+    {
+      "name": "trading_ctrader_oauth_states",
+      "rows": 12,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "state_token",
+          "type": "text",
+          "nullable": false,
+          "unique": true
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "subject",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "requested_roles",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[\"source\"]'::jsonb"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_ctrader_oauth_states_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_ingress_collectors",
+      "rows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "gen_random_uuid()"
+        },
+        {
+          "name": "collector_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "unique": true
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": []
+    },
+    {
+      "name": "source_feeds",
+      "rows": 9,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_connection_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "provider_feed_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "feed_type",
+          "type": "text",
+          "nullable": false,
+          "default": "'telegram_chat'::text"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "source_feeds_workspace_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "source_destination_routes_workspace_feed_source_fk",
+          "columns": [
+            "workspace_id",
+            "source_feed_id",
+            "source_connection_id"
+          ],
+          "target": "source_feeds",
+          "targetColumns": [
+            "workspace_id",
+            "id",
+            "source_connection_id"
+          ]
+        },
+        {
+          "name": "operation_journal_source_feed_id_fkey",
+          "columns": [
+            "source_feed_id"
+          ],
+          "target": "source_feeds",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "source_feeds_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_destination_connections",
+      "rows": 3,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "provider_type",
+          "type": "text",
+          "nullable": false,
+          "check": "provider_type = 'telegram_bot_api'::text"
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "credential_ciphertext",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_destinations_workspace_credential_connection_fk",
+          "columns": [
+            "workspace_id",
+            "credential_connection_id"
+          ],
+          "target": "trading_destination_connections",
+          "targetColumns": [
+            "workspace_id",
+            "id"
+          ]
+        },
+        {
+          "name": "trading_destination_connections_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trading_event_revisions",
+      "rows": 2333,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "trading_event_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "event_version",
+          "type": "text",
+          "nullable": false,
+          "default": "'1.0'::text"
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_external_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "external_event_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "raw_text",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "structured_payload",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "thread",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "processing_status",
+          "type": "text",
+          "nullable": false,
+          "default": "'RECEIVED'::text"
+        },
+        {
+          "name": "canonical_intent",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "trading_event_revisions_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "trading_event_revisions_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "operation_journal",
+      "rows": 50269,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "extensions.uuid_generate_v4()"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "evidence_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "correlation_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "trading_event_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "source_connection_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "source_feed_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "route_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "destination_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "trade_account_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "ai_provider_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "position_group_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "connector_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "stage",
+          "type": "text",
+          "nullable": false,
+          "check": "stage = ANY (ARRAY['INGRESS'::text, 'AUTHORIZATION'::text, 'INTERPRETATION'::text, 'AI_PROVIDER'::text, 'CORRELATION'::text, 'ROUTE'::text, 'DESTINATION'::text, 'BROKER_PLANNING'::text, 'BROKER_EXECUTION'::text, 'MANAGEMENT'::text, 'REPLAY'::text, 'RECONCILIATION'::text, 'CONNECTOR'::text, 'PERSISTENCE'::text])"
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "check": "status = ANY (ARRAY['SUCCEEDED'::text, 'FAILED'::text, 'SKIPPED'::text, 'BLOCKED'::text, 'RETRYABLE'::text, 'UNCERTAIN'::text, 'INFO'::text])"
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "failure_class",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "retryable",
+          "type": "boolean",
+          "nullable": true
+        },
+        {
+          "name": "summary",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "details",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "name": "operation_journal_ai_provider_id_fkey",
+          "columns": [
+            "ai_provider_id"
+          ],
+          "target": "ai_providers",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_workspace_id_fkey",
+          "columns": [
+            "workspace_id"
+          ],
+          "target": "trading_workspace_access",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_trading_event_id_fkey",
+          "columns": [
+            "trading_event_id"
+          ],
+          "target": "trading_events",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_source_connection_id_fkey",
+          "columns": [
+            "source_connection_id"
+          ],
+          "target": "source_connections",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_source_feed_id_fkey",
+          "columns": [
+            "source_feed_id"
+          ],
+          "target": "source_feeds",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_route_id_fkey",
+          "columns": [
+            "route_id"
+          ],
+          "target": "source_destination_routes",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_destination_id_fkey",
+          "columns": [
+            "destination_id"
+          ],
+          "target": "trading_destinations",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_trade_account_id_fkey",
+          "columns": [
+            "trade_account_id"
+          ],
+          "target": "trade_accounts",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "operation_journal_position_group_id_fkey",
+          "columns": [
+            "position_group_id"
+          ],
+          "target": "position_groups",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "orphan_signal_recovery_cursors",
+      "rows": 1,
+      "columns": [
+        {
+          "name": "cursor_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "last_received_at",
+          "type": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "last_event_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        }
+      ],
+      "primaryKeys": [
+        "cursor_key"
+      ],
+      "foreignKeys": []
+    }
+  ]
+}

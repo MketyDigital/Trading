@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { decryptConnectionCredentials, encryptConnectionCredentials } from '../security/connection_credentials.js';
@@ -72,6 +71,7 @@ async function defaultSupabase(env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
+  const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);
 }
 
@@ -107,17 +107,18 @@ async function readBody(request) {
   }
 }
 
-async function workspaceTokenExpiry(authorization, supabase, env, nowMs = Date.now()) {
+async function workspaceTokenExpiry(authorization, supabase, env, nowMs = Date.now(), accessCodes = null) {
   const workspaceId = String(authorization?.workspace?.id || '');
   const accessCodeId = text(authorization?.workspace?.metadata?.accessCodeId);
   if (accessCodeId) {
-    const { data, error } = await supabase
-      .from('trading_access_codes')
-      .select('id,workspace_id,expires_at')
-      .eq('id', accessCodeId)
-      .eq('workspace_id', workspaceId)
-      .maybeSingle();
-    if (error) throw new Error('WORKSPACE_ACCESS_LOOKUP_FAILED');
+    let data;
+    if (accessCodes) data = await accessCodes.getAccessCodeById(accessCodeId);
+    else {
+      const result = await supabase.from('trading_access_codes').select('id,workspace_id,expires_at').eq('id', accessCodeId).eq('workspace_id', workspaceId).maybeSingle();
+      if (result.error) throw new Error('WORKSPACE_ACCESS_LOOKUP_FAILED');
+      data = result.data;
+    }
+    if (data && String(data.workspace_id ?? data.workspaceId) !== workspaceId) throw new Error('WORKSPACE_ACCESS_LOOKUP_FAILED');
     if (data?.expires_at) {
       const expiresAt = Date.parse(data.expires_at);
       if (!Number.isFinite(expiresAt)) throw new Error('WORKSPACE_ACCESS_EXPIRY_INVALID');
@@ -130,8 +131,8 @@ async function workspaceTokenExpiry(authorization, supabase, env, nowMs = Date.n
   return Number(nowMs) + ttlMs;
 }
 
-async function createReusableToken(accountRowId, authorization, supabase, env, issuedAt = Date.now()) {
-  const expiresAt = await workspaceTokenExpiry(authorization, supabase, env, issuedAt);
+async function createReusableToken(accountRowId, authorization, supabase, env, issuedAt = Date.now(), accessCodes = null) {
+  const expiresAt = await workspaceTokenExpiry(authorization, supabase, env, issuedAt, accessCodes);
   const connectionToken = await createMt5ConnectorToken({
     accountRowId,
     signingKey: env.CBOT_TOKEN_SIGNING_KEY,
@@ -141,7 +142,7 @@ async function createReusableToken(accountRowId, authorization, supabase, env, i
   return { connectionToken, expiresAt };
 }
 
-async function createConnection(request, authorization, supabase, env) {
+async function createConnection(request, authorization, supabase, env, accountsStore = null, accessCodes = null) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
@@ -161,7 +162,7 @@ async function createConnection(request, authorization, supabase, env) {
   const accountRowId = crypto.randomUUID();
   const issuedAt = Date.now();
   let tokenMaterial;
-  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt); }
+  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt, accessCodes); }
   catch (error) {
     const reason = error?.message || 'WORKSPACE_ACCESS_LOOKUP_FAILED';
     return json({ ok: false, reason }, reason === 'WORKSPACE_ACCESS_EXPIRED' ? 403 : 503);
@@ -200,8 +201,15 @@ async function createConnection(request, authorization, supabase, env) {
     },
   };
 
-  const { data, error } = await supabase.from('trade_accounts').insert(row).select(ACCOUNT_SELECT).maybeSingle();
-  if (error || !data) return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503);
+  let data;
+  if (accountsStore) {
+    try { data = await accountsStore.createAccount(String(authorization.workspace.id), { id: accountRowId, label: row.account_label, platform: 'mt5', accountId: row.account_id, serverName: row.server_name, lotSizingType: row.lot_sizing_type, lotValue: row.lot_value, providerMode: 'mt5_connector', environment: row.environment, roles: row.roles, providerConfig: row.provider_config, safetyPolicy: row.safety_policy, fastEntryPolicy: row.fast_entry_policy, entryZonePolicy: row.entry_zone_policy }, credentialCiphertext); }
+    catch { return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trade_accounts').insert(row).select(ACCOUNT_SELECT).maybeSingle();
+    if (result.error || !result.data) return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503);
+    data = result.data;
+  }
   return json({
     ok: true,
     account: publicAccount(data),
@@ -212,15 +220,15 @@ async function createConnection(request, authorization, supabase, env) {
   }, 201);
 }
 
-async function readMt5Account(accountRowId, authorization, supabase) {
+async function readMt5Account(accountRowId, authorization, supabase, accountsStore = null) {
   const workspaceId = String(authorization.workspace.id);
-  const { data: current, error } = await supabase
-    .from('trade_accounts')
-    .select(ACCOUNT_SELECT)
-    .eq('workspace_id', workspaceId)
-    .eq('id', accountRowId)
-    .maybeSingle();
-  if (error) return { error: json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503) };
+  let current;
+  if (accountsStore) current = await accountsStore.getAccount(workspaceId, accountRowId);
+  else {
+    const result = await supabase.from('trade_accounts').select(ACCOUNT_SELECT).eq('workspace_id', workspaceId).eq('id', accountRowId).maybeSingle();
+    if (result.error) return { error: json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503) };
+    current = result.data;
+  }
   if (!current) return { error: json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404) };
   if (String(current.platform || '').toLowerCase() !== 'mt5' || String(current.provider_mode || '').toLowerCase() !== 'mt5_connector') {
     return { error: json({ ok: false, reason: 'MT5_CONNECTOR_ACCOUNT_REQUIRED' }, 409) };
@@ -228,14 +236,14 @@ async function readMt5Account(accountRowId, authorization, supabase) {
   return { current };
 }
 
-async function regenerateToken(accountRowId, authorization, supabase, env) {
+async function regenerateToken(accountRowId, authorization, supabase, env, accountsStore = null, accessCodes = null) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
   let gateway;
   try { gateway = gatewayConfig(env); }
   catch { return json({ ok: false, reason: 'MT5_CONNECTOR_NOT_CONFIGURED' }, 503); }
-  const found = await readMt5Account(accountRowId, authorization, supabase);
+  const found = await readMt5Account(accountRowId, authorization, supabase, accountsStore);
   if (found.error) return found.error;
 
   let credentials;
@@ -250,7 +258,7 @@ async function regenerateToken(accountRowId, authorization, supabase, env) {
 
   const issuedAt = Date.now();
   let tokenMaterial;
-  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt); }
+  try { tokenMaterial = await createReusableToken(accountRowId, authorization, supabase, env, issuedAt, accessCodes); }
   catch (error) {
     const reason = error?.message || 'WORKSPACE_ACCESS_LOOKUP_FAILED';
     return json({ ok: false, reason }, reason === 'WORKSPACE_ACCESS_EXPIRED' ? 403 : 503);
@@ -264,12 +272,13 @@ async function regenerateToken(accountRowId, authorization, supabase, env) {
     ...(found.current.provider_config && typeof found.current.provider_config === 'object' ? found.current.provider_config : {}),
     connectionTokenExpiresAt: new Date(tokenMaterial.expiresAt).toISOString(),
   };
-  const { error: updateError } = await supabase
-    .from('trade_accounts')
-    .update({ credential_ciphertext: credentialCiphertext, provider_config: providerConfig })
-    .eq('workspace_id', String(authorization.workspace.id))
-    .eq('id', accountRowId);
-  if (updateError) return json({ ok: false, reason: 'MT5_CONNECTOR_TOKEN_REFRESH_FAILED' }, 503);
+  if (accountsStore) {
+    try { await accountsStore.updateAccount(String(authorization.workspace.id), accountRowId, { credential_ciphertext: credentialCiphertext, provider_config: providerConfig }); }
+    catch { return json({ ok: false, reason: 'MT5_CONNECTOR_TOKEN_REFRESH_FAILED' }, 503); }
+  } else {
+    const { error: updateError } = await supabase.from('trade_accounts').update({ credential_ciphertext: credentialCiphertext, provider_config: providerConfig }).eq('workspace_id', String(authorization.workspace.id)).eq('id', accountRowId);
+    if (updateError) return json({ ok: false, reason: 'MT5_CONNECTOR_TOKEN_REFRESH_FAILED' }, 503);
+  }
   return json({
     ok: true,
     accountId: accountRowId,
@@ -280,13 +289,13 @@ async function regenerateToken(accountRowId, authorization, supabase, env) {
   });
 }
 
-async function syncConnection(accountRowId, authorization, supabase, env, fetchFn) {
+async function syncConnection(accountRowId, authorization, supabase, env, fetchFn, accountsStore = null) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
   if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'ACCOUNT_ENCRYPTION_NOT_CONFIGURED' }, 503);
   const workspaceId = String(authorization.workspace.id);
-  const found = await readMt5Account(accountRowId, authorization, supabase);
+  const found = await readMt5Account(accountRowId, authorization, supabase, accountsStore);
   if (found.error) return found.error;
   const current = found.current;
 
@@ -365,14 +374,16 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
     provider_config: providerConfig,
     credential_ciphertext: retainedCredentialCiphertext,
   };
-  const { data: updated, error: updateError } = await supabase
-    .from('trade_accounts')
-    .update(patch)
-    .eq('workspace_id', workspaceId)
-    .eq('id', accountRowId)
-    .select(ACCOUNT_SELECT)
-    .maybeSingle();
-  if (updateError || !updated) return json({ ok: false, reason: 'MT5_CONNECTOR_SYNC_FAILED' }, 503);
+  let updated;
+  if (accountsStore) {
+    try { updated = await accountsStore.updateAccount(workspaceId, accountRowId, patch); }
+    catch { return json({ ok: false, reason: 'MT5_CONNECTOR_SYNC_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trade_accounts').update(patch).eq('workspace_id', workspaceId).eq('id', accountRowId).select(ACCOUNT_SELECT).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'MT5_CONNECTOR_SYNC_FAILED' }, 503);
+    updated = result.data;
+  }
+  if (!updated) return json({ ok: false, reason: 'MT5_CONNECTOR_SYNC_FAILED' }, 503);
   return json({ ok: true, account: publicAccount(updated) });
 }
 
@@ -380,18 +391,18 @@ export async function handleV1AdminMt5ConnectorRequest(request, env = {}, {
   supabaseFactory = defaultSupabase,
   authorizeFn = authorizeV1AdminRequest,
   fetchFn = fetch,
+  persistenceRuntime = null,
 } = {}) {
-  let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
-  const authorization = await authorizeFn(request, env, { supabase });
+  let supabase = null;
+  if (!persistenceRuntime) { try { supabase = await supabaseFactory(env); } catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); } }
+  const authorization = await authorizeFn(request, env, { supabase, ...(persistenceRuntime ? { workspaceAccess: persistenceRuntime.workspaceAccess, accessCodeStore: persistenceRuntime.accessCodes, membershipStore: persistenceRuntime.workspaceAccess, hostnameStore: persistenceRuntime.hostnames } : {}) });
   if (!authorization?.ok) {
     return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   }
 
   const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/connections/mt5/connector') {
-    if (request.method === 'POST') return createConnection(request, authorization, supabase, env);
+    if (request.method === 'POST') return createConnection(request, authorization, supabase, env, persistenceRuntime?.accounts || null, persistenceRuntime?.accessCodes || null);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
   }
   const tokenMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/mt5\/connector\/([^/]+)\/token$/);
@@ -400,7 +411,7 @@ export async function handleV1AdminMt5ConnectorRequest(request, env = {}, {
     let accountRowId;
     try { accountRowId = decodeURIComponent(tokenMatch[1]); }
     catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
-    return regenerateToken(accountRowId, authorization, supabase, env);
+    return regenerateToken(accountRowId, authorization, supabase, env, persistenceRuntime?.accounts || null, persistenceRuntime?.accessCodes || null);
   }
   const syncMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/mt5\/connector\/([^/]+)\/sync$/);
   if (syncMatch) {
@@ -408,7 +419,7 @@ export async function handleV1AdminMt5ConnectorRequest(request, env = {}, {
     let accountRowId;
     try { accountRowId = decodeURIComponent(syncMatch[1]); }
     catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
-    return syncConnection(accountRowId, authorization, supabase, env, fetchFn);
+    return syncConnection(accountRowId, authorization, supabase, env, fetchFn, persistenceRuntime?.accounts || null);
   }
   return json({ ok: false, reason: 'MT5_CONNECTOR_ROUTE_NOT_FOUND' }, 404);
 }

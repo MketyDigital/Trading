@@ -7,11 +7,12 @@ export function createProductionBindingRepairRuntime({
   supabaseFactory = defaultDestinationRetrySupabaseFactory,
   executionDepsFactory = createProductionExecutionDependencies,
 } = {}) {
-  return async function runProductionBindingRepair(env = {}, _ctx = {}) {
-    const supabase = await supabaseFactory(env);
+  return async function runProductionBindingRepair(env = {}, { persistenceRuntime = null } = {}) {
+    const supabase = persistenceRuntime ? null : await supabaseFactory(env);
 
     return repairExecutionBindings({
       supabase,
+      persistenceRuntime,
       stateBinder: async (binding) => {
         if (executionDepsFactory === createProductionExecutionDependencies) {
           const binder = createProductionTradeStateBinder({

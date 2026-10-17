@@ -65,7 +65,10 @@ function equivalentTelegramExternalEventIds(externalEventId) {
   return [...new Set(values)];
 }
 
-async function findTradingEventId(supabase, workspaceId, externalEventId) {
+async function findTradingEventId(supabase, workspaceId, externalEventId, persistenceRuntime = null) {
+  if (persistenceRuntime?.deliveryHistory) {
+    return persistenceRuntime.deliveryHistory.findTradingEventId(workspaceId, equivalentTelegramExternalEventIds(externalEventId));
+  }
   if (!supabase?.from || !workspaceId || !externalEventId) return null;
   for (const candidate of equivalentTelegramExternalEventIds(externalEventId)) {
     const { data, error } = await supabase
@@ -80,10 +83,17 @@ async function findTradingEventId(supabase, workspaceId, externalEventId) {
   return null;
 }
 
-async function resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId) {
-  const eventId = await findTradingEventId(supabase, workspaceId, parentExternalEventId);
+async function resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId, persistenceRuntime = null) {
+  const eventId = await findTradingEventId(supabase, workspaceId, parentExternalEventId, persistenceRuntime);
   if (!eventId) return null;
   const destinationKey = `telegram-destination:${destination.id}`;
+  if (persistenceRuntime?.deliveryHistory) {
+    const repo = persistenceRuntime.deliveryHistory.repository({ workspaceId, destinationType: 'telegram', destinationRef: destinationKey, tradingEventId: eventId });
+    const row = await repo.findLatestSuccessful(eventId, destinationKey);
+    const value = row?.response_payload?.messageId ?? row?.response_payload?.message_id;
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+  }
   const { data, error } = await supabase
     .from('destination_deliveries')
     .select('response_payload')
@@ -100,8 +110,8 @@ async function resolveReplyMessageId(supabase, workspaceId, destination, parentE
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
-async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination, externalEventId, result = {}) {
-  const eventId = await findTradingEventId(supabase, workspaceId, externalEventId);
+async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination, externalEventId, result = {}, persistenceRuntime = null) {
+  const eventId = await findTradingEventId(supabase, workspaceId, externalEventId, persistenceRuntime);
   if (!eventId) throw new Error('TELEGRAM_THREAD_EVENT_LOOKUP_FAILED');
   const destinationKey = `telegram-destination:${destination.id}`;
   const idempotencyKey = `telegram:${destination.id}:${externalEventId}`;
@@ -118,6 +128,16 @@ async function recordTelegramDeliveryOutcome(supabase, workspaceId, destination,
     ...(result?.retryAfter != null ? { retryAfter: Number(result.retryAfter) } : {}),
     ...(result?.replyParentFallback === true ? { replyParentFallback: true } : {}),
   };
+  if (persistenceRuntime?.deliveryHistory) {
+    const repo = persistenceRuntime.deliveryHistory.repository({ workspaceId, destinationType: 'telegram', destinationRef: destinationKey, tradingEventId: eventId });
+    await repo.recordOutcome(idempotencyKey, {
+      responsePayload,
+      succeeded,
+      errorCode: succeeded ? null : (text(result?.errorCode) || 'TELEGRAM_DELIVERY_FAILED'),
+      failureClass: Number(result?.status) === 429 || Number(result?.status) >= 500 ? 'RETRYABLE' : 'TERMINAL',
+    });
+    return;
+  }
   const row = {
     workspace_id: String(workspaceId),
     trading_event_id: eventId,
@@ -148,6 +168,7 @@ async function recordMessageMapping(supabase, workspaceId, destination, external
 export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps = {}) {
   const baseStore = deps.destinationStore;
   const supabase = deps.supabase;
+  const persistenceRuntime = deps.persistenceRuntime;
   const workspaceId = text(input.workspaceId);
   const routedByChatId = new Map();
   const parentExternalEventId = replyExternalEventId(input.event);
@@ -179,7 +200,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
       const failOpenStandalone = destinationFormattingMode(destination) === 'clean_ai_fallback';
       let mappedMessageId = null;
       try {
-        mappedMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, sourceEditedExternalEventId);
+        mappedMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, sourceEditedExternalEventId, persistenceRuntime);
       } catch {
         if (!failOpenStandalone) {
           result = { ok: false, status: 0, errorCode: 'TELEGRAM_EDIT_PARENT_LOOKUP_FAILED' };
@@ -200,7 +221,7 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
     } else {
       if (parentExternalEventId && destination) {
         try {
-          replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId);
+          replyToMessageId = await resolveReplyMessageId(supabase, workspaceId, destination, parentExternalEventId, persistenceRuntime);
         } catch {
           result = { ok: false, status: 0, errorCode: 'TELEGRAM_REPLY_PARENT_LOOKUP_FAILED' };
         }
@@ -219,9 +240,9 @@ export async function runV1DestinationDeliveryAcceptanceStage(input = {}, deps =
       }
     }
 
-    if (destination && currentExternalEventId && supabase?.from) {
+    if (destination && currentExternalEventId && (supabase?.from || persistenceRuntime?.deliveryHistory)) {
       try {
-        await recordTelegramDeliveryOutcome(supabase, workspaceId, destination, currentExternalEventId, result);
+        await recordTelegramDeliveryOutcome(supabase, workspaceId, destination, currentExternalEventId, result, persistenceRuntime);
       } catch {
         return {
           ...result,

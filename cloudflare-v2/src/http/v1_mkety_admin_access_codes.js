@@ -191,6 +191,13 @@ function atomicRotationError(error) {
 }
 
 export function createMketyAdminAccessCodeStore(supabase) {
+  if (typeof supabase?.listAccessCodes === 'function' && typeof supabase?.createAccessCode === 'function' && typeof supabase?.revokeAccessCode === 'function') {
+    return {
+      listAccessCodes: (...args) => supabase.listAccessCodes(...args),
+      createAccessCode: (...args) => supabase.createAccessCode(...args),
+      revokeAccessCode: (...args) => supabase.revokeAccessCode(...args),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listAccessCodes() {

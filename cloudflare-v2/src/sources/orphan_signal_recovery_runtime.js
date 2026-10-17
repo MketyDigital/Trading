@@ -147,7 +147,7 @@ export function createOrphanSignalRecoveryRuntime({
   enqueueFn = defaultEnqueue,
   clock = Date.now,
 } = {}) {
-  return async function run(env = {}) {
+  return async function run(env = {}, { persistenceRuntime = null } = {}) {
     if (env.ORPHAN_SIGNAL_RECOVERY_ENABLED === 'false') {
       return { status: 'DISABLED', scanned: 0, enqueued: 0, skipped: 0, failed: 0 };
     }
@@ -155,10 +155,12 @@ export function createOrphanSignalRecoveryRuntime({
       return { status: 'QUEUE_UNAVAILABLE', scanned: 0, enqueued: 0, skipped: 0, failed: 0 };
     }
     const nowMs = Number(clock());
-    const supabase = await supabaseFactory(env);
+    const supabase = persistenceRuntime ? null : await supabaseFactory(env);
     let controls;
     try {
-      controls = await controlLoader({ supabase });
+      controls = persistenceRuntime
+        ? await Promise.all([persistenceRuntime.runtimeControls.getTradingAccessEnabled(), persistenceRuntime.runtimeControls.getBrokerExecutionEnabled()]).then(([tradingAccess, brokerExecution]) => ({ tradingAccess, brokerExecution }))
+        : await controlLoader({ supabase });
     } catch {
       return { status: 'CONTROL_UNAVAILABLE', scanned: 0, enqueued: 0, skipped: 0, failed: 0 };
     }
@@ -166,7 +168,12 @@ export function createOrphanSignalRecoveryRuntime({
     if (controlsStatus !== 'ENABLED') {
       return { status: controlsStatus, scanned: 0, enqueued: 0, skipped: 0, failed: 0 };
     }
-    const loaded = await candidateLoader({ supabase, nowMs });
+    const storedCursor = persistenceRuntime ? await persistenceRuntime.recoveryCursors.get(RECOVERY_CURSOR_KEY) : null;
+    const oldest = new Date(nowMs - MAX_AGE_MS).toISOString();
+    const newest = new Date(nowMs - MIN_RETRY_AGE_MS).toISOString();
+    const loaded = persistenceRuntime
+      ? { candidates: await persistenceRuntime.ingest.eventStore.listReadyRecoveryCandidates({ oldest, newest, cursor: storedCursor, limit: CANDIDATE_PAGE_SIZE }), cursorManaged: true }
+      : await candidateLoader({ supabase, nowMs });
     const cursorManaged = !Array.isArray(loaded) && loaded?.cursorManaged === true;
     const candidates = Array.isArray(loaded) ? loaded : (Array.isArray(loaded?.candidates) ? loaded.candidates : []);
     let enqueued = 0;
@@ -180,11 +187,24 @@ export function createOrphanSignalRecoveryRuntime({
         continue;
       }
       try {
-        if (!(await brokerRouteMatcher({ supabase, candidate }))) {
+        const routed = persistenceRuntime
+          ? await (async () => {
+              const [routes, destinations] = await Promise.all([persistenceRuntime.routes.list(candidate.workspace_id), persistenceRuntime.destinations.listDestinations(candidate.workspace_id)]);
+              const destinationById = new Map(destinations.map(item => [String(item.id), item]));
+              return routes.some(route => String(route.source_connection_id) === String(candidate.source_connection_id)
+                && (route.is_active === true || Number(route.is_active) === 1)
+                && destinationById.get(String(route.destination_id))?.destination_type === 'broker_account'
+                && (destinationById.get(String(route.destination_id))?.is_active === true || Number(destinationById.get(String(route.destination_id))?.is_active) === 1));
+            })()
+          : await brokerRouteMatcher({ supabase, candidate });
+        if (!routed) {
           skipped += 1;
           continue;
         }
-        if (await groupMatcher({ supabase, candidate })) {
+        const alreadyGrouped = persistenceRuntime
+          ? await persistenceRuntime.tradeState.hasSourceEventGroup(candidate.workspace_id, candidate.id, candidate.external_event_id)
+          : await groupMatcher({ supabase, candidate });
+        if (alreadyGrouped) {
           skipped += 1;
           continue;
         }
@@ -199,7 +219,8 @@ export function createOrphanSignalRecoveryRuntime({
     if (cursorManaged && candidates.length > 0) {
       const committedIndex = firstFailedIndex < 0 ? candidates.length - 1 : firstFailedIndex - 1;
       if (committedIndex >= 0) {
-        await cursorSaver({ supabase, candidate: candidates[committedIndex], nowMs });
+        if (persistenceRuntime) await persistenceRuntime.recoveryCursors.save(RECOVERY_CURSOR_KEY, candidates[committedIndex].received_at, candidates[committedIndex].id);
+        else await cursorSaver({ supabase, candidate: candidates[committedIndex], nowMs });
       }
     }
     return { status: 'COMPLETED', scanned: candidates.length, enqueued, skipped, failed };

@@ -222,15 +222,18 @@ function deliveryStoreFor({ factory, supabase, workspaceId, account, tradingEven
 export function createProductionExecutionDependencies(config = {}, overrides = {}) {
   const {
     decryptCredentialsFn = decryptConnectionCredentials,
-    deliveryStoreFactory = createSupabaseDeliveryStore,
+    deliveryStoreFactory = null,
     mt5ConnectorExecutor = executeMt5ConnectorAction,
     exposureLoader = null,
     fetchFn = fetch,
   } = overrides;
+  const effectiveDeliveryStoreFactory = deliveryStoreFactory || (config.persistenceRuntime
+    ? (_supabase, options) => config.persistenceRuntime.delivery(options)
+    : createSupabaseDeliveryStore);
   const base = createLegacyProductionExecutionDependencies(config, {
     ...overrides,
     decryptCredentialsFn,
-    deliveryStoreFactory,
+    deliveryStoreFactory: effectiveDeliveryStoreFactory,
     exposureLoader,
     fetchFn,
   });
@@ -314,7 +317,7 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     if (!controlSecret) throw new Error('MT5 connector control credential is unavailable');
     const symbols = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
     const deliveryStore = deliveryStoreFor({
-      factory: deliveryStoreFactory,
+      factory: effectiveDeliveryStoreFactory,
       supabase,
       workspaceId,
       account,

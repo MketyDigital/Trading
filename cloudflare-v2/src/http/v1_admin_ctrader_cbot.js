@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import { decryptConnectionCredentials, encryptConnectionCredentials } from '../security/connection_credentials.js';
@@ -76,6 +75,7 @@ async function defaultSupabase(env = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
   if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
+  const { createClient } = await import('@supabase/supabase-js');
   return createClient(url, key);
 }
 
@@ -111,7 +111,7 @@ async function readBody(request) {
   }
 }
 
-async function createConnection(request, authorization, supabase, env) {
+async function createConnection(request, authorization, supabase, env, accountsStore = null) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
@@ -170,8 +170,15 @@ async function createConnection(request, authorization, supabase, env) {
     },
   };
 
-  const { data, error } = await supabase.from('trade_accounts').insert(row).select(ACCOUNT_SELECT).maybeSingle();
-  if (error || !data) return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503);
+  let data;
+  if (accountsStore) {
+    try { data = await accountsStore.createAccount(String(authorization.workspace.id), { id: accountRowId, label: row.account_label, platform: 'ctrader', accountId: row.account_id, serverName: row.server_name, lotSizingType: row.lot_sizing_type, lotValue: row.lot_value, providerMode: 'ctrader_cbot', environment: row.environment, roles: row.roles, providerConfig: row.provider_config, safetyPolicy: row.safety_policy, fastEntryPolicy: row.fast_entry_policy, entryZonePolicy: row.entry_zone_policy }, credentialCiphertext); }
+    catch { return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trade_accounts').insert(row).select(ACCOUNT_SELECT).maybeSingle();
+    if (result.error || !result.data) return json({ ok: false, reason: 'ACCOUNT_CREATE_FAILED' }, 503);
+    data = result.data;
+  }
   return json({
     ok: true,
     account: publicAccount(data),
@@ -181,19 +188,19 @@ async function createConnection(request, authorization, supabase, env) {
   }, 201);
 }
 
-async function syncConnection(accountRowId, authorization, supabase, env, fetchFn) {
+async function syncConnection(accountRowId, authorization, supabase, env, fetchFn, accountsStore = null) {
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
   if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'ACCOUNT_ENCRYPTION_NOT_CONFIGURED' }, 503);
   const workspaceId = String(authorization.workspace.id);
-  const { data: current, error: readError } = await supabase
-    .from('trade_accounts')
-    .select(ACCOUNT_SELECT)
-    .eq('workspace_id', workspaceId)
-    .eq('id', accountRowId)
-    .maybeSingle();
-  if (readError) return json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503);
+  let current;
+  if (accountsStore) current = await accountsStore.getAccount(workspaceId, accountRowId);
+  else {
+    const result = await supabase.from('trade_accounts').select(ACCOUNT_SELECT).eq('workspace_id', workspaceId).eq('id', accountRowId).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'ACCOUNT_READ_FAILED' }, 503);
+    current = result.data;
+  }
   if (!current) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
   if (String(current.platform || '').toLowerCase() !== 'ctrader' || String(current.provider_mode || '').toLowerCase() !== 'ctrader_cbot') {
     return json({ ok: false, reason: 'CTRADER_CBOT_ACCOUNT_REQUIRED' }, 409);
@@ -259,14 +266,16 @@ async function syncConnection(accountRowId, authorization, supabase, env, fetchF
     server_name: observedEnvironment,
     provider_config: providerConfig,
   };
-  const { data: updated, error: updateError } = await supabase
-    .from('trade_accounts')
-    .update(patch)
-    .eq('workspace_id', workspaceId)
-    .eq('id', accountRowId)
-    .select(ACCOUNT_SELECT)
-    .maybeSingle();
-  if (updateError || !updated) return json({ ok: false, reason: 'CTRADER_CBOT_SYNC_FAILED' }, 503);
+  let updated;
+  if (accountsStore) {
+    try { updated = await accountsStore.updateAccount(workspaceId, accountRowId, patch); }
+    catch { return json({ ok: false, reason: 'CTRADER_CBOT_SYNC_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trade_accounts').update(patch).eq('workspace_id', workspaceId).eq('id', accountRowId).select(ACCOUNT_SELECT).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'CTRADER_CBOT_SYNC_FAILED' }, 503);
+    updated = result.data;
+  }
+  if (!updated) return json({ ok: false, reason: 'CTRADER_CBOT_SYNC_FAILED' }, 503);
   return json({ ok: true, account: publicAccount(updated) });
 }
 
@@ -274,18 +283,18 @@ export async function handleV1AdminCTraderCbotRequest(request, env = {}, {
   supabaseFactory = defaultSupabase,
   authorizeFn = authorizeV1AdminRequest,
   fetchFn = fetch,
+  persistenceRuntime = null,
 } = {}) {
-  let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
-  const authorization = await authorizeFn(request, env, { supabase });
+  let supabase = null;
+  if (!persistenceRuntime) { try { supabase = await supabaseFactory(env); } catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); } }
+  const authorization = await authorizeFn(request, env, { supabase, ...(persistenceRuntime ? { workspaceAccess: persistenceRuntime.workspaceAccess, accessCodeStore: persistenceRuntime.accessCodes, membershipStore: persistenceRuntime.workspaceAccess, hostnameStore: persistenceRuntime.hostnames } : {}) });
   if (!authorization?.ok) {
     return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   }
 
   const url = new URL(request.url);
   if (url.pathname === '/api/v1/admin/connections/ctrader/cbot') {
-    if (request.method === 'POST') return createConnection(request, authorization, supabase, env);
+    if (request.method === 'POST') return createConnection(request, authorization, supabase, env, persistenceRuntime?.accounts || null);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
   }
   const syncMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/ctrader\/cbot\/([^/]+)\/sync$/);
@@ -294,7 +303,7 @@ export async function handleV1AdminCTraderCbotRequest(request, env = {}, {
     let accountRowId;
     try { accountRowId = decodeURIComponent(syncMatch[1]); }
     catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
-    return syncConnection(accountRowId, authorization, supabase, env, fetchFn);
+    return syncConnection(accountRowId, authorization, supabase, env, fetchFn, persistenceRuntime?.accounts || null);
   }
   return json({ ok: false, reason: 'CTRADER_CBOT_ROUTE_NOT_FOUND' }, 404);
 }

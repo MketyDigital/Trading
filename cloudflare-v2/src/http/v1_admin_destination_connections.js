@@ -66,6 +66,14 @@ async function encryptCredentialPayload(credentials, masterKey, encryptCredentia
 }
 
 export function createAdminDestinationConnectionStore(supabase) {
+  if (supabase?.listConnections && supabase?.createConnection && supabase?.replaceConnectionCredentials && supabase?.setConnectionEnabled) {
+    return {
+      listConnections: (...args) => supabase.listConnections(...args),
+      createConnection: (...args) => supabase.createConnection(...args),
+      replaceCredentials: (...args) => supabase.replaceConnectionCredentials(...args),
+      setEnabled: (...args) => supabase.setConnectionEnabled(...args),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listConnections(workspaceId) {

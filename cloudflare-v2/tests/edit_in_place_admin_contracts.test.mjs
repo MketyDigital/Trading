@@ -167,3 +167,58 @@ test('saved Telegram delivery bot can be renamed without rotating or exposing to
   assert.equal(db.tables.trading_destination_connections[0].credential_ciphertext, 'still-existing-secret');
   assert.equal(JSON.stringify(body).includes('still-existing-secret'), false);
 });
+
+test('storage-runtime edit-in-place updates use selected repositories and never create Supabase', async () => {
+  let supabaseFactoryCalls = 0;
+  const updates = [];
+  const runtime = {
+    accessCodes: {}, workspaceAccess: {}, hostnames: {},
+    sourceConnections: {
+      getSourceForAdmin: async () => ({ id: 'source-1', workspace_id: 'ws-1', provider_type: 'custom_signed_api', source_family: 'api', display_name: 'Old source', config: {} }),
+      update: async (_workspace, id, patch) => { updates.push(['source', id, patch]); return { id, workspace_id: 'ws-1', provider_type: 'custom_signed_api', source_family: 'api', ...patch }; },
+    },
+    sourceFeeds: {
+      listFeeds: async () => [{ id: 'feed-1', workspace_id: 'ws-1', source_connection_id: 'source-1', provider_feed_id: 'feed-native', is_active: true }],
+      update: async (_workspace, id, patch) => { updates.push(['feed', id, patch]); return { id, workspace_id: 'ws-1', source_connection_id: 'source-1', provider_feed_id: 'feed-native', ...patch }; },
+    },
+    destinations: {
+      listDestinations: async () => [{ id: 'dest-1', workspace_id: 'ws-1', destination_type: 'telegram', display_name: 'Old destination', destination_ref: '-1001', template_id: 'tpl-1', credential_connection_id: 'bot-1', settings: { timeoutMs: 5000 } }],
+      updateDestination: async (_workspace, id, input) => { updates.push(['destination', id, input]); return { id, workspace_id: 'ws-1', destination_type: 'telegram', display_name: input.displayName, destination_ref: input.destinationRef, template_id: input.templateId, credential_connection_id: input.credentialConnectionId, settings: input.settings }; },
+      listTemplates: async () => [{ id: 'tpl-1', workspace_id: 'ws-1', template_name: 'Original', formatting_mode: 'ai_then_fallback', parse_mode: 'HTML', brand_name: 'Brand', header: 'Signal', footer: 'Risk', disclaimer: 'Demo', emoji_style: 'standard', cleanup_rules: { removeLinks: true }, layout: { fieldOrder: ['symbol'] }, is_default: true }],
+      updateTemplate: async (_workspace, id, input) => { updates.push(['template', id, input]); return { id, workspace_id: 'ws-1', template_name: input.templateName, formatting_mode: input.formattingMode, parse_mode: input.parseMode, brand_name: input.brandName, header: input.header, footer: input.footer, disclaimer: input.disclaimer, emoji_style: input.emojiStyle, cleanup_rules: input.cleanupRules, layout: input.layout, is_default: input.isDefault }; },
+      listConnections: async () => [{ id: 'bot-1', workspace_id: 'ws-1', provider_type: 'telegram_bot_api', display_name: 'Old bot', credential_ciphertext: 'secret-cipher', is_active: true }],
+      updateConnection: async (_workspace, id, input) => { updates.push(['connection', id, input]); return { id, workspace_id: 'ws-1', provider_type: 'telegram_bot_api', display_name: input.displayName || 'Old bot', credential_ciphertext: 'secret-cipher', is_active: input.enabled ?? true }; },
+    },
+    routes: {
+      list: async () => [{ id: 'route-1', workspace_id: 'ws-1', source_connection_id: 'source-1', source_feed_id: null, destination_id: 'dest-1', priority: 100, filters: {} }],
+      update: async (_workspace, id, patch) => { updates.push(['route', id, patch]); return { id, workspace_id: 'ws-1', source_connection_id: 'source-1', source_feed_id: null, destination_id: 'dest-1', filters: {}, ...patch }; },
+    },
+  };
+  const options = {
+    persistenceRuntime: runtime,
+    supabaseFactory: async () => { supabaseFactoryCalls += 1; throw new Error('Supabase must not be opened'); },
+    authorizeFn: async () => ({ ok: true, workspace: { id: 'ws-1' }, membership: { role: 'owner', enabled: true } }),
+  };
+  const cases = [
+    ['/api/v1/admin/sources/source-1', { displayName: 'Renamed source' }],
+    ['/api/v1/admin/sources/source-1/feeds/feed-1', { enabled: false }],
+    ['/api/v1/admin/destinations/dest-1', { displayName: 'Renamed destination' }],
+    ['/api/v1/admin/templates/tpl-1', { templateName: 'Renamed template' }],
+    ['/api/v1/admin/routes/route-1', { priority: 7 }],
+    ['/api/v1/admin/destination-connections/bot-1', { displayName: 'Renamed bot' }],
+  ];
+
+  for (const [path, body] of cases) {
+    const response = await handleV1AdminEditInPlaceRequest(request(path, 'PATCH', body), {}, options);
+    assert.equal(response.status, 200, `${path} should preserve in-place editing in storage mode`);
+    assert.equal((await response.json()).ok, true);
+  }
+  assert.equal(supabaseFactoryCalls, 0);
+  assert.deepEqual(updates.map(([domain]) => domain), ['source', 'feed', 'destination', 'template', 'route', 'connection']);
+  const templateUpdate = updates.find(([domain]) => domain === 'template')[2];
+  assert.equal(templateUpdate.formattingMode, 'ai_then_fallback');
+  assert.deepEqual(templateUpdate.cleanupRules, { removeLinks: true });
+  const destinationUpdate = updates.find(([domain]) => domain === 'destination')[2];
+  assert.equal(destinationUpdate.credentialConnectionId, 'bot-1');
+  assert.deepEqual(destinationUpdate.settings, { timeoutMs: 5000 });
+});
