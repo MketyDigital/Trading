@@ -204,7 +204,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trap 'rm -f "$RUNNER_TEMP/coolify-database-inventory.json" "$RUNNER_TEMP/coolify-mkety-postgres.json" "$RUNNER_TEMP/coolify-mkety-postgres-envs.json" "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt"' EXIT
+          trap 'rm -f "$RUNNER_TEMP"/coolify-*.json "$RUNNER_TEMP"/coolify-*.txt' EXIT
           if [[ -z "${OCI_COOLIFY_URL:-}" && -z "${OCI_COOLIFY_TOKEN:-}" ]]; then
             echo 'Coolify credentials are not available in the staging environment.'
             exit 0
@@ -266,13 +266,52 @@ jobs:
             type: typeof resource?.database_type === 'string' ? resource.database_type : typeof resource?.type === 'string' ? resource.type : null,
             status: typeof resource?.status === 'string' ? resource.status : null,
             environment: typeof resource?.environment_name === 'string' ? resource.environment_name : typeof resource?.environment?.name === 'string' ? resource.environment.name : null,
+            projectUuid: typeof resource?.project_uuid === 'string' ? resource.project_uuid : typeof resource?.project?.uuid === 'string' ? resource.project.uuid : null,
+            serverUuid: typeof resource?.server_uuid === 'string' ? resource.server_uuid : typeof resource?.server?.uuid === 'string' ? resource.server.uuid : null,
+            environmentUuid: typeof resource?.environment_uuid === 'string' ? resource.environment_uuid : typeof resource?.environment?.uuid === 'string' ? resource.environment.uuid : null,
             publicAccess: typeof resource?.is_public === 'boolean' ? resource.is_public : null,
             hasDatabaseName: keys.has('POSTGRES_DB'),
             hasDatabaseUser: keys.has('POSTGRES_USER'),
             hasDatabasePassword: keys.has('POSTGRES_PASSWORD')
           };
           console.log(`Coolify central PostgreSQL metadata (safe fields only): ${JSON.stringify(details)}`);
+          if (details.projectUuid && /^[a-z0-9-]+$/i.test(details.projectUuid)) {
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-central-project-uuid.txt`, details.projectUuid, { mode: 0o600 });
+          }
+          if (details.serverUuid && /^[a-z0-9-]+$/i.test(details.serverUuid)) {
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-central-server-uuid.txt`, details.serverUuid, { mode: 0o600 });
+          }
           SAFE_COOLIFY_POSTGRES_DETAILS
+            if [ -f "$RUNNER_TEMP/coolify-central-project-uuid.txt" ]; then
+              project_uuid="$(cat "$RUNNER_TEMP/coolify-central-project-uuid.txt")"
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/projects/$project_uuid/environments" > "$RUNNER_TEMP/coolify-central-environments.json"
+              PROJECTS_PATH="$RUNNER_TEMP/coolify-central-environments.json" node <<'SAFE_COOLIFY_ENVIRONMENTS'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.PROJECTS_PATH, 'utf8'));
+          const environments = Array.isArray(payload) ? payload : payload.environments ?? payload.data ?? payload.result;
+          if (!Array.isArray(environments)) throw new Error('Unexpected Coolify environment inventory response shape');
+          const safe = environments.map((row) => ({ name: typeof row?.name === 'string' ? row.name : null, uuid: typeof row?.uuid === 'string' ? row.uuid : null }));
+          console.log(`Coolify central project environments (safe fields only): ${JSON.stringify(safe)}`);
+          SAFE_COOLIFY_ENVIRONMENTS
+            fi
+            if [ -f "$RUNNER_TEMP/coolify-central-server-uuid.txt" ]; then
+              server_uuid="$(cat "$RUNNER_TEMP/coolify-central-server-uuid.txt")"
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/servers/$server_uuid/destinations" > "$RUNNER_TEMP/coolify-central-destinations.json"
+              DESTINATIONS_PATH="$RUNNER_TEMP/coolify-central-destinations.json" node <<'SAFE_COOLIFY_DESTINATIONS'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.DESTINATIONS_PATH, 'utf8'));
+          const destinations = Array.isArray(payload) ? payload : payload.destinations ?? payload.data ?? payload.result;
+          if (!Array.isArray(destinations)) throw new Error('Unexpected Coolify destination inventory response shape');
+          const safe = destinations.map((row) => ({ name: typeof row?.name === 'string' ? row.name : null, uuid: typeof row?.uuid === 'string' ? row.uuid : null, type: typeof row?.destination_type === 'string' ? row.destination_type : null }));
+          console.log(`Coolify central server destinations (safe fields only): ${JSON.stringify(safe)}`);
+          SAFE_COOLIFY_DESTINATIONS
+            fi
           fi
 
   cloudflare-inspect:

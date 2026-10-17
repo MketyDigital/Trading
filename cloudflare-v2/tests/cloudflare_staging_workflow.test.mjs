@@ -54,6 +54,10 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /\$api\/databases\/\$target_uuid\/envs/);
   assert.match(block, /Coolify central PostgreSQL metadata \(safe fields only\)/);
   assert.match(block, /hasDatabasePassword: keys\.has\('POSTGRES_PASSWORD'\)/);
+  assert.match(block, /\$api\/projects\/\$project_uuid\/environments/);
+  assert.match(block, /Coolify central project environments \(safe fields only\)/);
+  assert.match(block, /\$api\/servers\/\$server_uuid\/destinations/);
+  assert.match(block, /Coolify central server destinations \(safe fields only\)/);
   assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:start|stop|delete)/i);
   assert.doesNotMatch(block, /console\.log\([^\n]*(?:password|connection_string|postgres_user|postgres_password|docker_compose)/i);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
