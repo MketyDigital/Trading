@@ -2,8 +2,6 @@
 
 -- Secrets are stored only as ciphertext; legacy plaintext credential columns are intentionally omitted.
 
-CREATE SCHEMA IF NOT EXISTS trading_storage;
-
 CREATE TABLE IF NOT EXISTS trading_storage."workspaces" (
   "id" uuid DEFAULT gen_random_uuid() NOT NULL,
   "name" text NOT NULL,
