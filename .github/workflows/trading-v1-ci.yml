@@ -254,6 +254,48 @@ jobs:
             curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
               -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
               "$api/databases/$target_uuid/envs" > "$RUNNER_TEMP/coolify-mkety-postgres-envs.json"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid/backups" > "$RUNNER_TEMP/coolify-mkety-postgres-backups.json"
+            BACKUPS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backups.json" node <<'SAFE_COOLIFY_BACKUP_SCHEDULES'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.BACKUPS_PATH, 'utf8'));
+          const schedules = Array.isArray(payload) ? payload : payload.backups ?? payload.scheduled_backups ?? payload.data ?? payload.result;
+          if (!Array.isArray(schedules)) throw new Error('Unexpected Coolify PostgreSQL backup schedule response shape');
+          const safe = schedules.map((row) => ({
+            uuid: typeof row?.uuid === 'string' ? row.uuid : null,
+            frequency: typeof row?.frequency === 'string' ? row.frequency : null,
+            enabled: typeof row?.enabled === 'boolean' ? row.enabled : null,
+            saveS3: typeof row?.save_s3 === 'boolean' ? row.save_s3 : null,
+            retentionLocalCount: Number.isInteger(row?.database_backup_retention_amount_locally) ? row.database_backup_retention_amount_locally : null,
+            retentionLocalDays: Number.isInteger(row?.database_backup_retention_days_locally) ? row.database_backup_retention_days_locally : null,
+            retentionS3Count: Number.isInteger(row?.database_backup_retention_amount_s3) ? row.database_backup_retention_amount_s3 : null,
+            retentionS3Days: Number.isInteger(row?.database_backup_retention_days_s3) ? row.database_backup_retention_days_s3 : null
+          }));
+          console.log(`Coolify PostgreSQL backup schedules (safe fields only): ${JSON.stringify(safe)}`);
+          const ids = safe.map(({ uuid }) => uuid).filter((uuid) => /^[a-z0-9-]{8,64}$/i.test(String(uuid || '')));
+          await writeFile(`${process.env.RUNNER_TEMP}/coolify-mkety-postgres-backup-uuids.txt`, ids.join('\n'), { mode: 0o600 });
+          SAFE_COOLIFY_BACKUP_SCHEDULES
+            while IFS= read -r backup_uuid; do
+              [ -n "$backup_uuid" ] || continue
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/databases/$target_uuid/backups/$backup_uuid/executions" > "$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json"
+              BACKUP_EXECUTIONS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json" node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.BACKUP_EXECUTIONS_PATH, 'utf8'));
+          const executions = Array.isArray(payload) ? payload : payload.executions ?? payload.data ?? payload.result;
+          if (!Array.isArray(executions)) throw new Error('Unexpected Coolify PostgreSQL backup execution response shape');
+          const safe = executions.map((row) => ({
+            createdAt: typeof row?.created_at === 'string' ? row.created_at : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            sizeBytes: Number.isFinite(Number(row?.size)) ? Number(row.size) : null
+          }));
+          console.log(`Coolify PostgreSQL backup executions (safe fields only): ${JSON.stringify(safe)}`);
+          SAFE_COOLIFY_BACKUP_EXECUTIONS
+            done < "$RUNNER_TEMP/coolify-mkety-postgres-backup-uuids.txt"
             node --input-type=module <<'SAFE_COOLIFY_POSTGRES_DETAILS'
           import { readFile } from 'node:fs/promises';
 
