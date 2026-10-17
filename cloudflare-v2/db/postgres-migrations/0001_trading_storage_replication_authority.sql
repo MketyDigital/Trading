@@ -1,7 +1,7 @@
 -- Dedicated schema for the future Trading Worker storage authority.
 -- This may share Mkety's existing central PostgreSQL database, but it must
 -- only create or mutate objects inside trading_storage; never alter public.
-CREATE SCHEMA IF NOT EXISTS trading_storage;
+-- The guarded installer creates this schema before switching to trading_owner.
 
 CREATE TABLE IF NOT EXISTS trading_storage.authority_control (
   singleton_id smallint PRIMARY KEY CHECK (singleton_id = 1),
