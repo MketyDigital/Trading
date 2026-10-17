@@ -126,8 +126,18 @@ jobs:
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
           test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID'; exit 1; }
           npx wrangler whoami
-          npx wrangler d1 list
-          npx wrangler hyperdrive list
+          npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
+          node --input-type=module <<'D1_INVENTORY'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
+          const safeDatabases = databases.map(({ name, uuid, num_tables }) => ({ name, uuid, num_tables }));
+          console.log(`D1 inventory (safe fields only): ${JSON.stringify(safeDatabases)}`);
+          D1_INVENTORY
+          npx wrangler hyperdrive list > "$RUNNER_TEMP/trading-hyperdrive-inventory.txt"
+          node -e 'console.log("Hyperdrive inventory completed; resource details withheld from CI logs")'
 
   cloudflare-inspect:
     if: >-

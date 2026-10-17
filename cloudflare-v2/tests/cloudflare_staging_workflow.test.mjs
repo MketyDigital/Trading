@@ -28,8 +28,13 @@ test('Trading storage PR gets a same-repository, read-only D1 and Hyperdrive inv
   assert.match(block, /permissions:\s*\n\s+contents:\s*read/);
   assert.match(block, /npm ci[^\n]*\n/);
   assert.match(block, /npx wrangler whoami/);
-  assert.match(block, /npx wrangler d1 list/);
-  assert.match(block, /npx wrangler hyperdrive list/);
+  assert.match(block, /npx wrangler d1 list --json > "\$RUNNER_TEMP\/trading-d1-inventory\.json"/);
+  assert.match(block, /node --input-type=module <<'D1_INVENTORY'/);
+  assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
+  assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
+  assert.doesNotMatch(block, /npx wrangler hyperdrive list\s*\n/);
+  assert.doesNotMatch(block, /cat\s+"?\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt/);
+  assert.doesNotMatch(block, /console\.log\([^\n]*(?:host|hostname|user|username|password|connection string)/i);
   assert.doesNotMatch(block, /wrangler\s+(?:deploy|delete|create|update|migrations\s+apply)/);
 
   const installAt = block.indexOf('npm ci');
