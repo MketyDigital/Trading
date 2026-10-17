@@ -197,6 +197,45 @@ jobs:
           if [ -n "${STAGING_DATABASE_URL:-}" ]; then
             echo 'A generic staging database credential is configured; it is not approved for Trading use.'
           fi
+      - name: Inventory Coolify database resources (read-only)
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${OCI_COOLIFY_URL:-}" && -z "${OCI_COOLIFY_TOKEN:-}" ]]; then
+            echo 'Coolify credentials are not available in the staging environment.'
+            exit 0
+          fi
+          test -n "${OCI_COOLIFY_URL:-}" || { echo 'OCI_COOLIFY_URL is present without OCI_COOLIFY_TOKEN'; exit 1; }
+          test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'OCI_COOLIFY_TOKEN is present without OCI_COOLIFY_URL'; exit 1; }
+          if [[ "$OCI_COOLIFY_URL" == *$'\n'* || "$OCI_COOLIFY_TOKEN" == *$'\n'* ]]; then
+            echo 'Coolify URL and token secrets must each be a single line.'
+            exit 1
+          fi
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+            "$api/databases" > "$RUNNER_TEMP/coolify-database-inventory.json"
+          INVENTORY_PATH="$RUNNER_TEMP/coolify-database-inventory.json" node <<'SAFE_COOLIFY_INVENTORY'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.INVENTORY_PATH, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.databases ?? payload.data ?? payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected Coolify database inventory response shape');
+          const safe = databases.map((row) => ({
+            name: typeof row?.name === 'string' ? row.name : null,
+            uuid: typeof row?.uuid === 'string' ? row.uuid : null,
+            type: typeof row?.database_type === 'string' ? row.database_type : typeof row?.type === 'string' ? row.type : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            environment: typeof row?.environment_name === 'string' ? row.environment_name : null
+          }));
+          const candidates = safe.filter(({ name, type }) => /trading|postgres|postgresql|mkety/i.test(`${name || ''} ${type || ''}`));
+          console.log(`Coolify database resource count: ${safe.length}`);
+          console.log(`Coolify Trading/PostgreSQL candidates (safe fields only): ${JSON.stringify(candidates)}`);
+          SAFE_COOLIFY_INVENTORY
 
   cloudflare-inspect:
     if: >-

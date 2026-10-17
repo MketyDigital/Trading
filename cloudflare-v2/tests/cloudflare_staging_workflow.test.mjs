@@ -45,6 +45,13 @@ test('Trading storage PR provisions and migrates only the isolated staging D1', 
   assert.match(block, /Dedicated Trading PostgreSQL staging credential is not configured/);
   assert.match(block, /generic staging database credential is configured; it is not approved for Trading use/);
   assert.doesNotMatch(block, /echo [^\n]*\$\{(?:TRADING_PG_STAGING_DATABASE_URL|STAGING_DATABASE_URL)/);
+  assert.match(block, /Inventory Coolify database resources \(read-only\)/);
+  assert.match(block, /OCI_COOLIFY_URL: \$\{\{ secrets\.OCI_COOLIFY_URL \}\}/);
+  assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
+  assert.match(block, /\"\$api\/databases\" > \"\$RUNNER_TEMP\/coolify-database-inventory\.json\"/);
+  assert.match(block, /Coolify Trading\/PostgreSQL candidates \(safe fields only\)/);
+  assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:envs|start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:envs|start|stop|delete)/i);
+  assert.doesNotMatch(block, /console\.log\([^\n]*(?:password|connection_string|postgres_user|postgres_password|docker_compose)/i);
   assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
   assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
   assert.doesNotMatch(block, /npx wrangler hyperdrive list\s*\n/);
