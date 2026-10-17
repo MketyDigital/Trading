@@ -1,6 +1,20 @@
 name: Trading V1 CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Read-only inspection or one-time schema-only apply to the existing mkety database
+        required: true
+        type: choice
+        default: inspect
+        options:
+          - inspect
+          - apply-existing-mkety-schema
+      confirmation:
+        description: Required for apply; enter APPLY_TRADING_STORAGE_SCHEMA exactly
+        required: false
+        type: string
   push:
     branches:
       - main
