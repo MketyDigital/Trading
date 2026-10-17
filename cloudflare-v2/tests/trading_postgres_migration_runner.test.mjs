@@ -221,3 +221,46 @@ test('PostgreSQL schema installer does not report an unsafe applied schema as sa
   assert.ok(calls.includes('ROLLBACK'));
   assert.equal(calls.includes('COMMIT'), false);
 });
+
+test('PostgreSQL schema installer identifies the failed migration and statement line without leaking raw errors', async () => {
+  const failingMigrations = [
+    migrations[0],
+    { name: migrations[1].name, sql: 'CREATE TABLE\ntrading_storage.example (id integer);' },
+    migrations[2]
+  ];
+  class Client {
+    async connect() {}
+    async query(sql) {
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: false, schema_owner: '', owner_role_exists: false, current_role_is_superuser: true }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
+      if (sql.includes('pg_has_role')) return { rows: [{ is_member: true }] };
+      if (sql.includes('SELECT current_user')) return { rows: [{ current_role: 'trading_owner' }] };
+      if (sql === failingMigrations[1].sql) {
+        const error = new Error('permission denied for schema public; password=must-not-appear');
+        error.code = '42501';
+        error.position = '14';
+        throw error;
+      }
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  await assert.rejects(
+    applyTradingPostgresMigrations({
+      connectionString: 'postgres://user:secret@private.invalid/mkety',
+      expectedDatabaseName: 'mkety',
+      confirmation: 'APPLY_TRADING_STORAGE_SCHEMA',
+      caCertificate: 'synthetic CA',
+      ClientClass: Client,
+      migrations: failingMigrations
+    }),
+    (error) => {
+      assert.match(error.message, /0002_trading_domain_schema\.sql/);
+      assert.match(error.message, /line 2/);
+      assert.match(error.message, /permission denied for schema public/);
+      assert.doesNotMatch(error.message, /password|must-not-appear|secret|private\.invalid/);
+      return true;
+    }
+  );
+});
