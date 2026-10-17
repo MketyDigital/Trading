@@ -94,22 +94,42 @@ export async function applyTradingPostgresMigrations({
              current_setting('transaction_read_only') AS transaction_read_only,
              EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'trading_storage') AS trading_schema_exists,
              COALESCE((SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'trading_storage'), '') AS schema_owner,
-             COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_is_superuser,
-             COALESCE((SELECT rolcanlogin FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_can_login,
-             COALESCE((SELECT rolcreatedb FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_can_create_database,
-             COALESCE((SELECT rolcreaterole FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_can_create_roles,
-             COALESCE((SELECT rolbypassrls FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_bypasses_rls,
-             COALESCE((SELECT rolinherit FROM pg_roles WHERE rolname = 'trading_owner'), true) AS owner_inherits_roles
+             EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trading_owner') AS owner_role_exists,
+             COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false) AS current_role_is_superuser
     `);
     const identity = identityResult?.rows?.[0];
     if (!identity || identity.database_name !== expectedDatabaseName) {
       throw new Error('PostgreSQL connection is not the expected database');
     }
     if (identity.transaction_read_only !== 'off') throw new Error('PostgreSQL migration connection is read-only');
-    if (identity.owner_is_superuser !== false || identity.owner_can_login !== false
-      || identity.owner_can_create_database !== false || identity.owner_can_create_roles !== false
-      || identity.owner_bypasses_rls !== false || identity.owner_inherits_roles !== false) {
-      throw new Error('Restricted non-login trading_owner role is not provisioned');
+    if (!identity.owner_role_exists) {
+      if (identity.current_role_is_superuser !== true) {
+        throw new Error('Current database role cannot provision trading_owner');
+      }
+      stage = 'create restricted Trading owner role';
+      await client.query('CREATE ROLE trading_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT');
+    }
+
+    stage = 'verify restricted Trading owner role';
+    const ownerResult = await client.query(`
+      SELECT rolsuper AS owner_is_superuser,
+             rolcanlogin AS owner_can_login,
+             rolcreatedb AS owner_can_create_database,
+             rolcreaterole AS owner_can_create_roles,
+             rolbypassrls AS owner_bypasses_rls,
+             rolinherit AS owner_inherits_roles
+        FROM pg_roles
+       WHERE rolname = 'trading_owner'
+    `);
+    const owner = ownerResult?.rows?.[0];
+    if (!owner || owner.owner_is_superuser !== false || owner.owner_can_login !== false
+      || owner.owner_can_create_database !== false || owner.owner_can_create_roles !== false
+      || owner.owner_bypasses_rls !== false || owner.owner_inherits_roles !== false) {
+      throw new Error('Trading owner role has unsafe privileges');
+    }
+    const membership = await client.query("SELECT pg_has_role(current_user, 'trading_owner', 'MEMBER') AS is_member");
+    if (identity.current_role_is_superuser !== true && membership?.rows?.[0]?.is_member !== true) {
+      throw new Error('Current database role cannot assume trading_owner');
     }
 
     if (identity.trading_schema_exists) {
@@ -161,7 +181,9 @@ export async function applyTradingPostgresMigrations({
     const safeMessages = new Set([
       'PostgreSQL connection is not the expected database',
       'PostgreSQL migration connection is read-only',
-      'Restricted non-login trading_owner role is not provisioned',
+      'Current database role cannot provision trading_owner',
+      'Trading owner role has unsafe privileges',
+      'Current database role cannot assume trading_owner',
       'Existing trading_storage schema has an unexpected owner',
       'PostgreSQL migration did not switch to the restricted Trading owner',
       'Untracked trading_storage schema already exists',
