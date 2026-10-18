@@ -226,8 +226,65 @@ jobs:
           if (!result.includes('TRADING_D1_SCHEMA_OK')) throw new Error('Remote Trading D1 is missing migrated schema tables');
           console.log('Remote Trading D1 schema check passed');
           CHECK_TRADING_D1_SCHEMA
-          npx wrangler hyperdrive list > "$RUNNER_TEMP/trading-hyperdrive-inventory.txt"
-          node -e 'console.log("Hyperdrive inventory completed; resource details withheld from CI logs")'
+      - name: Inspect existing Cloudflare Worker database and private-network bindings (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP"/cf-hyperdrive.json "$RUNNER_TEMP"/cf-tunnels.json "$RUNNER_TEMP"/cf-worker-settings.json' EXIT
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing Cloudflare API token for read-only connectivity inventory.'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing Cloudflare account ID for read-only connectivity inventory.'; exit 1; }
+          base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/hyperdrive/configs?per_page=100" -o "$RUNNER_TEMP/cf-hyperdrive.json"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/cfd_tunnel?is_deleted=false&per_page=100" -o "$RUNNER_TEMP/cf-tunnels.json"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/workers/scripts/mkety-copier-engine/settings" -o "$RUNNER_TEMP/cf-worker-settings.json"
+          node <<'SAFE_CLOUDFLARE_BINDING_INVENTORY'
+          const fs = require('node:fs');
+          const readResult = (name) => {
+            const response = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
+            if (response.success !== true) throw new Error(`Cloudflare read-only inventory failed for ${name}`);
+            return response.result;
+          };
+          const hyperdrivePayload = readResult('cf-hyperdrive.json');
+          const hyperdrives = Array.isArray(hyperdrivePayload) ? hyperdrivePayload : hyperdrivePayload?.result;
+          if (!Array.isArray(hyperdrives)) throw new Error('Unexpected Cloudflare Hyperdrive inventory response shape');
+          const safeHyperdrives = hyperdrives.map((row) => ({
+            id: typeof row?.id === 'string' ? row.id : null,
+            name: typeof row?.name === 'string' ? row.name : null,
+            database: typeof row?.origin?.database === 'string' ? row.origin.database : null,
+            accessTunnelConfigured: Boolean(row?.origin?.access_client_id),
+            vpcServiceConfigured: Boolean(row?.origin?.vpc_service_id)
+          }));
+          const tunnelPayload = readResult('cf-tunnels.json');
+          const tunnels = Array.isArray(tunnelPayload) ? tunnelPayload : tunnelPayload?.result;
+          if (!Array.isArray(tunnels)) throw new Error('Unexpected Cloudflare Tunnel inventory response shape');
+          const safeTunnels = tunnels.map((row) => ({
+            id: typeof row?.id === 'string' ? row.id : null,
+            name: typeof row?.name === 'string' ? row.name : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            configSource: typeof row?.config_src === 'string' ? row.config_src : null,
+            activeConnections: Array.isArray(row?.connections) ? row.connections.length : 0
+          }));
+          const settings = readResult('cf-worker-settings.json');
+          const bindings = Array.isArray(settings?.bindings) ? settings.bindings : [];
+          const safeDatabaseBindings = bindings.filter((row) => ['d1', 'hyperdrive'].includes(String(row?.type || '').toLowerCase())).map((row) => ({
+            name: typeof row?.name === 'string' ? row.name : null,
+            type: typeof row?.type === 'string' ? row.type : null,
+            resourceId: typeof row?.id === 'string' ? row.id : typeof row?.database_id === 'string' ? row.database_id : null,
+            databaseName: typeof row?.database_name === 'string' ? row.database_name : null
+          }));
+          console.log(`Cloudflare Hyperdrive inventory (safe fields only): ${JSON.stringify(safeHyperdrives)}`);
+          console.log(`Cloudflare Tunnel inventory (safe fields only): ${JSON.stringify(safeTunnels)}`);
+          console.log(`Production Worker database bindings (safe fields only): ${JSON.stringify(safeDatabaseBindings)}`);
+          SAFE_CLOUDFLARE_BINDING_INVENTORY
       - name: Check access to the existing Coolify PostgreSQL database
         env:
           TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}

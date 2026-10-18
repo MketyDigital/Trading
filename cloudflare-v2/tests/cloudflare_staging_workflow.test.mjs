@@ -121,11 +121,16 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(probeStep, /test -s "\$RUNNER_TEMP\/trading-pg-backup-preflight\.json"/);
   assert.doesNotMatch(block, /\/databases\/[^\s]+\/(?:start|stop|delete)|\/services\/[^\s]+\/databases\/(?:[^\s]+\/)?(?:start|stop|delete)/i);
   assert.doesNotMatch(block, /console\.log\([^\n]*(?:password|connection_string|postgres_user|postgres_password|docker_compose)/i);
-  assert.match(block, /npx wrangler hyperdrive list > "\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt"/);
-  assert.match(block, /Hyperdrive inventory completed; resource details withheld from CI logs/);
-  assert.doesNotMatch(block, /npx wrangler hyperdrive list\s*\n/);
-  assert.doesNotMatch(block, /cat\s+"?\$RUNNER_TEMP\/trading-hyperdrive-inventory\.txt/);
-  assert.doesNotMatch(block, /console\.log\([^\n]*(?:host|hostname|user|username|password|connection string)/i);
+  assert.match(block, /Inspect existing Cloudflare Worker database and private-network bindings \(read-only\)/);
+  assert.match(block, /\$base\/hyperdrive\/configs\?per_page=100/);
+  assert.match(block, /\$base\/cfd_tunnel\?is_deleted=false&per_page=100/);
+  assert.match(block, /\$base\/workers\/scripts\/mkety-copier-engine\/settings/);
+  assert.match(block, /Cloudflare Hyperdrive inventory \(safe fields only\)/);
+  assert.match(block, /Cloudflare Tunnel inventory \(safe fields only\)/);
+  assert.match(block, /Production Worker database bindings \(safe fields only\)/);
+  assert.doesNotMatch(block, /console\.log\([^\n]*(?:host|hostname|user|username|password|connection string|connection_string|access_client_secret)/i);
+  assert.doesNotMatch(block, /hyperdrive\/configs[^\n]*-X (?:POST|PATCH|PUT|DELETE)/i);
+  assert.doesNotMatch(block, /cfd_tunnel[^\n]*-X (?:POST|PATCH|PUT|DELETE)/i);
   assert.doesNotMatch(block, /wrangler\s+(?:deploy|delete|update)/);
   assert.doesNotMatch(block, /npx wrangler d1 create (?!trading-staging)[^\s]+/);
 
