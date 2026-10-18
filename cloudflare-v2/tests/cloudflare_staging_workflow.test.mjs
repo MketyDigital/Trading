@@ -274,6 +274,12 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /failedGates/);
   assert.match(inventoryBlock, /safeImportSummary/);
   assert.match(inventoryBlock, /if \(!\(important\.workspaces > 0\) && !\(important\.trading_workspace_access > 0\)\) failedGates\.push\('workspace-preservation'\)/);
+  const failedGateStart = inventoryBlock.indexOf('if (failedGates.length) {');
+  const failedGateEnd = inventoryBlock.indexOf('\n            }\n            const driftSummary', failedGateStart);
+  assert.ok(failedGateStart >= 0 && failedGateEnd > failedGateStart, 'import gate must have a bounded failure handler');
+  const failedGateBlock = inventoryBlock.slice(failedGateStart, failedGateEnd);
+  assert.match(failedGateBlock, /process\.exit\(2\)/, 'failed acceptance gates must stop the polling loop immediately');
+  assert.doesNotMatch(failedGateBlock, /throw new Error/, 'failed acceptance must not be retried until the workflow timeout');
   assert.doesNotMatch(inventoryBlock, /JSON\.stringify\(result\.importantRows|JSON\.stringify\(result\.fences/,
     'import diagnostics must not serialize arbitrary snapshot rows or settings');
   assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);
