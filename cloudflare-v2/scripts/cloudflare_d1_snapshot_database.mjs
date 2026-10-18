@@ -1,5 +1,15 @@
 const API_BASE = 'https://api.cloudflare.com/client/v4';
 const MAX_BATCH_SIZE = 100;
+const APPROVED_DOMAIN_TABLES = new Set([
+  'workspaces', 'signal_routes', 'vip_members', 'bank_deposits', 'signal_logs',
+  'trading_workspace_access', 'source_connections', 'trading_events', 'position_groups',
+  'position_legs', 'destination_deliveries', 'trading_workspace_memberships',
+  'trading_workspace_hostnames', 'trading_access_codes', 'trading_access_code_redemptions',
+  'trading_destination_templates', 'trading_ctrader_oauth_states', 'trading_ingress_collectors',
+  'source_feeds', 'trading_destination_connections', 'trading_event_revisions',
+  'orphan_signal_recovery_cursors', 'ai_providers', 'trade_accounts', 'trading_destinations',
+  'source_destination_routes', 'trading_runtime_controls', 'operation_journal',
+]);
 
 function validateConfiguration({ apiToken, accountId, databaseId }) {
   if (typeof apiToken !== 'string' || !apiToken.trim()) throw new Error('Cloudflare D1 API token is required');
@@ -135,6 +145,21 @@ export function createCloudflareD1SnapshotDatabase({
         throw new Error('Cloudflare D1 snapshot batch failed');
       }
       return payload.result;
+    },
+
+    async deleteAllDomainTables(tableNames) {
+      if (!Array.isArray(tableNames) || tableNames.length !== APPROVED_DOMAIN_TABLES.size
+        || new Set(tableNames).size !== tableNames.length
+        || tableNames.some((name) => !APPROVED_DOMAIN_TABLES.has(name))) {
+        throw new Error('Fresh-start reset requires the exact reviewed Trading domain table set');
+      }
+      const statements = [...tableNames].reverse().map((name) => ({ sql: `DELETE FROM "${name}"`, params: [] }));
+      await verifyIdentity();
+      const payload = await request({ batch: statements });
+      if (payload.result.some((result) => result?.success !== true)) {
+        throw new Error('Cloudflare D1 fresh-start domain reset failed');
+      }
+      return { deletedTables: tableNames.length };
     },
   });
   return database;

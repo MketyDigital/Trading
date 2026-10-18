@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret } from '../src/security/secret_box.js';
-import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, applyTradingSnapshotImportPlanResumable, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, createTradingSnapshotRestClient, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, applyTradingSnapshotImportPlanResumable, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, createTradingSnapshotRestClient, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest, TRADING_CONTINUITY_PROFILE, TRADING_CONTINUITY_TABLES } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -57,6 +57,26 @@ test('snapshot request accepts only the pinned production source and a bounded p
     sourceProjectRef: 'vdblajgxrfndjesoyayy',
     pageSize: 5000
   }), /between 1 and 500/);
+});
+
+test('snapshot request allows only the approved fresh-start continuity profile', () => {
+  assert.equal(TRADING_CONTINUITY_PROFILE, 'continuity-fresh-start');
+  assert.equal(new Set(TRADING_CONTINUITY_TABLES).size, TRADING_CONTINUITY_TABLES.length);
+  for (const table of [
+    'workspaces', 'trading_workspace_access', 'trading_workspace_memberships', 'trade_accounts',
+    'source_connections', 'source_feeds', 'source_destination_routes', 'signal_routes',
+    'trading_destinations', 'trading_destination_templates', 'trading_destination_connections',
+    'ai_providers', 'trading_ingress_collectors', 'orphan_signal_recovery_cursors',
+  ]) assert.ok(TRADING_CONTINUITY_TABLES.includes(table), `missing continuity table ${table}`);
+  for (const table of [
+    'signal_logs', 'trading_events', 'position_groups', 'position_legs', 'destination_deliveries',
+    'trading_event_revisions', 'operation_journal', 'trading_ctrader_oauth_states',
+  ]) assert.equal(TRADING_CONTINUITY_TABLES.includes(table), false, `stale operational table ${table} must be excluded`);
+  assert.throws(() => validateTradingSnapshotRequest({
+    cutoverReference: 'source-cutover:OPS-20261018',
+    sourceProjectRef: 'vdblajgxrfndjesoyayy',
+    profile: 'complete-database',
+  }), /only the reviewed continuity fresh-start snapshot profile/i);
 });
 
 test('snapshot drift comparison distinguishes inserts from updates and deletions', () => {
@@ -411,8 +431,9 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
     });
     const artifact = JSON.parse(await readFile(outputPath, 'utf8'));
     assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
-    assert.equal(artifact.format, 'mkety-trading-data-snapshot-v1');
-    assert.equal(artifact.tableManifest.length, 28);
+    assert.equal(artifact.format, 'mkety-trading-data-snapshot-v2');
+    assert.equal(artifact.profile, TRADING_CONTINUITY_PROFILE);
+    assert.equal(artifact.tableManifest.length, TRADING_CONTINUITY_TABLES.length);
     assert.ok(artifact.tableManifest.findIndex(({ name }) => name === 'trading_workspace_access')
       < artifact.tableManifest.findIndex(({ name }) => name === 'trade_accounts'));
     assert.equal('payloadCiphertext' in artifact, true);
@@ -420,7 +441,8 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
     assert.equal(result.tableManifest.reduce((sum, table) => sum + table.rowCount, 0), 0);
     assert.deepEqual(JSON.parse(await decryptSecret(artifact.payloadCiphertext, 'snapshot-test-key')), Object.fromEntries(artifact.tableManifest.map((table) => [table.name, []])));
     const verified = await readTradingDataSnapshot({ artifactPath: outputPath, masterKey: 'snapshot-test-key' });
-    assert.equal(verified.rowsByTable.operation_journal.length, 0);
+    assert.equal(verified.rowsByTable.orphan_signal_recovery_cursors.length, 0);
+    assert.equal(Object.hasOwn(verified.rowsByTable, 'operation_journal'), false);
     artifact.tableManifest[0].rowCount += 1;
     await rm(outputPath);
     await writeFile(outputPath, JSON.stringify(artifact));
@@ -430,9 +452,9 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
   }
 });
 
-test('snapshot export records live changes and imports the latest complete pass', async () => {
+test('snapshot export records live continuity changes and captures the newest pass', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
-  let journalReads = 0;
+  let connectionReads = 0;
   const client = {
     from(table) {
       return {
@@ -440,9 +462,9 @@ test('snapshot export records live changes and imports the latest complete pass'
         select() { return this; },
         order() { return this; },
         async range(from) {
-          if (table !== 'operation_journal' || from !== 0) return { data: [], error: null };
-          journalReads += 1;
-          return { data: [{ id: 'journal-1', summary: journalReads === 1 ? 'before' : 'after' }], error: null };
+          if (table !== 'source_connections' || from !== 0) return { data: [], error: null };
+          connectionReads += 1;
+          return { data: [{ id: 'connection-1', workspace_id: 'ws-1', display_name: connectionReads === 1 ? 'before' : 'after' }], error: null };
         }
       };
     }
@@ -455,9 +477,9 @@ test('snapshot export records live changes and imports the latest complete pass'
       cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
     });
-    assert.deepEqual(result.sourceDrift, [{ table: 'operation_journal', added: 0, removed: 0, modified: 1 }]);
+    assert.deepEqual(result.sourceDrift, [{ table: 'source_connections', added: 0, removed: 0, modified: 1 }]);
     const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
-    assert.equal(verified.rowsByTable.operation_journal[0].summary, 'after');
+    assert.equal(verified.rowsByTable.source_connections[0].display_name, 'after');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -466,9 +488,10 @@ test('snapshot export records live changes and imports the latest complete pass'
 test('snapshot export reports safe table and page progress for each live-source pass', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   const events = [];
+  const readTables = new Set();
   try {
     await exportTradingDataSnapshot({
-      client: { from: () => ({ select() { return this; }, order() { return this; }, range: async () => ({ data: [], error: null }) }) },
+      client: { from: (table) => { readTables.add(table); return { select() { return this; }, order() { return this; }, range: async () => ({ data: [], error: null }) }; } },
       masterKey: 'snapshot-test-key',
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
       cutoverReference: 'source-cutover:OPS-20261018',
@@ -481,6 +504,7 @@ test('snapshot export reports safe table and page progress for each live-source 
     assert.ok(events.every((event) => /^[a-z][a-z0-9_]{0,62}$/.test(event.table)));
     assert.ok(events.every((event) => Number.isSafeInteger(event.rows) && event.rows >= 0));
     assert.ok(events.every((event) => !Object.hasOwn(event, 'data') && !Object.hasOwn(event, 'row')));
+    assert.deepEqual([...readTables].sort(), [...TRADING_CONTINUITY_TABLES].sort());
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -488,13 +512,13 @@ test('snapshot export reports safe table and page progress for each live-source 
 
 test('snapshot keyset paging avoids offset duplicates when live rows are inserted before the cursor', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
-  const journal = [
-    { id: 'b', summary: 'b' },
-    { id: 'c', summary: 'c' },
-    { id: 'd', summary: 'd' },
-    { id: 'e', summary: 'e' }
+  const connections = [
+    { id: 'b', workspace_id: 'ws-1', display_name: 'b' },
+    { id: 'c', workspace_id: 'ws-1', display_name: 'c' },
+    { id: 'd', workspace_id: 'ws-1', display_name: 'd' },
+    { id: 'e', workspace_id: 'ws-1', display_name: 'e' }
   ];
-  let journalPass = 0;
+  let connectionPass = 0;
   let inserted = false;
   const client = {
     from(table) {
@@ -504,15 +528,15 @@ test('snapshot keyset paging avoids offset duplicates when live rows are inserte
         order() { return this; },
         gt(key, value) { cursor = String(value); return this; },
         async range(from, to) {
-          if (table !== 'operation_journal') return { data: [], error: null };
+          if (table !== 'source_connections') return { data: [], error: null };
           if (from === 0 && cursor === null) {
-            journalPass += 1;
-            if (journalPass === 2 && !inserted) {
-              journal.push({ id: 'a', summary: 'arrived-before-cursor' });
+            connectionPass += 1;
+            if (connectionPass === 2 && !inserted) {
+              connections.push({ id: 'a', workspace_id: 'ws-1', display_name: 'arrived-before-cursor' });
               inserted = true;
             }
           }
-          const eligible = journal.filter((row) => cursor === null || row.id > cursor);
+          const eligible = connections.filter((row) => cursor === null || row.id > cursor);
           return { data: eligible.slice(from, to + 1), error: null };
         }
       };
@@ -528,7 +552,7 @@ test('snapshot keyset paging avoids offset duplicates when live rows are inserte
       pageSize: 2
     });
     const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
-    const ids = verified.rowsByTable.operation_journal.map(({ id }) => id);
+    const ids = verified.rowsByTable.source_connections.map(({ id }) => id);
     assert.equal(new Set(ids).size, ids.length);
     assert.deepEqual(ids, ['b', 'c', 'd', 'e']);
   } finally {
@@ -539,14 +563,12 @@ test('snapshot keyset paging avoids offset duplicates when live rows are inserte
 test('snapshot export refreshes workspace identity and access configuration at the end of the rolling capture', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   let workspaceReads = 0;
-  const positionReads = { position_groups: 0, position_legs: 0 };
   const client = {
     from(table) {
       return {
         select() { return this; },
         order() { return this; },
         async range() {
-          if (Object.hasOwn(positionReads, table)) positionReads[table] += 1;
           if (table !== 'workspaces') return { data: [], error: null };
           workspaceReads += 1;
           const name = workspaceReads === 1 ? 'before' : workspaceReads === 2 ? 'rolling' : 'latest';
@@ -564,28 +586,32 @@ test('snapshot export refreshes workspace identity and access configuration at t
       outputPath: join(directory, 'snapshot.json')
     });
     const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
+    assert.equal(result.profile, TRADING_CONTINUITY_PROFILE);
+    assert.equal(verified.profile, TRADING_CONTINUITY_PROFILE);
     assert.equal(verified.rowsByTable.workspaces[0].name, 'latest');
     assert.deepEqual(verified.sourceDrift.find(({ table }) => table === 'workspaces'), {
       table: 'workspaces', added: 0, removed: 0, modified: 2
     });
-    assert.deepEqual(positionReads, { position_groups: 3, position_legs: 3 });
+    assert.equal(Object.hasOwn(verified.rowsByTable, 'position_groups'), false);
+    assert.equal(Object.hasOwn(verified.rowsByTable, 'position_legs'), false);
+    assert.ok(Object.hasOwn(verified.rowsByTable, 'orphan_signal_recovery_cursors'));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('snapshot export records bounded live operation journal drift', async () => {
+test('snapshot export records bounded live continuity-table drift and omits operational history', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
-  let journalReads = 0;
+  let connectionReads = 0;
   const client = {
     from(table) {
       return {
         select() { return this; },
         order() { return this; },
         async range() {
-          if (table !== 'operation_journal') return { data: [], error: null };
-          journalReads += 1;
-          return { data: journalReads === 1 ? [] : [{ id: 'journal-new', summary: 'append-only' }], error: null };
+          if (table !== 'source_connections') return { data: [], error: null };
+          connectionReads += 1;
+          return { data: connectionReads === 1 ? [] : [{ id: 'connection-new', workspace_id: 'ws-1', display_name: 'new' }], error: null };
         }
       };
     }
@@ -598,28 +624,29 @@ test('snapshot export records bounded live operation journal drift', async () =>
       cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
     });
-    assert.deepEqual(result.sourceDrift, [{ table: 'operation_journal', added: 1, removed: 0, modified: 0 }]);
+    assert.deepEqual(result.sourceDrift, [{ table: 'source_connections', added: 1, removed: 0, modified: 0 }]);
     const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
-    assert.equal(verified.rowsByTable.operation_journal.length, 1);
+    assert.equal(verified.rowsByTable.source_connections.length, 1);
+    assert.equal(Object.hasOwn(verified.rowsByTable, 'operation_journal'), false);
     assert.deepEqual(verified.sourceDrift, result.sourceDrift);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('snapshot export rejects live drift above the explicit table bound', async () => {
+test('snapshot export rejects continuity drift above the explicit table bound', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
-  let journalReads = 0;
-  const driftRows = Array.from({ length: 2001 }, (_, index) => ({ id: `journal-${index}` }));
+  let connectionReads = 0;
+  const driftRows = Array.from({ length: 2001 }, (_, index) => ({ id: `connection-${index}` }));
   const client = {
     from(table) {
       return {
         select() { return this; },
         order() { return this; },
         async range(from, to) {
-          if (table !== 'operation_journal') return { data: [], error: null };
-          journalReads += 1;
-          if (journalReads === 1) return { data: [], error: null };
+          if (table !== 'source_connections') return { data: [], error: null };
+          connectionReads += 1;
+          if (connectionReads === 1) return { data: [], error: null };
           return { data: driftRows.slice(from, to + 1), error: null };
         }
       };
@@ -632,7 +659,7 @@ test('snapshot export rejects live drift above the explicit table bound', async 
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
       cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
-    }), /Live source drift exceeded the safe cutover bound at table operation_journal/);
+    }), /Live source drift exceeded the safe cutover bound at table source_connections/);
     await assert.rejects(() => readFile(join(directory, 'snapshot.json')));
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -96,14 +96,17 @@ test('D1 authority activates only after verified D1 and PostgreSQL parity', asyn
     return { meta: { changes: 1 }, results: [] };
   } };
   const parity = {
-    d1: { target: 'd1', tables: 28, rows: 6 },
-    postgres: { target: 'postgres', tables: 28, rows: 6 },
+    d1: { target: 'd1', tables: 20, rows: 6 },
+    postgres: { target: 'postgres', tables: 20, rows: 6 },
   };
   assert.deepEqual(await activatePopulatedTradingD1Authority({ database, parity }), {
     authority: 'd1', authorityEpoch: 1, writesFenced: false,
   });
   assert.equal(statements.length, 3);
   assert.match(statements[1], /UPDATE trading_storage_control/);
+  await assert.rejects(() => activatePopulatedTradingD1Authority({ database, parity: {
+    ...parity, d1: { ...parity.d1, tables: 28 },
+  } }), /parity verification/i);
   await assert.rejects(() => activatePopulatedTradingD1Authority({ database, parity: {
     ...parity, postgres: { ...parity.postgres, rows: 5 },
   } }), /parity verification/i);

@@ -1,3 +1,6 @@
+import { access, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   applyTradingSnapshotImportPlanResumable,
   applyTradingSnapshotPlanToD1,
@@ -5,12 +8,16 @@ import {
   createTradingSnapshotImportPlan,
   getD1SnapshotTargetDefinitions,
   getPostgresSnapshotTargetDefinitions,
+  getTradingSnapshotDomainTableInventory,
   prepareTradingSnapshotForImport,
+  TRADING_CONTINUITY_PROFILE,
+  TRADING_CONTINUITY_TABLE_COUNT,
 } from './trading_data_snapshot.mjs';
 
 const IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 const PAGE_SIZE = 250;
 export const APPROVED_TRADING_D1_ID = '4f00d59a-3d90-4146-832d-36230d5648bb';
+const SNAPSHOT_RUNNER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export async function assertTradingSnapshotTargetIdentities({ d1Database, postgresClient } = {}) {
   if (d1Database?.identity?.databaseName !== 'trading-staging'
@@ -30,10 +37,35 @@ export async function assertTradingSnapshotTargetIdentities({ d1Database, postgr
   return { d1: 'trading-staging', postgres: 'mkety' };
 }
 
+/** Fail before target reset if prior import progress or an active importer may exist. */
+export async function assertFreshStartCheckpointPathsClear(checkpointPaths = {}) {
+  for (const target of ['d1', 'postgres']) {
+    const checkpointPath = checkpointPaths[target];
+    if (typeof checkpointPath !== 'string' || !isAbsolute(checkpointPath)) {
+      throw new Error('Fresh-start reset requires absolute per-target import checkpoint paths');
+    }
+    const parent = await realpath(dirname(checkpointPath));
+    const actualPath = resolve(parent, basename(checkpointPath));
+    const repoPrefix = `${SNAPSHOT_RUNNER_ROOT}${sep}`;
+    if (actualPath === SNAPSHOT_RUNNER_ROOT || actualPath.startsWith(repoPrefix)) {
+      throw new Error('Snapshot import checkpoints must remain outside the repository');
+    }
+    for (const path of [checkpointPath, `${checkpointPath}.lock`]) {
+      try {
+        await access(path);
+        throw new Error('Fresh-start reset refused: existing import checkpoint or lock must be reviewed before reset');
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+  return true;
+}
+
 /** Enable writes in the existing D1 only after exact parity is confirmed on both targets. */
 export async function activatePopulatedTradingD1Authority({ database, parity } = {}) {
   if (!database?.query || parity?.d1?.target !== 'd1' || parity?.postgres?.target !== 'postgres'
-    || parity.d1.tables !== 28 || parity.postgres.tables !== 28
+    || parity.d1.tables !== TRADING_CONTINUITY_TABLE_COUNT || parity.postgres.tables !== TRADING_CONTINUITY_TABLE_COUNT
     || parity.d1.rows !== parity.postgres.rows || !Number.isSafeInteger(parity.d1.rows)) {
     throw new Error('D1 authority activation requires complete D1 and PostgreSQL parity verification');
   }
@@ -65,6 +97,121 @@ export async function activatePopulatedTradingD1Authority({ database, parity } =
     throw new Error('Existing D1 authority activation could not be verified');
   }
   return { authority: 'd1', authorityEpoch: 1, writesFenced: false };
+}
+
+async function fenceD1StorageWrites(database) {
+  let result = await database.query(`
+    SELECT active_authority, authority_epoch, writes_fenced
+      FROM trading_storage_control WHERE singleton_id = 1
+  `, []);
+  let row = result?.results?.[0];
+  if (result?.results?.length !== 1 || row.active_authority !== 'd1' || Number(row.authority_epoch) !== 1) {
+    throw new Error('Fresh-start reset refused: D1 authority identity is not the reviewed staging epoch');
+  }
+  if (Number(row.writes_fenced) === 0) {
+    await database.query(`
+      UPDATE trading_storage_control SET writes_fenced = 1, updated_at = CURRENT_TIMESTAMP
+       WHERE singleton_id = 1 AND active_authority = 'd1' AND authority_epoch = 1 AND writes_fenced = 0
+    `, []);
+    result = await database.query(`
+      SELECT active_authority, authority_epoch, writes_fenced
+        FROM trading_storage_control WHERE singleton_id = 1
+    `, []);
+    row = result?.results?.[0];
+  }
+  if (row?.active_authority !== 'd1' || Number(row.authority_epoch) !== 1 || Number(row.writes_fenced) !== 1) {
+    throw new Error('Fresh-start reset refused: D1 storage writes could not be fenced');
+  }
+}
+
+async function fencePostgresStorageWrites(client) {
+  let result = await client.query(`
+    SELECT active_authority, authority_epoch, writes_fenced
+      FROM trading_storage.authority_control WHERE singleton_id = 1
+  `, []);
+  let row = result?.rows?.[0];
+  if (result?.rows?.length !== 1 || row.active_authority !== 'd1' || Number(row.authority_epoch) !== 1) {
+    throw new Error('Fresh-start reset refused: PostgreSQL authority identity is not the reviewed staging epoch');
+  }
+  if (row.writes_fenced !== true) {
+    await client.query(`
+      UPDATE trading_storage.authority_control SET writes_fenced = true, updated_at = CURRENT_TIMESTAMP
+       WHERE singleton_id = 1 AND active_authority = 'd1' AND authority_epoch = 1
+    `, []);
+    result = await client.query(`
+      SELECT active_authority, authority_epoch, writes_fenced
+        FROM trading_storage.authority_control WHERE singleton_id = 1
+    `, []);
+    row = result?.rows?.[0];
+  }
+  if (row?.active_authority !== 'd1' || Number(row.authority_epoch) !== 1 || row.writes_fenced !== true) {
+    throw new Error('Fresh-start reset refused: PostgreSQL storage writes could not be fenced');
+  }
+}
+
+/**
+ * Remove prior/partial target data from only the reviewed Trading domain tables.
+ * Storage authority, replication metadata, and all non-Trading schemas are preserved.
+ */
+export async function resetTradingContinuityTargets({ d1Database, postgresClient, checkpointPaths, onProgress = async () => {} } = {}) {
+  if (d1Database?.identity?.databaseName !== 'trading-staging'
+    || d1Database?.identity?.databaseId !== APPROVED_TRADING_D1_ID
+    || !postgresClient?.query) throw new Error('Fresh-start reset requires the approved existing staging targets');
+  await assertFreshStartCheckpointPathsClear(checkpointPaths);
+  if (typeof d1Database.deleteAllDomainTables !== 'function') throw new Error('D1 adapter does not support guarded fresh-start reset');
+  const domainInventory = await getTradingSnapshotDomainTableInventory();
+  if (domainInventory.length !== 28) throw new Error('Fresh-start reset table inventory is not the reviewed 28-table domain schema');
+  const domainTableNames = domainInventory.map(({ name }) => name);
+  if (new Set(domainTableNames).size !== domainTableNames.length) throw new Error('Fresh-start reset table inventory contains duplicates');
+  await assertTradingSnapshotTargetIdentities({ d1Database, postgresClient });
+  await fenceD1StorageWrites(d1Database);
+  await fencePostgresStorageWrites(postgresClient);
+  await onProgress({ phase: 'fresh-start-reset-start', tables: domainTableNames.length });
+  await d1Database.deleteAllDomainTables(domainTableNames);
+  await onProgress({ phase: 'fresh-start-reset-target', target: 'd1', tables: domainTableNames.length });
+
+  let transactionStarted = false;
+  try {
+    await postgresClient.query('BEGIN');
+    transactionStarted = true;
+    await postgresClient.query("SET LOCAL statement_timeout = '120s'");
+    for (const sourceName of [...domainTableNames].reverse()) {
+      const targetName = sourceName === 'trading_runtime_controls' ? 'runtime_controls' : sourceName;
+      if (!IDENTIFIER.test(targetName)) throw new Error('Fresh-start reset contains an invalid domain table name');
+      await postgresClient.query(`DELETE FROM trading_storage."${targetName}"`);
+    }
+    await postgresClient.query('COMMIT');
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      try { await postgresClient.query('ROLLBACK'); } catch { /* Keep the original reset failure. */ }
+    }
+    throw error;
+  }
+  await onProgress({ phase: 'fresh-start-reset-target', target: 'postgres', tables: domainTableNames.length });
+  return { tablesResetPerTarget: domainTableNames.length, storageAuthorityPreserved: true, writesFenced: true };
+}
+
+export async function verifyTradingSnapshotExcludedTablesEmpty({ target, database, includedTableNames } = {}) {
+  if (!['d1', 'postgres'].includes(target) || !database?.query || !Array.isArray(includedTableNames)) {
+    throw new Error('Excluded-table verification inputs are invalid');
+  }
+  const inventory = await getTradingSnapshotDomainTableInventory();
+  const included = new Set(includedTableNames);
+  const excluded = inventory.filter(({ name }) => !included.has(name));
+  const counts = {};
+  for (const { name } of excluded) {
+    const tableName = target === 'postgres' && name === 'trading_runtime_controls' ? 'runtime_controls' : name;
+    const sql = target === 'postgres'
+      ? `SELECT COUNT(*) AS row_count FROM trading_storage."${tableName}"`
+      : `SELECT COUNT(*) AS row_count FROM "${tableName}"`;
+    const result = await database.query(sql, []);
+    const rows = target === 'postgres' ? result?.rows : result?.results;
+    const count = Number(rows?.[0]?.row_count);
+    if (!Number.isSafeInteger(count) || count !== 0) throw new Error(`Fresh-start excluded table is not empty: ${name}`);
+    counts[name] = count;
+  }
+  return { target, tables: excluded.length, rows: 0, verifiedTables: counts };
 }
 
 function quoteIdentifier(value) {
@@ -224,6 +371,9 @@ export async function importTradingSnapshotToTargets({
   onProgress = async () => {},
 } = {}) {
   if (!snapshot?.rowsByTable || !Array.isArray(snapshot.tableManifest)) throw new Error('Verified Trading snapshot is required');
+  if (snapshot.profile !== TRADING_CONTINUITY_PROFILE || snapshot.tableManifest.length !== TRADING_CONTINUITY_TABLE_COUNT) {
+    throw new Error('Only the verified continuity fresh-start snapshot can be imported');
+  }
   if (!d1Database?.query || !d1Database?.prepare || !d1Database?.batch) throw new Error('Existing Trading D1 target is unavailable');
   if (!postgresClient?.query) throw new Error('Existing mkety PostgreSQL target is unavailable');
   if (!masterKey || !checkpointPaths?.d1 || !checkpointPaths?.postgres) throw new Error('Master key and protected per-target checkpoints are required');
@@ -239,6 +389,8 @@ export async function importTradingSnapshotToTargets({
   const d1Plan = createTradingSnapshotImportPlan({ snapshot: projectedSnapshot, target: 'd1', tableDefinitions: d1Definitions });
   const pgProjection = prepareTradingSnapshotForImport(snapshot.rowsByTable, { target: 'postgres' });
   const pgPlan = createTradingSnapshotImportPlan({ snapshot: { ...snapshot, rowsByTable: pgProjection.rowsByTable }, target: 'postgres', tableDefinitions: pgDefinitions });
+
+  const reset = await resetTradingContinuityTargets({ d1Database, postgresClient, checkpointPaths, onProgress });
 
   await onProgress({ phase: 'target-import-start', target: 'd1', rows: d1Plan.rowCount });
   const d1Import = await applyTradingSnapshotImportPlanResumable(d1Plan, {
@@ -265,18 +417,26 @@ export async function importTradingSnapshotToTargets({
     verifyTradingSnapshotTarget({ target: 'postgres', database: postgresClient, rowsByTable: pgProjection.rowsByTable,
       tableManifest: snapshot.tableManifest, tableDefinitions: pgDefinitions, masterKey, onProgress }),
   ]);
+  const [d1ExcludedParity, postgresExcludedParity] = await Promise.all([
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'd1', database: d1Database, includedTableNames: snapshot.tableManifest.map(({ name }) => name) }),
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'postgres', database: postgresClient, includedTableNames: snapshot.tableManifest.map(({ name }) => name) }),
+  ]);
   const authority = await activatePopulatedTradingD1Authority({
     database: d1Database,
     parity: { d1: d1Parity, postgres: postgresParity },
   });
   return {
     source: { projectRef: snapshot.sourceProjectRef, capturedAt: snapshot.capturedAt, cutoverReference: snapshot.cutoverReference },
+    profile: snapshot.profile,
+    reset,
     fences: fenced.overrides,
     catalogNormalization: fenced.catalogNormalization,
     d1Import,
     postgresImport: pgImport,
     d1Parity,
     postgresParity,
+    d1ExcludedParity,
+    postgresExcludedParity,
     authority,
   };
 }

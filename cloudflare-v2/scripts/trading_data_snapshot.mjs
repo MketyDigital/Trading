@@ -9,7 +9,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(here, '../..');
 const SNAPSHOT_SCHEMA_PATH = resolve(REPOSITORY_ROOT, 'docs/supabase-trading-schema-snapshot-2026-10-17.json');
 const EXPECTED_PROJECT_REF = 'vdblajgxrfndjesoyayy';
-const FORMAT = 'mkety-trading-data-snapshot-v1';
+const FORMAT = 'mkety-trading-data-snapshot-v2';
+export const TRADING_CONTINUITY_PROFILE = 'continuity-fresh-start';
+export const TRADING_CONTINUITY_TABLES = Object.freeze([
+  'workspaces', 'trading_workspace_access', 'trading_workspace_memberships',
+  'trading_access_codes', 'trading_access_code_redemptions', 'trading_runtime_controls',
+  'source_connections', 'source_feeds', 'source_destination_routes', 'signal_routes',
+  'trading_destinations', 'trading_destination_templates', 'trading_destination_connections',
+  'ai_providers', 'trade_accounts', 'trading_workspace_hostnames', 'trading_ingress_collectors',
+  'vip_members', 'bank_deposits', 'orphan_signal_recovery_cursors',
+]);
+export const TRADING_CONTINUITY_TABLE_COUNT = TRADING_CONTINUITY_TABLES.length;
+const CONTINUITY_TABLE_SET = new Set(TRADING_CONTINUITY_TABLES);
 const MAX_LIVE_CUTOVER_DRIFT_PER_TABLE = 2_000;
 const MAX_LIVE_CUTOVER_DRIFT_TOTAL = 10_000;
 const CUTOVER_REFRESH_TABLES = new Set([
@@ -17,7 +28,7 @@ const CUTOVER_REFRESH_TABLES = new Set([
   'trading_access_codes', 'trading_access_code_redemptions', 'trading_runtime_controls',
   'source_connections', 'source_feeds', 'source_destination_routes', 'signal_routes',
   'trading_destinations', 'trading_destination_templates', 'trading_destination_connections',
-  'ai_providers', 'trade_accounts', 'position_groups', 'position_legs',
+  'ai_providers', 'trade_accounts', 'orphan_signal_recovery_cursors',
   'trading_workspace_hostnames', 'trading_ingress_collectors',
 ]);
 
@@ -27,14 +38,15 @@ function safeProjectRef(value) {
   return ref;
 }
 
-export function validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize = 200 } = {}) {
+export function validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize = 500, profile = TRADING_CONTINUITY_PROFILE } = {}) {
   if (!/^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$/.test(String(cutoverReference || ''))) {
     throw new Error('An auditable source-cutover reference is required');
   }
   const projectRef = safeProjectRef(sourceProjectRef);
+  if (profile !== TRADING_CONTINUITY_PROFILE) throw new Error('Only the reviewed continuity fresh-start snapshot profile is supported');
   const size = Number(pageSize);
   if (!Number.isSafeInteger(size) || size < 1 || size > 500) throw new Error('Snapshot page size must be between 1 and 500');
-  return { cutoverReference: String(cutoverReference), sourceProjectRef: projectRef, pageSize: size };
+  return { cutoverReference: String(cutoverReference), sourceProjectRef: projectRef, pageSize: size, profile };
 }
 
 function stable(value) {
@@ -598,7 +610,7 @@ export async function applyTradingSnapshotPlanToPostgres(client, statements) {
   }
 }
 
-async function loadTableInventory() {
+async function readReviewedTableInventory() {
   const snapshot = JSON.parse(await readFile(SNAPSHOT_SCHEMA_PATH, 'utf8'));
   const inventory = snapshot.tables.map((table) => ({ name: table.name, primaryKeys: table.primaryKeys }));
   if (!inventory.length || inventory.some((table) => !table.name || !table.primaryKeys?.length)) {
@@ -615,6 +627,19 @@ async function loadTableInventory() {
   const order = new Map(targetOrder.map((name, index) => [name, index]));
   if (inventory.some(({ name }) => !order.has(name))) throw new Error('Reviewed snapshot table is absent from the D1 migration order');
   return inventory.sort((left, right) => order.get(left.name) - order.get(right.name));
+}
+
+async function loadTableInventory(profile = TRADING_CONTINUITY_PROFILE) {
+  if (profile !== TRADING_CONTINUITY_PROFILE) throw new Error('Only the reviewed continuity fresh-start snapshot profile is supported');
+  const inventory = await readReviewedTableInventory();
+  const selected = inventory.filter(({ name }) => CONTINUITY_TABLE_SET.has(name));
+  if (selected.length !== TRADING_CONTINUITY_TABLES.length) throw new Error('Continuity snapshot allowlist does not match the reviewed schema');
+  return selected;
+}
+
+/** Return all reviewed domain table names in parent-first migration order for a guarded staging reset. */
+export async function getTradingSnapshotDomainTableInventory() {
+  return readReviewedTableInventory();
 }
 
 async function fetchTableRows(client, table, pageSize, { onProgress = async () => {}, pass = 'snapshot' } = {}) {
@@ -766,6 +791,7 @@ export function compareTradingSnapshotTableDrift(initial, current) {
 function snapshotMetadata(artifact) {
   return {
     format: artifact.format,
+    profile: artifact.profile,
     sourceProjectRef: artifact.sourceProjectRef,
     cutoverReference: artifact.cutoverReference,
     capturedAt: artifact.capturedAt,
@@ -791,18 +817,19 @@ export async function exportTradingDataSnapshot({
   masterKey,
   cutoverReference,
   sourceProjectRef,
+  profile = TRADING_CONTINUITY_PROFILE,
   outputPath,
   pageSize = 200,
   clock = () => new Date(),
   onProgress = async () => {}
 } = {}) {
-  const request = validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize });
+  const request = validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize, profile });
   if (!client?.from) throw new Error('Supabase snapshot client is required');
   if (typeof onProgress !== 'function') throw new Error('Snapshot export progress callback is invalid');
   if (!masterKey) throw new Error('TRADING_MASTER_KEY is required');
   if (!outputPath) throw new Error('Encrypted snapshot output path is required');
   const targetPath = await assertOutsideRepository(outputPath);
-  const inventory = await loadTableInventory();
+  const inventory = await loadTableInventory(request.profile);
 
   const firstRead = {};
   for (const table of inventory) firstRead[table.name] = await fetchTableRows(client, table, request.pageSize, { onProgress, pass: 'baseline' });
@@ -858,6 +885,7 @@ export async function exportTradingDataSnapshot({
 
   const artifact = {
     format: FORMAT,
+    profile: request.profile,
     sourceProjectRef: request.sourceProjectRef,
     cutoverReference: request.cutoverReference,
     capturedAt: clock().toISOString(),
@@ -869,6 +897,7 @@ export async function exportTradingDataSnapshot({
   await writeFile(targetPath, `${JSON.stringify(artifact)}\n`, { mode: 0o600, flag: 'wx' });
   return {
     format: artifact.format,
+    profile: artifact.profile,
     outputPath: targetPath,
     sourceProjectRef: artifact.sourceProjectRef,
     capturedAt: artifact.capturedAt,
@@ -887,7 +916,8 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
   validateTradingSnapshotRequest({
     cutoverReference: artifact.cutoverReference,
     sourceProjectRef: artifact.sourceProjectRef,
-    pageSize: 1
+    pageSize: 1,
+    profile: artifact.profile
   });
   if (!Array.isArray(artifact.tableManifest)) throw new Error('Trading data snapshot manifest is invalid');
   if (!Array.isArray(artifact.sourceDrift) || artifact.sourceDrift.some((drift) => (
@@ -901,7 +931,7 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
     throw new Error('Trading data snapshot metadata integrity check failed');
   }
   const rowsByTable = JSON.parse(await decryptSecret(artifact.payloadCiphertext, masterKey));
-  const inventory = await loadTableInventory();
+  const inventory = await loadTableInventory(artifact.profile);
   if (!rowsByTable || typeof rowsByTable !== 'object' || Array.isArray(rowsByTable)) {
     throw new Error('Trading data snapshot payload is invalid');
   }
@@ -930,7 +960,7 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
       }
     }
   }
-  return { sourceProjectRef: artifact.sourceProjectRef, cutoverReference: artifact.cutoverReference, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, sourceDrift: artifact.sourceDrift, rowsByTable };
+  return { profile: artifact.profile, sourceProjectRef: artifact.sourceProjectRef, cutoverReference: artifact.cutoverReference, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, sourceDrift: artifact.sourceDrift, rowsByTable };
 }
 
 async function main() {
@@ -951,6 +981,7 @@ async function main() {
     masterKey,
     cutoverReference,
     sourceProjectRef,
+    profile: TRADING_CONTINUITY_PROFILE,
     outputPath,
     pageSize: Number(process.env.TRADING_MIGRATION_PAGE_SIZE || 200)
   });

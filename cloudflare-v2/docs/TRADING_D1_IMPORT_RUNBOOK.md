@@ -1,32 +1,41 @@
-# Trading D1 and mkety cutover import
+# Trading continuity fresh-start import
 
-This data-load gate uses only the existing Cloudflare D1 database `trading-staging` and existing Coolify PostgreSQL database `mkety`. It does not create a database. Public source writes continue during export.
+This one-shot migration uses only the existing Cloudflare D1 database `trading-staging` and the existing Coolify PostgreSQL database `mkety`. It does not provision a database. The live Supabase source remains available and public writes are not paused.
 
-## Snapshot behavior
+## Data carried forward
 
-The source is not transactionally frozen. Export uses two ordered reads across the 28 reviewed tables, retains the newest full pass, then refreshes workspace identity, access, memberships, accounts, connections, routes, sources, destinations, templates, AI settings, hostnames, and runtime controls. Bounded row changes are recorded by table; the workflow stops if drift exceeds 2,000 changed rows in any table or 10,000 overall. These are rolling snapshots, not atomic snapshots. The later tables can reflect a newer instant than earlier tables.
+The explicit `continuity-fresh-start` profile copies 20 tables needed for workspace continuity and future incoming events:
 
-The importer verifies exact row, key, and content parity against the captured artifact in both targets. This proves target parity with the captured snapshot, not that every source write after a table was read is included. Keep broker execution fenced and reconcile current broker state before allowing any execution or management action on migrated positions.
+- Workspaces, owners, access, memberships, access codes/redemptions, hostnames, VIP members and deposits.
+- Trading accounts and their encrypted credentials, source connections/secrets, source feeds, ingress collectors, and the orphan-recovery high-water cursor.
+- Routes, destinations, destination connections/credentials, templates, AI providers/settings, and runtime controls.
 
-## Before dispatch
+The importer encrypts legacy workspace Telegram bot tokens and AI provider keys using the target secret-box format, rejects plaintext credentials in the snapshot, and fences broker execution in global controls and LIVE accounts. Existing account and routing identities are retained so new events can follow the same workspace and route configuration.
 
-1. Confirm the latest successful Coolify backup is less than 24 hours old. The workflow checks this automatically.
-2. Choose and record a change/incident reference for the cutover attempt. The reference is for audit only and does not pause public writes.
-3. Keep the source system live. Avoid making owner/access/config changes during the short capture window where practical; the final refresh captures those tables again.
-4. The importer preserves workspace access, owner membership, connections and encrypted credentials, routes, sources, destinations, AI settings, templates, and the reviewed trade/event rows. It disables global broker/live execution and non-demo account execution in the imported target.
+It deliberately does not carry forward `signal_logs`, `trading_events`, `position_groups`, `position_legs`, `destination_deliveries`, `trading_event_revisions`, `operation_journal`, or temporary cTrader OAuth states. This drops the stale trade/execution history and outstanding delivery retry state. The recovery cursor is retained to avoid rescanning older orphaned events. Public source writes continue during the rolling capture, so events that arrive in the capture/cutover gap can be missed as authorized by the owner.
+
+## Target reset and safety
+
+Before importing, the workflow verifies the exact existing D1 UUID and `mkety` database identity, TLS to PostgreSQL, a recent successful Coolify PostgreSQL backup, and a D1 pre-reset export. The D1 export is encrypted with `TRADING_MASTER_KEY`, uploaded as a private GitHub Actions artifact with seven-day retention, and its plaintext temporary file is removed before the destructive runner is created. The artifact name includes the workflow run ID. The export is recovery evidence for the staging target; the workflow does not automatically restore it.
+
+The importer refuses to reset either target if a prior per-target checkpoint or checkpoint lock exists. This prevents reset from deleting rows that a checkpoint would later cause the importer to skip. After confirming that no importer is active, review/remove only the exact stale checkpoint/lock files in the transient runner before retrying; the normal workflow deletes its temporary runner at completion. It then fences storage writes on both targets and deletes rows only from the 28 reviewed Trading domain tables, in reverse schema dependency order. It preserves D1/PostgreSQL authority-control and replication metadata, schemas, every non-Trading schema, and all source data.
+
+It imports only the 20 allowlisted tables into both targets, verifies exact row/key/content parity, and verifies all eight excluded operational tables are empty in both targets. Only after these checks does it activate D1 storage authority epoch 1. The existing PostgreSQL authority remains fenced as a standby. The D1 staging target remains unbound to the production Worker until separately reviewed.
+
+Broker execution remains disabled in imported runtime controls and LIVE account rows. Incoming message ingestion/routing can be smoke-tested, but automatic broker orders must remain blocked until the two manually managed broker positions are reconciled and execution is deliberately re-enabled through the approved operator process.
 
 ## Dispatch
 
 Run **Trading V1 CI** on branch `feat/trading-d1-cutover-implementation` with:
 
-- Mode: `import-existing-trading-data`
-- Confirmation: `IMPORT_TRADING_DATA_TO_EXISTING_TARGETS`
-- Cutover reference: `source-cutover:<change-reference>` (for example `source-cutover:TRADING-D1-CUTOVER-2026-10-18`)
+- Mode: `import-continuity-fresh-start`
+- Confirmation: `IMPORT_TRADING_CONTINUITY_FRESH_START`
+- Cutover reference: `source-cutover:<change-reference>`
 
-The importer refuses a Cloudflare D1 UUID other than the existing `trading-staging` UUID or a PostgreSQL connection other than database `mkety`. The private temporary Coolify app exposes its health endpoint before running the long import task, so Coolify does not mistake snapshot duration for an unhealthy container. The workflow waits for an explicit success/failure marker, applies bounded resumable idempotent upserts, verifies all 28 tables in both targets, then activates D1 authority epoch 1 with broker execution fenced. It checks workspace/access rows and removes the temporary app in cleanup.
+The workflow runs CI first, requires a recent existing Coolify PostgreSQL backup, checks/exports the existing staging D1, and deploys a private temporary Coolify runner at the exact reviewed commit. The runner cleans up the encrypted source snapshot and checkpoints; the workflow deletes the temporary Coolify app even on failure. Logs show aggregate counts and table names only, not row values or credentials.
 
-## After successful import
+## Acceptance after import
 
-Review the table counts and bounded drift report. Confirm owner workspace/access rows are present and broker execution remains fenced. Complete production deployment promptly after this import so the snapshot-to-cutover gap stays small. If deployment is delayed or an import is rerun, recapture the source and verify exact target parity again. Keep broker execution disabled until the selected open/pending positions are reconciled against their brokers; do not assume copied statuses represent current broker truth.
+Before any production binding change, verify the 20-table target parity report, preserved owner/workspace/access counts, retained source/recovery configuration, empty excluded history tables, storage authority state, and broker execution fence. Then run non-trading ingress and destination smoke checks against the target to prove a newly received event can be authenticated, persisted, routed, and delivered exactly once. Do not place a broker order during this check.
 
-The encrypted snapshot and per-target checkpoint files are temporary and deleted when the app exits/is removed. Logs contain aggregate counts and drift only, not row values or credentials.
+This import alone does not remove all Supabase runtime dependencies or perform production cutover. Production must remain on its current runtime until the runtime fallback audit, production bindings, rollback path, and end-to-end acceptance are complete. Do not enable LIVE execution automatically.

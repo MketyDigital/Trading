@@ -3,7 +3,7 @@ import { applyTradingPostgresMigrations } from './cloudflare-v2/scripts/apply_tr
 import { runTradingSnapshotImport } from './cloudflare-v2/scripts/run_trading_snapshot_import.mjs';
 import { startProbeRuntime } from './probe_runtime.mjs';
 
-if (process.env.TRADING_SNAPSHOT_IMPORT_CONFIRM === 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS') {
+if (process.env.TRADING_SNAPSHOT_IMPORT_CONFIRM === 'IMPORT_TRADING_CONTINUITY_FRESH_START') {
   await startProbeRuntime({
     runTask: runTradingSnapshotImport,
     successMarker: 'TRADING_SNAPSHOT_IMPORT_OK='

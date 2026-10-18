@@ -240,7 +240,7 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   const inventoryBlock = workflow.slice(inventoryStart, workflow.indexOf('\n  cloudflare-inspect:', inventoryStart));
 
   assert.match(triggerBlock, /workflow_dispatch:[\s\S]*?default: inspect[\s\S]*?apply-existing-mkety-schema/);
-  assert.match(triggerBlock, /import-existing-trading-data/);
+  assert.match(triggerBlock, /import-continuity-fresh-start/);
   assert.equal((triggerBlock.match(/^  workflow_dispatch:/gm) || []).length, 1,
     'workflow_dispatch must be declared only once');
   assert.match(triggerBlock, /confirmation:[\s\S]*?type: string/);
@@ -249,7 +249,7 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(testBlock, /github\.ref == 'refs\/heads\/feat\/trading-d1-cutover-implementation'/);
   assert.match(testBlock, /inputs\.mode == 'inspect'/);
   assert.match(testBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
-  assert.match(testBlock, /inputs\.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS'/);
+  assert.match(testBlock, /inputs\.confirmation == 'IMPORT_TRADING_CONTINUITY_FRESH_START'/);
   assert.match(testBlock, /startsWith\(inputs\.cutover_reference, 'source-cutover:'\)/);
   assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
@@ -257,6 +257,18 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /successful backup from the last 24 hours/);
   assert.match(inventoryBlock, /TRADING_PG_SCHEMA_MIGRATION_CONFIRM/);
   assert.match(inventoryBlock, /TRADING_SNAPSHOT_IMPORT_CONFIRM/);
+  assert.match(inventoryBlock, /TRADING_MASTER_KEY: \$\{\{ inputs\.mode == 'import-continuity-fresh-start' && secrets\.TRADING_MASTER_KEY \|\| '' \}\}/);
+  assert.match(inventoryBlock, /encryptTradingD1BackupFile/);
+  assert.match(inventoryBlock, /await unlink\(inputPath\)/);
+  assert.match(inventoryBlock, /Retain encrypted existing D1 recovery export/);
+  assert.match(inventoryBlock, /actions\/upload-artifact@v4/);
+  assert.match(inventoryBlock, /trading-staging-d1-pre-import-\$\{\{ github\.run_id \}\}/);
+  assert.match(inventoryBlock, /retention-days: 7/);
+  assert.match(inventoryBlock, /if-no-files-found: error/);
+  const backupStep = inventoryBlock.indexOf('name: Retain encrypted existing D1 recovery export');
+  const appCreationStep = inventoryBlock.indexOf('name: Create ephemeral private-network Trading PostgreSQL probe host');
+  assert.ok(backupStep >= 0 && appCreationStep > backupStep, 'encrypted D1 recovery export must be retained before the destructive runner is created');
+  assert.match(inventoryBlock, /path: \$\{\{ runner\.temp \}\}\/trading-staging-pre-import\.sql\.enc/);
   assert.match(inventoryBlock, /targetsParityVerified/);
   assert.match(inventoryBlock, /authorityActivated/);
   assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);

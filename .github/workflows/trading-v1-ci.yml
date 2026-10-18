@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Inspect, apply the existing schema, or import verified Trading data into the existing D1 and mkety targets
+        description: Inspect, apply the existing schema, or fresh-start the existing targets with continuity data only
         required: true
         type: choice
         default: inspect
         options:
           - inspect
           - apply-existing-mkety-schema
-          - import-existing-trading-data
+          - import-continuity-fresh-start
       confirmation:
         description: Enter the exact schema or data-import confirmation for the selected mode
         required: false
         type: string
       cutover_reference:
-        description: Audit reference for the rolling live-source import (does not pause writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
+        description: Audit reference for the rolling continuity import (does not pause public writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
         required: false
         type: string
   push:
@@ -76,8 +76,8 @@ jobs:
               inputs.mode == 'apply-existing-mkety-schema' &&
               inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
             ) || (
-              inputs.mode == 'import-existing-trading-data' &&
-              inputs.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' &&
+              inputs.mode == 'import-continuity-fresh-start' &&
+              inputs.confirmation == 'IMPORT_TRADING_CONTINUITY_FRESH_START' &&
               startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
@@ -142,8 +142,8 @@ jobs:
               inputs.mode == 'apply-existing-mkety-schema' &&
               inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
             ) || (
-              inputs.mode == 'import-existing-trading-data' &&
-              inputs.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' &&
+              inputs.mode == 'import-continuity-fresh-start' &&
+              inputs.confirmation == 'IMPORT_TRADING_CONTINUITY_FRESH_START' &&
               startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
@@ -176,6 +176,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TRADING_MASTER_KEY: ${{ inputs.mode == 'import-continuity-fresh-start' && secrets.TRADING_MASTER_KEY || '' }}
           STAGING_MODE: ${{ inputs.mode || 'inspect' }}
         shell: bash
         run: |
@@ -226,7 +227,7 @@ jobs:
           await writeFile('wrangler.trading-staging.toml', config, { mode: 0o600 });
           console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
           D1_CONFIG
-          trap 'rm -f wrangler.trading-staging.toml' EXIT
+          trap 'rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-staging-pre-import.sql"' EXIT
           if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
             npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
           fi
@@ -257,6 +258,34 @@ jobs:
           }
           console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
           CHECK_TRADING_D1_SCHEMA
+          if [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
+            npx wrangler d1 export trading-staging --remote --skip-confirmation \
+              --config wrangler.trading-staging.toml --output "$RUNNER_TEMP/trading-staging-pre-import.sql"
+            test -s "$RUNNER_TEMP/trading-staging-pre-import.sql" || { echo 'Existing D1 pre-reset export is empty; refusing fresh-start reset.'; exit 1; }
+            test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing GitHub staging secret: TRADING_MASTER_KEY'; exit 1; }
+            node --input-type=module <<'ENCRYPT_D1_PRE_IMPORT_EXPORT'
+          import { unlink } from 'node:fs/promises';
+          import { encryptTradingD1BackupFile } from './scripts/trading_d1_backup.mjs';
+
+          const inputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-import.sql`;
+          const outputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-import.sql.enc`;
+          const result = await encryptTradingD1BackupFile({
+            inputPath,
+            outputPath,
+            masterKey: process.env.TRADING_MASTER_KEY,
+          });
+          await unlink(inputPath);
+          console.log(`Existing staging D1 recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
+          ENCRYPT_D1_PRE_IMPORT_EXPORT
+          fi
+      - name: Retain encrypted existing D1 recovery export
+        if: ${{ inputs.mode == 'import-continuity-fresh-start' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-staging-d1-pre-import-${{ github.run_id }}
+          path: ${{ runner.temp }}/trading-staging-pre-import.sql.enc
+          if-no-files-found: error
+          retention-days: 7
       - name: Inspect existing Cloudflare Worker database and private-network bindings (read-only)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -437,7 +466,7 @@ jobs:
           }
           SAFE_COOLIFY_BACKUP_EXECUTIONS
             done < "$RUNNER_TEMP/coolify-mkety-postgres-backup-uuids.txt"
-            if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ] || [ "$STAGING_MODE" = 'import-existing-trading-data' ]; then
+            if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ] || [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
               test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Schema/data write refused: no successful Coolify PostgreSQL backup in the last 24 hours.'; exit 1; }
               echo 'Existing Coolify PostgreSQL backup preflight passed for the requested write operation.'
             fi
@@ -529,8 +558,8 @@ jobs:
             [ "$MIGRATION_CONFIRMATION" = 'APPLY_TRADING_STORAGE_SCHEMA' ] || { echo 'Schema apply requires the exact explicit confirmation.'; exit 1; }
             test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Schema apply requires a successful backup from the last 24 hours.'; exit 1; }
           fi
-          if [ "$APPLY_MODE" = 'import-existing-trading-data' ]; then
-            [ "$MIGRATION_CONFIRMATION" = 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' ] || { echo 'Data import requires the exact explicit confirmation.'; exit 1; }
+          if [ "$APPLY_MODE" = 'import-continuity-fresh-start' ]; then
+            [ "$MIGRATION_CONFIRMATION" = 'IMPORT_TRADING_CONTINUITY_FRESH_START' ] || { echo 'Data import requires the exact explicit confirmation.'; exit 1; }
             [[ "$SOURCE_CUTOVER_REFERENCE" =~ ^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$ ]] || { echo 'Data import requires valid source cutover reference.'; exit 1; }
             test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Data import requires a successful backup from the last 24 hours.'; exit 1; }
             test -n "${SUPABASE_SERVICE_ROLE:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE'; exit 1; }
@@ -567,7 +596,7 @@ jobs:
 
           TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'BUILD_PROBE_APP_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-app.json"
           const sha = process.env.TARGET_SHA;
-          const importing = process.env.APPLY_MODE === 'import-existing-trading-data';
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
           const appName = `${importing ? 'trading-data-import' : 'trading-pg-ro-probe'}-${sha.slice(0, 12)}`;
           process.stdout.write(JSON.stringify({
             project_uuid: '0zqhpkprlhtvlacmsgmfyyhs',
@@ -603,7 +632,7 @@ jobs:
             RECOVERED_UUID="$(TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'RECOVER_EXACT_PROBE_APP'
           const fs = require('node:fs');
           const sha = process.env.TARGET_SHA;
-          const importing = process.env.APPLY_MODE === 'import-existing-trading-data';
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
           const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-applications.json', 'utf8'));
           const rows = Array.isArray(payload) ? payload : payload.applications ?? payload.data ?? payload.result;
           if (!Array.isArray(rows)) process.exit(2);
@@ -685,7 +714,7 @@ jobs:
               --data-binary "@$RUNNER_TEMP/trading-pg-probe-migration-confirmation-env.json" "$api/applications/$APP_UUID/envs")"
             [ "$migration_env_code" = '201' ] || { echo "Coolify schema-only migration confirmation setup failed with HTTP $migration_env_code."; exit 3; }
           fi
-          if [ "$APPLY_MODE" = 'import-existing-trading-data' ]; then
+          if [ "$APPLY_MODE" = 'import-continuity-fresh-start' ]; then
             add_import_env() {
               local name="$1" value="$2" shown="${3:-true}" path="$RUNNER_TEMP/trading-pg-probe-import-env.json"
               ENV_NAME="$name" ENV_VALUE="$value" ENV_SHOWN="$shown" node <<'BUILD_IMPORT_ENV' > "$path"
@@ -843,7 +872,7 @@ jobs:
             process.exit(2);
           }
           const applying = process.env.APPLY_MODE === 'apply-existing-mkety-schema';
-          const importing = process.env.APPLY_MODE === 'import-existing-trading-data';
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
           const prefix = importing ? 'TRADING_SNAPSHOT_IMPORT_OK=' : applying ? 'TRADING_PG_MIGRATION_OK=' : 'TRADING_PG_PROBE_OK=';
           const line = logs.split(/\r?\n/).find((entry) => entry.startsWith(prefix));
           if (!line) process.exit(1);
@@ -857,17 +886,22 @@ jobs:
                 || tableChanges < 0 || tableChanges > 2000) throw new Error('Snapshot source drift report is invalid or exceeds a per-table safety bound.');
               return sum + tableChanges;
             }, 0);
-            if (result.tables !== 28 || result.targetsParityVerified !== true || result.authorityActivated !== true
+            const excluded = result.excludedOperationalTables || {};
+            const excludedEmpty = ['d1', 'postgres'].every((target) => excluded[target]?.tables === 8 && excluded[target]?.rows === 0);
+            if (result.tables !== 20 || result.targetsParityVerified !== true || result.authorityActivated !== true
               || result.snapshotConsistency !== 'bounded-rolling-live-source' || !Array.isArray(result.sourceDrift)
               || driftedRows > 10000
               || !Number.isSafeInteger(result.d1Rows) || result.d1Rows !== result.postgresRows
+              || result.snapshotProfile !== 'continuity-fresh-start'
+              || result.reset?.tablesResetPerTarget !== 28 || result.reset?.storageAuthorityPreserved !== true
+              || result.reset?.writesFenced !== true || !excludedEmpty
               || !(important.workspaces > 0) || !(important.trading_workspace_access > 0)
               || result.fences?.globalControlsFenced !== 2
               || result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) {
-              throw new Error('Snapshot import did not verify all reviewed tables and preserve owner access while fencing broker execution.');
+              throw new Error('Continuity fresh-start import did not verify target parity, empty stale operational tables, owner access, and the broker execution fence.');
             }
             const driftSummary = sourceDrift.map((change) => `${change.table}:${change.added}/${change.modified}/${change.removed}`).join(',') || 'none';
-            console.log(`Existing D1 and mkety data parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
+            console.log(`Existing D1 and mkety continuity parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; stale operational tables empty in both targets; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
           } else if (applying) {
             const expectedMigrations = [
               '0001_trading_storage_replication_authority.sql',

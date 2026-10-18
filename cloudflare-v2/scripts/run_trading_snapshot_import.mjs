@@ -5,12 +5,13 @@ import {
   exportTradingDataSnapshot,
   createTradingSnapshotRestClient,
   readTradingDataSnapshot,
+  TRADING_CONTINUITY_PROFILE,
 } from './trading_data_snapshot.mjs';
 import { importTradingSnapshotToTargets } from './trading_snapshot_import_runner.mjs';
 
 const SOURCE_PROJECT_REF = 'vdblajgxrfndjesoyayy';
 const D1_ID = '4f00d59a-3d90-4146-832d-36230d5648bb';
-const CONFIRMATION = 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS';
+const CONFIRMATION = 'IMPORT_TRADING_CONTINUITY_FRESH_START';
 
 function required(name, env = process.env) {
   const value = env[name];
@@ -47,6 +48,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       masterKey,
       cutoverReference: env.TRADING_MIGRATION_CUTOVER_REFERENCE,
       sourceProjectRef: SOURCE_PROJECT_REF,
+      profile: TRADING_CONTINUITY_PROFILE,
       outputPath: snapshotPath,
       pageSize: 500,
       onProgress: (event) => process.stdout.write(`snapshot_import_progress=${JSON.stringify(event)}\n`),
@@ -97,6 +99,8 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       d1Rows: report.d1Parity.rows,
       postgresRows: report.postgresParity.rows,
       targetsParityVerified: true,
+      snapshotProfile: report.profile,
+      reset: report.reset,
       authorityActivated: report.authority?.authority === 'd1' && report.authority?.writesFenced === false,
       importantRows: Object.fromEntries([
         'workspaces', 'trading_workspace_access', 'trading_workspace_memberships',
@@ -105,6 +109,10 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       ].map((name) => [name, snapshot.rowsByTable[name]?.length ?? 0])),
       fences: report.fences,
       sourceDrift: snapshot.sourceDrift,
+      excludedOperationalTables: {
+        d1: report.d1ExcludedParity,
+        postgres: report.postgresExcludedParity,
+      },
       snapshotConsistency: 'bounded-rolling-live-source',
     };
   } finally {
