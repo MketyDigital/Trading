@@ -77,17 +77,17 @@ The connected production project's read-only table metadata reports these curren
 
 These functions need D1/PostgreSQL repository equivalents or their callsites must be retired with behavior-owner signoff. SQL `rpc` scan alone does not identify dynamic names.
 
-## Active Worker and runtime dependency areas
+## Worker runtime status (verified 2026-10-18)
 
-The entrypoint `src/v1_runtime_entry.js` creates Supabase for the V1 event/admin/external/webhook paths. `src/v1_entry.js` also provides public branding/hostname-proof access and delegates legacy routes. Additional Supabase-specific modules include:
+This section supersedes the original 2026-10-16 runtime assessment below. The deployed Worker entrypoint `cloudflare-v2/src/v1_runtime_entry.js` composes the selected D1/PostgreSQL Trading repository runtime. It does not construct a Supabase client, read `SUPABASE_*` configuration, or import the Supabase SDK. Repository-backed routes fail closed when required runtime ports are absent. The SDK has been removed from the root and Worker package manifests.
 
-- Durable trade state, runtime controls, source queue and ingest: `src/persistence/supabase_*`, `src/storage/supabase_ingest_store.js`, `src/sources/source_queue_runtime.js`, `src/sources/orphan_signal_recovery_runtime.js`, `src/sources/mtproto/recovery_runtime.js`.
-- Access/customer/admin: `src/access/trading_access_codes.js`, `src/security/trading_membership_store.js`, `src/http/v1_*`, Telegram admin/webhook, connector/admin control and repair endpoints.
-- Execution state and recovery: destination retry, broker TP fill protection, binding repair, live group repair, operation journal, and production execution dependencies.
-- Legacy scheduled code: `src/index.js` and `src/vip/vip_manager.js` include data paths outside the main V1 repository seam. `wrangler.toml` currently runs both `*/15 * * * *` and `* * * * *` cron schedules.
-- Acceptance/diagnostic commands in `src/testing/` use Supabase directly. They may remain only if explicitly classified as isolated tooling with no Worker production import path and with documented credentials.
+The scan still finds Supabase-named adapters and injected compatibility paths in source, plus tests and operational scripts. A static text match is not proof of a live connection; separately verify that each path is reachable only through an injected test seam or is ported before deleting it. In particular, the VIP manager and several legacy admin/execution handlers still contain compatibility branches. `scripts/gate2_queue_acceptance.mjs`, `scripts/gate4_zitadel_acceptance.mjs`, and `scripts/recover_persisted_signal.mjs` still access the former source and need a target-backed replacement or a documented retirement decision.
 
-At the time this inventory was captured, `SUPABASE_URL` was required by the listed runtime callsites and `@supabase/supabase-js` was a production package dependency.
+Temporary source-export tools and the historical schema snapshots must remain available until the encrypted export, import to the existing D1 and `mkety` PostgreSQL targets, checksums, drift catch-up, and credential transformation have been verified. They are migration tooling and are not Worker runtime dependencies.
+
+**Production cutover is not complete.** At this checkpoint the Paid and Free Wrangler configurations have no D1 or Hyperdrive binding, while the isolated Trading staging config binds the existing staging D1. No target row import, target parity, runtime conformance, or rollback rehearsal is recorded. Do not deploy or describe the production Worker as migrated until those gates are closed.
+
+The sections above describing `.from(...)` callsites and the shared schema explain the original Supabase inventory used to design the migration; they are not current runtime architecture claims. The shared `cloudflare-v2/db/schema.sql` may also be used by other Mkety products and must not be removed as Trading cleanup.
 
 ## 2026-10-18 removal checkpoint
 
@@ -96,6 +96,7 @@ At the time this inventory was captured, `SUPABASE_URL` was required by the list
 - Migrated demo lifecycle persistence to the Trading PostgreSQL repository. MTProto recovery now requires the selected Trading source repository. Local subscription authorization fails closed if the Trading access-code repository is missing.
 - `scripts/postgrest_migration_reader.mjs` remains scoped to source export/acceptance/recovery tooling during migration. This is temporary source-data tooling and does not add a production Worker package dependency.
 - The existing production Worker remains on its current authority until export/import, row and checksum parity, open-order reconciliation, runtime conformance, and rollback gates pass. This checkpoint does not claim a completed production cutover.
+- The source export/import utility now has bounded, transactional, schema-checked upsert adapters for D1 and PostgreSQL. It rejects unknown columns, primary-key drift, missing required target columns without defaults, duplicate source keys, destructive statements, and failed batches. These are local/CI-tested primitives only; they have not run against production data or the existing remote targets.
 
 ## Migration classification required
 
