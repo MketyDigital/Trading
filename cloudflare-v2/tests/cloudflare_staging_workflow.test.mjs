@@ -271,6 +271,10 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /path: \$\{\{ runner\.temp \}\}\/trading-staging-pre-import\.sql\.enc/);
   assert.match(inventoryBlock, /targetsParityVerified/);
   assert.match(inventoryBlock, /authorityActivated/);
+  assert.match(inventoryBlock, /failedGates/);
+  assert.match(inventoryBlock, /safeImportSummary/);
+  assert.doesNotMatch(inventoryBlock, /JSON\.stringify\(result\.importantRows|JSON\.stringify\(result\.fences/,
+    'import diagnostics must not serialize arbitrary snapshot rows or settings');
   assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);
   assert.match(inventoryBlock, /if \[ "\$STAGING_MODE" = 'apply-existing-mkety-schema' \]; then\n\s+npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml[\s\S]*?\n\s+fi/,
     'D1 schema changes must require the exact schema-apply mode');
