@@ -35,6 +35,8 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /node --input-type=module <<'D1_INVENTORY'/);
   assert.doesNotMatch(block, /wrangler d1 create/i, 'CI must never provision a D1 database');
   assert.match(block, /Trading staging D1 is missing/);
+  assert.doesNotMatch(block, /\\n\s+throw new Error\('Existing Trading staging D1 is missing/,
+    'the D1 inventory guard must contain real JavaScript newlines, not escaped text');
   assert.match(block, /database_name = "trading-staging"/);
   assert.match(block, /migrations_dir = "db\/d1-migrations"/);
   assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
