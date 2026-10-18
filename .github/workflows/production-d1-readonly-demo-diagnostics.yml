@@ -60,7 +60,8 @@ jobs:
             },
             {
               title: 'Accounts by safe execution flags',
-              sql: "SELECT lower(COALESCE(environment, 'unknown')) AS environment, platform, is_active, execution_enabled, live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY environment, platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
+              sql: "SELECT lower(COALESCE(environment, 'unknown')) AS environment, platform, is_active, execution_enabled, live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY lower(COALESCE(environment, 'unknown')), platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
+      params: [],
             },
             {
               title: 'Recent position and leg states',
@@ -86,7 +87,7 @@ jobs:
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              batch: queries.map((query) => ({ sql: query.sql, params: [cutoff] })),
+              batch: queries.map((query) => ({ sql: query.sql, params: query.params === undefined ? [cutoff] : query.params })),
             }),
           });
           if (!response.ok) throw new Error('Cloudflare D1 query failed with HTTP ' + response.status);
