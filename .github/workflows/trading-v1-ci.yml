@@ -845,7 +845,7 @@ jobs:
           try {
             const event = JSON.parse(line.slice('snapshot_import_progress='.length));
             const safe = {};
-            for (const key of ['phase', 'pass', 'target', 'table', 'column', 'pages', 'rows', 'totalRows', 'batchNumber', 'appliedRows']) {
+            for (const key of ['phase', 'pass', 'target', 'table', 'column', 'pages', 'rows', 'totalRows', 'batchNumber', 'appliedRows', 'queryNumber']) {
               if (typeof event[key] === 'string' && /^[a-z][a-z0-9_-]{0,62}$/.test(event[key])) safe[key] = event[key];
               else if (Number.isSafeInteger(event[key]) && event[key] >= 0) safe[key] = event[key];
             }

@@ -384,14 +384,18 @@ test('PostgreSQL snapshot adapter commits successful batches and rolls failed ba
     if (failInsert && sql.startsWith('INSERT')) throw new Error('insert failed');
     return { rows: [] };
   } };
-  const statements = [{ sql: 'INSERT INTO trading_storage."workspaces" ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"', values: ['ws-1'] }];
-  await applyTradingSnapshotPlanToPostgres(client, statements);
-  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '120s'", statements[0].sql, 'COMMIT']);
+  const statements = [{ sourceTable: 'workspaces', sql: 'INSERT INTO trading_storage."workspaces" ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"', values: ['ws-1'] }];
+  const statementStarts = [];
+  await applyTradingSnapshotPlanToPostgres(client, statements, {
+    onStatementStart: async (event) => statementStarts.push(event),
+  });
+  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '30s'", statements[0].sql, 'COMMIT']);
+  assert.deepEqual(statementStarts, [{ table: 'workspaces', queryNumber: 1 }]);
 
   queries.length = 0;
   failInsert = true;
   await assert.rejects(() => applyTradingSnapshotPlanToPostgres(client, statements), /insert failed/);
-  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '120s'", statements[0].sql, 'ROLLBACK']);
+  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '30s'", statements[0].sql, 'ROLLBACK']);
 });
 
 test('D1 schema introspection reads allowlisted columns and preserves composite primary-key order', async () => {

@@ -192,10 +192,11 @@ export async function resetTradingContinuityTargets({ d1Database, postgresClient
   return { tablesResetPerTarget: domainTableNames.length, storageAuthorityPreserved: true, writesFenced: true };
 }
 
-export async function verifyTradingSnapshotExcludedTablesEmpty({ target, database, includedTableNames } = {}) {
+export async function verifyTradingSnapshotExcludedTablesEmpty({ target, database, includedTableNames, onProgress = async () => {} } = {}) {
   if (!['d1', 'postgres'].includes(target) || !database?.query || !Array.isArray(includedTableNames)) {
     throw new Error('Excluded-table verification inputs are invalid');
   }
+  if (typeof onProgress !== 'function') throw new Error('Excluded-table progress callback is invalid');
   const inventory = await getTradingSnapshotDomainTableInventory();
   const included = new Set(includedTableNames);
   const excluded = inventory.filter(({ name }) => !included.has(name));
@@ -210,6 +211,7 @@ export async function verifyTradingSnapshotExcludedTablesEmpty({ target, databas
     const count = Number(rows?.[0]?.row_count);
     if (!Number.isSafeInteger(count) || count !== 0) throw new Error(`Fresh-start excluded table is not empty: ${name}`);
     counts[name] = count;
+    await onProgress({ phase: 'target-excluded-table', target, table: name, rows: count });
   }
   return { target, tables: excluded.length, rows: 0, verifiedTables: counts };
 }
@@ -416,7 +418,11 @@ export async function importTradingSnapshotToTargets({
   });
   await onProgress({ phase: 'target-import-start', target: 'postgres', rows: pgPlan.rowCount });
   const pgImport = await applyTradingSnapshotImportPlanResumable(pgPlan, {
-    executeBatchAtomically: (statements) => applyTradingSnapshotPlanToPostgres(postgresClient, statements),
+    executeBatchAtomically: (statements, batch) => applyTradingSnapshotPlanToPostgres(postgresClient, statements, {
+      onStatementStart: ({ table, queryNumber }) => onProgress({
+        phase: 'target-import-query', target: 'postgres', batchNumber: batch?.batchNumber, table, queryNumber,
+      }),
+    }),
     checkpointPath: checkpointPaths.postgres,
     masterKey,
     batchSize,
@@ -432,8 +438,8 @@ export async function importTradingSnapshotToTargets({
       tableManifest: snapshot.tableManifest, tableDefinitions: pgDefinitions, masterKey, onProgress }),
   ]);
   const [d1ExcludedParity, postgresExcludedParity] = await Promise.all([
-    verifyTradingSnapshotExcludedTablesEmpty({ target: 'd1', database: d1Database, includedTableNames: snapshot.tableManifest.map(({ name }) => name) }),
-    verifyTradingSnapshotExcludedTablesEmpty({ target: 'postgres', database: postgresClient, includedTableNames: snapshot.tableManifest.map(({ name }) => name) }),
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'd1', database: d1Database, includedTableNames: snapshot.tableManifest.map(({ name }) => name), onProgress }),
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'postgres', database: postgresClient, includedTableNames: snapshot.tableManifest.map(({ name }) => name), onProgress }),
   ]);
   const authority = await activatePopulatedTradingD1Authority({
     database: d1Database,

@@ -596,8 +596,9 @@ export async function applyTradingSnapshotPlanToD1(db, statements) {
 }
 
 /** Wrap each PostgreSQL import group in one transaction; failed groups are fully rolled back. */
-export async function applyTradingSnapshotPlanToPostgres(client, statements) {
+export async function applyTradingSnapshotPlanToPostgres(client, statements, { onStatementStart = async () => {} } = {}) {
   if (!client?.query) throw new Error('PostgreSQL snapshot import client is unavailable');
+  if (typeof onStatementStart !== 'function') throw new Error('PostgreSQL snapshot progress callback is invalid');
   assertSnapshotImportUpserts(statements);
   if (!statements.length) return { appliedRows: 0 };
   let transactionStarted = false;
@@ -605,8 +606,11 @@ export async function applyTradingSnapshotPlanToPostgres(client, statements) {
     await client.query('BEGIN');
     transactionStarted = true;
     await client.query("SET LOCAL lock_timeout = '5s'");
-    await client.query("SET LOCAL statement_timeout = '120s'");
-    for (const { sql, values } of statements) await client.query(sql, values);
+    await client.query("SET LOCAL statement_timeout = '30s'");
+    for (const [index, { sql, values, sourceTable }] of statements.entries()) {
+      await onStatementStart({ table: sourceTable, queryNumber: index + 1 });
+      await client.query(sql, values);
+    }
     await client.query('COMMIT');
     return { appliedRows: statements.length };
   } catch (error) {

@@ -32,3 +32,32 @@ test('D1 fresh-start reset accepts only the exact reviewed domain tables', async
   assert.deepEqual(requests[0].batch.map(({ sql }) => sql), [...names].reverse().map((name) => `DELETE FROM "${name}"`));
   assert.equal(requests[0].batch.some(({ sql }) => /trading_storage_control|authority_control|replication_/i.test(sql)), false);
 });
+
+test('D1 query requests have a bounded timeout', async () => {
+  const calls = [];
+  const timeouts = [];
+  const nativeTimeout = AbortSignal.timeout;
+  AbortSignal.timeout = (milliseconds) => {
+    timeouts.push(milliseconds);
+    return nativeTimeout(milliseconds);
+  };
+  const fetchFn = async (url, init = {}) => {
+    calls.push(init);
+    if (init.method === 'GET') return response({ success: true, result: { uuid: '4f00d59a-3d90-4146-832d-36230d5648bb', name: 'trading-staging' } });
+    return response({ success: true, result: [{ success: true, results: [{ ok: 1 }] }] });
+  };
+  try {
+    const db = createCloudflareD1SnapshotDatabase({
+      apiToken: 'test-token', accountId: 'a'.repeat(32),
+      databaseId: '4f00d59a-3d90-4146-832d-36230d5648bb', fetchFn,
+    });
+    await db.query('SELECT 1');
+    assert.deepEqual(calls.map(({ method, signal }) => ({ method, hasTimeout: signal instanceof AbortSignal })), [
+      { method: 'GET', hasTimeout: true }, { method: 'POST', hasTimeout: true },
+    ]);
+    assert.deepEqual(timeouts, [20000, 20000]);
+    assert.equal(calls.every(({ signal }) => signal.aborted === false), true);
+  } finally {
+    AbortSignal.timeout = nativeTimeout;
+  }
+});

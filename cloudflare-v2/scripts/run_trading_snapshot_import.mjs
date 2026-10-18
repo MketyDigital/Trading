@@ -73,7 +73,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       connectionString: connectionUrl.toString(),
       connectionTimeoutMillis: 10_000,
       query_timeout: 120_000,
-      statement_timeout: 120_000,
+      statement_timeout: 30_000,
     });
     await client.connect();
     connected = true;

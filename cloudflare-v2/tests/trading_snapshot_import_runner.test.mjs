@@ -101,6 +101,7 @@ test('fresh-start reset rejects a live checkpoint lock before deleting either ta
 });
 
 test('excluded operational tables must be empty in each target after the selective import', async () => {
+  const progress = [];
   const d1 = { async query() { return { results: [{ row_count: 0 }] }; } };
   const pg = { async query() { return { rows: [{ row_count: 0 }] }; } };
   const includedTableNames = [
@@ -111,12 +112,14 @@ test('excluded operational tables must be empty in each target after the selecti
     'trading_ingress_collectors', 'vip_members', 'bank_deposits', 'orphan_signal_recovery_cursors',
   ];
   const [d1Result, pgResult] = await Promise.all([
-    verifyTradingSnapshotExcludedTablesEmpty({ target: 'd1', database: d1, includedTableNames }),
-    verifyTradingSnapshotExcludedTablesEmpty({ target: 'postgres', database: pg, includedTableNames }),
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'd1', database: d1, includedTableNames, onProgress: async (event) => progress.push(event) }),
+    verifyTradingSnapshotExcludedTablesEmpty({ target: 'postgres', database: pg, includedTableNames, onProgress: async (event) => progress.push(event) }),
   ]);
   assert.equal(d1Result.tables, 8);
   assert.equal(pgResult.tables, 8);
   assert.equal(d1Result.rows + pgResult.rows, 0);
+  assert.equal(progress.filter((event) => event.phase === 'target-excluded-table' && event.target === 'd1').length, 8);
+  assert.equal(progress.filter((event) => event.phase === 'target-excluded-table' && event.target === 'postgres').length, 8);
   await assert.rejects(() => verifyTradingSnapshotExcludedTablesEmpty({
     target: 'd1', database: { async query() { return { results: [{ row_count: 1 }] }; } }, includedTableNames,
   }), /excluded table is not empty/);

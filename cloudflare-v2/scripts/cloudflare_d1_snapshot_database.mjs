@@ -57,6 +57,7 @@ export function createCloudflareD1SnapshotDatabase({
       response = await fetchFn(identityEndpoint, {
         method: 'GET',
         headers: { Authorization: `Bearer ${apiToken}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(20000),
       });
     } catch {
       throw new Error('Cloudflare D1 target identity check failed');
@@ -85,6 +86,7 @@ export function createCloudflareD1SnapshotDatabase({
           Accept: 'application/json',
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify(body),
       });
     } catch {
