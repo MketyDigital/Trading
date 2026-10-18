@@ -179,13 +179,13 @@ jobs:
           const safeDatabases = databases.map(({ name, uuid, num_tables }) => ({ name, uuid, num_tables }));
           console.log(`D1 inventory (safe fields only): ${JSON.stringify(safeDatabases)}`);
           D1_INVENTORY
-          node --input-type=module <<'CHECK_TRADING_D1' || npx wrangler d1 create trading-staging
+          node --input-type=module <<'CHECK_TRADING_D1'
           import { readFile } from 'node:fs/promises';
 
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
           const databases = Array.isArray(payload) ? payload : payload.result;
           if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
-          if (!databases.some(({ name }) => name === 'trading-staging')) process.exit(1);
+          if (!databases.some(({ name }) => name === 'trading-staging')) {\n  throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');\n}
           CHECK_TRADING_D1
           npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
           node --input-type=module <<'D1_CONFIG'
@@ -194,7 +194,7 @@ jobs:
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
           const databases = Array.isArray(payload) ? payload : payload.result;
           const database = databases?.find(({ name }) => name === 'trading-staging');
-          if (!database?.uuid) throw new Error('Trading staging D1 is missing after provisioning');
+          if (!database?.uuid) throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');
           const config = [
             'name = "mkety-trading-staging-migrations"',
             'main = "src/v1_runtime_entry.js"',

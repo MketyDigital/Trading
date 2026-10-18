@@ -33,7 +33,8 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /npx wrangler whoami/);
   assert.match(block, /npx wrangler d1 list --json > "\$RUNNER_TEMP\/trading-d1-inventory\.json"/);
   assert.match(block, /node --input-type=module <<'D1_INVENTORY'/);
-  assert.match(block, /npx wrangler d1 create trading-staging/);
+  assert.doesNotMatch(block, /wrangler d1 create/i, 'CI must never provision a D1 database');
+  assert.match(block, /Trading staging D1 is missing/);
   assert.match(block, /database_name = "trading-staging"/);
   assert.match(block, /migrations_dir = "db\/d1-migrations"/);
   assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
@@ -171,13 +172,14 @@ test('Cloudflare staging gate uses GitHub environment secrets and never hard-cod
   assert.doesNotMatch(workflow, /CLOUDFLARE_API_TOKEN:\s*["']?[A-Za-z0-9_-]{20,}/);
 });
 
-test('Cloudflare staging gate defaults to inspect mode and requires explicit deployment selection', async () => {
+test('Cloudflare staging gate is inspect-only and has no Supabase deploy path', async () => {
   const workflow = await readWorkflow();
   assert.match(workflow, /mode:/);
   assert.match(workflow, /default:\s*inspect/);
-  assert.match(workflow, /options:\s*\n(?:.|\n)*?- inspect\n(?:.|\n)*?- deploy-paid\n(?:.|\n)*?- deploy-free/);
-  assert.match(workflow, /if:\s*\$\{\{ inputs\.mode == 'deploy-paid' \}\}/);
-  assert.match(workflow, /if:\s*\$\{\{ inputs\.mode == 'deploy-free' \}\}/);
+  assert.match(workflow, /options:\s*\n\s+- inspect/);
+  assert.doesNotMatch(workflow, /deploy-paid|deploy-free|SUPABASE|supabase/i);
+  assert.doesNotMatch(workflow, /wrangler deploy --config (?:wrangler\.toml|wrangler\.free\.toml|wrangler\.trading-staging\.toml)/);
+  assert.match(workflow, /wrangler\.trading-staging\.toml/);
 });
 
 test('Cloudflare staging gate keeps TradingView ingress and broker execution disabled', async () => {
@@ -188,18 +190,11 @@ test('Cloudflare staging gate keeps TradingView ingress and broker execution dis
   assert.match(workflow, /BROKER_EXECUTION_ENABLED:\s*["']false["']/);
 });
 
-test('Cloudflare staging gate validates both Wrangler profiles before any deploy step', async () => {
+test('Cloudflare staging gate only dry-runs and inspects the reviewed Trading target', async () => {
   const workflow = await readWorkflow();
-  const paidDryRun = workflow.indexOf('npx wrangler deploy --dry-run --config wrangler.toml');
-  const freeDryRun = workflow.indexOf('npx wrangler deploy --dry-run --config wrangler.free.toml');
-  const paidDeploy = workflow.indexOf('npx wrangler deploy --config wrangler.toml');
-  const freeDeploy = workflow.indexOf('npx wrangler deploy --config wrangler.free.toml');
-  assert.ok(paidDryRun >= 0, 'paid Wrangler dry-run must exist');
-  assert.ok(freeDryRun >= 0, 'free Wrangler dry-run must exist');
-  assert.ok(paidDeploy >= 0, 'paid deployment command must exist');
-  assert.ok(freeDeploy >= 0, 'free deployment command must exist');
-  assert.ok(paidDryRun < paidDeploy, 'paid dry-run must precede paid deployment');
-  assert.ok(freeDryRun < freeDeploy, 'free dry-run must precede free deployment');
+  assert.match(workflow, /npx wrangler deploy --dry-run --containers-rollout=none --config wrangler\.trading-staging\.toml/);
+  assert.match(workflow, /npx wrangler d1 migrations list trading-staging --remote --config wrangler\.trading-staging\.toml/);
+  assert.doesNotMatch(workflow, /npx wrangler deploy --config/);
 });
 
 test('ordinary CI stays lightweight and docs-only edits do not trigger branch or PR CI', async () => {
