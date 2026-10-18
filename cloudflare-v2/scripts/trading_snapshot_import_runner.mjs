@@ -262,6 +262,16 @@ function normalizeValue(value, column, target) {
   return value;
 }
 
+// Report only structural facts when parity fails. Never include setting or
+// credential values in workflow output.
+function parityShape(value) {
+  if (value === null) return { kind: 'null' };
+  if (Array.isArray(value)) return { kind: 'array', length: value.length };
+  if (typeof value === 'object') return { kind: 'object', keys: Object.keys(value).length };
+  if (typeof value === 'string') return { kind: 'string', length: value.length };
+  return { kind: typeof value };
+}
+
 function rowIdentity(row, primaryKeys, definition, target) {
   return stable(primaryKeys.map((key) => normalizeValue(row[key], definition.columns.find((column) => column.name === key), target)));
 }
@@ -337,9 +347,12 @@ export async function verifyTradingSnapshotTarget({
           const actual = normalizeValue(row[column.name], column, target);
           const expectedValue = normalizeValue(source[column.name], column, target);
           if (stable(actual) !== stable(expectedValue)) {
-            await onProgress({ phase: 'target-parity-mismatch', target, table: sourceName, column: column.name });
-            // Column names and target are sufficient to diagnose schema/value
-            // representation drift; never log the row or its credentials.
+            await onProgress({
+              phase: 'target-parity-mismatch', target, table: sourceName, column: column.name,
+              actualShape: parityShape(actual), expectedShape: parityShape(expectedValue),
+            });
+            // Column name and value shapes diagnose representation drift;
+            // never log the row or its credentials.
             throw new Error(`Snapshot parity mismatch for ${sourceName}.${column.name} (${target})`);
           }
         }

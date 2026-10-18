@@ -41,6 +41,27 @@ test('target parity rejects content drift for a matching primary key', async () 
   }), /parity mismatch for workspaces/i);
 });
 
+test('target parity mismatch progress reports only safe value shapes', async () => {
+  const progress = [];
+  await assert.rejects(() => verifyTradingSnapshotTarget({
+    target: 'd1',
+    database: { async query() { return { results: [{ id: 'control-1', metadata: 'not-json-sensitive-value' }] }; } },
+    rowsByTable: { trading_runtime_controls: [{ id: 'control-1', metadata: { accessToken: 'never-log-this' } }] },
+    tableManifest: [{ name: 'trading_runtime_controls', primaryKeys: ['id'] }],
+    tableDefinitions: { trading_runtime_controls: { columns: [
+      { name: 'id', type: 'TEXT' }, { name: 'metadata', type: 'TEXT' },
+    ], primaryKeys: ['id'] } },
+    masterKey: 'test-master-key',
+    onProgress: async (event) => progress.push(event),
+  }), /parity mismatch/i);
+  assert.deepEqual(progress, [{
+    phase: 'target-parity-mismatch', target: 'd1', table: 'trading_runtime_controls', column: 'metadata',
+    actualShape: { kind: 'string', length: 24 }, expectedShape: { kind: 'object', keys: 1 },
+  }]);
+  assert.equal(JSON.stringify(progress).includes('never-log-this'), false);
+  assert.equal(JSON.stringify(progress).includes('not-json-sensitive-value'), false);
+});
+
 test('target parity rejects extra target rows and unsupported targets', async () => {
   const input = {
     target: 'd1',
