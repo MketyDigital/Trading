@@ -811,7 +811,7 @@ jobs:
           progress_line="$(node <<'PRINT_SAFE_IMPORT_PROGRESS' || true
           const fs = require('node:fs');
           const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
-          const line = String(payload.logs || '').split(/\\r?\\n/).filter((entry) => entry.startsWith('snapshot_import_progress=')).at(-1);
+          const line = String(payload.logs || '').split(/\r?\n/).filter((entry) => entry.startsWith('snapshot_import_progress=')).at(-1);
           if (!line) process.exit(0);
           try {
             const event = JSON.parse(line.slice('snapshot_import_progress='.length));
