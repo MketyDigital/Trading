@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decryptSecret, encryptSecret } from '../src/security/secret_box.js';
-import { exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { decryptSecret } from '../src/security/secret_box.js';
+import { compareTradingSnapshotTableDrift, exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -57,6 +57,13 @@ test('snapshot request accepts only the pinned production source and a bounded p
     sourceProjectRef: 'vdblajgxrfndjesoyayy',
     pageSize: 5000
   }), /between 1 and 500/);
+});
+
+test('snapshot drift comparison distinguishes inserts from updates and deletions', () => {
+  assert.deepEqual(compareTradingSnapshotTableDrift(
+    { keyedRows: [{ key: ['1'], sha256: 'same' }, { key: ['2'], sha256: 'before' }] },
+    { keyedRows: [{ key: ['1'], sha256: 'same' }, { key: ['2'], sha256: 'after' }, { key: ['3'], sha256: 'new' }] }
+  ), { added: 1, removed: 0, modified: 1 });
 });
 
 test('import projection preserves business state but fences access and broker execution', () => {
@@ -119,14 +126,7 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
     artifact.tableManifest[0].rowCount += 1;
     await rm(outputPath);
     await writeFile(outputPath, JSON.stringify(artifact));
-    await assert.rejects(() => readTradingDataSnapshot({ artifactPath: outputPath, masterKey: 'snapshot-test-key' }), /integrity check failed/);
-
-    const missingTable = Object.fromEntries(artifact.tableManifest.map((table) => [table.name, []]));
-    delete missingTable.operation_journal;
-    artifact.tableManifest[0].rowCount -= 1;
-    artifact.payloadCiphertext = await encryptSecret(JSON.stringify(missingTable), 'snapshot-test-key');
-    await writeFile(outputPath, JSON.stringify(artifact));
-    await assert.rejects(() => readTradingDataSnapshot({ artifactPath: outputPath, masterKey: 'snapshot-test-key' }), /table set is incomplete/);
+    await assert.rejects(() => readTradingDataSnapshot({ artifactPath: outputPath, masterKey: 'snapshot-test-key' }), /metadata integrity/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -145,6 +145,69 @@ test('snapshot export aborts if a table changes between verification passes', as
           if (table !== 'operation_journal' || from !== 0) return { data: [], error: null };
           journalReads += 1;
           return { data: [{ id: 'journal-1', summary: journalReads === 1 ? 'before' : 'after' }], error: null };
+        }
+      };
+    }
+  };
+  try {
+    await assert.rejects(() => exportTradingDataSnapshot({
+      client,
+      masterKey: 'snapshot-test-key',
+      sourceProjectRef: 'vdblajgxrfndjesoyayy',
+      freezeEvidence: 'source-freeze:OPS-20261018',
+      outputPath: join(directory, 'snapshot.json')
+    }), /Source changed during snapshot export at table operation_journal/);
+    await assert.rejects(() => readFile(join(directory, 'snapshot.json')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snapshot export records a bounded append-only operation journal delta', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
+  let journalReads = 0;
+  const client = {
+    from(table) {
+      return {
+        select() { return this; },
+        order() { return this; },
+        async range() {
+          if (table !== 'operation_journal') return { data: [], error: null };
+          journalReads += 1;
+          return { data: journalReads === 1 ? [] : [{ id: 'journal-new', summary: 'append-only' }], error: null };
+        }
+      };
+    }
+  };
+  try {
+    const result = await exportTradingDataSnapshot({
+      client,
+      masterKey: 'snapshot-test-key',
+      sourceProjectRef: 'vdblajgxrfndjesoyayy',
+      freezeEvidence: 'source-freeze:OPS-20261018',
+      outputPath: join(directory, 'snapshot.json')
+    });
+    assert.deepEqual(result.sourceDrift, [{ table: 'operation_journal', added: 1, removed: 0, modified: 0 }]);
+    const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
+    assert.equal(verified.rowsByTable.operation_journal.length, 0);
+    assert.deepEqual(verified.sourceDrift, result.sourceDrift);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snapshot export rejects operation journal drift above the explicit bound', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
+  let journalReads = 0;
+  const client = {
+    from(table) {
+      return {
+        select() { return this; },
+        order() { return this; },
+        async range() {
+          if (table !== 'operation_journal') return { data: [], error: null };
+          journalReads += 1;
+          return { data: journalReads === 1 ? [] : Array.from({ length: 101 }, (_, index) => ({ id: `journal-${index}` })), error: null };
         }
       };
     }

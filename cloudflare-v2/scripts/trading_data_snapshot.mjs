@@ -9,6 +9,7 @@ const REPOSITORY_ROOT = resolve(here, '../..');
 const SNAPSHOT_SCHEMA_PATH = resolve(REPOSITORY_ROOT, 'docs/supabase-trading-schema-snapshot-2026-10-17.json');
 const EXPECTED_PROJECT_REF = 'vdblajgxrfndjesoyayy';
 const FORMAT = 'mkety-trading-data-snapshot-v1';
+const MAX_OPERATION_JOURNAL_APPEND_DRIFT = 100;
 
 function safeProjectRef(value) {
   const ref = String(value || '').trim();
@@ -229,6 +230,31 @@ function tableManifest(rowsByTable, inventory, checksumKey) {
   });
 }
 
+export function compareTradingSnapshotTableDrift(initial, current) {
+  const initialRows = new Map((initial?.keyedRows || []).map((row) => [stable(row.key), row.sha256]));
+  const currentRows = new Map((current?.keyedRows || []).map((row) => [stable(row.key), row.sha256]));
+  let added = 0;
+  let removed = 0;
+  let modified = 0;
+  for (const [key, checksum] of currentRows) {
+    if (!initialRows.has(key)) added += 1;
+    else if (initialRows.get(key) !== checksum) modified += 1;
+  }
+  for (const key of initialRows.keys()) if (!currentRows.has(key)) removed += 1;
+  return { added, removed, modified };
+}
+
+function snapshotMetadata(artifact) {
+  return {
+    format: artifact.format,
+    sourceProjectRef: artifact.sourceProjectRef,
+    freezeEvidence: artifact.freezeEvidence,
+    capturedAt: artifact.capturedAt,
+    tableManifest: artifact.tableManifest,
+    sourceDrift: artifact.sourceDrift
+  };
+}
+
 async function assertOutsideRepository(path) {
   const target = resolve(path);
   const actualParent = await realpath(dirname(target));
@@ -265,11 +291,20 @@ export async function exportTradingDataSnapshot({
 
   // A second full read catches concurrent writes that counts alone would miss.
   // Freeze evidence is still mandatory: two equal passes cannot prove an atomic snapshot without it.
+  const sourceDrift = [];
   for (const table of inventory) {
     const currentRows = await fetchTableRows(client, table, request.pageSize);
     const currentManifest = tableManifest({ [table.name]: currentRows }, [table], masterKey);
     const expected = sourceManifest.find((entry) => entry.name === table.name);
-    if (currentManifest[0].rowCount !== expected.rowCount || currentManifest[0].sha256 !== expected.sha256) {
+    const drift = compareTradingSnapshotTableDrift(expected, currentManifest[0]);
+    if (drift.added || drift.removed || drift.modified) {
+      if (table.name !== 'operation_journal' || drift.removed || drift.modified
+        || drift.added > MAX_OPERATION_JOURNAL_APPEND_DRIFT) {
+        throw new Error(`Source changed during snapshot export at table ${table.name}; discard and restart after refreezing`);
+      }
+      sourceDrift.push({ table: table.name, ...drift });
+    }
+    if (currentManifest[0].rowCount !== expected.rowCount + drift.added - drift.removed) {
       throw new Error(`Source changed during snapshot export at table ${table.name}; discard and restart after refreezing`);
     }
   }
@@ -279,16 +314,19 @@ export async function exportTradingDataSnapshot({
     sourceProjectRef: request.sourceProjectRef,
     freezeEvidence: request.freezeEvidence,
     capturedAt: clock().toISOString(),
+    sourceDrift,
     tableManifest: manifest.map(({ name, primaryKeys, rowCount, sha256 }) => ({ name, primaryKeys, rowCount, sha256 })),
     payloadCiphertext: await encryptSecret(JSON.stringify(prepared), masterKey)
   };
+  artifact.metadataHmac = keyedDigest(snapshotMetadata(artifact), masterKey);
   await writeFile(targetPath, `${JSON.stringify(artifact)}\n`, { mode: 0o600, flag: 'wx' });
   return {
     format: artifact.format,
     outputPath: targetPath,
     sourceProjectRef: artifact.sourceProjectRef,
     capturedAt: artifact.capturedAt,
-    tableManifest: artifact.tableManifest
+    tableManifest: artifact.tableManifest,
+    sourceDrift: artifact.sourceDrift
   };
 }
 
@@ -304,6 +342,13 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
     pageSize: 1
   });
   if (!Array.isArray(artifact.tableManifest)) throw new Error('Trading data snapshot manifest is invalid');
+  if (!Array.isArray(artifact.sourceDrift) || artifact.sourceDrift.some((drift) => (
+    drift?.table !== 'operation_journal' || !Number.isSafeInteger(drift.added) || drift.added < 1
+    || drift.added > MAX_OPERATION_JOURNAL_APPEND_DRIFT || drift.removed !== 0 || drift.modified !== 0
+  ))) throw new Error('Trading data snapshot drift manifest is invalid');
+  if (artifact.metadataHmac !== keyedDigest(snapshotMetadata(artifact), masterKey)) {
+    throw new Error('Trading data snapshot metadata integrity check failed');
+  }
   const rowsByTable = JSON.parse(await decryptSecret(artifact.payloadCiphertext, masterKey));
   const inventory = await loadTableInventory();
   if (!rowsByTable || typeof rowsByTable !== 'object' || Array.isArray(rowsByTable)) {
@@ -334,7 +379,7 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
       }
     }
   }
-  return { sourceProjectRef: artifact.sourceProjectRef, freezeEvidence: artifact.freezeEvidence, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, rowsByTable };
+  return { sourceProjectRef: artifact.sourceProjectRef, freezeEvidence: artifact.freezeEvidence, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, sourceDrift: artifact.sourceDrift, rowsByTable };
 }
 
 async function main() {
@@ -361,6 +406,9 @@ async function main() {
   });
   for (const table of result.tableManifest) {
     process.stdout.write(`${table.name}\t${table.rowCount}\t${table.sha256}\n`);
+  }
+  for (const drift of result.sourceDrift) {
+    process.stdout.write(`source_drift\t${drift.table}\tadded=${drift.added}\n`);
   }
   process.stdout.write(`encrypted_snapshot_written\t${result.capturedAt}\n`);
 }
