@@ -185,7 +185,9 @@ jobs:
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
           const databases = Array.isArray(payload) ? payload : payload.result;
           if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
-          if (!databases.some(({ name }) => name === 'trading-staging')) {\n  throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');\n}
+          if (!databases.some(({ name }) => name === 'trading-staging')) {
+            throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');
+          }
           CHECK_TRADING_D1
           npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
           node --input-type=module <<'D1_CONFIG'
