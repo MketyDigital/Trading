@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret } from '../src/security/secret_box.js';
-import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -225,6 +225,38 @@ test('PostgreSQL snapshot adapter commits successful batches and rolls failed ba
   assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '120s'", statements[0].sql, 'ROLLBACK']);
 });
 
+test('D1 schema introspection reads allowlisted columns and preserves composite primary-key order', async () => {
+  const calls = [];
+  const db = { prepare(sql) { return { async all() {
+    calls.push(sql);
+    return { results: [
+      { name: 'workspace_id', type: 'TEXT', pk: 2 },
+      { name: 'id', type: 'TEXT', pk: 1 },
+      { name: 'metadata', type: 'TEXT', pk: 0 }
+    ] };
+  } }; } };
+  const result = await getD1SnapshotTargetDefinitions(db, [{ name: 'trading_workspace_memberships', primaryKeys: ['id', 'workspace_id'] }]);
+  assert.deepEqual(calls, ['PRAGMA table_info("trading_workspace_memberships")']);
+  assert.deepEqual(result.trading_workspace_memberships.primaryKeys, ['id', 'workspace_id']);
+  assert.deepEqual(result.trading_workspace_memberships.columns.map(({ name }) => name), ['workspace_id', 'id', 'metadata']);
+});
+
+test('PostgreSQL schema introspection maps runtime controls and verifies primary keys', async () => {
+  const calls = [];
+  const client = { async query(sql, values) {
+    calls.push({ sql, values });
+    if (sql.includes('information_schema.columns')) return { rows: [
+      { table_name: 'runtime_controls', column_name: 'control_key', data_type: 'text', ordinal_position: 1 },
+      { table_name: 'runtime_controls', column_name: 'enabled', data_type: 'boolean', ordinal_position: 2 }
+    ] };
+    return { rows: [{ table_name: 'runtime_controls', column_name: 'control_key', ordinal_position: 1 }] };
+  } };
+  const result = await getPostgresSnapshotTargetDefinitions(client, [{ name: 'trading_runtime_controls', primaryKeys: ['control_key'] }]);
+  assert.deepEqual(calls.map((call) => call.values), [['trading_storage', ['runtime_controls']], ['trading_storage', ['runtime_controls']]]);
+  assert.deepEqual(result.runtime_controls.primaryKeys, ['control_key']);
+  assert.deepEqual(result.runtime_controls.columns.map(({ name, type }) => [name, type]), [['control_key', 'text'], ['enabled', 'boolean']]);
+});
+
 test('snapshot artifact is encrypted at rest and includes only keyed checksums in its clear manifest', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   try {
@@ -240,6 +272,8 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
     assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
     assert.equal(artifact.format, 'mkety-trading-data-snapshot-v1');
     assert.equal(artifact.tableManifest.length, 28);
+    assert.ok(artifact.tableManifest.findIndex(({ name }) => name === 'trading_workspace_access')
+      < artifact.tableManifest.findIndex(({ name }) => name === 'trade_accounts'));
     assert.equal('payloadCiphertext' in artifact, true);
     assert.equal(JSON.stringify(artifact).includes('owner@example.test'), false);
     assert.equal(result.tableManifest.reduce((sum, table) => sum + table.rowCount, 0), 0);
