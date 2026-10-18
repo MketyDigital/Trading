@@ -159,6 +159,21 @@ test('snapshot import plan rejects target schema gaps, key drift, malformed name
   assert.throws(() => createTradingSnapshotImportPlan({ target: 'sqlite', snapshot, tableDefinitions: {} }), /target must be d1 or postgres/);
 });
 
+test('snapshot import plan rejects omitted required target columns without defaults', () => {
+  const snapshot = {
+    rowsByTable: { workspaces: [{ id: 'ws-1', name: 'Tenant' }] },
+    tableManifest: [{ name: 'workspaces', primaryKeys: ['id'] }]
+  };
+  assert.throws(() => createTradingSnapshotImportPlan({
+    target: 'd1', snapshot,
+    tableDefinitions: { workspaces: { columns: [
+      { name: 'id', type: 'TEXT', notNull: true },
+      { name: 'name', type: 'TEXT', notNull: true },
+      { name: 'owner_id', type: 'TEXT', notNull: true, hasDefault: false }
+    ], primaryKeys: ['id'] } }
+  }), /required target column workspaces\.owner_id/);
+});
+
 test('snapshot import execution sends bounded atomic batches and stops on the first failure', async () => {
   const batches = [];
   const statements = Array.from({ length: 5 }, (_, index) => ({
@@ -230,9 +245,9 @@ test('D1 schema introspection reads allowlisted columns and preserves composite 
   const db = { prepare(sql) { return { async all() {
     calls.push(sql);
     return { results: [
-      { name: 'workspace_id', type: 'TEXT', pk: 2 },
-      { name: 'id', type: 'TEXT', pk: 1 },
-      { name: 'metadata', type: 'TEXT', pk: 0 }
+      { name: 'workspace_id', type: 'TEXT', pk: 2, notnull: 1, dflt_value: null },
+      { name: 'id', type: 'TEXT', pk: 1, notnull: 1, dflt_value: null },
+      { name: 'metadata', type: 'TEXT', pk: 0, notnull: 0, dflt_value: null }
     ] };
   } }; } };
   const result = await getD1SnapshotTargetDefinitions(db, [{ name: 'trading_workspace_memberships', primaryKeys: ['id', 'workspace_id'] }]);
@@ -246,15 +261,17 @@ test('PostgreSQL schema introspection maps runtime controls and verifies primary
   const client = { async query(sql, values) {
     calls.push({ sql, values });
     if (sql.includes('information_schema.columns')) return { rows: [
-      { table_name: 'runtime_controls', column_name: 'control_key', data_type: 'text', ordinal_position: 1 },
-      { table_name: 'runtime_controls', column_name: 'enabled', data_type: 'boolean', ordinal_position: 2 }
+      { table_name: 'runtime_controls', column_name: 'control_key', data_type: 'text', is_nullable: 'NO', column_default: null, ordinal_position: 1 },
+      { table_name: 'runtime_controls', column_name: 'enabled', data_type: 'boolean', is_nullable: 'NO', column_default: 'false', ordinal_position: 2 }
     ] };
     return { rows: [{ table_name: 'runtime_controls', column_name: 'control_key', ordinal_position: 1 }] };
   } };
   const result = await getPostgresSnapshotTargetDefinitions(client, [{ name: 'trading_runtime_controls', primaryKeys: ['control_key'] }]);
   assert.deepEqual(calls.map((call) => call.values), [['trading_storage', ['runtime_controls']], ['trading_storage', ['runtime_controls']]]);
   assert.deepEqual(result.runtime_controls.primaryKeys, ['control_key']);
-  assert.deepEqual(result.runtime_controls.columns.map(({ name, type }) => [name, type]), [['control_key', 'text'], ['enabled', 'boolean']]);
+  assert.deepEqual(result.runtime_controls.columns.map(({ name, type, nullable, hasDefault }) => [name, type, nullable, hasDefault]), [
+    ['control_key', 'text', false, false], ['enabled', 'boolean', false, true]
+  ]);
 });
 
 test('snapshot artifact is encrypted at rest and includes only keyed checksums in its clear manifest', async () => {
