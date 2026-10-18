@@ -32,12 +32,8 @@ function isDue(row, nowMs) {
   return age >= MIN_RETRY_AGE_MS;
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 export async function defaultCandidateLoader({ supabase, nowMs }) {

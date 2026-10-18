@@ -31,12 +31,8 @@ function authorizeMketyAdmin(request, env = {}) {
   return { ok: true };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('SUPABASE_SERVICE_NOT_CONFIGURED');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function boundedLimit(value) {

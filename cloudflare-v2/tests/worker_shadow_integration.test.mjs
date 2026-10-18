@@ -126,9 +126,10 @@ test('V1 health bypasses legacy Worker and remains readable while Trading access
     legacy: { fetch: async () => { legacyCalls += 1; return new Response('legacy'); } },
   });
   const env = {
-    SUPABASE_URL: 'https://staging-secret-project.supabase.co',
-    SUPABASE_SERVICE_ROLE: 'service-secret-value',
     TRADING_MASTER_KEY: 'master-secret-value',
+    TRADING_STORAGE_RUNTIME_ENABLED: 'true',
+    TRADING_PG: { connectionString: 'postgres://user:password@db.example.test:5432/trading' },
+    DB: { prepare: () => ({ bind() { return this; }, first: async () => null, run: async () => ({ success: true }) }) },
     ZITADEL_ISSUER: 'https://auth.example.com',
     ZITADEL_AUDIENCE: 'trading-api',
     ZITADEL_JWKS_URL: 'https://auth.example.com/oauth/v2/keys',

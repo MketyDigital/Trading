@@ -117,9 +117,6 @@ export class SupabaseTradeStatePersistence {
 }
 
 export async function createSupabaseTradeStatePersistence(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return new SupabaseTradeStatePersistence(createClient(url, key));
+  void env;
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }

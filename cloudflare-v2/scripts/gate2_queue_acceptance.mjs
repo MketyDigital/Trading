@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createClient } from '@supabase/supabase-js';
+import { createPostgrestMigrationClient } from './postgrest_migration_reader.mjs';
 import { encryptSecret } from '../src/security/secret_box.js';
 import { buildSignedV1Request } from '../src/testing/v1_acceptance_harness.js';
 
@@ -20,9 +20,7 @@ const sourceSecret = required('TRADING_V1_SOURCE_SECRET');
 const internalToken = required('INTERNAL_SOURCE_TRANSPORT_TOKEN');
 const workerBaseUrl = required('TRADING_V1_WORKER_BASE_URL').replace(/\/$/, '');
 
-const supabase = createClient(supabaseUrl, serviceRole, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+const supabase = createPostgrestMigrationClient({ url: supabaseUrl, serviceRole });
 
 const workspaceId = randomUUID();
 const sourceId = randomUUID();

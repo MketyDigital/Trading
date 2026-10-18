@@ -8,7 +8,7 @@ This repository is safe to change from public to private without changing the de
 - Production deployment uses `actions/checkout` inside GitHub Actions. Checkout is authenticated with GitHub's workflow token, so it continues to work when the repository is private.
 - Repository searches found no runtime dependency on `raw.githubusercontent.com`, GitHub Pages (`github.io`), or Git-based npm dependencies from this repository.
 - GitHub Pages is not enabled for this repository.
-- The Node package manifests use normal registry packages (`@mtcute/web`, `@supabase/supabase-js`, and `wrangler`) rather than packages fetched from this repository's public URL.
+- The Node package manifests use normal registry packages (`@mtcute/web` and `wrangler`) rather than packages fetched from this repository's public URL. The Supabase JavaScript SDK has been removed from both manifests.
 - Production secrets remain GitHub Actions/environment secrets and are not stored in the repository.
 
 Changing repository visibility therefore does not undeploy, restart, or otherwise disconnect the already deployed Cloudflare Worker.

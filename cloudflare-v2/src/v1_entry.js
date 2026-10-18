@@ -104,18 +104,9 @@ function normalizeEnterprisePortalHtml(html) {
   return String(html).replace('placeholder="gpt-5-mini"', 'placeholder="Enter the current provider model ID"');
 }
 
-async function publicSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) return null;
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
-}
-
 async function resolveInitialBranding(request, env, publicBrandingHandler) {
   try {
-    const supabase = await publicSupabase(env);
-    const response = await publicBrandingHandler(request, env, { supabase });
+    const response = await publicBrandingHandler(request, env, {});
     if (!response?.ok) return null;
     const payload = await response.json();
     return payload?.ok && payload?.branding ? payload : null;
@@ -230,13 +221,11 @@ export function createTradingV1Entrypoint({
       if (url.pathname === '/api/v1/health') return healthResponse(request, env);
       if (url.pathname === '/api/v1/custom-hostname/probe') {
         if (usePersistenceRuntime) return withTradingPersistenceRuntime(persistenceRuntimeFactory, env, (runtime) => customHostnameRouteProofHandler(request, env, { hostnameStore: runtime.hostnames }), ctx);
-        const supabase = await publicSupabase(env);
-        return customHostnameRouteProofHandler(request, env, { supabase });
+        return customHostnameRouteProofHandler(request, env, {});
       }
       if (url.pathname === '/api/v1/public/branding') {
         if (usePersistenceRuntime) return withTradingPersistenceRuntime(persistenceRuntimeFactory, env, (runtime) => publicBrandingHandler(request, env, { persistenceRuntime: runtime }), ctx);
-        const supabase = await publicSupabase(env);
-        return publicBrandingHandler(request, env, { supabase });
+        return publicBrandingHandler(request, env, {});
       }
       if (url.pathname === '/api/v1/internal/source-event') return internalSourceHandler(request, env, { ctx });
       if (url.pathname.startsWith('/api/v1/internal/')) return notFoundResponse();

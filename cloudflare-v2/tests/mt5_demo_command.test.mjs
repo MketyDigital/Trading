@@ -6,22 +6,24 @@ import {
 } from '../src/testing/mt5_demo_command.js';
 import { runMT5DemoCommand } from '../src/testing/mt5_demo_runner.js';
 
-test('MT5 demo command reports required server-side config names only', () => {
+test('MT5 demo command reports required Trading storage config names only', () => {
   const result = validateMT5DemoCommandEnvironment({
-    SUPABASE_URL: 'https://secret-project.supabase.co',
-    SUPABASE_SERVICE_ROLE_KEY: 'service-secret-never-print',
+    TRADING_PG_STAGING_DATABASE_URL: 'postgres://secret',
+    TRADING_MASTER_KEY: 'master-secret',
     TRADING_WORKSPACE_ID: '',
   });
 
   assert.equal(result.ok, false);
-  assert.deepEqual(result.missing, ['TRADING_WORKSPACE_ID']);
-  assert.doesNotMatch(JSON.stringify(result), /secret-project|service-secret-never-print/i);
+  assert.deepEqual(result.missing, ['TRADING_STORAGE_AUTHORITY=postgres', 'TRADING_WORKSPACE_ID', 'TRADING_STORAGE_AUTHORITY_EPOCH']);
+  assert.doesNotMatch(JSON.stringify(result), /postgres:\/\/secret|master-secret/i);
 });
 
-test('MT5 demo command accepts the normalized staging SUPABASE_SERVICE_ROLE alias', () => {
+test('MT5 demo command accepts the existing Trading PostgreSQL staging config', () => {
   const result = validateMT5DemoCommandEnvironment({
-    SUPABASE_URL: 'https://project.supabase.co',
-    SUPABASE_SERVICE_ROLE: 'service-secret',
+    TRADING_STORAGE_AUTHORITY: 'postgres',
+    TRADING_STORAGE_AUTHORITY_EPOCH: '1',
+    TRADING_PG_STAGING_DATABASE_URL: 'postgres://secret',
+    TRADING_MASTER_KEY: 'master-secret',
     TRADING_WORKSPACE_ID: 'workspace-123',
   });
 
@@ -29,46 +31,48 @@ test('MT5 demo command accepts the normalized staging SUPABASE_SERVICE_ROLE alia
   assert.deepEqual(result.missing, []);
 });
 
-test('dependency builder creates persistent MT5 demo delivery store scoped to workspace/account', () => {
+test('dependency builder creates PostgreSQL MT5 demo delivery store scoped to workspace/account', async () => {
   const calls = [];
-  const fakeClient = { from() {} };
-  const deps = buildMT5DemoCommandDependencies({
+  const fakeStore = { find() {} };
+  const deps = await buildMT5DemoCommandDependencies({
     env: {
-      SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE: 'service-secret',
+      TRADING_STORAGE_AUTHORITY: 'postgres',
+      TRADING_STORAGE_AUTHORITY_EPOCH: '1',
+      TRADING_PG_STAGING_DATABASE_URL: 'postgres://secret',
+      TRADING_MASTER_KEY: 'master-secret',
       TRADING_WORKSPACE_ID: 'workspace-123',
       MT5_ACCOUNT_ID: '1001',
     },
-    createClientFn: (url, key, options) => {
-      calls.push({ url, key, options });
-      return fakeClient;
+    runtimeFactory: async (env) => {
+      calls.push(env);
+      return {
+        delivery: (options) => { calls.push(options); return fakeStore; },
+        close() { calls.push('closed'); },
+      };
     },
   });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://project.supabase.co');
-  assert.equal(calls[0].key, 'service-secret');
-  assert.equal(calls[0].options.auth.persistSession, false);
-  assert.equal(deps.deliveryStore.workspaceId, 'workspace-123');
-  assert.equal(deps.deliveryStore.destinationType, 'mt5');
-  assert.equal(deps.deliveryStore.destinationRef, 'demo:1001');
+  assert.equal(calls[0].TRADING_STORAGE_AUTHORITY, 'postgres');
+  assert.deepEqual(calls[0].TRADING_PG, { connectionString: 'postgres://secret' });
+  assert.deepEqual(calls[1], { workspaceId: 'workspace-123', destinationType: 'mt5', destinationRef: 'demo:1001' });
+  assert.equal(deps.deliveryStore, fakeStore);
+  await deps.close();
+  assert.equal(calls[2], 'closed');
 });
 
-test('dependency builder fails before client creation when command environment is incomplete', () => {
+test('dependency builder fails before runtime creation when command environment is incomplete', async () => {
   let calls = 0;
-  assert.throws(() => buildMT5DemoCommandDependencies({
+  await assert.rejects(buildMT5DemoCommandDependencies({
     env: {
-      SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE: 'service-secret',
       TRADING_WORKSPACE_ID: '',
       MT5_ACCOUNT_ID: '1001',
     },
-    createClientFn: () => { calls += 1; return { from() {} }; },
+    runtimeFactory: () => { calls += 1; return {}; },
   }), /TRADING_WORKSPACE_ID/);
   assert.equal(calls, 0);
 });
 
-test('MT5 probe mode does not require Supabase delivery-store configuration', async () => {
+test('MT5 probe mode does not require database delivery-store configuration', async () => {
   const logs = [];
   const result = await runMT5DemoCommand({
     env: {

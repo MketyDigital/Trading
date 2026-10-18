@@ -87,7 +87,15 @@ The entrypoint `src/v1_runtime_entry.js` creates Supabase for the V1 event/admin
 - Legacy scheduled code: `src/index.js` and `src/vip/vip_manager.js` include data paths outside the main V1 repository seam. `wrangler.toml` currently runs both `*/15 * * * *` and `* * * * *` cron schedules.
 - Acceptance/diagnostic commands in `src/testing/` use Supabase directly. They may remain only if explicitly classified as isolated tooling with no Worker production import path and with documented credentials.
 
-Environment-variable scan still finds `SUPABASE_URL` in the runtime entry, legacy entry, webhook/admin/connector endpoints, recovery workers, membership/access paths, and readiness/config helpers. `@supabase/supabase-js` remains a production package dependency.
+At the time this inventory was captured, `SUPABASE_URL` was required by the listed runtime callsites and `@supabase/supabase-js` was a production package dependency.
+
+## 2026-10-18 removal checkpoint
+
+- Removed `@supabase/supabase-js` from the root and Worker package manifests; a clean Worker `npm ci` succeeds without that SDK.
+- Removed SDK construction and `SUPABASE_*` configuration reads from `cloudflare-v2/src`. The historical Worker module now retires the legacy database API and delegates no Trading data path to it. The active Wrangler main remains `src/v1_runtime_entry.js`, which fails closed unless the selected Trading storage runtime can initialize.
+- Migrated demo lifecycle persistence to the Trading PostgreSQL repository. MTProto recovery now requires the selected Trading source repository. Local subscription authorization fails closed if the Trading access-code repository is missing.
+- `scripts/postgrest_migration_reader.mjs` remains scoped to source export/acceptance/recovery tooling during migration. This is temporary source-data tooling and does not add a production Worker package dependency.
+- The existing production Worker remains on its current authority until export/import, row and checksum parity, open-order reconciliation, runtime conformance, and rollback gates pass. This checkpoint does not claim a completed production cutover.
 
 ## Migration classification required
 

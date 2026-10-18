@@ -48,12 +48,8 @@ async function readBody(request) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   } catch { return null; }
 }
-async function defaultSupabaseFactory(env = {}) {
-  const url = text(env.SUPABASE_URL);
-  const key = text(env.SUPABASE_SERVICE_ROLE ?? env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SERVICE_KEY);
-  if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 async function sourceById(supabase, workspaceId, sourceId, persistenceRuntime = null) {
   if (persistenceRuntime) return persistenceRuntime.sourceConnections.getSourceForAdmin(workspaceId, sourceId);

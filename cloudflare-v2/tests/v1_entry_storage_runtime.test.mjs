@@ -15,12 +15,11 @@ test('storage mode injects the selected runtime into admin and branding handlers
   assert.match(entrypoint, /try \{ await runtime\?\.close\?\.\(\); \} catch/);
 });
 
-test('storage mode uses hostname repositories before legacy Supabase construction', () => {
+test('storage mode uses Trading repositories and has no Supabase client fallback', () => {
   const storageBranch = entrypoint.indexOf("if (url.pathname === '/api/v1/public/branding')");
   assert.notEqual(storageBranch, -1);
-  const legacyBranch = entrypoint.indexOf('const supabase = await publicSupabase(env);', storageBranch);
-  assert.notEqual(legacyBranch, -1);
-  const branchText = entrypoint.slice(storageBranch, legacyBranch);
+  const branchText = entrypoint.slice(storageBranch, entrypoint.indexOf("if (url.pathname === '/api/v1/internal/source-event')", storageBranch));
   assert.match(branchText, /if \(usePersistenceRuntime\) return withTradingPersistenceRuntime/);
   assert.match(branchText, /publicBrandingHandler\(request, env, \{ persistenceRuntime: runtime \}\)/);
+  assert.doesNotMatch(entrypoint, /publicSupabase|createClient\(|SUPABASE_/);
 });

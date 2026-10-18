@@ -5,8 +5,9 @@ import { createTradingV1Entrypoint } from '../src/v1_entry.js';
 
 function coreEnv(overrides = {}) {
   return {
-    SUPABASE_URL: 'https://staging.example.invalid',
-    SUPABASE_SERVICE_ROLE: 'service-role-secret',
+    TRADING_STORAGE_RUNTIME_ENABLED: 'true',
+    DB: { prepare() {} },
+    TRADING_PG: { connectionString: 'postgres://secret' },
     TRADING_MASTER_KEY: 'master-key-secret',
     ZITADEL_ISSUER: 'https://auth.example.invalid',
     ZITADEL_AUDIENCE: 'trading-api',

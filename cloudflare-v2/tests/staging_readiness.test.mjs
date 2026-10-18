@@ -4,8 +4,9 @@ import { validateStagingReadiness } from '../src/config/staging_readiness.js';
 
 function completeCore(overrides = {}) {
   return {
-    SUPABASE_URL: 'https://staging.supabase.co',
-    SUPABASE_SERVICE_ROLE: 'secret-service-key',
+    TRADING_STORAGE_RUNTIME_ENABLED: 'true',
+    DB: { prepare() {} },
+    TRADING_PG: { connectionString: 'postgres://secret' },
     TRADING_MASTER_KEY: 'secret-master-key',
     TRADING_ACCESS_ENABLED: 'false',
     ...overrides,
@@ -24,16 +25,14 @@ function completeAccess(overrides = {}) {
 
 test('reports missing core staging configuration names without exposing values', () => {
   const result = validateStagingReadiness({
-    SUPABASE_URL: 'https://staging.supabase.co',
     TRADING_MASTER_KEY: 'do-not-leak-this',
     TRADING_ACCESS_ENABLED: 'false',
   });
 
   assert.equal(result.ready, false);
-  assert.deepEqual(result.missing, ['SUPABASE_SERVICE_ROLE']);
+  assert.deepEqual(result.missing, ['TRADING_STORAGE_RUNTIME_ENABLED', 'D1_DB_BINDING', 'TRADING_PG_HYPERDRIVE_BINDING']);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('do-not-leak-this'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(result, 'SUPABASE_URL'), false);
 });
 
 test('core staging is ready without identity-provider config while trading access is disabled', () => {
@@ -69,17 +68,14 @@ test('trading access is ready when Mkety access-gate configuration is complete',
   assert.equal(result.features.accessEnabled, true);
 });
 
-test('accepts supported Supabase service-role aliases but reports canonical missing name', () => {
-  const byAlias = validateStagingReadiness(completeCore({
-    SUPABASE_SERVICE_ROLE: undefined,
-    SUPABASE_SERVICE_ROLE_KEY: 'alias-secret',
-  }));
-  assert.equal(byAlias.ready, true);
-
-  const missing = validateStagingReadiness(completeCore({
-    SUPABASE_SERVICE_ROLE: undefined,
-  }));
-  assert.equal(missing.missing.includes('SUPABASE_SERVICE_ROLE'), true);
+test('Supabase credentials cannot satisfy Trading storage readiness', () => {
+  const result = validateStagingReadiness({
+    SUPABASE_URL: 'https://staging.supabase.co',
+    SUPABASE_SERVICE_ROLE: 'legacy-secret',
+    TRADING_MASTER_KEY: 'master-key',
+  });
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.missing, ['TRADING_STORAGE_RUNTIME_ENABLED', 'D1_DB_BINDING', 'TRADING_PG_HYPERDRIVE_BINDING']);
 });
 
 test('simulation readiness adds Trade State and explicit staging market-context requirements', () => {

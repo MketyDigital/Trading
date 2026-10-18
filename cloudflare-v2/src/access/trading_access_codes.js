@@ -317,36 +317,7 @@ async function validateLocalSubscription(auth, env = {}, { now = new Date(), acc
   // A storage-runtime request must fail closed when its subscription repository
   // is missing; it must never silently bypass expiration/revocation checks.
   if (workspaceAccess) return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) return auth;
-
-  try {
-    const { createClient } = await import('@supabase/supabase-js');
-    const supabase = createClient(url, key);
-    const { data: code, error } = await supabase
-      .from('trading_access_codes')
-      .select('id,workspace_id,product,status,expires_at')
-      .eq('id', auth.accessCodeId)
-      .maybeSingle();
-    if (error) return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
-    if (!code?.id || String(code.workspace_id || '') !== String(auth.workspaceId) || String(code.product || '') !== 'trading') {
-      return { ok: false, reason: 'ACCESS_SUBSCRIPTION_INVALID' };
-    }
-    if (String(code.status || '') !== 'active') {
-      return { ok: false, reason: 'ACCESS_SUBSCRIPTION_REVOKED' };
-    }
-    if (code.expires_at && new Date(code.expires_at).getTime() <= new Date(now).getTime()) {
-      await supabase
-        .from('trading_workspace_access')
-        .update({ trading_access_enabled: false, updated_at: new Date(now).toISOString() })
-        .eq('id', auth.workspaceId);
-      return { ok: false, reason: 'ACCESS_SUBSCRIPTION_EXPIRED' };
-    }
-    return auth;
-  } catch {
-    return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
-  }
+  return { ok: false, reason: 'ACCESS_SUBSCRIPTION_LOOKUP_FAILED' };
 }
 
 export async function authenticateLocalTradingAccessBearer(request, env = {}, options = {}) {

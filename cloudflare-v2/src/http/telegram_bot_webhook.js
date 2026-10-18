@@ -124,12 +124,8 @@ function nativeEventFromUpdate(update, extracted, nowMs) {
   };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = text(env?.SUPABASE_URL);
-  const key = text(env?.SUPABASE_SERVICE_ROLE ?? env?.SUPABASE_SERVICE_ROLE_KEY ?? env?.SUPABASE_SERVICE_KEY);
-  if (!url || !key) throw new Error('Trading database is unavailable');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function resolveDefaultSourceStore(env, supabaseFactory) {

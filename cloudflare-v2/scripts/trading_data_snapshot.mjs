@@ -207,6 +207,67 @@ async function fetchTableRows(client, table, pageSize) {
   }
 }
 
+/** Minimal read-only PostgREST reader for one allowlisted migration export. */
+export function createTradingSnapshotRestClient({ url, serviceRole, fetchFn = fetch } = {}) {
+  const endpoint = new URL(String(url || ''));
+  if (endpoint.protocol !== 'https:' || endpoint.hostname.toLowerCase() !== `${EXPECTED_PROJECT_REF}.supabase.co`) {
+    throw new Error('Snapshot source URL does not match the pinned project');
+  }
+  if (!String(serviceRole || '').trim() || typeof fetchFn !== 'function') {
+    throw new Error('Snapshot source read credentials are incomplete');
+  }
+  return {
+    from(tableName) {
+      const table = String(tableName || '');
+      if (!/^[a-z][a-z0-9_]{0,62}$/.test(table)) throw new Error('Snapshot table name is invalid');
+      const order = [];
+      let rangeStart = 0;
+      let rangeEnd = 0;
+      const query = {
+        select(columns) {
+          if (columns !== '*') throw new Error('Snapshot export only supports reviewed whole-table reads');
+          return query;
+        },
+        order(key, options = {}) {
+          const column = String(key || '');
+          if (!/^[a-z][a-z0-9_]{0,62}$/.test(column) || options.ascending === false) {
+            throw new Error('Snapshot ordering must use reviewed ascending primary keys');
+          }
+          order.push(`${column}.asc`);
+          return query;
+        },
+        async range(from, to) {
+          if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to - from > 499) {
+            throw new Error('Snapshot range is invalid');
+          }
+          rangeStart = from;
+          rangeEnd = to;
+          const requestUrl = new URL(`/rest/v1/${encodeURIComponent(table)}`, endpoint);
+          requestUrl.searchParams.set('select', '*');
+          if (order.length) requestUrl.searchParams.set('order', order.join(','));
+          const response = await fetchFn(requestUrl, {
+            method: 'GET',
+            headers: {
+              apikey: String(serviceRole),
+              authorization: `Bearer ${serviceRole}`,
+              accept: 'application/json',
+              'range-unit': 'items',
+              range: `${rangeStart}-${rangeEnd}`,
+            },
+          });
+          let body;
+          try { body = await response.json(); } catch { body = null; }
+          if (!response.ok) {
+            return { data: null, error: { code: body?.code || `HTTP_${response.status}` } };
+          }
+          return { data: body, error: null };
+        },
+      };
+      return query;
+    },
+  };
+}
+
 function tableManifest(rowsByTable, inventory, checksumKey) {
   return inventory.map(({ name, primaryKeys }) => {
     const rows = [...(rowsByTable[name] || [])].sort((left, right) => {
@@ -394,8 +455,7 @@ async function main() {
   if (configuredHost !== `${EXPECTED_PROJECT_REF}.supabase.co`) {
     throw new Error('SUPABASE_URL does not match the pinned Trading source project');
   }
-  const { createClient } = await import('@supabase/supabase-js');
-  const client = createClient(url, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
+  const client = createTradingSnapshotRestClient({ url, serviceRole });
   const result = await exportTradingDataSnapshot({
     client,
     masterKey,

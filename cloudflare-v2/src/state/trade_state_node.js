@@ -1,5 +1,4 @@
 import { TradeStateStore, TradeStateCoordinator } from './trade_state_store.js';
-import { createSupabaseTradeStatePersistence } from '../persistence/supabase_trade_state_persistence.js';
 import { resolveTradingStorageAuthority } from '../persistence/trading_storage_authority.js';
 import { createPostgresTradingDatabase } from '../persistence/postgres_database.js';
 import { createTradingTradeStatePersistence } from '../persistence/trading_trade_state_repository.js';
@@ -14,10 +13,6 @@ async function body(request) {
 
 function workspaceHeader(request) {
   return String(request.headers.get('x-mkety-workspace-id') || '').trim();
-}
-
-function hasSupabaseCredentials(env = {}) {
-  return Boolean(env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY));
 }
 
 function storageRuntimeEnabled(env = {}) {
@@ -60,9 +55,7 @@ export class TradeStateNode {
   constructor(state, env = {}) {
     this.state = state;
     this.env = env;
-    const persistencePromise = storageRuntimeEnabled(env)
-      ? Promise.resolve(null)
-      : (hasSupabaseCredentials(env) ? createSupabaseTradeStatePersistence(env) : Promise.resolve(null));
+    const persistencePromise = Promise.resolve(null);
     this.persistence = lazyPersistence(persistencePromise, env);
     this.store = new TradeStateStore(state.storage, { persistence: this.persistence });
     this.coordinator = new TradeStateCoordinator(this.store, {

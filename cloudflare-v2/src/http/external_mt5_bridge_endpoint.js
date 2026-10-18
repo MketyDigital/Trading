@@ -49,12 +49,8 @@ function normalizeRuntimeBridgeUrl(value) {
   return url.toString().replace(/\/$/, '');
 }
 
-async function defaultSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('BRIDGE_DATABASE_UNAVAILABLE');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabase() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function readBridgeMetadata({ baseUrl, target, secret, fetchImpl, timestampMs }) {

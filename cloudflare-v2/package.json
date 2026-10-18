@@ -21,7 +21,6 @@
   },
   "dependencies": {
     "@mtcute/web": "^0.31.0",
-    "@supabase/supabase-js": "^2.48.1",
     "pg": "8.16.3"
   },
   "devDependencies": {

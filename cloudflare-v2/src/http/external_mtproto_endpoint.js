@@ -139,15 +139,8 @@ function normalizeExternalMtprotoBody(rawBody) {
   });
 }
 
-async function defaultResolveActiveSource(sourceId, env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  const masterKey = env.TRADING_MASTER_KEY;
-  if (!url || !key || !masterKey) throw new Error('SOURCE_RUNTIME_UNAVAILABLE');
-  const { createClient } = await import('@supabase/supabase-js');
-  const supabase = createClient(url, key);
-  const stores = createSupabaseIngestStores(supabase, { masterKey });
-  return stores.sourceStore.getActiveSource(sourceId);
+async function defaultResolveActiveSource() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 export async function handleExternalMtprotoEndpointRequest(request, env = {}, {

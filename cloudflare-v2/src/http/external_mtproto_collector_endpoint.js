@@ -116,12 +116,8 @@ async function sha256Hex(value) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function defaultSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('COLLECTOR_RUNTIME_UNAVAILABLE');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabase() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function defaultResolveCollector(token, env = {}) {
