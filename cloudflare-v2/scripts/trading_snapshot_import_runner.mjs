@@ -138,6 +138,7 @@ export async function verifyTradingSnapshotTarget({
   tableManifest,
   tableDefinitions,
   masterKey,
+  onProgress = async () => {},
 } = {}) {
   if (!['d1', 'postgres'].includes(target)) throw new Error('Snapshot target must be d1 or postgres');
   if (!database?.query || !rowsByTable || !Array.isArray(tableManifest) || !tableDefinitions) {
@@ -178,6 +179,7 @@ export async function verifyTradingSnapshotTarget({
       expectedByKey.set(identity, row);
     }
     const seen = new Set();
+    let pageNumber = 0;
     for (let offset = 0; ; offset += PAGE_SIZE) {
       const rows = await readPage(database, target, tableName, columns, manifest.primaryKeys, offset);
       for (const row of rows) {
@@ -195,11 +197,14 @@ export async function verifyTradingSnapshotTarget({
         if (stable(projected) !== stable(expectedProjected)) throw new Error(`Snapshot parity mismatch for ${sourceName}`);
         seen.add(identity);
       }
+      pageNumber += 1;
+      if (pageNumber % 20 === 0) await onProgress({ phase: 'target-parity-page', target, table: sourceName, pages: pageNumber, rows: seen.size });
       if (rows.length < PAGE_SIZE) break;
     }
     if (seen.size !== expected.length) throw new Error(`Snapshot parity mismatch for ${sourceName}`);
     verifiedRows[sourceName] = seen.size;
     totalRows += seen.size;
+    await onProgress({ phase: 'target-parity-table', target, table: sourceName, rows: seen.size, totalRows });
   }
   return { target, tables: tableManifest.length, rows: totalRows, verifiedRows };
 }
@@ -235,26 +240,30 @@ export async function importTradingSnapshotToTargets({
   const pgProjection = prepareTradingSnapshotForImport(snapshot.rowsByTable, { target: 'postgres' });
   const pgPlan = createTradingSnapshotImportPlan({ snapshot: { ...snapshot, rowsByTable: pgProjection.rowsByTable }, target: 'postgres', tableDefinitions: pgDefinitions });
 
+  await onProgress({ phase: 'target-import-start', target: 'd1', rows: d1Plan.rowCount });
   const d1Import = await applyTradingSnapshotImportPlanResumable(d1Plan, {
     executeBatchAtomically: (statements) => applyTradingSnapshotPlanToD1(d1Database, statements),
     checkpointPath: checkpointPaths.d1,
     masterKey,
     batchSize: Math.min(batchSize, 100),
-    onBatchCommitted: onProgress,
+    onBatchCommitted: (progress) => onProgress({ phase: 'target-import-batch', ...progress }),
   });
+  await onProgress({ phase: 'target-import-start', target: 'postgres', rows: pgPlan.rowCount });
   const pgImport = await applyTradingSnapshotImportPlanResumable(pgPlan, {
     executeBatchAtomically: (statements) => applyTradingSnapshotPlanToPostgres(postgresClient, statements),
     checkpointPath: checkpointPaths.postgres,
     masterKey,
     batchSize,
-    onBatchCommitted: onProgress,
+    onBatchCommitted: (progress) => onProgress({ phase: 'target-import-batch', ...progress }),
   });
+  await onProgress({ phase: 'target-parity-start', target: 'd1' });
+  await onProgress({ phase: 'target-parity-start', target: 'postgres' });
 
   const [d1Parity, postgresParity] = await Promise.all([
     verifyTradingSnapshotTarget({ target: 'd1', database: d1Database, rowsByTable: fenced.rowsByTable,
-      tableManifest: snapshot.tableManifest, tableDefinitions: d1Definitions, masterKey }),
+      tableManifest: snapshot.tableManifest, tableDefinitions: d1Definitions, masterKey, onProgress }),
     verifyTradingSnapshotTarget({ target: 'postgres', database: postgresClient, rowsByTable: pgProjection.rowsByTable,
-      tableManifest: snapshot.tableManifest, tableDefinitions: pgDefinitions, masterKey }),
+      tableManifest: snapshot.tableManifest, tableDefinitions: pgDefinitions, masterKey, onProgress }),
   ]);
   const authority = await activatePopulatedTradingD1Authority({
     database: d1Database,

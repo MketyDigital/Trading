@@ -154,7 +154,7 @@ jobs:
     concurrency:
       group: trading-coolify-postgres-staging
       cancel-in-progress: false
-    timeout-minutes: 35
+    timeout-minutes: 70
     permissions:
       contents: read
     defaults:
@@ -774,7 +774,7 @@ jobs:
           } catch {}
           let logs = '';
           try { logs = String(JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8')).logs || ''); } catch {}
-          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|PostgreSQL schema migration failed during|must be read-only|TRADING_(?:PG_(?:PROBE|MIGRATION)_OK|SNAPSHOT_IMPORT_OK|PROBE_FAILED)=/.test(line));
+          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|PostgreSQL schema migration failed during|must be read-only|TRADING_(?:PG_(?:PROBE|MIGRATION)_OK|SNAPSHOT_IMPORT_OK|PROBE_FAILED)=|^snapshot_import_progress=/.test(line));
           for (const line of safe.slice(-5)) console.error(redact(line));
           SAFE_PROBE_FAILURE
           }
@@ -804,8 +804,30 @@ jobs:
           fi
 
           probe_done='no'
-          for i in $(seq 1 300); do
+          last_progress=''
+          probe_deadline=$((SECONDS + 45 * 60))
+          while [ "$SECONDS" -lt "$probe_deadline" ]; do
           if fetch_logs; then
+          progress_line="$(node <<'PRINT_SAFE_IMPORT_PROGRESS' || true
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
+          const line = String(payload.logs || '').split(/\\r?\\n/).filter((entry) => entry.startsWith('snapshot_import_progress=')).at(-1);
+          if (!line) process.exit(0);
+          try {
+            const event = JSON.parse(line.slice('snapshot_import_progress='.length));
+            const safe = {};
+            for (const key of ['phase', 'pass', 'target', 'table', 'pages', 'rows', 'totalRows', 'batchNumber', 'appliedRows']) {
+              if (typeof event[key] === 'string' && /^[a-z][a-z0-9_-]{0,62}$/.test(event[key])) safe[key] = event[key];
+              else if (Number.isSafeInteger(event[key]) && event[key] >= 0) safe[key] = event[key];
+            }
+            if (safe.phase) process.stdout.write('snapshot_import_progress=' + JSON.stringify(safe));
+          } catch {}
+          PRINT_SAFE_IMPORT_PROGRESS
+          )"
+          if [ -n "$progress_line" ] && [ "$progress_line" != "$last_progress" ]; then
+            echo "$progress_line"
+            last_progress="$progress_line"
+          fi
           if APPLY_MODE="$APPLY_MODE" node <<'VERIFY_SAFE_PROBE_RESULT'
           const fs = require('node:fs');
           const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
@@ -876,7 +898,7 @@ jobs:
               fi
             fi
           fi
-            sleep 3
+            sleep 10
           done
           if [ "$probe_done" != 'yes' ]; then
             print_safe_failure

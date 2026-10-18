@@ -49,6 +49,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       sourceProjectRef: SOURCE_PROJECT_REF,
       outputPath: snapshotPath,
       pageSize: 200,
+      onProgress: (event) => process.stdout.write(`snapshot_import_progress=${JSON.stringify(event)}\n`),
     });
     const d1 = createCloudflareD1SnapshotDatabase({
       apiToken: required('CLOUDFLARE_API_TOKEN', env),
@@ -88,9 +89,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       masterKey,
       checkpointPaths,
       batchSize: 50,
-      onProgress: ({ target, appliedRows, batchNumber }) => {
-        process.stdout.write(`snapshot_import_progress target=${target} rows=${appliedRows} batches=${batchNumber}\n`);
-      },
+      onProgress: (event) => process.stdout.write(`snapshot_import_progress=${JSON.stringify(event)}\n`),
     });
     return {
       capturedAt: report.source.capturedAt,

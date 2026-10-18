@@ -447,6 +447,29 @@ test('snapshot export records live changes and imports the latest complete pass'
   }
 });
 
+test('snapshot export reports safe table and page progress for each live-source pass', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
+  const events = [];
+  try {
+    await exportTradingDataSnapshot({
+      client: { from: () => ({ select() { return this; }, order() { return this; }, range: async () => ({ data: [], error: null }) }) },
+      masterKey: 'snapshot-test-key',
+      sourceProjectRef: 'vdblajgxrfndjesoyayy',
+      cutoverReference: 'source-cutover:OPS-20261018',
+      outputPath: join(directory, 'snapshot.json'),
+      onProgress: async (event) => events.push(event)
+    });
+    assert.ok(events.some((event) => event.phase === 'source-read-table' && event.pass === 'baseline'));
+    assert.ok(events.some((event) => event.phase === 'source-read-table' && event.pass === 'rolling'));
+    assert.ok(events.some((event) => event.phase === 'source-read-table' && event.pass === 'cutover-refresh'));
+    assert.ok(events.every((event) => /^[a-z][a-z0-9_]{0,62}$/.test(event.table)));
+    assert.ok(events.every((event) => Number.isSafeInteger(event.rows) && event.rows >= 0));
+    assert.ok(events.every((event) => !Object.hasOwn(event, 'data') && !Object.hasOwn(event, 'row')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('snapshot export refreshes workspace identity and access configuration at the end of the rolling capture', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   let workspaceReads = 0;

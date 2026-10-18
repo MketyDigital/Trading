@@ -617,8 +617,9 @@ async function loadTableInventory() {
   return inventory.sort((left, right) => order.get(left.name) - order.get(right.name));
 }
 
-async function fetchTableRows(client, table, pageSize) {
+async function fetchTableRows(client, table, pageSize, { onProgress = async () => {}, pass = 'snapshot' } = {}) {
   const rows = [];
+  let pageNumber = 0;
   for (let offset = 0; ; offset += pageSize) {
     let query = client.from(table.name).select('*');
     for (const key of table.primaryKeys) query = query.order(key, { ascending: true });
@@ -629,6 +630,10 @@ async function fetchTableRows(client, table, pageSize) {
     }
     if (!Array.isArray(data)) throw new Error(`Supabase snapshot returned invalid rows for ${table.name}`);
     rows.push(...data);
+    pageNumber += 1;
+    if (pageNumber % 25 === 0 || data.length < pageSize) {
+      await onProgress({ phase: 'source-read-table', pass, table: table.name, pages: pageNumber, rows: rows.length });
+    }
     if (data.length < pageSize) return rows;
   }
 }
@@ -761,17 +766,19 @@ export async function exportTradingDataSnapshot({
   sourceProjectRef,
   outputPath,
   pageSize = 200,
-  clock = () => new Date()
+  clock = () => new Date(),
+  onProgress = async () => {}
 } = {}) {
   const request = validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize });
   if (!client?.from) throw new Error('Supabase snapshot client is required');
+  if (typeof onProgress !== 'function') throw new Error('Snapshot export progress callback is invalid');
   if (!masterKey) throw new Error('TRADING_MASTER_KEY is required');
   if (!outputPath) throw new Error('Encrypted snapshot output path is required');
   const targetPath = await assertOutsideRepository(outputPath);
   const inventory = await loadTableInventory();
 
   const firstRead = {};
-  for (const table of inventory) firstRead[table.name] = await fetchTableRows(client, table, request.pageSize);
+  for (const table of inventory) firstRead[table.name] = await fetchTableRows(client, table, request.pageSize, { onProgress, pass: 'baseline' });
   const sourceManifest = tableManifest(firstRead, inventory, masterKey);
   // Public ingress remains live. Retain the newest complete pass and bound the
   // drift; an explicit final refresh keeps owner identity and settings close to
@@ -780,7 +787,7 @@ export async function exportTradingDataSnapshot({
   const rollingRows = {};
   let totalDrift = 0;
   for (const table of inventory) {
-    const currentRows = await fetchTableRows(client, table, request.pageSize);
+    const currentRows = await fetchTableRows(client, table, request.pageSize, { onProgress, pass: 'rolling' });
     rollingRows[table.name] = currentRows;
     const currentManifest = tableManifest({ [table.name]: currentRows }, [table], masterKey);
     const expected = sourceManifest.find((entry) => entry.name === table.name);
@@ -797,7 +804,7 @@ export async function exportTradingDataSnapshot({
 
   for (const table of inventory) {
     if (!CUTOVER_REFRESH_TABLES.has(table.name)) continue;
-    const latestRows = await fetchTableRows(client, table, request.pageSize);
+    const latestRows = await fetchTableRows(client, table, request.pageSize, { onProgress, pass: 'cutover-refresh' });
     const latestManifest = tableManifest({ [table.name]: latestRows }, [table], masterKey)[0];
     const previousManifest = tableManifest({ [table.name]: rollingRows[table.name] }, [table], masterKey)[0];
     const drift = compareTradingSnapshotTableDrift(previousManifest, latestManifest);
