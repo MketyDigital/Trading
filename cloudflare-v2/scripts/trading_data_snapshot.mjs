@@ -182,6 +182,163 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
   };
 }
 
+function quoteImportIdentifier(value) {
+  const identifier = String(value || '');
+  if (!/^[a-z][a-z0-9_]{0,62}$/.test(identifier)) throw new Error('Snapshot import schema contains an invalid identifier');
+  return `"${identifier}"`;
+}
+
+function importTableName(sourceName, target) {
+  if (target === 'postgres' && sourceName === 'trading_runtime_controls') return 'runtime_controls';
+  return sourceName;
+}
+
+function importValue(value, target, column) {
+  if (value === undefined) throw new Error('Snapshot import row contains an undefined value');
+  if (target === 'd1') {
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (value && typeof value === 'object') return JSON.stringify(value);
+  }
+  return value;
+}
+
+/**
+ * Build deterministic, non-destructive upserts for a previously integrity-verified snapshot.
+ * Callers must inspect the returned plan and execute bounded batches transactionally.
+ */
+export function createTradingSnapshotImportPlan({ snapshot, target, tableDefinitions } = {}) {
+  if (!['d1', 'postgres'].includes(target)) throw new Error('Snapshot import target must be d1 or postgres');
+  if (!snapshot?.rowsByTable || !Array.isArray(snapshot.tableManifest) || !tableDefinitions || typeof tableDefinitions !== 'object') {
+    throw new Error('Snapshot import manifest or target schema is invalid');
+  }
+  const sourceTables = Object.keys(snapshot.rowsByTable).sort();
+  const manifestTables = snapshot.tableManifest.map((entry) => entry?.name).sort();
+  if (JSON.stringify(sourceTables) !== JSON.stringify(manifestTables) || new Set(manifestTables).size !== manifestTables.length) {
+    throw new Error('Snapshot import table set does not match its verified manifest');
+  }
+
+  const statements = [];
+  const tableCounts = {};
+  for (const manifest of snapshot.tableManifest) {
+    const sourceName = manifest.name;
+    const targetName = importTableName(sourceName, target);
+    const definition = tableDefinitions[targetName];
+    if (!definition || !Array.isArray(definition.columns) || !Array.isArray(definition.primaryKeys)) {
+      throw new Error(`Snapshot table ${targetName} is missing from target schema`);
+    }
+    if (JSON.stringify(definition.primaryKeys) !== JSON.stringify(manifest.primaryKeys)) {
+      throw new Error(`Snapshot table ${targetName} primary key does not match target schema`);
+    }
+    const columnsByName = new Map(definition.columns.map((column) => [column.name, column]));
+    const quotedTable = target === 'postgres'
+      ? `trading_storage.${quoteImportIdentifier(targetName)}`
+      : quoteImportIdentifier(targetName);
+    const rows = snapshot.rowsByTable[sourceName];
+    if (!Array.isArray(rows)) throw new Error(`Snapshot table ${sourceName} does not contain rows`);
+    const seen = new Set();
+    tableCounts[sourceName] = rows.length;
+
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Snapshot row in ${sourceName} is invalid`);
+      const key = stable(rowKey(row, manifest.primaryKeys));
+      if (seen.has(key)) throw new Error(`Snapshot table ${sourceName} contains a duplicate primary key`);
+      seen.add(key);
+      const rowColumns = Object.keys(row);
+      for (const column of rowColumns) {
+        if (!columnsByName.has(column)) throw new Error(`Snapshot column ${targetName}.${column} is missing from target schema`);
+      }
+      const columns = definition.columns.filter((column) => Object.hasOwn(row, column.name));
+      if (columns.length !== rowColumns.length) throw new Error(`Snapshot table ${sourceName} contains unsupported columns`);
+      const names = columns.map((column) => quoteImportIdentifier(column.name));
+      const values = columns.map((column) => importValue(row[column.name], target, column));
+      const placeholders = values.map((_, index) => target === 'postgres' ? `$${index + 1}` : '?');
+      const conflict = manifest.primaryKeys.map(quoteImportIdentifier).join(', ');
+      const updates = columns
+        .filter((column) => !manifest.primaryKeys.includes(column.name))
+        .map((column) => `${quoteImportIdentifier(column.name)} = EXCLUDED.${quoteImportIdentifier(column.name)}`);
+      const conflictAction = updates.length ? `DO UPDATE SET ${updates.join(', ')}` : 'DO NOTHING';
+      const schema = target === 'postgres' ? 'trading_storage.' : '';
+      const sql = `INSERT INTO ${schema}${quoteImportIdentifier(targetName)} (${names.join(', ')}) VALUES (${placeholders.join(', ')}) ON CONFLICT (${conflict}) ${conflictAction}`;
+      statements.push({ sourceTable: sourceName, targetTable: targetName, sql, values });
+    }
+  }
+  return { target, rowCount: statements.length, tableCounts, statements };
+}
+
+/** Execute a reviewed plan in retry-safe, caller-provided atomic batches. */
+export async function applyTradingSnapshotImportPlan(plan, {
+  executeBatchAtomically,
+  batchSize = 50,
+  onBatchCommitted = async () => {}
+} = {}) {
+  if (!['d1', 'postgres'].includes(plan?.target) || !Array.isArray(plan.statements)
+    || plan.rowCount !== plan.statements.length) throw new Error('Snapshot import plan is invalid');
+  const size = Number(batchSize);
+  if (!Number.isSafeInteger(size) || size < 1 || size > 250) throw new Error('Snapshot import batch size must be between 1 and 250');
+  if (typeof executeBatchAtomically !== 'function') throw new Error('Atomic snapshot import batch executor is required');
+  if (typeof onBatchCommitted !== 'function') throw new Error('Snapshot import progress callback is invalid');
+  assertSnapshotImportUpserts(plan.statements);
+  let appliedRows = 0;
+  let batches = 0;
+  for (let offset = 0; offset < plan.statements.length; offset += size) {
+    const batch = plan.statements.slice(offset, offset + size);
+    await executeBatchAtomically(batch, { target: plan.target, batchNumber: batches + 1 });
+    appliedRows += batch.length;
+    batches += 1;
+    await onBatchCommitted({ target: plan.target, appliedRows, batchNumber: batches });
+  }
+  return { target: plan.target, appliedRows, batches };
+}
+
+function assertSnapshotImportUpserts(statements) {
+  if (!Array.isArray(statements)) throw new Error('Snapshot import statements are invalid');
+  for (const statement of statements) {
+    if (!statement || (statement.sourceTable != null && !/^[a-z][a-z0-9_]{0,62}$/.test(statement.sourceTable))
+      || (statement.targetTable != null && !/^[a-z][a-z0-9_]{0,62}$/.test(statement.targetTable))
+      || typeof statement.sql !== 'string'
+      || !/^INSERT INTO (?:trading_storage\.)?"[a-z][a-z0-9_]{0,62}" \(.+\) VALUES \(.+\) ON CONFLICT \(.+\) DO (?:UPDATE SET .+|NOTHING)$/.test(statement.sql)
+      || statement.sql.includes(';')
+      || !Array.isArray(statement.values)) {
+      throw new Error('Snapshot import accepts only allowlisted INSERT upserts');
+    }
+  }
+}
+
+/** Use D1's transactional batch API for each bounded group of already-reviewed upserts. */
+export async function applyTradingSnapshotPlanToD1(db, statements) {
+  if (!db?.prepare || !db?.batch) throw new Error('D1 snapshot import binding is unavailable');
+  assertSnapshotImportUpserts(statements);
+  if (!statements.length) return { appliedRows: 0 };
+  const prepared = statements.map(({ sql, values }) => db.prepare(sql).bind(...values));
+  const result = await db.batch(prepared);
+  if (Array.isArray(result) && result.some((item) => item?.success === false)) {
+    throw new Error('D1 snapshot import batch failed');
+  }
+  return { appliedRows: statements.length };
+}
+
+/** Wrap each PostgreSQL import group in one transaction; failed groups are fully rolled back. */
+export async function applyTradingSnapshotPlanToPostgres(client, statements) {
+  if (!client?.query) throw new Error('PostgreSQL snapshot import client is unavailable');
+  assertSnapshotImportUpserts(statements);
+  if (!statements.length) return { appliedRows: 0 };
+  let transactionStarted = false;
+  try {
+    await client.query('BEGIN');
+    transactionStarted = true;
+    await client.query("SET LOCAL lock_timeout = '5s'");
+    await client.query("SET LOCAL statement_timeout = '120s'");
+    for (const { sql, values } of statements) await client.query(sql, values);
+    await client.query('COMMIT');
+    return { appliedRows: statements.length };
+  } catch (error) {
+    if (transactionStarted) {
+      try { await client.query('ROLLBACK'); } catch { /* Preserve the original target error. */ }
+    }
+    throw error;
+  }
+}
+
 async function loadTableInventory() {
   const snapshot = JSON.parse(await readFile(SNAPSHOT_SCHEMA_PATH, 'utf8'));
   const inventory = snapshot.tables.map((table) => ({ name: table.name, primaryKeys: table.primaryKeys }));
