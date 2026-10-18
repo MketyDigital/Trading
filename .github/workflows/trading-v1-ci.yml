@@ -774,7 +774,7 @@ jobs:
           } catch {}
           let logs = '';
           try { logs = String(JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8')).logs || ''); } catch {}
-          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|PostgreSQL schema migration failed during|must be read-only|TRADING_PG_(?:PROBE|MIGRATION)_OK=/.test(line));
+          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|PostgreSQL schema migration failed during|must be read-only|TRADING_(?:PG_(?:PROBE|MIGRATION)_OK|SNAPSHOT_IMPORT_OK|PROBE_FAILED)=/.test(line));
           for (const line of safe.slice(-5)) console.error(redact(line));
           SAFE_PROBE_FAILURE
           }
@@ -804,11 +804,22 @@ jobs:
           fi
 
           probe_done='no'
-          for i in $(seq 1 60); do
-          if fetch_logs && APPLY_MODE="$APPLY_MODE" node <<'VERIFY_SAFE_PROBE_RESULT'
+          for i in $(seq 1 300); do
+          if fetch_logs; then
+          if APPLY_MODE="$APPLY_MODE" node <<'VERIFY_SAFE_PROBE_RESULT'
           const fs = require('node:fs');
           const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
           const logs = String(payload.logs || '');
+          const failure = logs.split(/\r?\n/).find((entry) => entry.startsWith('TRADING_PROBE_FAILED='));
+          if (failure) {
+            try {
+              const details = JSON.parse(failure.slice('TRADING_PROBE_FAILED='.length));
+              console.error(`Transient probe task failed: ${String(details.message || 'unknown error').slice(0, 500)}`);
+            } catch {
+              console.error('Transient probe task failed; its error details could not be parsed safely.');
+            }
+            process.exit(2);
+          }
           const applying = process.env.APPLY_MODE === 'apply-existing-mkety-schema';
           const importing = process.env.APPLY_MODE === 'import-existing-trading-data';
           const prefix = importing ? 'TRADING_SNAPSHOT_IMPORT_OK=' : applying ? 'TRADING_PG_MIGRATION_OK=' : 'TRADING_PG_PROBE_OK=';
@@ -857,12 +868,19 @@ jobs:
             then
               probe_done='yes'
               break
+            else
+              verify_status=$?
+              if [ "$verify_status" -eq 2 ]; then
+                print_safe_failure
+                exit 5
+              fi
             fi
+          fi
             sleep 3
           done
           if [ "$probe_done" != 'yes' ]; then
             print_safe_failure
-            echo 'The transient Coolify app did not report the expected read-only probe or schema-only migration result.'
+            echo 'The transient Coolify app did not report a successful probe, migration, or data import before the task-result timeout.'
             exit 5
           fi
       - name: Delete ephemeral Trading PostgreSQL probe host

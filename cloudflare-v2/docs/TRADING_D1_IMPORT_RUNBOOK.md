@@ -23,7 +23,7 @@ Run **Trading V1 CI** on branch `feat/trading-d1-cutover-implementation` with:
 - Confirmation: `IMPORT_TRADING_DATA_TO_EXISTING_TARGETS`
 - Cutover reference: `source-cutover:<change-reference>` (for example `source-cutover:TRADING-D1-CUTOVER-2026-10-18`)
 
-The importer refuses a Cloudflare D1 UUID other than the existing `trading-staging` UUID or a PostgreSQL connection other than database `mkety`. The private temporary Coolify app applies bounded idempotent upserts, verifies all 28 tables in both targets, then activates D1 authority epoch 1 with broker execution fenced. The workflow checks workspace/access rows and removes the temporary app in cleanup.
+The importer refuses a Cloudflare D1 UUID other than the existing `trading-staging` UUID or a PostgreSQL connection other than database `mkety`. The private temporary Coolify app exposes its health endpoint before running the long import task, so Coolify does not mistake snapshot duration for an unhealthy container. The workflow waits for an explicit success/failure marker, applies bounded resumable idempotent upserts, verifies all 28 tables in both targets, then activates D1 authority epoch 1 with broker execution fenced. It checks workspace/access rows and removes the temporary app in cleanup.
 
 ## After successful import
 

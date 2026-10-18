@@ -18,6 +18,7 @@ COPY docs/supabase-trading-schema-snapshot-2026-10-17.json ./docs/supabase-tradi
 COPY cloudflare-v2/db/d1-migrations ./cloudflare-v2/db/d1-migrations
 COPY cloudflare-v2/db/postgres-migrations ./cloudflare-v2/db/postgres-migrations
 COPY ops/coolify-staging-postgres-probe/probe.mjs ./probe.mjs
+COPY ops/coolify-staging-postgres-probe/probe_runtime.mjs ./probe_runtime.mjs
 
 EXPOSE 3000
 HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=12 \

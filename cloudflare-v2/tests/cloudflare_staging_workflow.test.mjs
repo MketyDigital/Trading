@@ -79,11 +79,16 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /applications\/\$APP_UUID/);
   const dockerfile = await readFile(coolifyProbeDockerfilePath, 'utf8');
   assert.match(dockerfile, /cloudflare-v2\/package-lock\.json/);
+  assert.match(dockerfile, /COPY ops\/coolify-staging-postgres-probe\/probe_runtime\.mjs/);
   assert.match(dockerfile, /USER node/);
   const probeScript = await readFile(coolifyProbeScriptPath, 'utf8');
   assert.match(probeScript, /checkStagingPostgresConnection/);
+  assert.match(probeScript, /startProbeRuntime/);
   assert.match(probeScript, /TRADING_PG_PROBE_OK=/);
+  assert.doesNotMatch(probeScript, /await runTradingSnapshotImport\(\)/);
   assert.doesNotMatch(probeScript, /postgres-migrations|CREATE DATABASE|CREATE SCHEMA|INSERT INTO|UPDATE .* SET|DELETE FROM/i);
+  assert.match(block, /TRADING_PROBE_FAILED=/);
+  assert.match(block, /seq 1 300/);
   assert.match(block, /Inventory Coolify database resources \(read-only\)/);
   assert.match(block, /OCI_COOLIFY_URL: \$\{\{ secrets\.OCI_COOLIFY_URL \}\}/);
   assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
