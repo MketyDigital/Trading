@@ -154,6 +154,11 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 - The first hosted inspection found all 34 application tables plus `_cf_KV`; the D1 API still reports `num_tables: 0`. Cloudflare documents `_cf_KV` as a reserved D1 internal table, excluded from usage charges and unavailable to application queries. The inventory helper excludes only this exact Cloudflare table (and SQLite/Wrangler metadata tables), while still rejecting every other unrecognized table. Trading V1 CI #3317 then verified the exact 34-table application inventory, passed read-only Cloudflare/Coolify/`mkety` checks and the PostgreSQL probe, and deleted the temporary probe app. The `num_tables: 0` field is inaccurate for this resource; the direct remote schema query is authoritative for its application schema.
 - Local validation passed after the `_cf_KV` regression case: focused workflow/inventory tests 17/17 and the full Worker suite 428/428. PR inspect mode did not apply migrations, import rows, or mutate production authority.
 
+### Resumable snapshot import progress (2026-10-18)
+
+- Added a resumable upsert executor primitive with a mode-600 checkpoint outside the repository, HMAC-bound to the exact target and import plan. It checkpoints only after an atomic target batch commits, refuses concurrent importers, rejects altered checkpoints/plans, and safely replays an idempotent batch if a crash occurs between target commit and checkpoint replacement. A stale lock requires confirming the prior process is gone before removing it.
+- Validation passed: snapshot suite 22/22, storage suite 267/267, and full Worker suite 428/428; `git diff --check` passed. This is not an end-to-end importer: no snapshot was exported, no import was run, and no target row parity or live broker reconciliation was performed. A protected runner still needs to bind this primitive to the existing targets and execute only after a reviewed source freeze.
+
 ### Cutover execution plan and current checkpoint (2026-10-18 09:31 UTC)
 
 The following order is required to use only the existing Cloudflare D1 and existing Coolify `mkety-postgres`, without provisioning another database:

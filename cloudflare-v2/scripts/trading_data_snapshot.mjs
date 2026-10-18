@@ -1,5 +1,5 @@
-import { createHash, createHmac } from 'node:crypto';
-import { readFile, realpath, writeFile } from 'node:fs/promises';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve, sep } from 'node:path';
 import { encryptSecret, decryptSecret } from '../src/security/secret_box.js';
@@ -393,6 +393,149 @@ export async function applyTradingSnapshotImportPlan(plan, {
     await onBatchCommitted({ target: plan.target, appliedRows, batchNumber: batches });
   }
   return { target: plan.target, appliedRows, batches };
+}
+
+function snapshotImportPlanFingerprint(plan, masterKey) {
+  return keyedDigest({
+    target: plan.target,
+    rowCount: plan.rowCount,
+    tableCounts: plan.tableCounts || {},
+    statements: plan.statements.map(({ sourceTable, targetTable, sql, values }) => ({ sourceTable, targetTable, sql, values }))
+  }, masterKey);
+}
+
+function snapshotImportCheckpointMetadata(checkpoint) {
+  return {
+    format: checkpoint.format,
+    target: checkpoint.target,
+    planFingerprint: checkpoint.planFingerprint,
+    totalRows: checkpoint.totalRows,
+    batchSize: checkpoint.batchSize,
+    appliedRows: checkpoint.appliedRows,
+    batches: checkpoint.batches,
+    updatedAt: checkpoint.updatedAt
+  };
+}
+
+async function writeSnapshotImportCheckpoint(checkpointPath, checkpoint, masterKey) {
+  const payload = {
+    ...checkpoint,
+    signature: keyedDigest(snapshotImportCheckpointMetadata(checkpoint), masterKey)
+  };
+  const temporaryPath = `${checkpointPath}.${process.pid}.${randomUUID()}.tmp`;
+  let handle;
+  try {
+    handle = await open(temporaryPath, 'wx', 0o600);
+    await handle.writeFile(`${JSON.stringify(payload)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await rename(temporaryPath, checkpointPath);
+  } catch (error) {
+    if (handle) await handle.close().catch(() => {});
+    await unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Resume an upsert-only import from an HMAC-authenticated local checkpoint.
+ * Target batches commit before their checkpoint is advanced; a crash in between safely
+ * replays the last idempotent batch. Keep the checkpoint outside the repository and protected
+ * alongside the encrypted source artifact. A crashed process may leave `.lock`; verify the
+ * old process is gone before an operator removes that stale lock and resumes.
+ */
+export async function applyTradingSnapshotImportPlanResumable(plan, {
+  executeBatchAtomically,
+  checkpointPath,
+  masterKey,
+  batchSize = 50,
+  onBatchCommitted = async () => {},
+  clock = () => new Date()
+} = {}) {
+  if (!['d1', 'postgres'].includes(plan?.target) || !Array.isArray(plan.statements)
+    || plan.rowCount !== plan.statements.length) throw new Error('Snapshot import plan is invalid');
+  if (!masterKey) throw new Error('TRADING_MASTER_KEY is required for resumable snapshot import');
+  if (!checkpointPath) throw new Error('Snapshot import checkpoint path is required');
+  const size = Number(batchSize);
+  if (!Number.isSafeInteger(size) || size < 1 || size > 250) throw new Error('Snapshot import batch size must be between 1 and 250');
+  if (typeof executeBatchAtomically !== 'function') throw new Error('Atomic snapshot import batch executor is required');
+  if (typeof onBatchCommitted !== 'function') throw new Error('Snapshot import progress callback is invalid');
+  assertSnapshotImportUpserts(plan.statements);
+
+  const targetPath = await assertOutsideRepository(checkpointPath);
+  const lockPath = `${targetPath}.lock`;
+  let lock;
+  try {
+    lock = await open(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if (error?.code === 'EEXIST') throw new Error('Snapshot import checkpoint is locked; verify no importer is running before resuming');
+    throw error;
+  }
+
+  try {
+    await lock.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: clock().toISOString() })}\n`, 'utf8');
+    await lock.sync();
+    const fingerprint = snapshotImportPlanFingerprint(plan, masterKey);
+    let checkpoint;
+    try {
+      checkpoint = JSON.parse(await readFile(targetPath, 'utf8'));
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw new Error('Snapshot import checkpoint is unreadable');
+    }
+
+    if (checkpoint) {
+      const metadata = snapshotImportCheckpointMetadata(checkpoint);
+      if (checkpoint.format !== 'mkety-trading-import-progress-v1'
+        || checkpoint.signature !== keyedDigest(metadata, masterKey)) {
+        throw new Error('Snapshot import checkpoint integrity check failed');
+      }
+      if (checkpoint.target !== plan.target || checkpoint.planFingerprint !== fingerprint
+        || checkpoint.totalRows !== plan.rowCount || checkpoint.batchSize !== size) {
+        throw new Error('Snapshot import checkpoint does not match this snapshot import plan');
+      }
+      if (!Number.isSafeInteger(checkpoint.appliedRows) || checkpoint.appliedRows < 0
+        || checkpoint.appliedRows > plan.rowCount
+        || (checkpoint.appliedRows !== plan.rowCount && checkpoint.appliedRows % size !== 0)
+        || checkpoint.batches !== Math.ceil(checkpoint.appliedRows / size)) {
+        throw new Error('Snapshot import checkpoint progress is invalid');
+      }
+    } else {
+      checkpoint = {
+        format: 'mkety-trading-import-progress-v1',
+        target: plan.target,
+        planFingerprint: fingerprint,
+        totalRows: plan.rowCount,
+        batchSize: size,
+        appliedRows: 0,
+        batches: 0,
+        updatedAt: clock().toISOString()
+      };
+      await writeSnapshotImportCheckpoint(targetPath, checkpoint, masterKey);
+    }
+
+    const resumedFromRows = checkpoint.appliedRows;
+    let appliedRows = checkpoint.appliedRows;
+    let batches = checkpoint.batches;
+    for (let offset = checkpoint.appliedRows; offset < plan.statements.length; offset += size) {
+      const batch = plan.statements.slice(offset, offset + size);
+      await executeBatchAtomically(batch, { target: plan.target, batchNumber: batches + 1 });
+      appliedRows += batch.length;
+      batches += 1;
+      checkpoint = {
+        ...checkpoint,
+        appliedRows,
+        batches,
+        updatedAt: clock().toISOString()
+      };
+      await writeSnapshotImportCheckpoint(targetPath, checkpoint, masterKey);
+      await onBatchCommitted({ target: plan.target, appliedRows, batchNumber: batches });
+    }
+    return { target: plan.target, appliedRows, batches, resumedFromRows };
+  } finally {
+    await lock.close().catch(() => {});
+    await unlink(lockPath).catch(() => {});
+  }
 }
 
 function assertSnapshotImportUpserts(statements) {

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret } from '../src/security/secret_box.js';
-import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, applyTradingSnapshotImportPlanResumable, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -236,6 +236,71 @@ test('snapshot import execution sends bounded atomic batches and stops on the fi
     executeBatchAtomically: async () => { attempts += 1; if (attempts === 2) throw new Error('batch failed'); }
   }), /batch failed/);
   assert.equal(attempts, 2);
+});
+
+test('resumable snapshot import persists authenticated progress after atomic batches and skips committed rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-import-resume-'));
+  const checkpointPath = join(directory, 'progress.json');
+  const statements = Array.from({ length: 5 }, (_, index) => ({
+    sourceTable: 'workspaces', targetTable: 'workspaces',
+    sql: 'INSERT INTO "workspaces" ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"',
+    values: [`ws-${index}`]
+  }));
+  const plan = { target: 'd1', rowCount: statements.length, tableCounts: { workspaces: 5 }, statements };
+  const committed = [];
+  try {
+    await assert.rejects(() => applyTradingSnapshotImportPlanResumable(plan, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async (batch, { batchNumber }) => {
+        if (batchNumber === 2) throw new Error('target interrupted');
+        committed.push(...batch.flatMap((statement) => statement.values));
+      }
+    }), /target interrupted/);
+
+    const checkpoint = JSON.parse(await readFile(checkpointPath, 'utf8'));
+    assert.equal(checkpoint.appliedRows, 2);
+    assert.equal(checkpoint.totalRows, 5);
+    assert.equal(checkpoint.target, 'd1');
+    assert.equal(JSON.stringify(checkpoint).includes('ws-0'), false);
+
+    const resumed = await applyTradingSnapshotImportPlanResumable(plan, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async (batch) => { committed.push(...batch.flatMap((statement) => statement.values)); }
+    });
+    assert.deepEqual(resumed, { target: 'd1', appliedRows: 5, batches: 3, resumedFromRows: 2 });
+    assert.deepEqual(committed, ['ws-0', 'ws-1', 'ws-2', 'ws-3', 'ws-4']);
+
+    const complete = await applyTradingSnapshotImportPlanResumable(plan, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async () => assert.fail('completed imports must not execute again')
+    });
+    assert.deepEqual(complete, { target: 'd1', appliedRows: 5, batches: 3, resumedFromRows: 5 });
+    await assert.rejects(() => applyTradingSnapshotImportPlanResumable({
+      ...plan,
+      statements: statements.map((statement, index) => index === 0 ? { ...statement, values: ['changed'] } : statement)
+    }, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async () => assert.fail('changed plans must not resume')
+    }), /does not match this snapshot import plan/);
+
+    const lockPath = `${checkpointPath}.lock`;
+    await writeFile(lockPath, '{"pid":1}\n', { mode: 0o600 });
+    await assert.rejects(() => applyTradingSnapshotImportPlanResumable(plan, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async () => assert.fail('a locked import must not run')
+    }), /checkpoint is locked/);
+    await rm(lockPath, { force: true });
+
+    const tampered = JSON.parse(await readFile(checkpointPath, 'utf8'));
+    tampered.appliedRows = 4;
+    await writeFile(checkpointPath, `${JSON.stringify(tampered)}\n`, { mode: 0o600 });
+    await assert.rejects(() => applyTradingSnapshotImportPlanResumable(plan, {
+      checkpointPath, masterKey: 'resume-key', batchSize: 2,
+      executeBatchAtomically: async () => assert.fail('tampered checkpoints must not resume')
+    }), /checkpoint integrity check failed/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('snapshot import execution refuses destructive statements and invalid batch settings', async () => {
