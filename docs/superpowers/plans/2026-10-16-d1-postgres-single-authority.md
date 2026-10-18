@@ -147,6 +147,12 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 - Updated stale operator guidance to remove old database credential setup. The source exporter and acceptance/recovery scripts remain temporary source dependencies until the rows are safely copied and each operation is ported or retired.
 - Cutover remains blocked: production Paid/Free Wrangler configs have no D1/Hyperdrive binding; the existing staging D1 inventory/schema discrepancy is unresolved; no target row import, target parity, runtime soak, broker reconciliation, or rollback rehearsal is proven. No production deployment or authority/control change was made.
 
+### Exact remote D1 inventory gate (2026-10-18)
+
+- Replaced the staging check's minimum-table-count assertion with a read-only exact set comparison between `sqlite_master` and all application tables declared by the committed D1 migrations. Wrangler's `d1_migrations` ledger and SQLite internal tables are excluded from the comparison.
+- Added helper unit coverage for exact inventory, missing tables, unexpected tables, and empty migration inventory; updated the workflow regression test to require the exact comparison.
+- Local validation passed: focused workflow/inventory tests 17/17 and the full Worker suite 428/428. This only proves local tests; hosted staging must still report the remote table-set result before the earlier Cloudflare metadata discrepancy can be considered resolved. PR inspect mode does not apply migrations or mutate the database.
+
 ### Cutover execution plan and current checkpoint (2026-10-18 09:31 UTC)
 
 The following order is required to use only the existing Cloudflare D1 and existing Coolify `mkety-postgres`, without provisioning another database:

@@ -23,6 +23,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.ok(start >= 0, 'cloudflare-storage-inventory job must exist');
   assert.ok(end > start, 'storage inventory job must end before the existing inspection job');
   const block = workflow.slice(start, end);
+  const normalizedBlock = block.replace(/\\\n\s+/g, ' ');
 
   assert.match(block, /github\.event_name == 'pull_request'/);
   assert.match(block, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
@@ -41,9 +42,9 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /migrations_dir = "db\/d1-migrations"/);
   assert.match(block, /npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/);
   assert.match(block, /npx wrangler d1 migrations list trading-staging --remote --config wrangler\.trading-staging\.toml/);
-  assert.match(block, /wrangler d1 execute trading-staging --remote --config wrangler\.trading-staging\.toml --command .*sqlite_master/);
-  assert.match(block, /COUNT\(\*\) >= 34/);
-  assert.match(block, /Remote Trading D1 schema check passed/);
+  assert.match(normalizedBlock, /wrangler d1 execute trading-staging --remote --config wrangler\.trading-staging\.toml --json\s+--command .*sqlite_master/);
+  assert.match(normalizedBlock, /compareD1MigrationTableInventory/);
+  assert.match(normalizedBlock, /Remote Trading D1 exact schema check passed/);
   assert.match(block, /Check access to the existing Coolify PostgreSQL database/);
   assert.match(block, /TRADING_PG_STAGING_DATABASE_URL: \$\{\{ secrets\.TRADING_PG_STAGING_DATABASE_URL \}\}/);
   assert.match(block, /Existing Coolify PostgreSQL connection secret is configured/);

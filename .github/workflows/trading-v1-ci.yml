@@ -218,13 +218,31 @@ jobs:
             npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
           fi
           npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
-          npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --command "SELECT CASE WHEN COUNT(*) >= 34 THEN 'TRADING_D1_SCHEMA_OK' ELSE 'TRADING_D1_SCHEMA_MISSING' END AS status FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';" > "$RUNNER_TEMP/trading-d1-schema-check.txt"
+          npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --json \
+            --command "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name;" \
+            > "$RUNNER_TEMP/trading-d1-schema-check.json"
           node --input-type=module <<'CHECK_TRADING_D1_SCHEMA'
           import { readFile } from 'node:fs/promises';
+          import { compareD1MigrationTableInventory } from './scripts/trading_d1_schema_inventory.mjs';
 
-          const result = await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check.txt`, 'utf8');
-          if (!result.includes('TRADING_D1_SCHEMA_OK')) throw new Error('Remote Trading D1 is missing migrated schema tables');
-          console.log('Remote Trading D1 schema check passed');
+          const migrationPaths = [
+            'db/d1-migrations/0001_trading_storage_replication.sql',
+            'db/d1-migrations/0002_trading_domain_schema.sql',
+            'db/d1-migrations/0003_trading_replication_health.sql',
+          ];
+          const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check.json`, 'utf8'));
+          const rows = Array.isArray(payload)
+            ? payload.flatMap((item) => Array.isArray(item?.results) ? item.results : [])
+            : Array.isArray(payload?.results) ? payload.results : [];
+          const inventory = compareD1MigrationTableInventory({
+            migrationSql,
+            actualTables: rows.map((row) => row?.name),
+          });
+          if (inventory.missing.length || inventory.unexpected.length) {
+            throw new Error(`Remote Trading D1 schema mismatch: ${JSON.stringify(inventory)}`);
+          }
+          console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
           CHECK_TRADING_D1_SCHEMA
       - name: Inspect existing Cloudflare Worker database and private-network bindings (read-only)
         env:
