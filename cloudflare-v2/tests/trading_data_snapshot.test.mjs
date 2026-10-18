@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret } from '../src/security/secret_box.js';
-import { compareTradingSnapshotTableDrift, exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -100,6 +100,129 @@ test('import projection preserves business state but fences access and broker ex
   const postgres = prepareTradingSnapshotForImport(sourceRows, { target: 'postgres', now: '2026-10-18T00:00:00.000Z' });
   assert.equal(postgres.rowsByTable.trading_runtime_controls[0].enabled, false);
   assert.equal(postgres.rowsByTable.trade_accounts[0].execution_enabled, false);
+});
+
+test('snapshot import plan uses only schema-checked idempotent upserts and maps PostgreSQL controls', () => {
+  const snapshot = {
+    rowsByTable: {
+      trading_runtime_controls: [{ control_key: 'trading_access_enabled', enabled: false, updated_by: 'migration-import-fenced' }],
+      workspaces: [{ id: 'ws-1', name: 'Tenant', metadata: { region: 'west' }, is_active: true }]
+    },
+    tableManifest: [
+      { name: 'trading_runtime_controls', primaryKeys: ['control_key'] },
+      { name: 'workspaces', primaryKeys: ['id'] }
+    ]
+  };
+  const definitions = {
+    runtime_controls: { columns: [{ name: 'control_key', type: 'text' }, { name: 'enabled', type: 'boolean' }, { name: 'updated_by', type: 'text' }], primaryKeys: ['control_key'] },
+    workspaces: { columns: [{ name: 'id', type: 'text' }, { name: 'name', type: 'text' }, { name: 'metadata', type: 'jsonb' }, { name: 'is_active', type: 'boolean' }], primaryKeys: ['id'] }
+  };
+
+  const plan = createTradingSnapshotImportPlan({ snapshot, target: 'postgres', tableDefinitions: definitions });
+
+  assert.equal(plan.rowCount, 2);
+  assert.match(plan.statements[0].sql, /^INSERT INTO trading_storage\."runtime_controls"/);
+  assert.match(plan.statements[0].sql, /ON CONFLICT \("control_key"\) DO UPDATE/);
+  assert.deepEqual(plan.statements[0].values, ['trading_access_enabled', false, 'migration-import-fenced']);
+  assert.deepEqual(plan.statements[1].values, ['ws-1', 'Tenant', { region: 'west' }, true]);
+  assert.equal(plan.statements.some(({ sql }) => /\b(DELETE|TRUNCATE|DROP)\b/i.test(sql)), false);
+});
+
+test('snapshot import plan converts booleans and JSON values for D1', () => {
+  const plan = createTradingSnapshotImportPlan({
+    target: 'd1',
+    snapshot: {
+      rowsByTable: { trading_runtime_controls: [{ control_key: 'broker_execution_enabled', enabled: false, metadata: { source: 'import' } }] },
+      tableManifest: [{ name: 'trading_runtime_controls', primaryKeys: ['control_key'] }]
+    },
+    tableDefinitions: {
+      trading_runtime_controls: { columns: [{ name: 'control_key', type: 'TEXT' }, { name: 'enabled', type: 'INTEGER' }, { name: 'metadata', type: 'TEXT' }], primaryKeys: ['control_key'] }
+    }
+  });
+  assert.deepEqual(plan.statements[0].values, ['broker_execution_enabled', 0, '{"source":"import"}']);
+  assert.match(plan.statements[0].sql, /^INSERT INTO "trading_runtime_controls"/);
+});
+
+test('snapshot import plan rejects target schema gaps, key drift, malformed names and unverified tables', () => {
+  const snapshot = {
+    rowsByTable: { trading_events: [{ id: 'event-1', processing_status: 'READY' }] },
+    tableManifest: [{ name: 'trading_events', primaryKeys: ['id'] }]
+  };
+  assert.throws(() => createTradingSnapshotImportPlan({ target: 'd1', snapshot, tableDefinitions: {} }), /missing from target schema/);
+  assert.throws(() => createTradingSnapshotImportPlan({
+    target: 'd1', snapshot,
+    tableDefinitions: { trading_events: { columns: [{ name: 'id', type: 'TEXT' }, { name: 'processing_status', type: 'TEXT' }], primaryKeys: ['different_key'] } }
+  }), /primary key/);
+  assert.throws(() => createTradingSnapshotImportPlan({
+    target: 'd1', snapshot: { ...snapshot, rowsByTable: { 'events;DROP TABLE workspaces': [] } }, tableDefinitions: {}
+  }), /manifest/);
+  assert.throws(() => createTradingSnapshotImportPlan({ target: 'sqlite', snapshot, tableDefinitions: {} }), /target must be d1 or postgres/);
+});
+
+test('snapshot import execution sends bounded atomic batches and stops on the first failure', async () => {
+  const batches = [];
+  const statements = Array.from({ length: 5 }, (_, index) => ({
+    sourceTable: 'workspaces', targetTable: 'workspaces',
+    sql: 'INSERT INTO "workspaces" ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"',
+    values: [`ws-${index}`]
+  }));
+  const progress = await applyTradingSnapshotImportPlan({ target: 'd1', rowCount: 5, statements }, {
+    batchSize: 2,
+    executeBatchAtomically: async (batch) => { batches.push(batch); }
+  });
+  assert.deepEqual(batches.map((batch) => batch.length), [2, 2, 1]);
+  assert.deepEqual(progress, { target: 'd1', appliedRows: 5, batches: 3 });
+
+  let attempts = 0;
+  await assert.rejects(() => applyTradingSnapshotImportPlan({ target: 'd1', rowCount: 5, statements }, {
+    batchSize: 2,
+    executeBatchAtomically: async () => { attempts += 1; if (attempts === 2) throw new Error('batch failed'); }
+  }), /batch failed/);
+  assert.equal(attempts, 2);
+});
+
+test('snapshot import execution refuses destructive statements and invalid batch settings', async () => {
+  const statement = { sourceTable: 'workspaces', targetTable: 'workspaces', sql: 'DELETE FROM "workspaces"', values: [] };
+  await assert.rejects(() => applyTradingSnapshotImportPlan({ target: 'd1', rowCount: 1, statements: [statement] }, {
+    executeBatchAtomically: async () => {}
+  }), /only allowlisted INSERT upserts/);
+  await assert.rejects(() => applyTradingSnapshotImportPlan({ target: 'd1', rowCount: 0, statements: [] }, {
+    batchSize: 0,
+    executeBatchAtomically: async () => {}
+  }), /batch size/);
+});
+
+test('D1 snapshot adapter submits each validated batch through one atomic D1 batch call', async () => {
+  const calls = [];
+  const db = {
+    prepare(sql) { return { bind: (...values) => ({ sql, values }) }; },
+    async batch(statements) { calls.push(statements); return statements.map(() => ({ success: true })); }
+  };
+  const statements = [
+    { sql: 'INSERT INTO "workspaces" ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"', values: ['ws-1'] },
+    { sql: 'INSERT INTO "workspaces" ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"', values: ['ws-2'] }
+  ];
+  await applyTradingSnapshotPlanToD1(db, statements);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].map(({ values }) => values), [['ws-1'], ['ws-2']]);
+});
+
+test('PostgreSQL snapshot adapter commits successful batches and rolls failed batches back', async () => {
+  const queries = [];
+  let failInsert = false;
+  const client = { async query(sql, values) {
+    queries.push({ sql, values });
+    if (failInsert && sql.startsWith('INSERT')) throw new Error('insert failed');
+    return { rows: [] };
+  } };
+  const statements = [{ sql: 'INSERT INTO trading_storage."workspaces" ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "id" = EXCLUDED."id"', values: ['ws-1'] }];
+  await applyTradingSnapshotPlanToPostgres(client, statements);
+  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '120s'", statements[0].sql, 'COMMIT']);
+
+  queries.length = 0;
+  failInsert = true;
+  await assert.rejects(() => applyTradingSnapshotPlanToPostgres(client, statements), /insert failed/);
+  assert.deepEqual(queries.map(({ sql }) => sql), ['BEGIN', "SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_timeout = '120s'", statements[0].sql, 'ROLLBACK']);
 });
 
 test('snapshot artifact is encrypted at rest and includes only keyed checksums in its clear manifest', async () => {
