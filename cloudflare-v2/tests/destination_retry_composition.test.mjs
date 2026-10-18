@@ -43,14 +43,14 @@ test('due retry scan includes due RETRYABLE work and expired leased PENDING cras
 
   assert.deepEqual(result.map((item) => item.id), ['p1', 'r1']);
   assert.deepEqual(calls, [
-    ['select', '*'],
+    ['select', 'workspace_id,trading_event_id,destination_type,destination_ref,idempotency_key,status,request_payload,next_attempt_at,lease_expires_at,created_at'],
     ['eq', 'status', 'RETRYABLE'],
     ['lte', 'next_attempt_at', '2026-09-03T10:00:00.000Z'],
     ['lt', 'attempt_count', 5],
     ['or', 'lease_expires_at.is.null,lease_expires_at.lt.2026-09-03T10:00:00.000Z'],
     ['order', 'next_attempt_at', { ascending: true }],
     ['limit', 20],
-    ['select', '*'],
+    ['select', 'workspace_id,trading_event_id,destination_type,destination_ref,idempotency_key,status,request_payload,next_attempt_at,lease_expires_at,created_at'],
     ['eq', 'status', 'PENDING'],
     ['lt', 'lease_expires_at', '2026-09-03T10:00:00.000Z'],
     ['order', 'lease_expires_at', { ascending: true }],
