@@ -237,13 +237,13 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.equal((triggerBlock.match(/^  workflow_dispatch:/gm) || []).length, 1,
     'workflow_dispatch must be declared only once');
   assert.match(triggerBlock, /confirmation:[\s\S]*?type: string/);
-  assert.match(triggerBlock, /freeze_evidence:[\s\S]*?source-freeze/);
+  assert.match(triggerBlock, /cutover_reference:[\s\S]*?source-cutover/);
   assert.match(testBlock, /github\.event_name == 'workflow_dispatch'/);
   assert.match(testBlock, /github\.ref == 'refs\/heads\/feat\/trading-d1-cutover-implementation'/);
   assert.match(testBlock, /inputs\.mode == 'inspect'/);
   assert.match(testBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
   assert.match(testBlock, /inputs\.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS'/);
-  assert.match(testBlock, /startsWith\(inputs\.freeze_evidence, 'source-freeze:'\)/);
+  assert.match(testBlock, /startsWith\(inputs\.cutover_reference, 'source-cutover:'\)/);
   assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
@@ -263,7 +263,8 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   const probe = await readFile(coolifyProbeScriptPath, 'utf8');
   assert.match(probe, /runTradingSnapshotImport/);
   const importer = await readFile(new URL('../scripts/run_trading_snapshot_import.mjs', import.meta.url), 'utf8');
-  assert.match(importer, /source drifted during export/);
+  assert.match(importer, /snapshotConsistency: 'bounded-rolling-live-source'/);
+  assert.doesNotMatch(importer, /source drifted during export/);
 });
 
 test('feature branch regression runs once via PR while exact push gates still retain test dependency', async () => {

@@ -23,8 +23,8 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
   if (env.TRADING_SNAPSHOT_IMPORT_CONFIRM !== CONFIRMATION) {
     throw new Error('Explicit Trading snapshot import confirmation is required');
   }
-  if (!/^source-freeze:[A-Z0-9][A-Z0-9-]{5,79}$/.test(String(env.TRADING_MIGRATION_FREEZE_EVIDENCE || ''))) {
-    throw new Error('Source pause evidence is required before exporting Trading data');
+  if (!/^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$/.test(String(env.TRADING_MIGRATION_CUTOVER_REFERENCE || ''))) {
+    throw new Error('An auditable source cutover reference is required before exporting Trading data');
   }
   if (env.TRADING_PG_EXPECTED_DATABASE !== 'mkety') throw new Error('PostgreSQL target must be the existing mkety database');
 
@@ -45,15 +45,11 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
     const exported = await exportTradingDataSnapshot({
       client: source,
       masterKey,
-      freezeEvidence: env.TRADING_MIGRATION_FREEZE_EVIDENCE,
+      cutoverReference: env.TRADING_MIGRATION_CUTOVER_REFERENCE,
       sourceProjectRef: SOURCE_PROJECT_REF,
       outputPath: snapshotPath,
       pageSize: 200,
     });
-    if (exported.sourceDrift.length !== 0) {
-      throw new Error('Trading source drifted during export; pause writes and rerun for exact table parity');
-    }
-
     const d1 = createCloudflareD1SnapshotDatabase({
       apiToken: required('CLOUDFLARE_API_TOKEN', env),
       accountId: required('CLOUDFLARE_ACCOUNT_ID', env),
@@ -110,6 +106,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       ].map((name) => [name, snapshot.rowsByTable[name]?.length ?? 0])),
       fences: report.fences,
       sourceDrift: snapshot.sourceDrift,
+      snapshotConsistency: 'bounded-rolling-live-source',
     };
   } finally {
     if (connected) await client.end().catch(() => {});

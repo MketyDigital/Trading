@@ -37,23 +37,23 @@ test('snapshot credential envelopes use the production secret-box format', async
   assert.equal(await decryptSecret(rows.ai_providers[0].api_key_ciphertext, masterKey), 'sk-test-provider-key');
 });
 
-test('snapshot request refuses absent, malformed or wrong-project freeze evidence', () => {
-  assert.throws(() => validateTradingSnapshotRequest({}), /Explicit source-freeze evidence/);
-  assert.throws(() => validateTradingSnapshotRequest({ freezeEvidence: 'source-freeze:short' }), /Explicit source-freeze evidence/);
+test('snapshot request refuses absent, malformed or wrong-project cutover references', () => {
+  assert.throws(() => validateTradingSnapshotRequest({}), /auditable source-cutover reference/);
+  assert.throws(() => validateTradingSnapshotRequest({ cutoverReference: 'source-cutover:short' }), /auditable source-cutover reference/);
   assert.throws(() => validateTradingSnapshotRequest({
-    freezeEvidence: 'source-freeze:OPS-20261018',
+    cutoverReference: 'source-cutover:OPS-20261018',
     sourceProjectRef: 'wrong-project'
   }), /expected Supabase project/);
 });
 
 test('snapshot request accepts only the pinned production source and a bounded page size', () => {
   assert.equal(validateTradingSnapshotRequest({
-    freezeEvidence: 'source-freeze:OPS-20261018',
+    cutoverReference: 'source-cutover:OPS-20261018',
     sourceProjectRef: 'vdblajgxrfndjesoyayy',
     pageSize: 200
   }).pageSize, 200);
   assert.throws(() => validateTradingSnapshotRequest({
-    freezeEvidence: 'source-freeze:OPS-20261018',
+    cutoverReference: 'source-cutover:OPS-20261018',
     sourceProjectRef: 'vdblajgxrfndjesoyayy',
     pageSize: 5000
   }), /between 1 and 500/);
@@ -390,7 +390,7 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
       client: { from: () => ({ select() { return this; }, order() { return this; }, range: async () => ({ data: [], error: null }) }) },
       masterKey: 'snapshot-test-key',
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
-      freezeEvidence: 'source-freeze:OPS-20261018',
+      cutoverReference: 'source-cutover:OPS-20261018',
       outputPath
     });
     const artifact = JSON.parse(await readFile(outputPath, 'utf8'));
@@ -414,7 +414,7 @@ test('snapshot artifact is encrypted at rest and includes only keyed checksums i
   }
 });
 
-test('snapshot export aborts if a table changes between verification passes', async () => {
+test('snapshot export records live changes and imports the latest complete pass', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   let journalReads = 0;
   const client = {
@@ -432,20 +432,60 @@ test('snapshot export aborts if a table changes between verification passes', as
     }
   };
   try {
-    await assert.rejects(() => exportTradingDataSnapshot({
+    const result = await exportTradingDataSnapshot({
       client,
       masterKey: 'snapshot-test-key',
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
-      freezeEvidence: 'source-freeze:OPS-20261018',
+      cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
-    }), /Source changed during snapshot export at table operation_journal/);
-    await assert.rejects(() => readFile(join(directory, 'snapshot.json')));
+    });
+    assert.deepEqual(result.sourceDrift, [{ table: 'operation_journal', added: 0, removed: 0, modified: 1 }]);
+    const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
+    assert.equal(verified.rowsByTable.operation_journal[0].summary, 'after');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('snapshot export records a bounded append-only operation journal delta', async () => {
+test('snapshot export refreshes workspace identity and access configuration at the end of the rolling capture', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
+  let workspaceReads = 0;
+  const positionReads = { position_groups: 0, position_legs: 0 };
+  const client = {
+    from(table) {
+      return {
+        select() { return this; },
+        order() { return this; },
+        async range() {
+          if (Object.hasOwn(positionReads, table)) positionReads[table] += 1;
+          if (table !== 'workspaces') return { data: [], error: null };
+          workspaceReads += 1;
+          const name = workspaceReads === 1 ? 'before' : workspaceReads === 2 ? 'rolling' : 'latest';
+          return { data: [{ id: 'workspace-1', name, owner_email: 'owner@example.test' }], error: null };
+        }
+      };
+    }
+  };
+  try {
+    const result = await exportTradingDataSnapshot({
+      client,
+      masterKey: 'snapshot-test-key',
+      sourceProjectRef: 'vdblajgxrfndjesoyayy',
+      cutoverReference: 'source-cutover:OPS-20261018',
+      outputPath: join(directory, 'snapshot.json')
+    });
+    const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
+    assert.equal(verified.rowsByTable.workspaces[0].name, 'latest');
+    assert.deepEqual(verified.sourceDrift.find(({ table }) => table === 'workspaces'), {
+      table: 'workspaces', added: 0, removed: 0, modified: 2
+    });
+    assert.deepEqual(positionReads, { position_groups: 3, position_legs: 3 });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snapshot export records bounded live operation journal drift', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   let journalReads = 0;
   const client = {
@@ -466,30 +506,32 @@ test('snapshot export records a bounded append-only operation journal delta', as
       client,
       masterKey: 'snapshot-test-key',
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
-      freezeEvidence: 'source-freeze:OPS-20261018',
+      cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
     });
     assert.deepEqual(result.sourceDrift, [{ table: 'operation_journal', added: 1, removed: 0, modified: 0 }]);
     const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
-    assert.equal(verified.rowsByTable.operation_journal.length, 0);
+    assert.equal(verified.rowsByTable.operation_journal.length, 1);
     assert.deepEqual(verified.sourceDrift, result.sourceDrift);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('snapshot export rejects operation journal drift above the explicit bound', async () => {
+test('snapshot export rejects live drift above the explicit table bound', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   let journalReads = 0;
+  const driftRows = Array.from({ length: 2001 }, (_, index) => ({ id: `journal-${index}` }));
   const client = {
     from(table) {
       return {
         select() { return this; },
         order() { return this; },
-        async range() {
+        async range(from, to) {
           if (table !== 'operation_journal') return { data: [], error: null };
           journalReads += 1;
-          return { data: journalReads === 1 ? [] : Array.from({ length: 101 }, (_, index) => ({ id: `journal-${index}` })), error: null };
+          if (journalReads === 1) return { data: [], error: null };
+          return { data: driftRows.slice(from, to + 1), error: null };
         }
       };
     }
@@ -499,9 +541,9 @@ test('snapshot export rejects operation journal drift above the explicit bound',
       client,
       masterKey: 'snapshot-test-key',
       sourceProjectRef: 'vdblajgxrfndjesoyayy',
-      freezeEvidence: 'source-freeze:OPS-20261018',
+      cutoverReference: 'source-cutover:OPS-20261018',
       outputPath: join(directory, 'snapshot.json')
-    }), /Source changed during snapshot export at table operation_journal/);
+    }), /Live source drift exceeded the safe cutover bound at table operation_journal/);
     await assert.rejects(() => readFile(join(directory, 'snapshot.json')));
   } finally {
     await rm(directory, { recursive: true, force: true });

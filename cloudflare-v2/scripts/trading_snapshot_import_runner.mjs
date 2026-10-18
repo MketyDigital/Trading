@@ -261,7 +261,7 @@ export async function importTradingSnapshotToTargets({
     parity: { d1: d1Parity, postgres: postgresParity },
   });
   return {
-    source: { projectRef: snapshot.sourceProjectRef, capturedAt: snapshot.capturedAt, freezeEvidence: snapshot.freezeEvidence },
+    source: { projectRef: snapshot.sourceProjectRef, capturedAt: snapshot.capturedAt, cutoverReference: snapshot.cutoverReference },
     fences: fenced.overrides,
     catalogNormalization: fenced.catalogNormalization,
     d1Import,

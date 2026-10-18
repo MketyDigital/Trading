@@ -16,8 +16,8 @@ on:
         description: Enter the exact schema or data-import confirmation for the selected mode
         required: false
         type: string
-      freeze_evidence:
-        description: Required for data import; enter source-freeze followed by your approved change or incident reference
+      cutover_reference:
+        description: Audit reference for the rolling live-source import (does not pause writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
         required: false
         type: string
   push:
@@ -78,7 +78,7 @@ jobs:
             ) || (
               inputs.mode == 'import-existing-trading-data' &&
               inputs.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' &&
-              startsWith(inputs.freeze_evidence, 'source-freeze:')
+              startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
         ) ||
@@ -144,7 +144,7 @@ jobs:
             ) || (
               inputs.mode == 'import-existing-trading-data' &&
               inputs.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' &&
-              startsWith(inputs.freeze_evidence, 'source-freeze:')
+              startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
         )
@@ -517,7 +517,7 @@ jobs:
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           APPLY_MODE: ${{ inputs.mode }}
           MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
-          SOURCE_FREEZE_EVIDENCE: ${{ inputs.freeze_evidence }}
+          SOURCE_CUTOVER_REFERENCE: ${{ inputs.cutover_reference }}
         shell: bash
         run: |
           set -euo pipefail
@@ -531,7 +531,7 @@ jobs:
           fi
           if [ "$APPLY_MODE" = 'import-existing-trading-data' ]; then
             [ "$MIGRATION_CONFIRMATION" = 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS' ] || { echo 'Data import requires the exact explicit confirmation.'; exit 1; }
-            [[ "$SOURCE_FREEZE_EVIDENCE" =~ ^source-freeze:[A-Z0-9][A-Z0-9-]{5,79}$ ]] || { echo 'Data import requires valid source pause evidence.'; exit 1; }
+            [[ "$SOURCE_CUTOVER_REFERENCE" =~ ^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$ ]] || { echo 'Data import requires valid source cutover reference.'; exit 1; }
             test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Data import requires a successful backup from the last 24 hours.'; exit 1; }
             test -n "${SUPABASE_SERVICE_ROLE:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE'; exit 1; }
             test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing GitHub staging secret: TRADING_MASTER_KEY'; exit 1; }
@@ -711,7 +711,7 @@ jobs:
             echo "::add-mask::$TRADING_MASTER_KEY"
             echo "::add-mask::$CLOUDFLARE_API_TOKEN"
             add_import_env TRADING_SNAPSHOT_IMPORT_CONFIRM "$MIGRATION_CONFIRMATION"
-            add_import_env TRADING_MIGRATION_FREEZE_EVIDENCE "$SOURCE_FREEZE_EVIDENCE"
+            add_import_env TRADING_MIGRATION_CUTOVER_REFERENCE "$SOURCE_CUTOVER_REFERENCE"
             add_import_env SUPABASE_URL 'https://vdblajgxrfndjesoyayy.supabase.co' false
             add_import_env SUPABASE_SERVICE_ROLE "$SUPABASE_SERVICE_ROLE"
             add_import_env TRADING_MASTER_KEY "$TRADING_MASTER_KEY"
@@ -817,14 +817,24 @@ jobs:
           const result = JSON.parse(line.slice(prefix.length));
           if (importing) {
             const important = result.importantRows || {};
+            const sourceDrift = result.sourceDrift || [];
+            const driftedRows = sourceDrift.reduce((sum, change) => {
+              const tableChanges = Number(change?.added) + Number(change?.removed) + Number(change?.modified);
+              if (!/^[a-z][a-z0-9_]{0,62}$/.test(String(change?.table || '')) || !Number.isSafeInteger(tableChanges)
+                || tableChanges < 0 || tableChanges > 2000) throw new Error('Snapshot source drift report is invalid or exceeds a per-table safety bound.');
+              return sum + tableChanges;
+            }, 0);
             if (result.tables !== 28 || result.targetsParityVerified !== true || result.authorityActivated !== true
+              || result.snapshotConsistency !== 'bounded-rolling-live-source' || !Array.isArray(result.sourceDrift)
+              || driftedRows > 10000
               || !Number.isSafeInteger(result.d1Rows) || result.d1Rows !== result.postgresRows
               || !(important.workspaces > 0) || !(important.trading_workspace_access > 0)
               || result.fences?.globalControlsFenced !== 2
               || result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) {
               throw new Error('Snapshot import did not verify all reviewed tables and preserve owner access while fencing broker execution.');
             }
-            console.log(`Existing D1 and mkety data parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; broker execution remains fenced.`);
+            const driftSummary = sourceDrift.map((change) => `${change.table}:${change.added}/${change.modified}/${change.removed}`).join(',') || 'none';
+            console.log(`Existing D1 and mkety data parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
           } else if (applying) {
             const expectedMigrations = [
               '0001_trading_storage_replication_authority.sql',

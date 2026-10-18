@@ -10,7 +10,16 @@ const REPOSITORY_ROOT = resolve(here, '../..');
 const SNAPSHOT_SCHEMA_PATH = resolve(REPOSITORY_ROOT, 'docs/supabase-trading-schema-snapshot-2026-10-17.json');
 const EXPECTED_PROJECT_REF = 'vdblajgxrfndjesoyayy';
 const FORMAT = 'mkety-trading-data-snapshot-v1';
-const MAX_OPERATION_JOURNAL_APPEND_DRIFT = 100;
+const MAX_LIVE_CUTOVER_DRIFT_PER_TABLE = 2_000;
+const MAX_LIVE_CUTOVER_DRIFT_TOTAL = 10_000;
+const CUTOVER_REFRESH_TABLES = new Set([
+  'workspaces', 'trading_workspace_access', 'trading_workspace_memberships',
+  'trading_access_codes', 'trading_access_code_redemptions', 'trading_runtime_controls',
+  'source_connections', 'source_feeds', 'source_destination_routes', 'signal_routes',
+  'trading_destinations', 'trading_destination_templates', 'trading_destination_connections',
+  'ai_providers', 'trade_accounts', 'position_groups', 'position_legs',
+  'trading_workspace_hostnames', 'trading_ingress_collectors',
+]);
 
 function safeProjectRef(value) {
   const ref = String(value || '').trim();
@@ -18,14 +27,14 @@ function safeProjectRef(value) {
   return ref;
 }
 
-export function validateTradingSnapshotRequest({ freezeEvidence, sourceProjectRef, pageSize = 200 } = {}) {
-  if (!/^source-freeze:[A-Z0-9][A-Z0-9-]{5,79}$/.test(String(freezeEvidence || ''))) {
-    throw new Error('Explicit source-freeze evidence is required');
+export function validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize = 200 } = {}) {
+  if (!/^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$/.test(String(cutoverReference || ''))) {
+    throw new Error('An auditable source-cutover reference is required');
   }
   const projectRef = safeProjectRef(sourceProjectRef);
   const size = Number(pageSize);
   if (!Number.isSafeInteger(size) || size < 1 || size > 500) throw new Error('Snapshot page size must be between 1 and 500');
-  return { freezeEvidence: String(freezeEvidence), sourceProjectRef: projectRef, pageSize: size };
+  return { cutoverReference: String(cutoverReference), sourceProjectRef: projectRef, pageSize: size };
 }
 
 function stable(value) {
@@ -726,7 +735,7 @@ function snapshotMetadata(artifact) {
   return {
     format: artifact.format,
     sourceProjectRef: artifact.sourceProjectRef,
-    freezeEvidence: artifact.freezeEvidence,
+    cutoverReference: artifact.cutoverReference,
     capturedAt: artifact.capturedAt,
     tableManifest: artifact.tableManifest,
     sourceDrift: artifact.sourceDrift
@@ -744,17 +753,17 @@ async function assertOutsideRepository(path) {
   return actualTarget;
 }
 
-/** Export only while the operator has paused source writes and provides a change/incident reference. */
+/** Export a bounded rolling cutover snapshot while public source writes continue. */
 export async function exportTradingDataSnapshot({
   client,
   masterKey,
-  freezeEvidence,
+  cutoverReference,
   sourceProjectRef,
   outputPath,
   pageSize = 200,
   clock = () => new Date()
 } = {}) {
-  const request = validateTradingSnapshotRequest({ freezeEvidence, sourceProjectRef, pageSize });
+  const request = validateTradingSnapshotRequest({ cutoverReference, sourceProjectRef, pageSize });
   if (!client?.from) throw new Error('Supabase snapshot client is required');
   if (!masterKey) throw new Error('TRADING_MASTER_KEY is required');
   if (!outputPath) throw new Error('Encrypted snapshot output path is required');
@@ -764,37 +773,63 @@ export async function exportTradingDataSnapshot({
   const firstRead = {};
   for (const table of inventory) firstRead[table.name] = await fetchTableRows(client, table, request.pageSize);
   const sourceManifest = tableManifest(firstRead, inventory, masterKey);
-  const prepared = await prepareTradingSnapshotRows(firstRead, { masterKey });
-  const manifest = tableManifest(prepared, inventory, masterKey);
-
-  // A second full read catches concurrent writes that counts alone would miss.
-  // Freeze evidence is still mandatory: two equal passes cannot prove an atomic snapshot without it.
+  // Public ingress remains live. Retain the newest complete pass and bound the
+  // drift; an explicit final refresh keeps owner identity and settings close to
+  // the chosen cutover point without claiming a globally atomic source snapshot.
   const sourceDrift = [];
+  const rollingRows = {};
+  let totalDrift = 0;
   for (const table of inventory) {
     const currentRows = await fetchTableRows(client, table, request.pageSize);
+    rollingRows[table.name] = currentRows;
     const currentManifest = tableManifest({ [table.name]: currentRows }, [table], masterKey);
     const expected = sourceManifest.find((entry) => entry.name === table.name);
     const drift = compareTradingSnapshotTableDrift(expected, currentManifest[0]);
     if (drift.added || drift.removed || drift.modified) {
-      if (table.name !== 'operation_journal' || drift.removed || drift.modified
-        || drift.added > MAX_OPERATION_JOURNAL_APPEND_DRIFT) {
-        throw new Error(`Source changed during snapshot export at table ${table.name}; discard and restart after refreezing`);
-      }
+      const changedRows = drift.added + drift.removed + drift.modified;
+      if (changedRows > MAX_LIVE_CUTOVER_DRIFT_PER_TABLE) throw new Error(`Live source drift exceeded the safe cutover bound at table ${table.name}`);
+      totalDrift += changedRows;
+      if (totalDrift > MAX_LIVE_CUTOVER_DRIFT_TOTAL) throw new Error('Live source drift exceeded the total safe cutover bound');
       sourceDrift.push({ table: table.name, ...drift });
     }
-    if (currentManifest[0].rowCount !== expected.rowCount + drift.added - drift.removed) {
-      throw new Error(`Source changed during snapshot export at table ${table.name}; discard and restart after refreezing`);
-    }
+    if (currentManifest[0].rowCount !== expected.rowCount + drift.added - drift.removed) throw new Error(`Source changed inconsistently during snapshot export at table ${table.name}`);
   }
+
+  for (const table of inventory) {
+    if (!CUTOVER_REFRESH_TABLES.has(table.name)) continue;
+    const latestRows = await fetchTableRows(client, table, request.pageSize);
+    const latestManifest = tableManifest({ [table.name]: latestRows }, [table], masterKey)[0];
+    const previousManifest = tableManifest({ [table.name]: rollingRows[table.name] }, [table], masterKey)[0];
+    const drift = compareTradingSnapshotTableDrift(previousManifest, latestManifest);
+    const changedRows = drift.added + drift.removed + drift.modified;
+    if (changedRows) {
+      if (changedRows > MAX_LIVE_CUTOVER_DRIFT_PER_TABLE) throw new Error(`Live source drift exceeded the safe cutover bound at table ${table.name}`);
+      totalDrift += changedRows;
+      if (totalDrift > MAX_LIVE_CUTOVER_DRIFT_TOTAL) throw new Error('Live source drift exceeded the total safe cutover bound');
+      const prior = sourceDrift.find((entry) => entry.table === table.name);
+      if (prior) {
+        prior.added += drift.added;
+        prior.removed += drift.removed;
+        prior.modified += drift.modified;
+        if (prior.added + prior.removed + prior.modified > MAX_LIVE_CUTOVER_DRIFT_PER_TABLE) {
+          throw new Error(`Live source drift exceeded the safe cutover bound at table ${table.name}`);
+        }
+      } else sourceDrift.push({ table: table.name, ...drift });
+    }
+    rollingRows[table.name] = latestRows;
+  }
+
+  const snapshotSourceRows = await prepareTradingSnapshotRows(rollingRows, { masterKey });
+  const manifest = tableManifest(snapshotSourceRows, inventory, masterKey);
 
   const artifact = {
     format: FORMAT,
     sourceProjectRef: request.sourceProjectRef,
-    freezeEvidence: request.freezeEvidence,
+    cutoverReference: request.cutoverReference,
     capturedAt: clock().toISOString(),
     sourceDrift,
     tableManifest: manifest.map(({ name, primaryKeys, rowCount, sha256 }) => ({ name, primaryKeys, rowCount, sha256 })),
-    payloadCiphertext: await encryptSecret(JSON.stringify(prepared), masterKey)
+    payloadCiphertext: await encryptSecret(JSON.stringify(snapshotSourceRows), masterKey)
   };
   artifact.metadataHmac = keyedDigest(snapshotMetadata(artifact), masterKey);
   await writeFile(targetPath, `${JSON.stringify(artifact)}\n`, { mode: 0o600, flag: 'wx' });
@@ -804,7 +839,8 @@ export async function exportTradingDataSnapshot({
     sourceProjectRef: artifact.sourceProjectRef,
     capturedAt: artifact.capturedAt,
     tableManifest: artifact.tableManifest,
-    sourceDrift: artifact.sourceDrift
+    sourceDrift: artifact.sourceDrift,
+    totalDrift
   };
 }
 
@@ -815,15 +851,18 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
   if (artifact?.format !== FORMAT) throw new Error('Trading data snapshot format is unsupported');
   safeProjectRef(artifact.sourceProjectRef);
   validateTradingSnapshotRequest({
-    freezeEvidence: artifact.freezeEvidence,
+    cutoverReference: artifact.cutoverReference,
     sourceProjectRef: artifact.sourceProjectRef,
     pageSize: 1
   });
   if (!Array.isArray(artifact.tableManifest)) throw new Error('Trading data snapshot manifest is invalid');
   if (!Array.isArray(artifact.sourceDrift) || artifact.sourceDrift.some((drift) => (
-    drift?.table !== 'operation_journal' || !Number.isSafeInteger(drift.added) || drift.added < 1
-    || drift.added > MAX_OPERATION_JOURNAL_APPEND_DRIFT || drift.removed !== 0 || drift.modified !== 0
-  ))) throw new Error('Trading data snapshot drift manifest is invalid');
+    typeof drift?.table !== 'string' || !/^[a-z][a-z0-9_]{0,62}$/.test(drift.table)
+    || !['added', 'removed', 'modified'].every((key) => Number.isSafeInteger(drift[key]) && drift[key] >= 0)
+    || drift.added + drift.removed + drift.modified > MAX_LIVE_CUTOVER_DRIFT_PER_TABLE
+  )) || artifact.sourceDrift.reduce((sum, drift) => sum + drift.added + drift.removed + drift.modified, 0) > MAX_LIVE_CUTOVER_DRIFT_TOTAL) {
+    throw new Error('Trading data snapshot drift manifest is invalid');
+  }
   if (artifact.metadataHmac !== keyedDigest(snapshotMetadata(artifact), masterKey)) {
     throw new Error('Trading data snapshot metadata integrity check failed');
   }
@@ -857,14 +896,14 @@ export async function readTradingDataSnapshot({ artifactPath, masterKey } = {}) 
       }
     }
   }
-  return { sourceProjectRef: artifact.sourceProjectRef, freezeEvidence: artifact.freezeEvidence, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, sourceDrift: artifact.sourceDrift, rowsByTable };
+  return { sourceProjectRef: artifact.sourceProjectRef, cutoverReference: artifact.cutoverReference, capturedAt: artifact.capturedAt, tableManifest: expectedManifest, sourceDrift: artifact.sourceDrift, rowsByTable };
 }
 
 async function main() {
   const sourceProjectRef = process.env.TRADING_MIGRATION_SOURCE_PROJECT_REF;
   const outputPath = process.env.TRADING_MIGRATION_SNAPSHOT_PATH;
   const masterKey = process.env.TRADING_MASTER_KEY;
-  const freezeEvidence = process.env.TRADING_MIGRATION_FREEZE_EVIDENCE;
+  const cutoverReference = process.env.TRADING_MIGRATION_CUTOVER_REFERENCE;
   const url = process.env.SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
   if (!url || !serviceRole) throw new Error('Supabase migration read credentials are required');
@@ -876,7 +915,7 @@ async function main() {
   const result = await exportTradingDataSnapshot({
     client,
     masterKey,
-    freezeEvidence,
+    cutoverReference,
     sourceProjectRef,
     outputPath,
     pageSize: Number(process.env.TRADING_MIGRATION_PAGE_SIZE || 200)
