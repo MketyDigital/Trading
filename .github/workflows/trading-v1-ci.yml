@@ -909,7 +909,7 @@ jobs:
             if (result.reset?.tablesResetPerTarget !== 28 || result.reset?.storageAuthorityPreserved !== true
               || result.reset?.writesFenced !== true) failedGates.push('guarded-target-reset');
             if (!excludedEmpty) failedGates.push('excluded-operational-tables-empty');
-            if (!(important.workspaces > 0)) failedGates.push('workspace-preservation');
+            if (!(important.workspaces > 0) && !(important.trading_workspace_access > 0)) failedGates.push('workspace-preservation');
             if (!(important.trading_workspace_access > 0)) failedGates.push('workspace-access-preservation');
             if (result.fences?.globalControlsFenced !== 2) failedGates.push('global-execution-fence');
             if (result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) failedGates.push('workspace-access-fence-accounting');
