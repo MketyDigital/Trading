@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Read-only inspection or one-time schema-only apply to the existing mkety database
+        description: Read-only inspection or exact-confirmation schema-only apply to existing Trading D1 and mkety PostgreSQL targets
         required: true
         type: choice
         default: inspect
@@ -54,21 +54,6 @@ on:
       - 'cloudflare-v2/wrangler.free.toml'
       - 'cloudflare-v2/wrangler.trading-staging.toml'
       - '.github/workflows/trading-v1-ci.yml'
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Read-only inspection or one-time schema-only apply to the existing mkety database
-        required: true
-        type: choice
-        default: inspect
-        options:
-          - inspect
-          - apply-existing-mkety-schema
-      confirmation:
-        description: Required for apply; enter APPLY_TRADING_STORAGE_SCHEMA exactly
-        required: false
-        type: string
-
 permissions:
   contents: read
 
@@ -174,10 +159,11 @@ jobs:
       - name: Install dependencies without Cloudflare credentials
         run: npm ci --no-audit --no-fund
 
-      - name: Prepare isolated Trading D1 staging schema and inspect Hyperdrive
+      - name: Inspect or explicitly apply existing Trading D1 schema
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STAGING_MODE: ${{ inputs.mode || 'inspect' }}
         shell: bash
         run: |
           test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
@@ -228,7 +214,9 @@ jobs:
           console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
           D1_CONFIG
           trap 'rm -f wrangler.trading-staging.toml' EXIT
-          npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+          if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
+            npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+          fi
           npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
           npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --command "SELECT CASE WHEN COUNT(*) >= 34 THEN 'TRADING_D1_SCHEMA_OK' ELSE 'TRADING_D1_SCHEMA_MISSING' END AS status FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';" > "$RUNNER_TEMP/trading-d1-schema-check.txt"
           node --input-type=module <<'CHECK_TRADING_D1_SCHEMA'
