@@ -35,3 +35,17 @@ test('production deploy stops before Cloudflare mutations when Trading storage b
   assert.match(preflight, /requireVar\(["']LIVE_BROKER_EXECUTION_ENABLED["'],\s*["']false["']\)/);
   assert.doesNotMatch(preflight, /(?:curl|wrangler)\s+[^\n]*(?:-X\s+(?:POST|PUT|PATCH|DELETE)|\bdeploy\b)/i);
 });
+
+test('production deploy removes stale Supabase Worker secrets after deploying the D1 runtime', () => {
+  const deployAt = workflow.indexOf('npx wrangler deploy --config wrangler.production.generated.toml --secrets-file');
+  const cleanupAt = workflow.indexOf('name: Remove legacy Supabase Worker secrets');
+  const healthAt = workflow.indexOf('name: Probe production health');
+  assert.ok(deployAt >= 0, 'production deploy step must exist');
+  assert.ok(cleanupAt > deployAt, 'legacy secret cleanup must happen only after the D1 deployment');
+  assert.ok(healthAt > cleanupAt, 'production health must be checked after legacy secrets are removed');
+  const cleanup = workflow.slice(cleanupAt, healthAt);
+  assert.match(cleanup, /wrangler secret list/);
+  assert.match(cleanup, /wrangler secret delete/);
+  assert.match(cleanup, /SUPABASE_/);
+  assert.match(cleanup, /remaining/i);
+});

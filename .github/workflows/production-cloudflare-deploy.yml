@@ -340,6 +340,35 @@ jobs:
       - name: Deploy production Trading Worker with persisted owner broker switch
         run: npx wrangler deploy --config wrangler.production.generated.toml --secrets-file "$RUNNER_TEMP/mkety-trading-production-secrets.json"
 
+      - name: Remove legacy Supabase Worker secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_json="$(npx wrangler secret list --config wrangler.production.generated.toml --format json)"
+          legacy_names="$(SECRET_LIST_JSON="$secret_json" node <<'NODE'
+          const parsed = JSON.parse(process.env.SECRET_LIST_JSON || 'null');
+          if (!Array.isArray(parsed)) throw new Error('Cloudflare secret inventory returned an unexpected shape');
+          const names = parsed.map((item) => typeof item === 'string' ? item : item?.name)
+            .filter((name) => typeof name === 'string' && /^SUPABASE_/i.test(name));
+          process.stdout.write([...new Set(names)].join('\n'));
+          NODE
+          )"
+          if [ -n "$legacy_names" ]; then
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              npx wrangler secret delete "$name" --config wrangler.production.generated.toml
+            done <<< "$legacy_names"
+          fi
+          remaining_json="$(npx wrangler secret list --config wrangler.production.generated.toml --format json)"
+          SECRET_LIST_JSON="$remaining_json" node <<'NODE'
+          const parsed = JSON.parse(process.env.SECRET_LIST_JSON || 'null');
+          if (!Array.isArray(parsed)) throw new Error('Cloudflare secret inventory returned an unexpected shape');
+          const remaining = parsed.map((item) => typeof item === 'string' ? item : item?.name)
+            .filter((name) => typeof name === 'string' && /^SUPABASE_/i.test(name));
+          if (remaining.length) throw new Error(`Legacy Supabase Worker secrets remain (${remaining.length})`);
+          console.log('Legacy Supabase Worker secrets: absent');
+          NODE
+
       - name: Probe production health
         shell: bash
         run: |
