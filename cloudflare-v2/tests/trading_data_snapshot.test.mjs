@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret } from '../src/security/secret_box.js';
-import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, applyTradingSnapshotImportPlanResumable, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { applyTradingSnapshotPlanToD1, applyTradingSnapshotPlanToPostgres, applyTradingSnapshotImportPlan, applyTradingSnapshotImportPlanResumable, compareTradingSnapshotTableDrift, createTradingSnapshotImportPlan, createTradingSnapshotRestClient, exportTradingDataSnapshot, getD1SnapshotTargetDefinitions, getPostgresSnapshotTargetDefinitions, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -382,6 +382,22 @@ test('PostgreSQL schema introspection maps runtime controls and verifies primary
   ]);
 });
 
+test('snapshot REST reader encodes primary-key cursors and requests the first bounded page', async () => {
+  let captured;
+  const client = createTradingSnapshotRestClient({
+    url: 'https://vdblajgxrfndjesoyayy.supabase.co',
+    serviceRole: 'test-service-role',
+    fetchFn: async (url, options) => {
+      captured = { url: new URL(url), options };
+      return { ok: true, json: async () => [] };
+    }
+  });
+  await client.from('operation_journal').select('*').order('id').gt('id', '00000000-0000-0000-0000-000000000001').range(0, 499);
+  assert.equal(captured.url.searchParams.get('id'), 'gt.00000000-0000-0000-0000-000000000001');
+  assert.equal(captured.url.searchParams.get('order'), 'id.asc');
+  assert.equal(captured.options.headers.range, '0-499');
+});
+
 test('snapshot artifact is encrypted at rest and includes only keyed checksums in its clear manifest', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
   try {
@@ -465,6 +481,56 @@ test('snapshot export reports safe table and page progress for each live-source 
     assert.ok(events.every((event) => /^[a-z][a-z0-9_]{0,62}$/.test(event.table)));
     assert.ok(events.every((event) => Number.isSafeInteger(event.rows) && event.rows >= 0));
     assert.ok(events.every((event) => !Object.hasOwn(event, 'data') && !Object.hasOwn(event, 'row')));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snapshot keyset paging avoids offset duplicates when live rows are inserted before the cursor', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'trading-snapshot-'));
+  const journal = [
+    { id: 'b', summary: 'b' },
+    { id: 'c', summary: 'c' },
+    { id: 'd', summary: 'd' },
+    { id: 'e', summary: 'e' }
+  ];
+  let journalPass = 0;
+  let inserted = false;
+  const client = {
+    from(table) {
+      let cursor = null;
+      return {
+        select() { return this; },
+        order() { return this; },
+        gt(key, value) { cursor = String(value); return this; },
+        async range(from, to) {
+          if (table !== 'operation_journal') return { data: [], error: null };
+          if (from === 0 && cursor === null) {
+            journalPass += 1;
+            if (journalPass === 2 && !inserted) {
+              journal.push({ id: 'a', summary: 'arrived-before-cursor' });
+              inserted = true;
+            }
+          }
+          const eligible = journal.filter((row) => cursor === null || row.id > cursor);
+          return { data: eligible.slice(from, to + 1), error: null };
+        }
+      };
+    }
+  };
+  try {
+    const result = await exportTradingDataSnapshot({
+      client,
+      masterKey: 'snapshot-test-key',
+      sourceProjectRef: 'vdblajgxrfndjesoyayy',
+      cutoverReference: 'source-cutover:OPS-20261018',
+      outputPath: join(directory, 'snapshot.json'),
+      pageSize: 2
+    });
+    const verified = await readTradingDataSnapshot({ artifactPath: result.outputPath, masterKey: 'snapshot-test-key' });
+    const ids = verified.rowsByTable.operation_journal.map(({ id }) => id);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.deepEqual(ids, ['b', 'c', 'd', 'e']);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

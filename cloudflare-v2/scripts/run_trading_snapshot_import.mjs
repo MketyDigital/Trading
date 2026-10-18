@@ -48,7 +48,7 @@ export async function runTradingSnapshotImport({ env = process.env } = {}) {
       cutoverReference: env.TRADING_MIGRATION_CUTOVER_REFERENCE,
       sourceProjectRef: SOURCE_PROJECT_REF,
       outputPath: snapshotPath,
-      pageSize: 200,
+      pageSize: 500,
       onProgress: (event) => process.stdout.write(`snapshot_import_progress=${JSON.stringify(event)}\n`),
     });
     const d1 = createCloudflareD1SnapshotDatabase({

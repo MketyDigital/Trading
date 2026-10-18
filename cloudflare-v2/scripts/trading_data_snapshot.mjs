@@ -619,17 +619,34 @@ async function loadTableInventory() {
 
 async function fetchTableRows(client, table, pageSize, { onProgress = async () => {}, pass = 'snapshot' } = {}) {
   const rows = [];
+  const keysetEnabled = Boolean(table.primaryKeys?.length === 1);
+  const keyColumn = keysetEnabled ? table.primaryKeys[0] : null;
+  let lastKey = null;
+  let offset = 0;
   let pageNumber = 0;
-  for (let offset = 0; ; offset += pageSize) {
+  for (;;) {
     let query = client.from(table.name).select('*');
     for (const key of table.primaryKeys) query = query.order(key, { ascending: true });
-    const { data, error } = await query.range(offset, offset + pageSize - 1);
+    const supportsKeyset = typeof query.gt === 'function';
+    if (supportsKeyset && !keysetEnabled) throw new Error(`Snapshot keyset pagination requires one primary key for ${table.name}`);
+    if (supportsKeyset && lastKey !== null) query = query.gt(keyColumn, lastKey);
+    const pageOffset = supportsKeyset ? 0 : offset;
+    const { data, error } = await query.range(pageOffset, pageOffset + pageSize - 1);
     if (error) {
       const code = /^[A-Z0-9_-]{2,16}$/i.test(String(error.code || '')) ? String(error.code).toUpperCase() : 'UNKNOWN';
       throw new Error(`Supabase snapshot read failed for ${table.name} (${code})`);
     }
     if (!Array.isArray(data)) throw new Error(`Supabase snapshot returned invalid rows for ${table.name}`);
     rows.push(...data);
+    if (supportsKeyset && data.length) {
+      const nextKey = data[data.length - 1]?.[keyColumn];
+      if (nextKey === undefined || nextKey === null || (lastKey !== null && String(nextKey) === String(lastKey))) {
+        throw new Error(`Snapshot keyset pagination did not advance for ${table.name}`);
+      }
+      lastKey = nextKey;
+    } else if (!supportsKeyset) {
+      offset += pageSize;
+    }
     pageNumber += 1;
     if (pageNumber % 25 === 0 || data.length < pageSize) {
       await onProgress({ phase: 'source-read-table', pass, table: table.name, pages: pageNumber, rows: rows.length });
@@ -652,6 +669,7 @@ export function createTradingSnapshotRestClient({ url, serviceRole, fetchFn = fe
       const table = String(tableName || '');
       if (!/^[a-z][a-z0-9_]{0,62}$/.test(table)) throw new Error('Snapshot table name is invalid');
       const order = [];
+      const filters = new Map();
       let rangeStart = 0;
       let rangeEnd = 0;
       const query = {
@@ -667,6 +685,14 @@ export function createTradingSnapshotRestClient({ url, serviceRole, fetchFn = fe
           order.push(`${column}.asc`);
           return query;
         },
+        gt(key, value) {
+          const column = String(key || '');
+          if (!/^[a-z][a-z0-9_]{0,62}$/.test(column) || value === undefined || value === null) {
+            throw new Error('Snapshot keyset cursor is invalid');
+          }
+          filters.set(column, `gt.${String(value)}`);
+          return query;
+        },
         async range(from, to) {
           if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to - from > 499) {
             throw new Error('Snapshot range is invalid');
@@ -676,6 +702,7 @@ export function createTradingSnapshotRestClient({ url, serviceRole, fetchFn = fe
           const requestUrl = new URL(`/rest/v1/${encodeURIComponent(table)}`, endpoint);
           requestUrl.searchParams.set('select', '*');
           if (order.length) requestUrl.searchParams.set('order', order.join(','));
+          for (const [column, filter] of filters) requestUrl.searchParams.set(column, filter);
           const response = await fetchFn(requestUrl, {
             method: 'GET',
             headers: {
