@@ -26,8 +26,9 @@ function assertCommonLifecycleSafety(block, marker, provider) {
   assert.match(block, /github\.event_name == 'workflow_dispatch'/);
   assert.match(block, new RegExp(`github\\.event\\.inputs\\.provider == '${provider}'`));
   assert.match(block, new RegExp(`github\\.event\\.inputs\\.confirmation == '${marker}'`));
-  assert.match(block, /SUPABASE_URL:\s*\$\{\{\s*secrets\.SUPABASE_URL\s*\}\}/);
-  assert.match(block, /SUPABASE_SERVICE_ROLE_KEY:\s*\$\{\{\s*secrets\.SUPABASE_SERVICE_ROLE_KEY\s*\}\}/);
+  assert.match(block, /TRADING_STORAGE_AUTHORITY:\s*postgres/);
+  assert.match(block, /TRADING_PG_STAGING_DATABASE_URL:\s*\$\{\{\s*secrets\.TRADING_PG_STAGING_DATABASE_URL\s*\}\}/);
+  assert.match(block, /TRADING_MASTER_KEY:\s*\$\{\{\s*secrets\.TRADING_MASTER_KEY\s*\}\}/);
   assert.match(block, /TRADING_WORKSPACE_ID:\s*\$\{\{\s*secrets\.TRADING_WORKSPACE_ID\s*\}\}/);
   assert.match(block, /BROKER_EXECUTION_ENABLED:\s*['"]false['"]/);
   assert.doesNotMatch(block, /\bwrangler\b|CLOUDFLARE_|allowLiveTrading:\s*true/i);
