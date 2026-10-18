@@ -1,5 +1,7 @@
 # Mkety Multi-Tenant SaaS Integration & Deployment Guide
 
+> **Migration notice (2026-10-18):** This historical UI-only guide is not a production deployment procedure. The Trading Worker has moved to its D1/PostgreSQL persistence runtime. Production cutover is not complete, and the Paid and Free Worker configurations still need verified bindings to the existing targets. Follow the protected workflows and migration plan before changing a live Worker. Never add Supabase credentials to a Worker deployment.
+
 This document explains the architecture, isolation, authentication, Cloudflare Dashboard (UI-Only) setup, and GitHub integrations for the standalone copier running on **`trade.mkety.com`** connected to **`app.mkety.com`**.
 
 ---
@@ -10,7 +12,7 @@ This document explains the architecture, isolation, authentication, Cloudflare D
 
 * **Dual-Mode Processing**: The system dynamically handles both complex formatted HTML (AI-driven) and fast text execution.
 * **Asymmetric Fail-Fast Cascade**: If the primary AI provider (e.g., Gemini) times out or has a network glitch within 12 seconds, it automatically fails over to the next configured provider (e.g., OpenAI or DeepSeek).
-* **The Zero-Drop DB Lock**: Webhook requests execute an instant `pending_lock` write into Supabase *before* starting the AI parse or copier logic. This eliminates duplicate execution errors from rapid multi-channel posts or HTTP retries.
+* **Durable idempotency and execution state**: Webhook and broker paths use the selected Trading persistence runtime to record lifecycle state and prevent duplicate actions. Do not infer from this historical guide that production has completed the database cutover.
 * **Auto-Repair Bold Tags**: Inside `universal_ai.js`, `cleanOutput` scans and balances unclosed `<b>` tags on-the-fly, preventing rendering bugs in Telegram.
 * **Precise Symbol & Asset Recognition**: Handles JPY pairs, indices (US30, NAS100), crypto (BTC), metals (XAUUSD), and synthetics (Volatility 75, Boom 500) perfectly.
 * **Automatic Source Credit Stripping**: Preserves @-signs inside numeric prices (e.g. `@1.16440` and `@(1.16440)`) while stripping channel handles and promotional tags.
@@ -100,18 +102,9 @@ To keep the codebase versioned and automatically deploy on every `git push`:
 3. Authenticate with your GitHub account, select your repository, specify the `/cloudflare-v2/` subdirectory, and target the `main` branch.
 4. From now on, whenever you commit and push to GitHub, Cloudflare automatically builds and deploys the new code!
 
-### Step 4: Add Environment Variables & Secrets in Dashboard
-1. Inside your Worker page, click **Settings** $\rightarrow$ **Variables**.
-2. Under **Environment Variables**, click **Add Variable**:
-   - `SUPABASE_URL` = `https://your-project.supabase.co`
-   - `DERIV_APP_ID` = `1098`
-   - `ZITADEL_JWKS_URL` = `https://your-zitadel-instance/oauth/v2/keys`
-   - `GLOBAL_ROUTER_URL` = `https://trade.mkety.com/api/webhook/process_signal`
-3. Under **Secrets**, click **Add Secret** (encrypted storage):
-   - `SUPABASE_ANON_KEY` = (Your Supabase key)
-   - `TELEGRAM_BOT_TOKEN` = (Your Telegram Bot API Key)
-   - `TELEGRAM_ADMIN_CHANNEL_ID` = (Your Private Admin Verification Group ID)
-   - `TELEGRAM_VIP_CHAT_ID` = (Your Private VIP Signal Group ID)
+### Step 4: Configure runtime bindings and secrets
+
+Configure D1/Hyperdrive bindings and required Worker secrets only through the reviewed Wrangler configuration and protected deployment workflow. The migration reuses the existing `trading-staging` D1 and Coolify `mkety` PostgreSQL service; do not create another database. The Paid and Free configurations are not yet proven ready for production cutover, so do not deploy them using this legacy dashboard procedure. Keep Trading access and broker execution controls disabled until the migration gates and DEMO acceptance pass. Add only application secrets required by the reviewed Worker configuration.
 
 ### Step 5: Configure Custom Domains & Subdomains
 1. Inside your Worker dashboard, click **Settings** $\rightarrow$ **Triggers**.
@@ -138,7 +131,7 @@ Each module performs its own tasks in complete isolation, communicating only via
                                                                   ▼
  ┌──────────────────────┐   (4) Execute Copy-Trade     ┌──────────────────────┐
  │    Trade Executors   │ <─────────────────────────── │   Core Router API    │
- │ (Deriv, cTrader, MT5)│                              │ (Supabase Lock & AI) │
+ │ (Deriv, cTrader, MT5)│                              │ (Trading storage & AI)│
  └──────────────────────┘                              └──────────────────────┘
 ```
 
