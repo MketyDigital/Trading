@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   d1-readonly-diagnostics:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -56,24 +57,24 @@ jobs:
           const queries = [
             {
               title: 'Incoming events by processing state',
-              sql: "SELECT processing_status, COALESCE(error_code, '') AS error_code, COUNT(*) AS events FROM trading_events WHERE datetime(received_at) >= datetime(?) GROUP BY processing_status, error_code ORDER BY events DESC LIMIT 50",
+              sql: "SELECT CASE lower(COALESCE(processing_status, '')) WHEN 'processed' THEN 'PROCESSED' WHEN 'executed' THEN 'EXECUTED' WHEN 'failed' THEN 'FAILED' WHEN 'rejected' THEN 'REJECTED' WHEN 'ignored' THEN 'IGNORED' WHEN 'pending' THEN 'PENDING' WHEN 'processing' THEN 'PROCESSING' ELSE 'OTHER' END AS processing_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, COUNT(*) AS events FROM trading_events WHERE datetime(received_at) >= datetime(?) GROUP BY processing_state, has_error ORDER BY events DESC LIMIT 50",
             },
             {
               title: 'Accounts by safe execution flags',
-              sql: "SELECT lower(COALESCE(environment, 'unknown')) AS environment, platform, is_active, execution_enabled, live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY lower(COALESCE(environment, 'unknown')), platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
+              sql: "SELECT CASE lower(COALESCE(environment, 'unknown')) WHEN 'demo' THEN 'DEMO' WHEN 'live' THEN 'LIVE' ELSE 'UNKNOWN' END AS environment, CASE lower(COALESCE(platform, '')) WHEN 'deriv' THEN 'DERIV' WHEN 'ctrader' THEN 'CTRADER' WHEN 'mt5' THEN 'MT5' ELSE 'OTHER' END AS platform, COALESCE(is_active, 0) AS is_active, COALESCE(execution_enabled, 0) AS execution_enabled, COALESCE(live_execution_enabled, 0) AS live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY environment, platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
               params: [],
             },
             {
               title: 'Recent position and leg states',
-              sql: "SELECT lower(COALESCE(a.environment, 'unknown')) AS environment, g.status AS group_status, COALESCE(l.status, 'NO_LEG') AS leg_status, COALESCE(l.failure_code, '') AS failure_code, COUNT(DISTINCT g.id) AS groups, COUNT(DISTINCT l.id) AS legs FROM position_groups g LEFT JOIN trade_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.trade_account_id LEFT JOIN position_legs l ON l.workspace_id = g.workspace_id AND l.position_group_id = g.id WHERE datetime(g.updated_at) >= datetime(?) GROUP BY lower(COALESCE(a.environment, 'unknown')), g.status, COALESCE(l.status, 'NO_LEG'), COALESCE(l.failure_code, '') ORDER BY groups DESC LIMIT 100",
+              sql: "SELECT CASE lower(COALESCE(a.environment, 'unknown')) WHEN 'demo' THEN 'DEMO' WHEN 'live' THEN 'LIVE' ELSE 'UNKNOWN' END AS environment, CASE lower(COALESCE(g.status, '')) WHEN 'open' THEN 'OPEN' WHEN 'planned' THEN 'PLANNED' WHEN 'pending' THEN 'PENDING' WHEN 'closed' THEN 'CLOSED' WHEN 'failed' THEN 'FAILED' WHEN 'cancelled' THEN 'CANCELLED' ELSE 'OTHER' END AS group_status, CASE lower(COALESCE(l.status, '')) WHEN 'open' THEN 'OPEN' WHEN 'planned' THEN 'PLANNED' WHEN 'pending' THEN 'PENDING' WHEN 'closed' THEN 'CLOSED' WHEN 'failed' THEN 'FAILED' WHEN 'cancelled' THEN 'CANCELLED' ELSE 'NO_LEG_OR_OTHER' END AS leg_status, CASE WHEN COALESCE(l.failure_code, '') = '' THEN 0 ELSE 1 END AS has_failure, COUNT(DISTINCT g.id) AS groups, COUNT(DISTINCT l.id) AS legs FROM position_groups g LEFT JOIN trade_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.trade_account_id LEFT JOIN position_legs l ON l.workspace_id = g.workspace_id AND l.position_group_id = g.id WHERE datetime(g.updated_at) >= datetime(?) GROUP BY environment, group_status, leg_status, has_failure ORDER BY groups DESC LIMIT 100",
             },
             {
               title: 'Recent operation journal outcomes',
-              sql: "SELECT stage, operation, status, COALESCE(error_code, '') AS error_code, COALESCE(failure_class, '') AS failure_class, COUNT(*) AS operations FROM operation_journal WHERE datetime(observed_at) >= datetime(?) GROUP BY stage, operation, status, error_code, failure_class ORDER BY operations DESC LIMIT 100",
+              sql: "SELECT CASE lower(COALESCE(status, '')) WHEN 'success' THEN 'SUCCESS' WHEN 'succeeded' THEN 'SUCCESS' WHEN 'completed' THEN 'SUCCESS' WHEN 'failed' THEN 'FAILED' WHEN 'error' THEN 'FAILED' WHEN 'pending' THEN 'PENDING' WHEN 'started' THEN 'STARTED' ELSE 'OTHER' END AS operation_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, CASE WHEN COALESCE(failure_class, '') = '' THEN 0 ELSE 1 END AS has_failure, COUNT(*) AS operations FROM operation_journal WHERE datetime(observed_at) >= datetime(?) GROUP BY operation_state, has_error, has_failure ORDER BY operations DESC LIMIT 100",
             },
             {
               title: 'Recent events without a linked position group',
-              sql: "SELECT processing_status, COALESCE(error_code, '') AS error_code, COUNT(*) AS events FROM trading_events e WHERE datetime(e.received_at) >= datetime(?) AND NOT EXISTS (SELECT 1 FROM position_groups g WHERE g.workspace_id = e.workspace_id AND (g.source_event_id = e.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(g.source_event_ids, '[]')) WHERE value = e.id))) GROUP BY processing_status, error_code ORDER BY events DESC LIMIT 50",
+              sql: "SELECT CASE lower(COALESCE(processing_status, '')) WHEN 'processed' THEN 'PROCESSED' WHEN 'executed' THEN 'EXECUTED' WHEN 'failed' THEN 'FAILED' WHEN 'rejected' THEN 'REJECTED' WHEN 'ignored' THEN 'IGNORED' WHEN 'pending' THEN 'PENDING' WHEN 'processing' THEN 'PROCESSING' ELSE 'OTHER' END AS processing_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, COUNT(*) AS events FROM trading_events e WHERE datetime(e.received_at) >= datetime(?) AND NOT EXISTS (SELECT 1 FROM position_groups g WHERE g.workspace_id = e.workspace_id AND (g.source_event_id = e.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(g.source_event_ids, '[]')) WHERE value = e.id))) GROUP BY processing_state, has_error ORDER BY events DESC LIMIT 50",
             },
           ];
 
@@ -105,7 +106,7 @@ jobs:
           let report = '# Production D1 read-only diagnostics\n\n'
             + '- Window: last ' + hours + ' hours (through ' + new Date().toISOString() + ')\n'
             + '- Source: existing production D1 binding; SELECT-only queries\n'
-            + '- Privacy: raw message text, account IDs, workspace IDs, and credentials are omitted\n';
+            + '- Privacy: database text values are reduced to fixed categories or boolean indicators; raw message text, account IDs, workspace IDs, and credentials are omitted\n';
           for (let i = 0; i < queries.length; i++) {
             const rows = payload.result[i].results;
             report += '\n## ' + queries[i].title + '\n';
