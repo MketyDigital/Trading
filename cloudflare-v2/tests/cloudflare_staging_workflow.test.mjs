@@ -72,7 +72,7 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /if: always\(\) && steps\.postgres-probe-app\.outputs\.app_uuid != ''/);
   assert.doesNotMatch(block, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
   assert.match(block, /concurrency:\s*\n\s+group: trading-coolify-postgres-staging/);
-  assert.match(block, /timeout-minutes:\s*35/);
+  assert.match(block, /timeout-minutes:\s*70/);
   assert.match(block, /git_commit_sha:\s*sha,/);
   assert.match(block, /autogenerate_domain:\s*false/);
   assert.match(block, /-X DELETE/);
@@ -88,7 +88,9 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.doesNotMatch(probeScript, /await runTradingSnapshotImport\(\)/);
   assert.doesNotMatch(probeScript, /postgres-migrations|CREATE DATABASE|CREATE SCHEMA|INSERT INTO|UPDATE .* SET|DELETE FROM/i);
   assert.match(block, /TRADING_PROBE_FAILED=/);
-  assert.match(block, /seq 1 300/);
+  assert.match(block, /probe_deadline=\$\(\(SECONDS \+ 45 \* 60\)\)/);
+  assert.match(block, /sleep 10/);
+  assert.match(block, /snapshot_import_progress=/);
   assert.match(block, /Inventory Coolify database resources \(read-only\)/);
   assert.match(block, /OCI_COOLIFY_URL: \$\{\{ secrets\.OCI_COOLIFY_URL \}\}/);
   assert.match(block, /OCI_COOLIFY_TOKEN: \$\{\{ secrets\.OCI_COOLIFY_TOKEN \}\}/);
