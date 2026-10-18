@@ -1,0 +1,126 @@
+name: Production D1 Read-only Demo Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      window_hours:
+        description: "Lookback window in hours (1-120); defaults to five days"
+        required: true
+        default: "120"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  d1-readonly-diagnostics:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WINDOW_HOURS: ${{ inputs.window_hours }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Query production D1 without printing message contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const hours = Number(process.env.WINDOW_HOURS);
+          if (!Number.isInteger(hours) || hours < 1 || hours > 120) {
+            throw new Error('WINDOW_HOURS must be an integer from 1 to 120');
+          }
+          if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) {
+            throw new Error('Cloudflare credentials are not configured');
+          }
+
+          const config = fs.readFileSync('cloudflare-v2/wrangler.toml', 'utf8');
+          const start = config.indexOf('[[d1_databases]]');
+          if (start < 0) throw new Error('Production D1 binding was not found');
+          const next = config.indexOf('\n[[', start + 1);
+          const binding = config.slice(start, next < 0 ? config.length : next);
+          const name = binding.match(/^database_name\s*=\s*"([^"]+)"/m)?.[1];
+          const databaseId = binding.match(/^database_id\s*=\s*"([^"]+)"/m)?.[1];
+          if (name !== 'trading-staging' || !/^[0-9a-f-]{36}$/i.test(databaseId || '')) {
+            throw new Error('Expected existing production Trading D1 binding was not verified');
+          }
+
+          const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+          const queries = [
+            {
+              title: 'Incoming events by processing state',
+              sql: "SELECT CASE lower(COALESCE(processing_status, '')) WHEN 'processed' THEN 'PROCESSED' WHEN 'executed' THEN 'EXECUTED' WHEN 'failed' THEN 'FAILED' WHEN 'rejected' THEN 'REJECTED' WHEN 'ignored' THEN 'IGNORED' WHEN 'pending' THEN 'PENDING' WHEN 'processing' THEN 'PROCESSING' ELSE 'OTHER' END AS processing_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, COUNT(*) AS events FROM trading_events WHERE datetime(received_at) >= datetime(?) GROUP BY processing_state, has_error ORDER BY events DESC LIMIT 50",
+            },
+            {
+              title: 'Accounts by safe execution flags',
+              sql: "SELECT CASE lower(COALESCE(environment, 'unknown')) WHEN 'demo' THEN 'DEMO' WHEN 'live' THEN 'LIVE' ELSE 'UNKNOWN' END AS environment, CASE lower(COALESCE(platform, '')) WHEN 'deriv' THEN 'DERIV' WHEN 'ctrader' THEN 'CTRADER' WHEN 'mt5' THEN 'MT5' ELSE 'OTHER' END AS platform, COALESCE(is_active, 0) AS is_active, COALESCE(execution_enabled, 0) AS execution_enabled, COALESCE(live_execution_enabled, 0) AS live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY environment, platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
+              params: [],
+            },
+            {
+              title: 'Recent position and leg states',
+              sql: "SELECT CASE lower(COALESCE(a.environment, 'unknown')) WHEN 'demo' THEN 'DEMO' WHEN 'live' THEN 'LIVE' ELSE 'UNKNOWN' END AS environment, CASE lower(COALESCE(g.status, '')) WHEN 'open' THEN 'OPEN' WHEN 'planned' THEN 'PLANNED' WHEN 'pending' THEN 'PENDING' WHEN 'closed' THEN 'CLOSED' WHEN 'failed' THEN 'FAILED' WHEN 'cancelled' THEN 'CANCELLED' ELSE 'OTHER' END AS group_status, CASE lower(COALESCE(l.status, '')) WHEN 'open' THEN 'OPEN' WHEN 'planned' THEN 'PLANNED' WHEN 'pending' THEN 'PENDING' WHEN 'closed' THEN 'CLOSED' WHEN 'failed' THEN 'FAILED' WHEN 'cancelled' THEN 'CANCELLED' ELSE 'NO_LEG_OR_OTHER' END AS leg_status, CASE WHEN COALESCE(l.failure_code, '') = '' THEN 0 ELSE 1 END AS has_failure, COUNT(DISTINCT g.id) AS groups, COUNT(DISTINCT l.id) AS legs FROM position_groups g LEFT JOIN trade_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.trade_account_id LEFT JOIN position_legs l ON l.workspace_id = g.workspace_id AND l.position_group_id = g.id WHERE datetime(g.updated_at) >= datetime(?) GROUP BY environment, group_status, leg_status, has_failure ORDER BY groups DESC LIMIT 100",
+            },
+            {
+              title: 'Recent operation journal outcomes',
+              sql: "SELECT CASE lower(COALESCE(status, '')) WHEN 'success' THEN 'SUCCESS' WHEN 'succeeded' THEN 'SUCCESS' WHEN 'completed' THEN 'SUCCESS' WHEN 'failed' THEN 'FAILED' WHEN 'error' THEN 'FAILED' WHEN 'pending' THEN 'PENDING' WHEN 'started' THEN 'STARTED' ELSE 'OTHER' END AS operation_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, CASE WHEN COALESCE(failure_class, '') = '' THEN 0 ELSE 1 END AS has_failure, COUNT(*) AS operations FROM operation_journal WHERE datetime(observed_at) >= datetime(?) GROUP BY operation_state, has_error, has_failure ORDER BY operations DESC LIMIT 100",
+            },
+            {
+              title: 'Recent events without a linked position group',
+              sql: "SELECT CASE lower(COALESCE(processing_status, '')) WHEN 'processed' THEN 'PROCESSED' WHEN 'executed' THEN 'EXECUTED' WHEN 'failed' THEN 'FAILED' WHEN 'rejected' THEN 'REJECTED' WHEN 'ignored' THEN 'IGNORED' WHEN 'pending' THEN 'PENDING' WHEN 'processing' THEN 'PROCESSING' ELSE 'OTHER' END AS processing_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, COUNT(*) AS events FROM trading_events e WHERE datetime(e.received_at) >= datetime(?) AND NOT EXISTS (SELECT 1 FROM position_groups g WHERE g.workspace_id = e.workspace_id AND (g.source_event_id = e.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(g.source_event_ids, '[]')) WHERE value = e.id))) GROUP BY processing_state, has_error ORDER BY events DESC LIMIT 50",
+            },
+          ];
+
+          const url = 'https://api.cloudflare.com/client/v4/accounts/'
+            + encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)
+            + '/d1/database/' + encodeURIComponent(databaseId) + '/query';
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              Authorization: 'Bearer ' + process.env.CLOUDFLARE_API_TOKEN,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              batch: queries.map((query) => ({ sql: query.sql, params: query.params === undefined ? [cutoff] : query.params })),
+            }),
+          });
+          if (!response.ok) throw new Error('Cloudflare D1 query failed with HTTP ' + response.status);
+          const payload = await response.json();
+          if (payload.success !== true || !Array.isArray(payload.result) || payload.result.length !== queries.length) {
+            throw new Error('Cloudflare D1 returned an unsuccessful or incomplete read-only query result');
+          }
+          for (const result of payload.result) {
+            if (result.success !== true || !Array.isArray(result.results)) {
+              throw new Error('A bounded D1 diagnostics query did not complete successfully');
+            }
+          }
+
+          const escapeCell = (value) => String(value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
+          let report = '# Production D1 read-only diagnostics\n\n'
+            + '- Window: last ' + hours + ' hours (through ' + new Date().toISOString() + ')\n'
+            + '- Source: existing production D1 binding; SELECT-only queries\n'
+            + '- Privacy: database text values are reduced to fixed categories or boolean indicators; raw message text, account IDs, workspace IDs, and credentials are omitted\n';
+          for (let i = 0; i < queries.length; i++) {
+            const rows = payload.result[i].results;
+            report += '\n## ' + queries[i].title + '\n';
+            if (!rows.length) {
+              report += '\nNo rows.\n';
+              continue;
+            }
+            const columns = Object.keys(rows[0]);
+            report += '\n| ' + columns.map(escapeCell).join(' | ') + ' |\n'
+              + '| ' + columns.map(() => '---').join(' | ') + ' |\n';
+            for (const row of rows) {
+              report += '| ' + columns.map((column) => escapeCell(row[column])).join(' | ') + ' |\n';
+            }
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+          console.log('Production D1 read-only diagnostics completed; only grouped status/error summaries were emitted.');
+          NODE
