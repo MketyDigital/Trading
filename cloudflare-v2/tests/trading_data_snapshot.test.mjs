@@ -187,7 +187,7 @@ test('snapshot import plan uses only schema-checked idempotent upserts and maps 
   assert.match(plan.statements[0].sql, /^INSERT INTO trading_storage\."runtime_controls"/);
   assert.match(plan.statements[0].sql, /ON CONFLICT \("control_key"\) DO UPDATE/);
   assert.deepEqual(plan.statements[0].values, ['trading_access_enabled', false, 'migration-import-fenced']);
-  assert.deepEqual(plan.statements[1].values, ['ws-1', 'Tenant', { region: 'west' }, true]);
+  assert.deepEqual(plan.statements[1].values, ['ws-1', 'Tenant', '{"region":"west"}', true]);
   assert.equal(plan.statements.some(({ sql }) => /\b(DELETE|TRUNCATE|DROP)\b/i.test(sql)), false);
 });
 
@@ -206,18 +206,30 @@ test('snapshot import plan converts booleans and JSON values for D1', () => {
   assert.match(plan.statements[0].sql, /^INSERT INTO "trading_runtime_controls"/);
 });
 
-test('snapshot import plan JSON-encodes scalar strings for PostgreSQL JSON columns', () => {
+test('snapshot import plan JSON-encodes every value for PostgreSQL JSON columns', () => {
   const plan = createTradingSnapshotImportPlan({
     target: 'postgres',
     snapshot: {
-      rowsByTable: { workspaces: [{ id: 'ws-legacy', metadata: 'legacy-metadata' }] },
+      rowsByTable: { workspaces: [{
+        id: 'ws-legacy',
+        metadata: 'legacy-metadata',
+        settings: '{"looks":"like-json"}',
+        labels: ['alpha', 'beta']
+      }] },
       tableManifest: [{ name: 'workspaces', primaryKeys: ['id'] }]
     },
     tableDefinitions: {
-      workspaces: { columns: [{ name: 'id', type: 'text' }, { name: 'metadata', type: 'jsonb' }], primaryKeys: ['id'] }
+      workspaces: { columns: [
+        { name: 'id', type: 'text' },
+        { name: 'metadata', type: 'jsonb' },
+        { name: 'settings', type: 'json' },
+        { name: 'labels', type: 'jsonb' }
+      ], primaryKeys: ['id'] }
     }
   });
-  assert.deepEqual(plan.statements[0].values, ['ws-legacy', '"legacy-metadata"']);
+  assert.deepEqual(plan.statements[0].values, [
+    'ws-legacy', '"legacy-metadata"', '"{\\"looks\\":\\"like-json\\"}"', '["alpha","beta"]'
+  ]);
 });
 
 test('snapshot import plan rejects target schema gaps, key drift, malformed names and unverified tables', () => {
