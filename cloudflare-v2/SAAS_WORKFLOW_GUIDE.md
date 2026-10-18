@@ -19,7 +19,7 @@ your-github-repo/
 └── cloudflare-v2/             # Isolated Copier Engine (trade.mkety.com)
     ├── wrangler.toml          # Cloudflare configuration file
     ├── db/
-    │   └── schema.sql         # Supabase setup SQL
+    │   └── schema.sql         # Shared legacy schema baseline; not the Trading deployment path
     ├── src/
     │   ├── index.js           # Core SaaS Entry Point & Routing Handler
     │   ├── ai/
