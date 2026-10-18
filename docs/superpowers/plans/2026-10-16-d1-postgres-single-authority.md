@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 10193)
-Total output lines: 174
-
 # D1/PostgreSQL single-authority migration plan
 
 ## End-to-end progress plan
@@ -92,7 +89,8 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 ### Existing Coolify PostgreSQL constraint (2026-10-17)
 
 - Coolify's read-only inventory found the existing `mkety-postgres` service healthy and private. The existing PostgreSQL URL points to database `mkety`; it is not a separate staging database. A GitHub-hosted runner cannot resolve the private DB hostname (`EAI_AGAIN`), so the protected workflow creates a short-lived, exact-commit Coolify application attached to the existing private Docker network and runs only a read-only identity probe there. The probe requires the expected database name; the temporary application is deleted in cleanup.
-- The one-time migration utility for the existing `mkety` database requires an explicit apply confirmation, validates the database identity, takes a transaction-scoped advisory lock, creates `trading_owner` only when absent and only from a superuser connection with restricted flags, applies only the three allowlisted files atomically, stores SHA-256 checksums in `trading_storage.schema_migrations`, refuses an untracked schema/checksum drift, and verifies D…193 tokens truncated…ormed.
+- The one-time migration utility for the existing `mkety` database requires an explicit apply confirmation, validates the database identity, takes a transaction-scoped advisory lock, creates `trading_owner` only when absent and only from a superuser connection with restricted flags, applies only the three allowlisted files atomically, stores SHA-256 checksums in `trading_storage.schema_migrations`, refuses an untracked schema/checksum drift, and verifies D1 authority plus all controls off before commit. The manual apply path requires a successful Coolify backup within 24 hours and leaves the ordinary PR probe read-only. Unit tests cover these guardrails.
+- Latest protected schema gate (workflow run `39101919264`, commit `a673e6bf03cafed46cd37568a1bbef124b59ede3`, 2026-10-18) confirmed the existing private, healthy Coolify `mkety-postgres`, successful backup at `2026-10-18T02:00:05Z`, exact `mkety.trading_storage` migration ledger, restricted owner, and fenced/off controls. The migration runner returned `alreadyApplied: true`, so it made no PostgreSQL DDL changes. The ephemeral probe application was deleted. This was schema verification only; no source rows were imported and no parity or restore rehearsal was performed.
 - The same run targeted only the existing `trading-staging` D1 database. Wrangler reported no unapplied migrations and the remote SQL schema assertion passed, while Cloudflare's D1 inventory still reported `num_tables: 0`. Treat this metadata mismatch as unresolved before using inventory output as proof of target contents. No production D1 binding was inspected or changed.
 
 ### Implementation-pass updates (2026-10-17)
@@ -153,8 +151,8 @@ Additional build reproducibility checkpoint (2026-10-17): generated `cloudflare-
 
 - Replaced the staging check's minimum-table-count assertion with a read-only exact set comparison between `sqlite_master` and all application tables declared by the committed D1 migrations. Wrangler's `d1_migrations` ledger and SQLite internal tables are excluded from the comparison.
 - Added helper unit coverage for exact inventory, missing tables, unexpected tables, and empty migration inventory; updated the workflow regression test to require the exact comparison.
-- The first hosted inspection found all 34 application tables plus `_cf_KV`; the D1 API still reports `num_tables: 0`. Cloudflare documents `_cf_KV` as a reserved D1 internal table, excluded from usage charges and unavailable to application queries. The inventory helper now excludes only this exact Cloudflare table (and SQLite/Wrangler metadata tables), while still rejecting every other unrecognized table. Hosted recheck is pending.
-- Local validation passed before the hosted finding: focused workflow/inventory tests 17/17 and the full Worker suite 428/428. The targeted `_cf_KV` regression test was added after the first hosted run and is being revalidated with the updated gate. PR inspect mode does not apply migrations or mutate the database.
+- The first hosted inspection found all 34 application tables plus `_cf_KV`; the D1 API still reports `num_tables: 0`. Cloudflare documents `_cf_KV` as a reserved D1 internal table, excluded from usage charges and unavailable to application queries. The inventory helper excludes only this exact Cloudflare table (and SQLite/Wrangler metadata tables), while still rejecting every other unrecognized table. Trading V1 CI #3317 then verified the exact 34-table application inventory, passed read-only Cloudflare/Coolify/`mkety` checks and the PostgreSQL probe, and deleted the temporary probe app. The `num_tables: 0` field is inaccurate for this resource; the direct remote schema query is authoritative for its application schema.
+- Local validation passed after the `_cf_KV` regression case: focused workflow/inventory tests 17/17 and the full Worker suite 428/428. PR inspect mode did not apply migrations, import rows, or mutate production authority.
 
 ### Cutover execution plan and current checkpoint (2026-10-18 09:31 UTC)
 
