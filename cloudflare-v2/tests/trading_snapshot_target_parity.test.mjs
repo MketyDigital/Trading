@@ -57,6 +57,21 @@ test('target parity rejects extra target rows and unsupported targets', async ()
   await assert.rejects(() => verifyTradingSnapshotTarget({ ...input, target: 'unknown' }), /target must be d1 or postgres/i);
 });
 
+test('PostgreSQL numeric strings and timestamp values normalize to the snapshot representation', async () => {
+  const rowsByTable = { workspaces: [{ id: 'ws-1', leverage: 0.01, created_at: '2026-10-18T00:00:00.000Z' }] };
+  await verifyTradingSnapshotTarget({
+    target: 'postgres',
+    database: { async query() { return { rows: [{ id: 'ws-1', leverage: '0.010000', created_at: new Date('2026-10-18T00:00:00.000Z') }] }; } },
+    rowsByTable,
+    tableManifest: [{ name: 'workspaces', primaryKeys: ['id'] }],
+    tableDefinitions: { workspaces: { columns: [
+      { name: 'id', type: 'text' }, { name: 'leverage', type: 'numeric' },
+      { name: 'created_at', type: 'timestamp with time zone' },
+    ], primaryKeys: ['id'] } },
+    masterKey: 'test-master-key',
+  });
+});
+
 test('import target identity check requires the existing named D1 and mkety database', async () => {
   const d1Database = { identity: { databaseId: '4f00d59a-3d90-4146-832d-36230d5648bb', databaseName: 'trading-staging' } };
   const postgresClient = { async query() { return { rows: [{ database_name: 'mkety' }] }; } };

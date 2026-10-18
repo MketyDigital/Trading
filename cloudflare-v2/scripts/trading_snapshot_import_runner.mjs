@@ -96,6 +96,14 @@ function normalizeValue(value, column, target) {
   } else if (type.includes('json') && typeof value === 'string') {
     try { return stable(JSON.parse(value)); } catch { return value; }
   }
+  if (/smallint|integer|bigint|numeric|decimal|real|double precision/.test(type)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      if (/smallint|integer|bigint/.test(type) && Number.isInteger(numeric)
+        && !Number.isSafeInteger(numeric)) return String(value);
+      return numeric;
+    }
+  }
   if (type.includes('bool')) {
     if (value === 1 || value === '1' || value === 't') return true;
     if (value === 0 || value === '0' || value === 'f') return false;
