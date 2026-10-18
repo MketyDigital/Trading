@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 20353)
-Total output lines: 1407
-
 name: Trading V1 CI
 
 on:
@@ -635,7 +632,32 @@ jobs:
             RECOVERED_UUID="$(TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'RECOVER_EXACT_PROBE_APP'
           const fs = require('node:fs');
           const sha = process.env.TARGET_SHA;
-          const importing = process.env.APPLY_MODE === 'import-continu…353 tokens truncated…Y_CA_MOUNT
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-applications.json', 'utf8'));
+          const rows = Array.isArray(payload) ? payload : payload.applications ?? payload.data ?? payload.result;
+          if (!Array.isArray(rows)) process.exit(2);
+          const expected = `${importing ? 'trading-data-import' : 'trading-pg-ro-probe'}-${sha.slice(0, 12)}`;
+          const matches = rows.filter((row) => row?.name === expected && /^[a-z0-9-]{8,64}$/i.test(String(row?.uuid || '')));
+          if (matches.length === 1) process.stdout.write(matches[0].uuid);
+          RECOVER_EXACT_PROBE_APP
+            )"
+            if [ -z "$RECOVERED_UUID" ]; then
+              echo 'Coolify did not confirm the exact transient probe application after an uncertain create.'
+              exit 2
+            fi
+            APP_UUID="$RECOVERED_UUID"
+            echo 'Recovered the exact transient probe application from Coolify inventory.'
+          fi
+          echo "app_uuid=$APP_UUID" >> "$GITHUB_OUTPUT"
+
+          node <<'BUILD_COOLIFY_CA_MOUNT' > "$RUNNER_TEMP/trading-pg-probe-ca-mount.json"
+          process.stdout.write(JSON.stringify({
+            type: 'file',
+            is_host_file: true,
+            fs_path: '/data/coolify/ssl/coolify-ca.crt',
+            mount_path: '/etc/ssl/certs/coolify-ca.crt'
+          }));
+          BUILD_COOLIFY_CA_MOUNT
           mount_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-ca-mount-response.json" -w '%{http_code}' \
             --connect-timeout 10 --max-time 60 \
             -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
