@@ -219,7 +219,46 @@ export async function sendRawWebhookDestination({
   }
 }
 
-export function createV1DestinationDeliveryStore(supabase) {
+export function createV1DestinationDeliveryStore(supabase, { persistenceRuntime = null } = {}) {
+  if (persistenceRuntime?.routes && persistenceRuntime?.sourceFeeds && persistenceRuntime?.destinations) {
+    const { routes, sourceFeeds, destinations } = persistenceRuntime;
+    return {
+      async listRoutedDestinations(workspaceId, sourceId, { providerFeedId = null } = {}) {
+        const workspace = text(workspaceId);
+        const source = text(sourceId);
+        let feedId = null;
+        if (text(providerFeedId)) {
+          const feed = await sourceFeeds.findActiveFeed(workspace, source, text(providerFeedId));
+          feedId = text(feed?.id) || null;
+        }
+        const allRoutes = (await routes.list(workspace)).filter(row => text(row.source_connection_id) === source && (row.is_active === true || Number(row.is_active) === 1));
+        const selectedRoutes = selectAuthorizedRoutesForFeed(allRoutes, feedId);
+        const orderedIds = selectedRoutes.map(row => text(row.destination_id)).filter(Boolean);
+        if (!orderedIds.length) return [];
+        const destinationRows = (await destinations.listDestinations(workspace)).filter(row => (row.is_active === true || Number(row.is_active) === 1) && orderedIds.includes(text(row.id)));
+        const templates = await destinations.listTemplates(workspace);
+        const connections = await destinations.listConnections(workspace);
+        const templateRows = new Map(templates.map(row => [text(row.id), row]));
+        const connectionRows = new Map(connections.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [text(row.id), row]));
+        const routeRows = new Map(selectedRoutes.map(row => [text(row.destination_id), row]));
+        const destinationRowsById = new Map(destinationRows.map(row => [text(row.id), row]));
+        return orderedIds.map(id => destinationRowsById.get(id)).filter(Boolean).map(row => {
+          const route = routeRows.get(text(row.id)) || {};
+          const connection = connectionRows.get(text(row.credential_connection_id));
+          return {
+            ...row,
+            template: templateRows.get(text(row.template_id)) || null,
+            route_filters: safeObject(route.filters),
+            source_feed_id: text(route.source_feed_id) || null,
+            ...(connection ? { shared_credential_ciphertext: connection.credential_ciphertext, credential_connection_provider_type: connection.provider_type } : {}),
+          };
+        });
+      },
+      async recordDestinationOutcome(workspaceId, id, outcome = {}) {
+        await destinations.recordDestinationOutcome(text(workspaceId), text(id), outcome);
+      },
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   return {

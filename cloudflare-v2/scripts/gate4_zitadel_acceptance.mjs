@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createPostgrestMigrationClient } from './postgrest_migration_reader.mjs';
 import { authorizeV1AdminRequest } from '../src/http/v1_admin.js';
 import { hasTradingPermission } from '../src/security/trading_permissions.js';
 
@@ -32,9 +32,7 @@ const env = {
 assert(disabled(process.env.TRADING_ACCESS_ENABLED), 'TRADING_ACCESS_ENABLED must remain false during Gate 4 acceptance');
 assert(disabled(process.env.BROKER_EXECUTION_ENABLED), 'broker execution must remain disabled during Gate 4 acceptance');
 
-const supabase = createClient(required('SUPABASE_URL'), required('SUPABASE_SERVICE_ROLE'), {
-  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-});
+const supabase = createPostgrestMigrationClient({ url: required('SUPABASE_URL'), serviceRole: required('SUPABASE_SERVICE_ROLE') });
 
 function requestFor(token, selectedWorkspaceId) {
   return new Request(`${baseUrl}/api/v1/admin/workspace`, {

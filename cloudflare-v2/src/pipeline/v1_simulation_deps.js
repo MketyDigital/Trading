@@ -1,4 +1,4 @@
-import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
+import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol, sanitizeAccountSymbolCatalog } from '../execution/account_symbol_catalog.js';
 import { decryptConnectionCredentials } from '../security/connection_credentials.js';
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
@@ -491,7 +491,7 @@ async function defaultCTraderAccountCatalogLoader(account, env = {}) {
   }
 }
 
-async function persistAccountCatalog(supabase, account, hydrated = {}) {
+async function persistAccountCatalog(supabase, account, hydrated = {}, persistenceRuntime = null) {
   const catalog = Array.isArray(hydrated?.catalog) ? hydrated.catalog : [];
   if (!catalog.length) return account;
   const currentConfig = providerConfigOf(account);
@@ -500,11 +500,20 @@ async function persistAccountCatalog(supabase, account, hydrated = {}) {
     : (currentConfig.symbolAliases || {});
   const providerConfig = {
     ...currentConfig,
-    symbolCatalog: catalog,
+    // Broker responses include large raw protocol objects that the trading
+    // resolver never consumes. Persist only the bounded, normalized catalog.
+    symbolCatalog: sanitizeAccountSymbolCatalog(catalog),
     symbolAliases: aliases,
     symbolCatalogUpdatedAt: new Date().toISOString(),
   };
 
+  if (persistenceRuntime) {
+    if (typeof persistenceRuntime.accounts?.updateProviderConfig !== 'function') {
+      throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
+    }
+    await persistenceRuntime.accounts.updateProviderConfig(text(account?.workspace_id ?? account?.workspaceId), text(account?.id), providerConfig);
+    return { ...account, provider_config: providerConfig };
+  }
   const query = supabase
     .from('trade_accounts')
     .update({ provider_config: providerConfig })
@@ -520,7 +529,7 @@ async function persistAccountCatalog(supabase, account, hydrated = {}) {
   return { ...account, provider_config: providerConfig };
 }
 
-async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountCatalogLoader } = {}) {
+async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountCatalogLoader, persistenceRuntime = null } = {}) {
   const loader = typeof accountCatalogLoader === 'function'
     ? accountCatalogLoader
     : (account) => {
@@ -559,7 +568,7 @@ async function hydrateMissingAccountCatalogs(accounts, { supabase, env, accountC
     // load is authoritative for this execution and must not be discarded just
     // because the cache write is temporarily unavailable.
     try {
-      return await persistAccountCatalog(supabase, account, hydrated);
+      return await persistAccountCatalog(supabase, account, hydrated, persistenceRuntime);
     } catch {
       return inMemoryAccount;
     }
@@ -595,9 +604,28 @@ function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
   );
 }
 
-async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {} } = {}) {
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null } = {}) {
   const trustedSourceId = text(sourceId);
   if (!trustedSourceId) return [];
+
+  if (persistenceRuntime) {
+    if (!persistenceRuntime.routes || !persistenceRuntime.sourceFeeds || !persistenceRuntime.destinations) {
+      throw new Error('TRADING_ROUTING_REPOSITORIES_UNAVAILABLE');
+    }
+    const allRoutes = await persistenceRuntime.routes.list(workspaceId);
+    const routes = allRoutes.filter(row => text(row.source_connection_id) === trustedSourceId && (row.is_active === true || Number(row.is_active) === 1));
+    const providerFeedId = providerFeedIdFromEvent(event);
+    let feedId = null;
+    if (providerFeedId) feedId = text((await persistenceRuntime.sourceFeeds.findActiveFeed(workspaceId, trustedSourceId, providerFeedId))?.id) || null;
+    const selected = selectAuthorizedRoutesForFeed(routes, feedId);
+    const ids = selected.map(row => text(row.destination_id)).filter(Boolean);
+    const destinations = (await persistenceRuntime.destinations.listDestinations(workspaceId)).filter(row => ids.includes(text(row.id)) && String(row.destination_type || '').toLowerCase() === 'broker_account' && (row.is_active === true || Number(row.is_active) === 1));
+    const byId = new Map(destinations.map(row => [text(row.id), row]));
+    return selected.map(route => ({ route, destination: byId.get(text(route.destination_id)) }))
+      .filter(({ destination }) => destination)
+      .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
+      .map(({ destination }) => text(destination.destination_ref)).filter(Boolean);
+  }
 
   const { data: routesData, error: routeError } = await supabase
     .from('source_destination_routes')
@@ -648,8 +676,8 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     .filter(Boolean);
 }
 
-export async function createV1SimulationDependencies({ env = {}, supabase, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
-  if (!supabase?.from) throw new Error('Supabase client is required for simulation');
+export async function createV1SimulationDependencies({ env = {}, supabase, persistenceRuntime = null, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
+  if (!supabase?.from && !persistenceRuntime) throw new Error('Trading persistence is required for simulation');
   const workspaceId = String(event?.workspace_hint || '');
   if (!workspaceId) throw new Error('authenticated workspace is required for simulation');
 
@@ -681,7 +709,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
         throw new Error('cBot lifecycle status is available only for LIVE accounts');
       }
 
-      const lifecycleDependencies = lifecycleDependenciesFactory({ env, supabase, workspaceId });
+      const lifecycleDependencies = lifecycleDependenciesFactory({ env, supabase, persistenceRuntime, workspaceId });
       try {
         for (const leg of pendingLegs) {
           const snapshot = await lifecycleDependencies.readPendingOrderLifecycleStatus({
@@ -731,6 +759,12 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
         ? [...new Set(options.matchedAccountIds.map(text).filter(Boolean))]
         : [];
       if (matchedAccountIds.length > 0) {
+        if (persistenceRuntime) {
+          if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
+          const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
+          const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
+          return matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean);
+        }
         const { data, error } = await supabase
           .from('trade_accounts')
           .select('*')
@@ -743,8 +777,15 @@ export async function createV1SimulationDependencies({ env = {}, supabase, event
         // Do not reapply signal-symbol route filters to a symbol-less reply.
         return matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean);
       }
-      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation });
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation, persistenceRuntime });
       if (!accountIds.length) return [];
+      if (persistenceRuntime) {
+        if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
+        const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
+        const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
+        const orderedAccounts = accountIds.map(id => accountMap.get(id)).filter(Boolean);
+        return hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime });
+      }
       const { data, error } = await supabase
         .from('trade_accounts')
         .select('*')

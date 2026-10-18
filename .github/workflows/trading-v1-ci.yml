@@ -4,15 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Read-only inspection or one-time schema-only apply to the existing mkety database
+        description: Inspect, apply the existing schema, or fresh-start the existing targets with continuity data only
         required: true
         type: choice
         default: inspect
         options:
           - inspect
           - apply-existing-mkety-schema
+          - import-continuity-fresh-start
       confirmation:
-        description: Required for apply; enter APPLY_TRADING_STORAGE_SCHEMA exactly
+        description: Enter the exact schema or data-import confirmation for the selected mode
+        required: false
+        type: string
+      cutover_reference:
+        description: Audit reference for the rolling continuity import (does not pause public writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
         required: false
         type: string
   push:
@@ -25,10 +30,15 @@ on:
       - 'cloudflare-v2/bridges/**'
       - 'cloudflare-v2/containers/**'
       - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/db/d1-migrations/**'
+      - 'cloudflare-v2/db/postgres-migrations/**'
+      - 'cloudflare-v2/db/schema.sql'
+      - 'cloudflare-v2/scripts/**'
       - 'cloudflare-v2/package.json'
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
       - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/wrangler.trading-staging.toml'
       - 'cloudflare-v2/docs/GATE2_PAID_DEPLOY_TRIGGER.md'
       - 'cloudflare-v2/docs/GATE3_TRADINGVIEW_TRIGGER.md'
       - '.github/workflows/trading-v1-ci.yml'
@@ -39,12 +49,16 @@ on:
       - 'cloudflare-v2/bridges/**'
       - 'cloudflare-v2/containers/**'
       - 'cloudflare-v2/external/**'
+      - 'cloudflare-v2/db/d1-migrations/**'
+      - 'cloudflare-v2/db/postgres-migrations/**'
+      - 'cloudflare-v2/db/schema.sql'
+      - 'cloudflare-v2/scripts/**'
       - 'cloudflare-v2/package.json'
       - 'cloudflare-v2/package-lock.json'
       - 'cloudflare-v2/wrangler.toml'
       - 'cloudflare-v2/wrangler.free.toml'
+      - 'cloudflare-v2/wrangler.trading-staging.toml'
       - '.github/workflows/trading-v1-ci.yml'
-
 permissions:
   contents: read
 
@@ -53,6 +67,21 @@ jobs:
     if: >-
       ${{
         github.event_name == 'pull_request' ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/feat/trading-d1-cutover-implementation' &&
+          (
+            inputs.mode == 'inspect' ||
+            (
+              inputs.mode == 'apply-existing-mkety-schema' &&
+              inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+            ) || (
+              inputs.mode == 'import-continuity-fresh-start' &&
+              inputs.confirmation == 'IMPORT_TRADING_CONTINUITY_FRESH_START' &&
+              startsWith(inputs.cutover_reference, 'source-cutover:')
+            )
+          )
+        ) ||
         github.ref == 'refs/heads/main' ||
         (
           github.event_name == 'push' &&
@@ -83,7 +112,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Run Worker and trading-core tests
         run: npm run test:ci
@@ -95,6 +124,867 @@ jobs:
         run: |
           PYTHONPATH=containers/mtproto-listener python -m unittest containers/mtproto-listener/test_listener.py -v
           PYTHONPATH=external/mtproto-adapter python -m unittest discover -s external/mtproto-adapter -p 'test_*.py' -v
+
+  cloudflare-storage-inventory:
+    needs: test
+    if: >-
+      ${{
+        (
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'feat/trading-d1-cutover-implementation'
+        ) || (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/feat/trading-d1-cutover-implementation' &&
+          (
+            inputs.mode == 'inspect' ||
+            (
+              inputs.mode == 'apply-existing-mkety-schema' &&
+              inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
+            ) || (
+              inputs.mode == 'import-continuity-fresh-start' &&
+              inputs.confirmation == 'IMPORT_TRADING_CONTINUITY_FRESH_START' &&
+              startsWith(inputs.cutover_reference, 'source-cutover:')
+            )
+          )
+        )
+      }}
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: trading-coolify-postgres-staging
+      cancel-in-progress: false
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cloudflare-v2
+    steps:
+      - name: Checkout reviewed PR head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies without Cloudflare credentials
+        run: npm ci --no-audit --no-fund
+
+      - name: Inspect or explicitly apply existing Trading D1 schema
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TRADING_MASTER_KEY: ${{ inputs.mode == 'import-continuity-fresh-start' && secrets.TRADING_MASTER_KEY || '' }}
+          STAGING_MODE: ${{ inputs.mode || 'inspect' }}
+        shell: bash
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+          npx wrangler whoami
+          npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
+          node --input-type=module <<'D1_INVENTORY'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
+          const safeDatabases = databases.map(({ name, uuid, num_tables }) => ({ name, uuid, num_tables }));
+          console.log(`D1 inventory (safe fields only): ${JSON.stringify(safeDatabases)}`);
+          D1_INVENTORY
+          node --input-type=module <<'CHECK_TRADING_D1'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
+          if (!databases.some(({ name }) => name === 'trading-staging')) {
+            throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');
+          }
+          CHECK_TRADING_D1
+          npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
+          node --input-type=module <<'D1_CONFIG'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          const database = databases?.find(({ name }) => name === 'trading-staging');
+          if (!database?.uuid) throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');
+          const config = [
+            'name = "mkety-trading-staging-migrations"',
+            'main = "src/v1_runtime_entry.js"',
+            'compatibility_date = "2026-10-17"',
+            'compatibility_flags = ["nodejs_compat"]',
+            '',
+            '[[d1_databases]]',
+            'binding = "TRADING_DB"',
+            'database_name = "trading-staging"',
+            `database_id = "${database.uuid}"`,
+            'migrations_dir = "db/d1-migrations"',
+            ''
+          ].join('\n');
+          await writeFile('wrangler.trading-staging.toml', config, { mode: 0o600 });
+          console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
+          D1_CONFIG
+          trap 'rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-staging-pre-import.sql"' EXIT
+          if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
+            npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+          fi
+          npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
+          npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --json \
+            --command "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name;" \
+            > "$RUNNER_TEMP/trading-d1-schema-check.json"
+          node --input-type=module <<'CHECK_TRADING_D1_SCHEMA'
+          import { readFile } from 'node:fs/promises';
+          import { compareD1MigrationTableInventory } from './scripts/trading_d1_schema_inventory.mjs';
+
+          const migrationPaths = [
+            'db/d1-migrations/0001_trading_storage_replication.sql',
+            'db/d1-migrations/0002_trading_domain_schema.sql',
+            'db/d1-migrations/0003_trading_replication_health.sql',
+          ];
+          const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check.json`, 'utf8'));
+          const rows = Array.isArray(payload)
+            ? payload.flatMap((item) => Array.isArray(item?.results) ? item.results : [])
+            : Array.isArray(payload?.results) ? payload.results : [];
+          const inventory = compareD1MigrationTableInventory({
+            migrationSql,
+            actualTables: rows.map((row) => row?.name),
+          });
+          if (inventory.missing.length || inventory.unexpected.length) {
+            throw new Error(`Remote Trading D1 schema mismatch: ${JSON.stringify(inventory)}`);
+          }
+          console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
+          CHECK_TRADING_D1_SCHEMA
+          if [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
+            npx wrangler d1 export trading-staging --remote --skip-confirmation \
+              --config wrangler.trading-staging.toml --output "$RUNNER_TEMP/trading-staging-pre-import.sql"
+            test -s "$RUNNER_TEMP/trading-staging-pre-import.sql" || { echo 'Existing D1 pre-reset export is empty; refusing fresh-start reset.'; exit 1; }
+            test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing GitHub staging secret: TRADING_MASTER_KEY'; exit 1; }
+            node --input-type=module <<'ENCRYPT_D1_PRE_IMPORT_EXPORT'
+          import { unlink } from 'node:fs/promises';
+          import { encryptTradingD1BackupFile } from './scripts/trading_d1_backup.mjs';
+
+          const inputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-import.sql`;
+          const outputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-import.sql.enc`;
+          const result = await encryptTradingD1BackupFile({
+            inputPath,
+            outputPath,
+            masterKey: process.env.TRADING_MASTER_KEY,
+          });
+          await unlink(inputPath);
+          console.log(`Existing staging D1 recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
+          ENCRYPT_D1_PRE_IMPORT_EXPORT
+          fi
+      - name: Retain encrypted existing D1 recovery export
+        if: ${{ inputs.mode == 'import-continuity-fresh-start' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-staging-d1-pre-import-${{ github.run_id }}
+          path: ${{ runner.temp }}/trading-staging-pre-import.sql.enc
+          if-no-files-found: error
+          retention-days: 7
+      - name: Inspect existing Cloudflare Worker database and private-network bindings (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP"/cf-hyperdrive.json "$RUNNER_TEMP"/cf-tunnels.json "$RUNNER_TEMP"/cf-worker-settings.json' EXIT
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing Cloudflare API token for read-only connectivity inventory.'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing Cloudflare account ID for read-only connectivity inventory.'; exit 1; }
+          base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/hyperdrive/configs?per_page=100" -o "$RUNNER_TEMP/cf-hyperdrive.json"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/cfd_tunnel?is_deleted=false&per_page=100" -o "$RUNNER_TEMP/cf-tunnels.json"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 2 --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Accept: application/json' \
+            "$base/workers/scripts/mkety-copier-engine/settings" -o "$RUNNER_TEMP/cf-worker-settings.json"
+          node <<'SAFE_CLOUDFLARE_BINDING_INVENTORY'
+          const fs = require('node:fs');
+          const readResult = (name) => {
+            const response = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
+            if (response.success !== true) throw new Error(`Cloudflare read-only inventory failed for ${name}`);
+            return response.result;
+          };
+          const hyperdrivePayload = readResult('cf-hyperdrive.json');
+          const hyperdrives = Array.isArray(hyperdrivePayload) ? hyperdrivePayload : hyperdrivePayload?.result;
+          if (!Array.isArray(hyperdrives)) throw new Error('Unexpected Cloudflare Hyperdrive inventory response shape');
+          const safeHyperdrives = hyperdrives.map((row) => ({
+            id: typeof row?.id === 'string' ? row.id : null,
+            name: typeof row?.name === 'string' ? row.name : null,
+            database: typeof row?.origin?.database === 'string' ? row.origin.database : null,
+            accessTunnelConfigured: Boolean(row?.origin?.access_client_id),
+            vpcServiceConfigured: Boolean(row?.origin?.vpc_service_id)
+          }));
+          const tunnelPayload = readResult('cf-tunnels.json');
+          const tunnels = Array.isArray(tunnelPayload) ? tunnelPayload : tunnelPayload?.result;
+          if (!Array.isArray(tunnels)) throw new Error('Unexpected Cloudflare Tunnel inventory response shape');
+          const safeTunnels = tunnels.map((row) => ({
+            id: typeof row?.id === 'string' ? row.id : null,
+            name: typeof row?.name === 'string' ? row.name : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            configSource: typeof row?.config_src === 'string' ? row.config_src : null,
+            activeConnections: Array.isArray(row?.connections) ? row.connections.length : 0
+          }));
+          const settings = readResult('cf-worker-settings.json');
+          const bindings = Array.isArray(settings?.bindings) ? settings.bindings : [];
+          const safeDatabaseBindings = bindings.filter((row) => ['d1', 'hyperdrive'].includes(String(row?.type || '').toLowerCase())).map((row) => ({
+            name: typeof row?.name === 'string' ? row.name : null,
+            type: typeof row?.type === 'string' ? row.type : null,
+            resourceId: typeof row?.id === 'string' ? row.id : typeof row?.database_id === 'string' ? row.database_id : null,
+            databaseName: typeof row?.database_name === 'string' ? row.database_name : null
+          }));
+          console.log(`Cloudflare Hyperdrive inventory (safe fields only): ${JSON.stringify(safeHyperdrives)}`);
+          console.log(`Cloudflare Tunnel inventory (safe fields only): ${JSON.stringify(safeTunnels)}`);
+          console.log(`Production Worker database bindings (safe fields only): ${JSON.stringify(safeDatabaseBindings)}`);
+          SAFE_CLOUDFLARE_BINDING_INVENTORY
+      - name: Check access to the existing Coolify PostgreSQL database
+        env:
+          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
+          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        shell: bash
+        run: |
+          if [ -n "${TRADING_PG_STAGING_DATABASE_URL:-}" ]; then
+            echo 'Existing Coolify PostgreSQL connection secret is configured.'
+          else
+            echo 'Existing Coolify PostgreSQL connection secret is not configured.'
+          fi
+          if [ -n "${STAGING_DATABASE_URL:-}" ]; then
+            echo 'A generic staging database credential is configured; it is not approved for Trading use.'
+          fi
+      - name: Inventory Coolify database resources (read-only)
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          STAGING_MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP"/coolify-*.json "$RUNNER_TEMP"/coolify-*.txt' EXIT
+          if [[ -z "${OCI_COOLIFY_URL:-}" && -z "${OCI_COOLIFY_TOKEN:-}" ]]; then
+            echo 'Coolify credentials are not available in the staging environment.'
+            exit 0
+          fi
+          test -n "${OCI_COOLIFY_URL:-}" || { echo 'OCI_COOLIFY_URL is present without OCI_COOLIFY_TOKEN'; exit 1; }
+          test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'OCI_COOLIFY_TOKEN is present without OCI_COOLIFY_URL'; exit 1; }
+          if [[ "$OCI_COOLIFY_URL" == *$'\n'* || "$OCI_COOLIFY_TOKEN" == *$'\n'* ]]; then
+            echo 'Coolify URL and token secrets must each be a single line.'
+            exit 1
+          fi
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+            "$api/databases" > "$RUNNER_TEMP/coolify-database-inventory.json"
+          INVENTORY_PATH="$RUNNER_TEMP/coolify-database-inventory.json" node <<'SAFE_COOLIFY_INVENTORY'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.INVENTORY_PATH, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.databases ?? payload.data ?? payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected Coolify database inventory response shape');
+          const safe = databases.map((row) => ({
+            name: typeof row?.name === 'string' ? row.name : null,
+            uuid: typeof row?.uuid === 'string' ? row.uuid : null,
+            type: typeof row?.database_type === 'string' ? row.database_type : typeof row?.type === 'string' ? row.type : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            environment: typeof row?.environment_name === 'string' ? row.environment_name : null
+          }));
+          const candidates = safe.filter(({ name, type }) => /trading|postgres|postgresql|mkety/i.test(`${name || ''} ${type || ''}`));
+          console.log(`Coolify database resource count: ${safe.length}`);
+          console.log(`Coolify Trading/PostgreSQL candidates (safe fields only): ${JSON.stringify(candidates)}`);
+          const central = databases.find((row) => String(row?.name || '').trim().toLowerCase() === 'mkety-postgres');
+          if (central?.uuid) {
+            if (!/^[a-z0-9-]+$/i.test(central.uuid)) throw new Error('Unexpected Coolify PostgreSQL resource identifier');
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-mkety-postgres-uuid.txt`, central.uuid, { mode: 0o600 });
+          }
+          SAFE_COOLIFY_INVENTORY
+          if [ -f "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt" ]; then
+            target_uuid="$(cat "$RUNNER_TEMP/coolify-mkety-postgres-uuid.txt")"
+            rm -f "$RUNNER_TEMP/trading-pg-backup-preflight.json"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid" > "$RUNNER_TEMP/coolify-mkety-postgres.json"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid/envs" > "$RUNNER_TEMP/coolify-mkety-postgres-envs.json"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/databases/$target_uuid/backups" > "$RUNNER_TEMP/coolify-mkety-postgres-backups.json"
+            BACKUPS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backups.json" node <<'SAFE_COOLIFY_BACKUP_SCHEDULES'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.BACKUPS_PATH, 'utf8'));
+          const schedules = Array.isArray(payload) ? payload : payload.backups ?? payload.scheduled_backups ?? payload.data ?? payload.result;
+          if (!Array.isArray(schedules)) throw new Error('Unexpected Coolify PostgreSQL backup schedule response shape');
+          const safe = schedules.map((row) => ({
+            uuid: typeof row?.uuid === 'string' ? row.uuid : null,
+            frequency: typeof row?.frequency === 'string' ? row.frequency : null,
+            enabled: typeof row?.enabled === 'boolean' ? row.enabled : null,
+            saveS3: typeof row?.save_s3 === 'boolean' ? row.save_s3 : null,
+            retentionLocalCount: Number.isInteger(row?.database_backup_retention_amount_locally) ? row.database_backup_retention_amount_locally : null,
+            retentionLocalDays: Number.isInteger(row?.database_backup_retention_days_locally) ? row.database_backup_retention_days_locally : null,
+            retentionS3Count: Number.isInteger(row?.database_backup_retention_amount_s3) ? row.database_backup_retention_amount_s3 : null,
+            retentionS3Days: Number.isInteger(row?.database_backup_retention_days_s3) ? row.database_backup_retention_days_s3 : null
+          }));
+          console.log(`Coolify PostgreSQL backup schedules (safe fields only): ${JSON.stringify(safe)}`);
+          const ids = safe.map(({ uuid }) => uuid).filter((uuid) => /^[a-z0-9-]{8,64}$/i.test(String(uuid || '')));
+          await writeFile(`${process.env.RUNNER_TEMP}/coolify-mkety-postgres-backup-uuids.txt`, ids.join('\n'), { mode: 0o600 });
+          SAFE_COOLIFY_BACKUP_SCHEDULES
+            while IFS= read -r backup_uuid; do
+              [ -n "$backup_uuid" ] || continue
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/databases/$target_uuid/backups/$backup_uuid/executions" > "$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json"
+              BACKUP_UUID="$backup_uuid" BACKUP_EXECUTIONS_PATH="$RUNNER_TEMP/coolify-mkety-postgres-backup-executions.json" node <<'SAFE_COOLIFY_BACKUP_EXECUTIONS'
+          import { readFile, writeFile } from 'node:fs/promises';
+
+          const backupUuid = process.env.BACKUP_UUID;
+          if (!/^[a-z0-9-]{8,64}$/i.test(String(backupUuid || ''))) throw new Error('Unexpected Coolify PostgreSQL backup identifier');
+          const payload = JSON.parse(await readFile(process.env.BACKUP_EXECUTIONS_PATH, 'utf8'));
+          const executions = Array.isArray(payload) ? payload : payload.executions ?? payload.data ?? payload.result;
+          if (!Array.isArray(executions)) throw new Error('Unexpected Coolify PostgreSQL backup execution response shape');
+          const safe = executions.map((row) => ({
+            createdAt: typeof row?.created_at === 'string' ? row.created_at : null,
+            status: typeof row?.status === 'string' ? row.status : null,
+            sizeBytes: Number.isFinite(Number(row?.size)) ? Number(row.size) : null
+          })).sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+          console.log(`Coolify PostgreSQL backup executions (safe fields only): ${JSON.stringify({ backupUuid, count: safe.length, latest: safe[0] ?? null })}`);
+          const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+          const recentSuccess = safe.find((item) => item.status?.toLowerCase() === 'success'
+            && Number.isFinite(Date.parse(item.createdAt || ''))
+            && Date.parse(item.createdAt) <= Date.now()
+            && Date.parse(item.createdAt) >= cutoffMs);
+          if (recentSuccess) {
+            await writeFile(`${process.env.RUNNER_TEMP}/trading-pg-backup-preflight.json`, JSON.stringify({ backupUuid, ...recentSuccess }), { mode: 0o600 });
+          }
+          SAFE_COOLIFY_BACKUP_EXECUTIONS
+            done < "$RUNNER_TEMP/coolify-mkety-postgres-backup-uuids.txt"
+            if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ] || [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
+              test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Schema/data write refused: no successful Coolify PostgreSQL backup in the last 24 hours.'; exit 1; }
+              echo 'Existing Coolify PostgreSQL backup preflight passed for the requested write operation.'
+            fi
+            node --input-type=module <<'SAFE_COOLIFY_POSTGRES_DETAILS'
+          import { readFile } from 'node:fs/promises';
+
+          const readJson = async (name) => JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
+          const raw = await readJson('coolify-mkety-postgres.json');
+          const resource = raw?.database ?? raw?.data ?? raw;
+          const envPayload = await readJson('coolify-mkety-postgres-envs.json');
+          const envs = Array.isArray(envPayload) ? envPayload : envPayload.envs ?? envPayload.data ?? envPayload.result;
+          if (!Array.isArray(envs)) throw new Error('Unexpected Coolify database environment response shape');
+          const keys = new Set(envs.map((row) => String(row?.key || '').toUpperCase()));
+          const details = {
+            name: typeof resource?.name === 'string' ? resource.name : 'mkety-postgres',
+            uuid: typeof resource?.uuid === 'string' ? resource.uuid : null,
+            type: typeof resource?.database_type === 'string' ? resource.database_type : typeof resource?.type === 'string' ? resource.type : null,
+            status: typeof resource?.status === 'string' ? resource.status : null,
+            environment: typeof resource?.environment_name === 'string' ? resource.environment_name : typeof resource?.environment?.name === 'string' ? resource.environment.name : null,
+            projectUuid: typeof resource?.project_uuid === 'string' ? resource.project_uuid : typeof resource?.project?.uuid === 'string' ? resource.project.uuid : null,
+            serverUuid: typeof resource?.server_uuid === 'string' ? resource.server_uuid : typeof resource?.server?.uuid === 'string' ? resource.server.uuid : null,
+            environmentUuid: typeof resource?.environment_uuid === 'string' ? resource.environment_uuid : typeof resource?.environment?.uuid === 'string' ? resource.environment.uuid : null,
+            publicAccess: typeof resource?.is_public === 'boolean' ? resource.is_public : null,
+            hasDatabaseName: keys.has('POSTGRES_DB'),
+            hasDatabaseUser: keys.has('POSTGRES_USER'),
+            hasDatabasePassword: keys.has('POSTGRES_PASSWORD')
+          };
+          console.log(`Coolify central PostgreSQL metadata (safe fields only): ${JSON.stringify(details)}`);
+          if (details.projectUuid && /^[a-z0-9-]+$/i.test(details.projectUuid)) {
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-central-project-uuid.txt`, details.projectUuid, { mode: 0o600 });
+          }
+          if (details.serverUuid && /^[a-z0-9-]+$/i.test(details.serverUuid)) {
+            await writeFile(`${process.env.RUNNER_TEMP}/coolify-central-server-uuid.txt`, details.serverUuid, { mode: 0o600 });
+          }
+          SAFE_COOLIFY_POSTGRES_DETAILS
+            if [ -f "$RUNNER_TEMP/coolify-central-project-uuid.txt" ]; then
+              project_uuid="$(cat "$RUNNER_TEMP/coolify-central-project-uuid.txt")"
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/projects/$project_uuid/environments" > "$RUNNER_TEMP/coolify-central-environments.json"
+              PROJECTS_PATH="$RUNNER_TEMP/coolify-central-environments.json" node <<'SAFE_COOLIFY_ENVIRONMENTS'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.PROJECTS_PATH, 'utf8'));
+          const environments = Array.isArray(payload) ? payload : payload.environments ?? payload.data ?? payload.result;
+          if (!Array.isArray(environments)) throw new Error('Unexpected Coolify environment inventory response shape');
+          const safe = environments.map((row) => ({ name: typeof row?.name === 'string' ? row.name : null, uuid: typeof row?.uuid === 'string' ? row.uuid : null }));
+          console.log(`Coolify central project environments (safe fields only): ${JSON.stringify(safe)}`);
+          SAFE_COOLIFY_ENVIRONMENTS
+            fi
+            if [ -f "$RUNNER_TEMP/coolify-central-server-uuid.txt" ]; then
+              server_uuid="$(cat "$RUNNER_TEMP/coolify-central-server-uuid.txt")"
+              curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+                "$api/servers/$server_uuid/destinations" > "$RUNNER_TEMP/coolify-central-destinations.json"
+              DESTINATIONS_PATH="$RUNNER_TEMP/coolify-central-destinations.json" node <<'SAFE_COOLIFY_DESTINATIONS'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.DESTINATIONS_PATH, 'utf8'));
+          const destinations = Array.isArray(payload) ? payload : payload.destinations ?? payload.data ?? payload.result;
+          if (!Array.isArray(destinations)) throw new Error('Unexpected Coolify destination inventory response shape');
+          const safe = destinations.map((row) => ({ name: typeof row?.name === 'string' ? row.name : null, uuid: typeof row?.uuid === 'string' ? row.uuid : null, type: typeof row?.destination_type === 'string' ? row.destination_type : null }));
+          console.log(`Coolify central server destinations (safe fields only): ${JSON.stringify(safe)}`);
+          SAFE_COOLIFY_DESTINATIONS
+            fi
+          fi
+      - name: Create ephemeral private-network Trading PostgreSQL probe host
+        id: postgres-probe-app
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          TRADING_PG_STAGING_DATABASE_URL: ${{ secrets.TRADING_PG_STAGING_DATABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
+          TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          APPLY_MODE: ${{ inputs.mode }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+          SOURCE_CUTOVER_REFERENCE: ${{ inputs.cutover_reference }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP"/trading-pg-probe-*.json "$RUNNER_TEMP/trading-pg-backup-preflight.json"' EXIT
+          test -n "${TRADING_PG_STAGING_DATABASE_URL:-}" || { echo 'Missing connection secret for the existing Coolify PostgreSQL database.'; exit 1; }
+          test -n "${OCI_COOLIFY_URL:-}" || { echo 'Missing Coolify URL for the private-network PostgreSQL probe.'; exit 1; }
+          test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'Missing Coolify token for the private-network PostgreSQL probe.'; exit 1; }
+          if [ "$APPLY_MODE" = 'apply-existing-mkety-schema' ]; then
+            [ "$MIGRATION_CONFIRMATION" = 'APPLY_TRADING_STORAGE_SCHEMA' ] || { echo 'Schema apply requires the exact explicit confirmation.'; exit 1; }
+            test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Schema apply requires a successful backup from the last 24 hours.'; exit 1; }
+          fi
+          if [ "$APPLY_MODE" = 'import-continuity-fresh-start' ]; then
+            [ "$MIGRATION_CONFIRMATION" = 'IMPORT_TRADING_CONTINUITY_FRESH_START' ] || { echo 'Data import requires the exact explicit confirmation.'; exit 1; }
+            [[ "$SOURCE_CUTOVER_REFERENCE" =~ ^source-cutover:[A-Z0-9][A-Z0-9-]{5,79}$ ]] || { echo 'Data import requires valid source cutover reference.'; exit 1; }
+            test -s "$RUNNER_TEMP/trading-pg-backup-preflight.json" || { echo 'Data import requires a successful backup from the last 24 hours.'; exit 1; }
+            test -n "${SUPABASE_SERVICE_ROLE:-}" || { echo 'Missing GitHub staging secret: SUPABASE_SERVICE_ROLE'; exit 1; }
+            test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing GitHub staging secret: TRADING_MASTER_KEY'; exit 1; }
+            test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
+            test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+          fi
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'PostgreSQL probe requires the exact reviewed commit SHA.'; exit 1; }
+          if [[ "$TRADING_PG_STAGING_DATABASE_URL" == *$'\n'* ]]; then
+            echo 'The existing Coolify PostgreSQL connection URL must be a single line.'
+            exit 1
+          fi
+          echo "::add-mask::$TRADING_PG_STAGING_DATABASE_URL"
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+            "$api/databases/hgxwkiyxgbmb2i3pl57kmxc8" > "$RUNNER_TEMP/trading-pg-probe-db.json"
+          DB_PATH="$RUNNER_TEMP/trading-pg-probe-db.json" node <<'VERIFY_EXISTING_COOLIFY_DB'
+          import { readFile } from 'node:fs/promises';
+
+          const payload = JSON.parse(await readFile(process.env.DB_PATH, 'utf8'));
+          const db = payload?.database ?? payload?.data ?? payload;
+          const environmentUuid = db?.environment_uuid ?? db?.environment?.uuid;
+          if (db?.name !== 'mkety-postgres' || db?.is_public !== false || !String(db?.status || '').toLowerCase().includes('healthy')) {
+            throw new Error('Existing Coolify PostgreSQL service identity, privacy, or health check failed.');
+          }
+          if (environmentUuid !== 'rtebcetyfvzlaiqitzcp0gl8') {
+            throw new Error('Existing Coolify PostgreSQL service is not in the expected project environment.');
+          }
+          console.log('Verified the existing private, healthy mkety-postgres service for the transient probe.');
+          VERIFY_EXISTING_COOLIFY_DB
+
+          TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'BUILD_PROBE_APP_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-app.json"
+          const sha = process.env.TARGET_SHA;
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
+          const appName = `${importing ? 'trading-data-import' : 'trading-pg-ro-probe'}-${sha.slice(0, 12)}`;
+          process.stdout.write(JSON.stringify({
+            project_uuid: '0zqhpkprlhtvlacmsgmfyyhs',
+            server_uuid: 'ynkdc4tx6bi7cyxf0kuy8kte',
+            environment_uuid: 'rtebcetyfvzlaiqitzcp0gl8',
+            git_repository: 'https://github.com/MketyDigital/Trading',
+            git_branch: 'feat/trading-d1-cutover-implementation',
+            git_commit_sha: sha,
+            build_pack: 'dockerfile',
+            dockerfile_location: '/ops/coolify-staging-postgres-probe/Dockerfile',
+            ports_exposes: '3000',
+            name: appName,
+            description: `Ephemeral private Trading ${importing ? 'data import to existing targets' : process.env.APPLY_MODE === 'apply-existing-mkety-schema' ? 'schema-only migration' : 'read-only probe'} for ${sha}`,
+            autogenerate_domain: false,
+            connect_to_docker_network: true,
+            instant_deploy: false
+          }));
+          BUILD_PROBE_APP_PAYLOAD
+
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-create.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-app.json" "$api/applications/public")"
+          APP_UUID=''
+          if [ "$code" = '201' ]; then
+            APP_UUID="$(node -e "const x=require(process.argv[1]);if(/^[a-z0-9-]{8,64}$/i.test(String(x.uuid||'')))process.stdout.write(x.uuid)" "$RUNNER_TEMP/trading-pg-probe-create.json")"
+          fi
+          if [ -z "$APP_UUID" ]; then
+            echo "Coolify probe-host create response was uncertain (HTTP $code); checking the exact ephemeral name before retrying or stopping."
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+              "$api/applications" > "$RUNNER_TEMP/trading-pg-probe-applications.json"
+            RECOVERED_UUID="$(TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'RECOVER_EXACT_PROBE_APP'
+          const fs = require('node:fs');
+          const sha = process.env.TARGET_SHA;
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-applications.json', 'utf8'));
+          const rows = Array.isArray(payload) ? payload : payload.applications ?? payload.data ?? payload.result;
+          if (!Array.isArray(rows)) process.exit(2);
+          const expected = `${importing ? 'trading-data-import' : 'trading-pg-ro-probe'}-${sha.slice(0, 12)}`;
+          const matches = rows.filter((row) => row?.name === expected && /^[a-z0-9-]{8,64}$/i.test(String(row?.uuid || '')));
+          if (matches.length === 1) process.stdout.write(matches[0].uuid);
+          RECOVER_EXACT_PROBE_APP
+            )"
+            if [ -z "$RECOVERED_UUID" ]; then
+              echo 'Coolify did not confirm the exact transient probe application after an uncertain create.'
+              exit 2
+            fi
+            APP_UUID="$RECOVERED_UUID"
+            echo 'Recovered the exact transient probe application from Coolify inventory.'
+          fi
+          echo "app_uuid=$APP_UUID" >> "$GITHUB_OUTPUT"
+
+          node <<'BUILD_COOLIFY_CA_MOUNT' > "$RUNNER_TEMP/trading-pg-probe-ca-mount.json"
+          process.stdout.write(JSON.stringify({
+            type: 'file',
+            is_host_file: true,
+            fs_path: '/data/coolify/ssl/coolify-ca.crt',
+            mount_path: '/etc/ssl/certs/coolify-ca.crt'
+          }));
+          BUILD_COOLIFY_CA_MOUNT
+          mount_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-ca-mount-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-mount.json" "$api/applications/$APP_UUID/storages")"
+          [ "$mount_code" = '201' ] || { echo "Coolify PostgreSQL CA mount failed with HTTP $mount_code."; exit 3; }
+
+          EXPECTED_DATABASE='mkety' node <<'BUILD_EXPECTED_DATABASE_ENV' > "$RUNNER_TEMP/trading-pg-probe-expected-database-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_EXPECTED_DATABASE',
+            value: process.env.EXPECTED_DATABASE,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: false
+          }));
+          BUILD_EXPECTED_DATABASE_ENV
+          expected_db_env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-expected-database-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-expected-database-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$expected_db_env_code" = '201' ] || { echo "Coolify PostgreSQL expected-database guard setup failed with HTTP $expected_db_env_code."; exit 3; }
+
+          DB_URL="$TRADING_PG_STAGING_DATABASE_URL" node <<'BUILD_PROBE_SECRET_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_STAGING_DATABASE_URL',
+            value: process.env.DB_URL,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: true
+          }));
+          BUILD_PROBE_SECRET_PAYLOAD
+          chmod 600 "$RUNNER_TEMP/trading-pg-probe-env.json"
+          env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-env-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$env_code" = '201' ] || { echo "Coolify transient probe secret injection failed with HTTP $env_code."; exit 3; }
+          if [ "$APPLY_MODE" = 'apply-existing-mkety-schema' ]; then
+            MIGRATION_CONFIRMATION="$MIGRATION_CONFIRMATION" node <<'BUILD_MIGRATION_CONFIRMATION_ENV' > "$RUNNER_TEMP/trading-pg-probe-migration-confirmation-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_SCHEMA_MIGRATION_CONFIRM',
+            value: process.env.MIGRATION_CONFIRMATION,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: true
+          }));
+          BUILD_MIGRATION_CONFIRMATION_ENV
+            chmod 600 "$RUNNER_TEMP/trading-pg-probe-migration-confirmation-env.json"
+            migration_env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-migration-confirmation-response.json" -w '%{http_code}' \
+              --connect-timeout 10 --max-time 60 \
+              -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+              --data-binary "@$RUNNER_TEMP/trading-pg-probe-migration-confirmation-env.json" "$api/applications/$APP_UUID/envs")"
+            [ "$migration_env_code" = '201' ] || { echo "Coolify schema-only migration confirmation setup failed with HTTP $migration_env_code."; exit 3; }
+          fi
+          if [ "$APPLY_MODE" = 'import-continuity-fresh-start' ]; then
+            add_import_env() {
+              local name="$1" value="$2" shown="${3:-true}" path="$RUNNER_TEMP/trading-pg-probe-import-env.json"
+              ENV_NAME="$name" ENV_VALUE="$value" ENV_SHOWN="$shown" node <<'BUILD_IMPORT_ENV' > "$path"
+          process.stdout.write(JSON.stringify({
+            key: process.env.ENV_NAME,
+            value: process.env.ENV_VALUE,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: process.env.ENV_SHOWN === 'true'
+          }));
+          BUILD_IMPORT_ENV
+              chmod 600 "$path"
+              local response_code
+              response_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-import-env-response.json" -w '%{http_code}' \
+                --connect-timeout 10 --max-time 60 \
+                -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+                --data-binary "@$path" "$api/applications/$APP_UUID/envs")"
+              rm -f "$path" "$RUNNER_TEMP/trading-pg-probe-import-env-response.json"
+              [ "$response_code" = '201' ] || { echo "Coolify private migration secret setup failed for $name (HTTP $response_code)."; exit 3; }
+            }
+            echo "::add-mask::$SUPABASE_SERVICE_ROLE"
+            echo "::add-mask::$TRADING_MASTER_KEY"
+            echo "::add-mask::$CLOUDFLARE_API_TOKEN"
+            add_import_env TRADING_SNAPSHOT_IMPORT_CONFIRM "$MIGRATION_CONFIRMATION"
+            add_import_env TRADING_MIGRATION_CUTOVER_REFERENCE "$SOURCE_CUTOVER_REFERENCE"
+            add_import_env SUPABASE_URL 'https://vdblajgxrfndjesoyayy.supabase.co' false
+            add_import_env SUPABASE_SERVICE_ROLE "$SUPABASE_SERVICE_ROLE"
+            add_import_env TRADING_MASTER_KEY "$TRADING_MASTER_KEY"
+            add_import_env CLOUDFLARE_API_TOKEN "$CLOUDFLARE_API_TOKEN"
+            add_import_env CLOUDFLARE_ACCOUNT_ID "$CLOUDFLARE_ACCOUNT_ID" false
+          fi
+          CA_FILE_PATH='/etc/ssl/certs/coolify-ca.crt' node <<'BUILD_COOLIFY_CA_ENV_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-ca-env.json"
+          process.stdout.write(JSON.stringify({
+            key: 'TRADING_PG_CA_FILE',
+            value: process.env.CA_FILE_PATH,
+            is_preview: false,
+            is_literal: true,
+            is_multiline: false,
+            is_shown_once: false
+          }));
+          BUILD_COOLIFY_CA_ENV_PAYLOAD
+          chmod 600 "$RUNNER_TEMP/trading-pg-probe-ca-env.json"
+          ca_env_code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-ca-env-response.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/trading-pg-probe-ca-env.json" "$api/applications/$APP_UUID/envs")"
+          [ "$ca_env_code" = '201' ] || { echo "Coolify PostgreSQL CA path setup failed with HTTP $ca_env_code."; exit 3; }
+          echo 'Existing Coolify database URL and trusted CA attached only to the transient private-network probe app.'
+      - name: Deploy exact-commit Trading PostgreSQL probe or schema-only migration
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          APP_UUID: ${{ steps.postgres-probe-app.outputs.app_uuid }}
+          APPLY_MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$APP_UUID" || { echo 'Transient PostgreSQL probe app was not created.'; exit 1; }
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          code="$(curl --proto '=https' --tlsv1.2 -sS -o "$RUNNER_TEMP/trading-pg-probe-deploy.json" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 60 \
+            -X POST -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deploy?uuid=$APP_UUID&force=true")"
+          [ "$code" = '200' ] || { echo "Coolify transient PostgreSQL probe deployment failed with HTTP $code."; exit 2; }
+          deployment_uuid="$(node -e "const x=require(process.argv[1]);const d=Array.isArray(x.deployments)?x.deployments[0]:null;if(!/^[a-z0-9-]{8,64}$/i.test(String(d?.deployment_uuid||'')))process.exit(1);process.stdout.write(d.deployment_uuid)" "$RUNNER_TEMP/trading-pg-probe-deploy.json")"
+
+          fetch_logs() {
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+              "$api/applications/$APP_UUID/logs?lines=1000&show_timestamps=false" \
+              -o "$RUNNER_TEMP/trading-pg-probe-logs.json"
+          }
+          print_safe_failure() {
+            node <<'SAFE_PROBE_FAILURE'
+          const fs = require('node:fs');
+          const redact = (value) => String(value || '')
+            .replace(/postgres(?:ql)?:\/\/[^\s"'`]+/gi, 'postgresql://***')
+            .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer ***')
+            .replace(/((?:password|secret|token|authorization)\s*[=:]\s*)[^\s"'`]+/gi, '$1***');
+          try {
+            const deployment = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-deployment-status.json', 'utf8'));
+            console.error(`Sanitized Coolify deployment status: ${redact(deployment.status || 'unknown')}`);
+            const deploymentLogs = String(deployment.logs || '').split(/\r?\n/).filter(Boolean).slice(-80).map(redact);
+            if (deploymentLogs.length) console.error(deploymentLogs.join('\n'));
+          } catch {}
+          let logs = '';
+          try { logs = String(JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8')).logs || ''); } catch {}
+          const safe = logs.split(/\r?\n/).filter((line) => /Staging PostgreSQL probe failed during|PostgreSQL schema migration failed during|must be read-only|TRADING_(?:PG_(?:PROBE|MIGRATION)_OK|SNAPSHOT_IMPORT_OK|PROBE_FAILED)=|^snapshot_import_progress=/.test(line));
+          for (const line of safe.slice(-5)) console.error(redact(line));
+          SAFE_PROBE_FAILURE
+          }
+
+          deployment_done='no'
+          for i in $(seq 1 120); do
+            curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" "$api/deployments/$deployment_uuid" \
+              -o "$RUNNER_TEMP/trading-pg-probe-deployment-status.json"
+            status="$(node -e "const x=require(process.argv[1]);process.stdout.write(String(x.status||''))" "$RUNNER_TEMP/trading-pg-probe-deployment-status.json")"
+            case "${status,,}" in
+              finished|success|successful|succeeded|completed) deployment_done='yes'; break ;;
+              failed|failure|error|cancelled|canceled)
+                fetch_logs || true
+                print_safe_failure
+                echo "Transient PostgreSQL probe deployment failed with status $status."
+                exit 3
+                ;;
+            esac
+            sleep 5
+          done
+          if [ "$deployment_done" != 'yes' ]; then
+            fetch_logs || true
+            print_safe_failure
+            echo 'Timed out waiting for transient PostgreSQL probe deployment.'
+            exit 4
+          fi
+
+          probe_done='no'
+          last_progress=''
+          probe_deadline=$((SECONDS + 45 * 60))
+          while [ "$SECONDS" -lt "$probe_deadline" ]; do
+          if fetch_logs; then
+          progress_line="$(node <<'PRINT_SAFE_IMPORT_PROGRESS' || true
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
+          const line = String(payload.logs || '').split(/\r?\n/).filter((entry) => entry.startsWith('snapshot_import_progress=')).at(-1);
+          if (!line) process.exit(0);
+          try {
+            const event = JSON.parse(line.slice('snapshot_import_progress='.length));
+            const safe = {};
+            for (const key of ['phase', 'pass', 'target', 'table', 'column', 'pages', 'rows', 'totalRows', 'batchNumber', 'appliedRows', 'queryNumber']) {
+              if (typeof event[key] === 'string' && /^[a-z][a-z0-9_-]{0,62}$/.test(event[key])) safe[key] = event[key];
+              else if (Number.isSafeInteger(event[key]) && event[key] >= 0) safe[key] = event[key];
+            }
+            for (const key of ['actualShape', 'expectedShape']) {
+              const shape = event[key];
+              if (!shape || typeof shape !== 'object' || Array.isArray(shape)) continue;
+              const safeShape = {};
+              if (typeof shape.kind === 'string' && /^(null|array|object|string|number|boolean|undefined)$/.test(shape.kind)) safeShape.kind = shape.kind;
+              for (const sizeKey of ['length', 'keys']) {
+                if (Number.isSafeInteger(shape[sizeKey]) && shape[sizeKey] >= 0) safeShape[sizeKey] = shape[sizeKey];
+              }
+              if (safeShape.kind) safe[key] = safeShape;
+            }
+            if (safe.phase) process.stdout.write('snapshot_import_progress=' + JSON.stringify(safe));
+          } catch {}
+          PRINT_SAFE_IMPORT_PROGRESS
+          )"
+          if [ -n "$progress_line" ] && [ "$progress_line" != "$last_progress" ]; then
+            echo "$progress_line"
+            last_progress="$progress_line"
+          fi
+          if APPLY_MODE="$APPLY_MODE" node <<'VERIFY_SAFE_PROBE_RESULT'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/trading-pg-probe-logs.json', 'utf8'));
+          const logs = String(payload.logs || '');
+          const failure = logs.split(/\r?\n/).find((entry) => entry.startsWith('TRADING_PROBE_FAILED='));
+          if (failure) {
+            try {
+              const details = JSON.parse(failure.slice('TRADING_PROBE_FAILED='.length));
+              console.error(`Transient probe task failed: ${String(details.message || 'unknown error').slice(0, 500)}`);
+            } catch {
+              console.error('Transient probe task failed; its error details could not be parsed safely.');
+            }
+            process.exit(2);
+          }
+          const applying = process.env.APPLY_MODE === 'apply-existing-mkety-schema';
+          const importing = process.env.APPLY_MODE === 'import-continuity-fresh-start';
+          const prefix = importing ? 'TRADING_SNAPSHOT_IMPORT_OK=' : applying ? 'TRADING_PG_MIGRATION_OK=' : 'TRADING_PG_PROBE_OK=';
+          const line = logs.split(/\r?\n/).find((entry) => entry.startsWith(prefix));
+          if (!line) process.exit(1);
+          const result = JSON.parse(line.slice(prefix.length));
+          if (importing) {
+            const important = result.importantRows || {};
+            const sourceDrift = result.sourceDrift || [];
+            const driftedRows = sourceDrift.reduce((sum, change) => {
+              const tableChanges = Number(change?.added) + Number(change?.removed) + Number(change?.modified);
+              if (!/^[a-z][a-z0-9_]{0,62}$/.test(String(change?.table || '')) || !Number.isSafeInteger(tableChanges)
+                || tableChanges < 0 || tableChanges > 2000) throw new Error('Snapshot source drift report is invalid or exceeds a per-table safety bound.');
+              return sum + tableChanges;
+            }, 0);
+            const excluded = result.excludedOperationalTables || {};
+            const excludedEmpty = ['d1', 'postgres'].every((target) => excluded[target]?.tables === 8 && excluded[target]?.rows === 0);
+            const failedGates = [];
+            if (result.tables !== 20) failedGates.push('continuity-table-count');
+            if (result.targetsParityVerified !== true) failedGates.push('exact-target-parity');
+            if (result.authorityActivated !== true) failedGates.push('d1-authority-activation');
+            if (result.snapshotConsistency !== 'bounded-rolling-live-source') failedGates.push('snapshot-consistency');
+            if (!Array.isArray(result.sourceDrift) || driftedRows > 10000) failedGates.push('bounded-source-drift');
+            if (!Number.isSafeInteger(result.d1Rows) || result.d1Rows !== result.postgresRows) failedGates.push('target-row-count-parity');
+            if (result.snapshotProfile !== 'continuity-fresh-start') failedGates.push('approved-snapshot-profile');
+            if (result.reset?.tablesResetPerTarget !== 28 || result.reset?.storageAuthorityPreserved !== true
+              || result.reset?.writesFenced !== true) failedGates.push('guarded-target-reset');
+            if (!excludedEmpty) failedGates.push('excluded-operational-tables-empty');
+            if (!(important.workspaces > 0) && !(important.trading_workspace_access > 0)) failedGates.push('workspace-preservation');
+            if (!(important.trading_workspace_access > 0)) failedGates.push('workspace-access-preservation');
+            if (result.fences?.globalControlsFenced !== 2) failedGates.push('global-execution-fence');
+            if (result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) failedGates.push('workspace-access-fence-accounting');
+            if (failedGates.length) {
+              const safeCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+              const safeImportSummary = {
+                tables: safeCount(result.tables),
+                d1Rows: safeCount(result.d1Rows),
+                postgresRows: safeCount(result.postgresRows),
+                workspaceRows: safeCount(important.workspaces),
+                workspaceAccessRows: safeCount(important.trading_workspace_access),
+                sourceDriftRows: safeCount(driftedRows),
+                excludedD1: { tables: safeCount(excluded.d1?.tables), rows: safeCount(excluded.d1?.rows) },
+                excludedPostgres: { tables: safeCount(excluded.postgres?.tables), rows: safeCount(excluded.postgres?.rows) },
+                d1AuthorityActivated: result.authorityActivated === true,
+                executionControlsFenced: result.fences?.globalControlsFenced === 2,
+                targetResetFenced: result.reset?.writesFenced === true
+              };
+              console.error(`Continuity import acceptance failed gates: ${failedGates.join(',')}; safeImportSummary=${JSON.stringify(safeImportSummary)}`);
+              process.exit(2);
+            }
+            const driftSummary = sourceDrift.map((change) => `${change.table}:${change.added}/${change.modified}/${change.removed}`).join(',') || 'none';
+            console.log(`Existing D1 and mkety continuity parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; stale operational tables empty in both targets; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
+          } else if (applying) {
+            const expectedMigrations = [
+              '0001_trading_storage_replication_authority.sql',
+              '0002_trading_domain_schema.sql',
+              '0003_trading_replication_health.sql'
+            ];
+            const appliedExactly = result.alreadyApplied === true
+              || (Array.isArray(result.applied) && JSON.stringify(result.applied) === JSON.stringify(expectedMigrations));
+            if (result.databaseName !== 'mkety' || result.schemaName !== 'trading_storage' || !appliedExactly) {
+              throw new Error('Schema-only migration did not verify the expected database, schema, and migration ledger.');
+            }
+            console.log(`Existing mkety Trading schema migration verified: ${JSON.stringify(result)}`);
+          } else {
+            if (result.transactionReadOnly !== true || typeof result.databaseName !== 'string' || typeof result.roleIsSuperuser !== 'boolean') {
+              throw new Error('Read-only PostgreSQL probe did not confirm database identity metadata.');
+            }
+            console.log(`Existing PostgreSQL staging connection verified inside Coolify: ${JSON.stringify(result)}`);
+          }
+          VERIFY_SAFE_PROBE_RESULT
+            then
+              probe_done='yes'
+              break
+            else
+              verify_status=$?
+              if [ "$verify_status" -eq 2 ]; then
+                print_safe_failure
+                exit 5
+              fi
+            fi
+          fi
+            sleep 10
+          done
+          if [ "$probe_done" != 'yes' ]; then
+            print_safe_failure
+            echo 'The transient Coolify app did not report a successful probe, migration, or data import before the task-result timeout.'
+            exit 5
+          fi
+      - name: Delete ephemeral Trading PostgreSQL probe host
+        if: always() && steps.postgres-probe-app.outputs.app_uuid != ''
+        env:
+          OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+          OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+          APP_UUID: ${{ steps.postgres-probe-app.outputs.app_uuid }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 60 \
+            -X DELETE -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+            "$api/applications/$APP_UUID" >/dev/null
+          echo 'Ephemeral Trading PostgreSQL probe host deleted.'
 
   cloudflare-inspect:
     if: >-
@@ -123,7 +1013,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
@@ -201,7 +1091,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Cloudflare authentication
         run: npx wrangler whoami
@@ -260,7 +1150,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Require staging credentials without printing values
         shell: bash
@@ -451,7 +1341,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Require Cloudflare staging credentials without printing values
         shell: bash

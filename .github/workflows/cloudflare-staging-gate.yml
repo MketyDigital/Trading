@@ -1,17 +1,15 @@
-name: Cloudflare Staging Gate
+name: Trading Storage Staging Inspection
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Safe Cloudflare staging action
+        description: Read-only inspection of the existing Trading staging target
         required: true
         type: choice
         default: inspect
         options:
           - inspect
-          - deploy-paid
-          - deploy-free
 
 permissions:
   contents: read
@@ -30,26 +28,21 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      STAGING_SUPABASE_URL_SECRET: ${{ secrets.SUPABASE_URL }}
-      STAGING_SUPABASE_URL_VAR: ${{ vars.SUPABASE_URL }}
-      STAGING_SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      STAGING_SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      STAGING_TRADING_MASTER_KEY: ${{ secrets.TRADING_MASTER_KEY }}
       TRADINGVIEW_DIRECT_INGRESS_ENABLED: 'false'
       TRADINGVIEW_CERT_PROBE_ENABLED: 'false'
       TRADING_ACCESS_ENABLED: 'false'
       BROKER_EXECUTION_ENABLED: 'false'
+      LIVE_BROKER_EXECUTION_ENABLED: 'false'
 
     steps:
       - name: Checkout reviewed ref
         uses: actions/checkout@v4
 
-      - name: Refuse non-PR-2 branch
+      - name: Refuse unreviewed branch
         shell: bash
         run: |
-          if [ "${GITHUB_REF_NAME}" != "design/enterprise-trading-event-core" ]; then
-            echo "Cloudflare staging gate may run only from design/enterprise-trading-event-core."
+          if [ "${GITHUB_REF_NAME}" != "feat/trading-d1-cutover-implementation" ]; then
+            echo "Trading storage inspection may run only from the reviewed migration branch."
             exit 1
           fi
 
@@ -58,102 +51,60 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
+      - name: Install dependencies without Cloudflare credentials
+        run: npm ci --no-audit --no-fund
 
       - name: Require Cloudflare staging credentials by name only
         shell: bash
         run: |
-          missing=0
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "Missing GitHub staging secret: CLOUDFLARE_API_TOKEN"
-            missing=1
-          fi
-          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID"
-            missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
-
-      - name: Require paid runtime configuration by name only
-        if: ${{ inputs.mode == 'deploy-paid' }}
-        shell: bash
-        run: |
-          missing=0
-          if [ -z "${STAGING_SUPABASE_URL_SECRET:-}" ] && [ -z "${STAGING_SUPABASE_URL_VAR:-}" ]; then
-            echo "Missing GitHub staging configuration: SUPABASE_URL"
-            missing=1
-          fi
-          if [ -z "${STAGING_SUPABASE_SERVICE_ROLE:-}" ] && [ -z "${STAGING_SUPABASE_SERVICE_ROLE_KEY:-}" ] && [ -z "${STAGING_SUPABASE_SERVICE_KEY:-}" ]; then
-            echo "Missing GitHub staging secret: one of SUPABASE_SERVICE_ROLE, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY"
-            missing=1
-          fi
-          if [ -z "${STAGING_TRADING_MASTER_KEY:-}" ]; then
-            echo "Missing GitHub staging secret: TRADING_MASTER_KEY"
-            missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo 'Missing GitHub staging secret: CLOUDFLARE_ACCOUNT_ID'; exit 1; }
 
       - name: Verify Cloudflare identity
         run: npx wrangler whoami
 
-      - name: Validate Paid and Free Wrangler profiles
+      - name: Confirm the existing Trading D1 resource
         shell: bash
         run: |
-          npx wrangler deploy --dry-run --config wrangler.toml
-          npx wrangler deploy --dry-run --config wrangler.free.toml
+          npx wrangler d1 list --json > "$RUNNER_TEMP/trading-d1-inventory.json"
+          node --input-type=module <<'CHECK_EXISTING_D1'
+          import { readFile } from 'node:fs/promises';
 
-      - name: Inspect current Paid deployment state
-        if: ${{ inputs.mode == 'inspect' }}
-        run: npx wrangler deployments list --config wrangler.toml
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-inventory.json`, 'utf8'));
+          const databases = Array.isArray(payload) ? payload : payload.result;
+          if (!Array.isArray(databases)) throw new Error('Unexpected D1 inventory response shape');
+          const database = databases.find(({ name }) => name === 'trading-staging');
+          if (!database?.uuid) throw new Error('Existing Trading staging D1 is missing; refusing to provision a database');
+          console.log(`Existing Trading D1 found (${database.name}); resource id withheld.`);
+          CHECK_EXISTING_D1
 
-      - name: Build ephemeral Paid staging secrets file
-        if: ${{ inputs.mode == 'deploy-paid' }}
+      - name: Dry-run the Trading storage staging Worker
+        run: npx wrangler deploy --dry-run --containers-rollout=none --config wrangler.trading-staging.toml
+
+      - name: Inspect existing Trading D1 migration state
+        run: npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
+
+      - name: Verify migrated Trading tables exist
         shell: bash
         run: |
-          umask 077
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
+          npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml \
+            --command "SELECT CASE WHEN COUNT(*) >= 34 THEN 'TRADING_D1_SCHEMA_OK' ELSE 'TRADING_D1_SCHEMA_MISSING' END AS status FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';" \
+            > "$RUNNER_TEMP/trading-d1-schema-check.txt"
+          if ! grep -q 'TRADING_D1_SCHEMA_OK' "$RUNNER_TEMP/trading-d1-schema-check.txt"; then
+            echo 'Existing Trading D1 schema verification failed.'
+            exit 1
+          fi
+          echo 'Existing Trading D1 schema check passed.'
 
-          const supabaseUrl = process.env.STAGING_SUPABASE_URL_SECRET || process.env.STAGING_SUPABASE_URL_VAR;
-          const serviceRole = process.env.STAGING_SUPABASE_SERVICE_ROLE ||
-            process.env.STAGING_SUPABASE_SERVICE_ROLE_KEY ||
-            process.env.STAGING_SUPABASE_SERVICE_KEY;
+      - name: Inspect current Trading staging deployment state
+        run: npx wrangler deployments list --config wrangler.trading-staging.toml
 
-          const payload = {
-            SUPABASE_URL: supabaseUrl,
-            SUPABASE_SERVICE_ROLE: serviceRole,
-            TRADING_MASTER_KEY: process.env.STAGING_TRADING_MASTER_KEY,
-          };
-
-          const target = path.join(process.env.RUNNER_TEMP, 'mkety-trading-staging-secrets.json');
-          fs.writeFileSync(target, JSON.stringify(payload), { mode: 0o600 });
-          NODE
-
-      - name: Deploy reviewed Paid staging profile
-        if: ${{ inputs.mode == 'deploy-paid' }}
-        shell: bash
-        run: npx wrangler deploy --config wrangler.toml --secrets-file "$RUNNER_TEMP/mkety-trading-staging-secrets.json"
-
-      - name: Remove ephemeral Paid staging secrets file
-        if: ${{ always() && inputs.mode == 'deploy-paid' }}
-        shell: bash
-        run: rm -f "$RUNNER_TEMP/mkety-trading-staging-secrets.json"
-
-      - name: Deploy reviewed Free staging profile
-        if: ${{ inputs.mode == 'deploy-free' }}
-        run: npx wrangler deploy --config wrangler.free.toml
-
-      - name: Record safety posture
+      - name: Record fail-closed staging posture
         shell: bash
         run: |
-          echo "Cloudflare staging mode: ${{ inputs.mode }}"
+          echo "Cloudflare mode: read-only inspect and dry-run"
+          echo "D1 provisioning: disabled"
+          echo "Worker deployment: disabled"
           echo "TradingView direct ingress: disabled"
-          echo "TradingView certificate probe: disabled"
-          echo "Trading access entitlement: disabled"
+          echo "Trading access: disabled"
           echo "Broker execution: disabled"

@@ -121,7 +121,7 @@ test('V1 production-shaped DEMO path executes exactly once through real coordina
           seen.riskMaterializations += 1;
           assert.equal(workspaceId, 'ws-trusted');
           assert.equal(eventId, 'db-event-1');
-          assert.equal(account, persistedAccount);
+          assert.deepEqual(account, persistedAccount);
           assert.equal(action.simulated, undefined);
           return {
             allowed: true,
@@ -139,7 +139,7 @@ test('V1 production-shaped DEMO path executes exactly once through real coordina
           assert.equal(workspaceId, 'ws-trusted');
           assert.equal(eventId, 'db-event-1');
           assert.equal(groupId, 'group-1');
-          assert.equal(account, persistedAccount);
+          assert.deepEqual(account, persistedAccount);
           assert.equal(action.idempotencyKey, 'group-1:leg:1');
           return {
             brokerPositionId: 'fake-position-1',

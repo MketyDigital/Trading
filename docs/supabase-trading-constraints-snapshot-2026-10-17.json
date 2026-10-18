@@ -1,0 +1,1016 @@
+{
+  "project": "Mkety Digital",
+  "projectRef": "vdblajgxrfndjesoyayy",
+  "capturedAt": "2026-10-16T23:57:23.625Z",
+  "source": "Read-only pg_catalog query; schema metadata only, no row contents",
+  "tableCount": 28,
+  "rpcCount": 2,
+  "tables": [
+    {
+      "table": "ai_providers",
+      "indexes": [
+        "CREATE UNIQUE INDEX ai_providers_pkey ON public.ai_providers USING btree (id)",
+        "CREATE INDEX ai_providers_workspace_priority_idx ON public.ai_providers USING btree (workspace_id, is_active, priority_rank)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "ai_providers_last_health_status_check",
+          "type": "c",
+          "definition": "CHECK (last_health_status IS NULL OR (last_health_status = ANY (ARRAY['HEALTHY'::text, 'FAILED'::text])))"
+        },
+        {
+          "name": "ai_providers_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "ai_providers_provider_name_check",
+          "type": "c",
+          "definition": "CHECK (provider_name = ANY (ARRAY['openai'::text, 'azure_openai'::text, 'mkety_ai'::text, 'gemini'::text, 'google'::text, 'vertex_ai'::text, 'cloudflare_ai'::text, 'workers_ai'::text, 'aws_bedrock'::text, 'deepseek'::text, 'groq'::text, 'custom'::text]))"
+        },
+        {
+          "name": "ai_providers_workspace_id_trading_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "bank_deposits",
+      "indexes": [
+        "CREATE UNIQUE INDEX bank_deposits_pkey ON public.bank_deposits USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "bank_deposits_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "bank_deposits_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "signal_logs",
+      "indexes": [
+        "CREATE UNIQUE INDEX signal_logs_pkey ON public.signal_logs USING btree (id)",
+        "CREATE UNIQUE INDEX signal_logs_source_chat_id_source_message_id_key ON public.signal_logs USING btree (source_chat_id, source_message_id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "signal_logs_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "signal_logs_source_chat_id_source_message_id_key",
+          "type": "u",
+          "definition": "UNIQUE (source_chat_id, source_message_id)"
+        },
+        {
+          "name": "signal_logs_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "signal_routes",
+      "indexes": [
+        "CREATE UNIQUE INDEX signal_routes_pkey ON public.signal_routes USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "signal_routes_destination_type_check",
+          "type": "c",
+          "definition": "CHECK (destination_type = ANY (ARRAY['telegram_vip'::text, 'deriv_ws'::text, 'ctrader_ws'::text, 'mt5_webhook'::text]))"
+        },
+        {
+          "name": "signal_routes_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "signal_routes_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "source_connections",
+      "indexes": [
+        "CREATE INDEX idx_source_connections_external_identity ON public.source_connections USING btree (workspace_id, source_family, external_identity) WHERE (external_identity IS NOT NULL)",
+        "CREATE INDEX idx_source_connections_mtproto_recovery ON public.source_connections USING btree (provider_type, is_active, recovery_next_attempt_at, recovery_attempt_count) WHERE ((provider_type = 'cloudflare_container_mtproto'::text) AND (is_active = true))",
+        "CREATE UNIQUE INDEX idx_source_connections_one_default_per_family ON public.source_connections USING btree (workspace_id, source_family) WHERE ((is_active = true) AND (is_default = true))",
+        "CREATE INDEX idx_source_connections_provider_type ON public.source_connections USING btree (provider_type) WHERE (is_active = true)",
+        "CREATE UNIQUE INDEX idx_source_connections_public_source_handle ON public.source_connections USING btree (public_source_handle) WHERE (public_source_handle IS NOT NULL)",
+        "CREATE INDEX idx_source_connections_workspace_active ON public.source_connections USING btree (workspace_id, is_active)",
+        "CREATE INDEX idx_source_connections_workspace_family_active ON public.source_connections USING btree (workspace_id, source_family, is_active, priority, id)",
+        "CREATE UNIQUE INDEX idx_source_connections_workspace_id_unique ON public.source_connections USING btree (workspace_id, id)",
+        "CREATE UNIQUE INDEX source_connections_pkey ON public.source_connections USING btree (id)",
+        "CREATE UNIQUE INDEX source_connections_workspace_id_source_instance_id_key ON public.source_connections USING btree (workspace_id, source_instance_id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "source_connections_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "source_connections_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "source_connections_workspace_id_source_instance_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, source_instance_id)"
+        }
+      ]
+    },
+    {
+      "table": "trade_accounts",
+      "indexes": [
+        "CREATE INDEX idx_trade_accounts_workspace ON public.trade_accounts USING btree (workspace_id)",
+        "CREATE UNIQUE INDEX trade_accounts_pkey ON public.trade_accounts USING btree (id)",
+        "CREATE UNIQUE INDEX trade_accounts_workspace_platform_mode_account_unique ON public.trade_accounts USING btree (workspace_id, platform, provider_mode, account_id)"
+      ],
+      "triggers": [
+        {
+          "name": "trade_accounts_connected_demo_execution_invariant",
+          "function": "CREATE OR REPLACE FUNCTION public.enforce_connected_demo_execution()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  has_execution_role boolean;\n  connected_demo boolean;\nBEGIN\n  has_execution_role := COALESCE(NEW.roles, '[]'::jsonb) ? 'execution';\n  connected_demo :=\n    lower(COALESCE(NEW.environment, '')) = 'demo'\n    AND NULLIF(btrim(COALESCE(NEW.account_id, '')), '') IS NOT NULL\n    AND lower(COALESCE(NEW.account_id, '')) NOT LIKE 'pending:%'\n    AND (\n      lower(COALESCE(NEW.provider_mode, '')) NOT IN ('mt5_connector', 'ctrader_cbot')\n      OR lower(COALESCE(NEW.provider_config->>'status', '')) = 'connected'\n    );\n\n  IF connected_demo THEN\n    NEW.is_active := true;\n    NEW.live_execution_enabled := false;\n    IF has_execution_role THEN\n      NEW.execution_enabled := true;\n      NEW.safety_policy := jsonb_set(COALESCE(NEW.safety_policy, '{}'::jsonb), '{killSwitch}', 'false'::jsonb, true);\n    ELSE\n      NEW.execution_enabled := false;\n      NEW.safety_policy := jsonb_set(COALESCE(NEW.safety_policy, '{}'::jsonb), '{killSwitch}', 'true'::jsonb, true);\n    END IF;\n  END IF;\n\n  RETURN NEW;\nEND;\n$function$\n",
+          "definition": "CREATE TRIGGER trade_accounts_connected_demo_execution_invariant BEFORE INSERT OR UPDATE ON trade_accounts FOR EACH ROW EXECUTE FUNCTION enforce_connected_demo_execution()"
+        },
+        {
+          "name": "trg_enforce_connected_demo_execution",
+          "function": "CREATE OR REPLACE FUNCTION public.enforce_connected_demo_execution()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'public'\nAS $function$\nDECLARE\n  has_execution_role boolean;\n  connected_demo boolean;\nBEGIN\n  has_execution_role := COALESCE(NEW.roles, '[]'::jsonb) ? 'execution';\n  connected_demo :=\n    lower(COALESCE(NEW.environment, '')) = 'demo'\n    AND NULLIF(btrim(COALESCE(NEW.account_id, '')), '') IS NOT NULL\n    AND lower(COALESCE(NEW.account_id, '')) NOT LIKE 'pending:%'\n    AND (\n      lower(COALESCE(NEW.provider_mode, '')) NOT IN ('mt5_connector', 'ctrader_cbot')\n      OR lower(COALESCE(NEW.provider_config->>'status', '')) = 'connected'\n    );\n\n  IF connected_demo THEN\n    NEW.is_active := true;\n    NEW.live_execution_enabled := false;\n    IF has_execution_role THEN\n      NEW.execution_enabled := true;\n      NEW.safety_policy := jsonb_set(COALESCE(NEW.safety_policy, '{}'::jsonb), '{killSwitch}', 'false'::jsonb, true);\n    ELSE\n      NEW.execution_enabled := false;\n      NEW.safety_policy := jsonb_set(COALESCE(NEW.safety_policy, '{}'::jsonb), '{killSwitch}', 'true'::jsonb, true);\n    END IF;\n  END IF;\n\n  RETURN NEW;\nEND;\n$function$\n",
+          "definition": "CREATE TRIGGER trg_enforce_connected_demo_execution BEFORE INSERT OR UPDATE ON trade_accounts FOR EACH ROW EXECUTE FUNCTION enforce_connected_demo_execution()"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "trade_accounts_environment_check",
+          "type": "c",
+          "definition": "CHECK (environment IS NULL OR (environment = ANY (ARRAY['demo'::text, 'live'::text]))) NOT VALID"
+        },
+        {
+          "name": "trade_accounts_lot_sizing_type_check",
+          "type": "c",
+          "definition": "CHECK (lot_sizing_type = ANY (ARRAY['fixed'::text, 'adaptive_percent'::text, 'symbol_equivalent'::text, 'balance_percent'::text, 'multiplier'::text, 'risk_percent'::text]))"
+        },
+        {
+          "name": "trade_accounts_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trade_accounts_platform_check",
+          "type": "c",
+          "definition": "CHECK (platform = ANY (ARRAY['deriv'::text, 'ctrader'::text, 'mt5'::text]))"
+        },
+        {
+          "name": "trade_accounts_provider_mode_check",
+          "type": "c",
+          "definition": "CHECK (provider_mode = ANY (ARRAY['legacy'::text, 'ctrader_oauth'::text, 'ctrader_cbot'::text, 'mt5_bridge'::text, 'mt5_cloud'::text, 'mt5_connector'::text]))"
+        },
+        {
+          "name": "trade_accounts_workspace_id_trading_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE RESTRICT"
+        }
+      ]
+    },
+    {
+      "table": "trading_events",
+      "indexes": [
+        "CREATE INDEX idx_trading_events_source_connection ON public.trading_events USING btree (source_connection_id)",
+        "CREATE UNIQUE INDEX idx_trading_events_workspace_canonical_event ON public.trading_events USING btree (workspace_id, canonical_event_id) WHERE (canonical_event_id IS NOT NULL)",
+        "CREATE INDEX idx_trading_events_workspace_received ON public.trading_events USING btree (workspace_id, received_at DESC)",
+        "CREATE UNIQUE INDEX trading_events_pkey ON public.trading_events USING btree (id)",
+        "CREATE UNIQUE INDEX trading_events_workspace_id_source_connection_id_external_e_key ON public.trading_events USING btree (workspace_id, source_connection_id, external_event_id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_events_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_events_source_connection_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (source_connection_id) REFERENCES source_connections(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_events_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_events_workspace_id_source_connection_id_external_e_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, source_connection_id, external_event_id)"
+        }
+      ]
+    },
+    {
+      "table": "trading_workspace_access",
+      "indexes": [
+        "CREATE UNIQUE INDEX idx_trading_workspace_access_zitadel_org ON public.trading_workspace_access USING btree (zitadel_org_id) WHERE (zitadel_org_id IS NOT NULL)",
+        "CREATE UNIQUE INDEX trading_workspace_access_pkey ON public.trading_workspace_access USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_workspace_access_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ]
+    },
+    {
+      "table": "vip_members",
+      "indexes": [
+        "CREATE UNIQUE INDEX vip_members_pkey ON public.vip_members USING btree (id)",
+        "CREATE UNIQUE INDEX vip_members_workspace_id_telegram_id_key ON public.vip_members USING btree (workspace_id, telegram_id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "vip_members_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "vip_members_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "vip_members_workspace_id_telegram_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, telegram_id)"
+        }
+      ]
+    },
+    {
+      "table": "workspaces",
+      "indexes": [
+        "CREATE UNIQUE INDEX workspaces_pkey ON public.workspaces USING btree (id)",
+        "CREATE UNIQUE INDEX workspaces_tg_bot_token_key ON public.workspaces USING btree (tg_bot_token)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "workspaces_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "workspaces_tg_bot_token_key",
+          "type": "u",
+          "definition": "UNIQUE (tg_bot_token)"
+        },
+        {
+          "name": "workspaces_tier_check",
+          "type": "c",
+          "definition": "CHECK (tier = ANY (ARRAY['free'::text, 'pro'::text, 'enterprise'::text]))"
+        }
+      ]
+    },
+    {
+      "table": "destination_deliveries",
+      "indexes": [
+        "CREATE UNIQUE INDEX destination_deliveries_pkey ON public.destination_deliveries USING btree (id)",
+        "CREATE UNIQUE INDEX destination_deliveries_workspace_id_idempotency_key_key ON public.destination_deliveries USING btree (workspace_id, idempotency_key)",
+        "CREATE INDEX idx_destination_deliveries_retry_due ON public.destination_deliveries USING btree (status, next_attempt_at, workspace_id) WHERE (status = 'RETRYABLE'::text)",
+        "CREATE INDEX idx_destination_deliveries_status ON public.destination_deliveries USING btree (workspace_id, status, created_at)",
+        "CREATE INDEX idx_destination_deliveries_trading_event ON public.destination_deliveries USING btree (trading_event_id) WHERE (trading_event_id IS NOT NULL)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "destination_deliveries_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "destination_deliveries_trading_event_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (trading_event_id) REFERENCES trading_events(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "destination_deliveries_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "destination_deliveries_workspace_id_idempotency_key_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, idempotency_key)"
+        }
+      ]
+    },
+    {
+      "table": "position_groups",
+      "indexes": [
+        "CREATE INDEX idx_position_groups_correlation ON public.position_groups USING btree (workspace_id, correlation_key) WHERE (correlation_key IS NOT NULL)",
+        "CREATE INDEX idx_position_groups_source_event ON public.position_groups USING btree (source_event_id) WHERE (source_event_id IS NOT NULL)",
+        "CREATE INDEX idx_position_groups_source_state ON public.position_groups USING btree (workspace_id, source_instance_id, status, updated_at DESC) WHERE (status = ANY (ARRAY['OPEN'::text, 'PLANNED'::text, 'PENDING'::text]))",
+        "CREATE INDEX idx_position_groups_trade_account ON public.position_groups USING btree (trade_account_id) WHERE (trade_account_id IS NOT NULL)",
+        "CREATE UNIQUE INDEX idx_position_groups_workspace_runtime_group ON public.position_groups USING btree (workspace_id, runtime_group_id)",
+        "CREATE INDEX idx_position_groups_workspace_status ON public.position_groups USING btree (workspace_id, status)",
+        "CREATE UNIQUE INDEX position_groups_pkey ON public.position_groups USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "position_groups_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "position_groups_position_mode_check",
+          "type": "c",
+          "definition": "CHECK (position_mode = ANY (ARRAY['HEDGED'::text, 'NETTED'::text, 'SPREAD_BETTING'::text]))"
+        },
+        {
+          "name": "position_groups_side_check",
+          "type": "c",
+          "definition": "CHECK (side = ANY (ARRAY['BUY'::text, 'SELL'::text]))"
+        },
+        {
+          "name": "position_groups_source_event_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (source_event_id) REFERENCES trading_events(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "position_groups_trade_account_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (trade_account_id) REFERENCES trade_accounts(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "position_groups_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "position_legs",
+      "indexes": [
+        "CREATE INDEX idx_position_legs_broker_order ON public.position_legs USING btree (workspace_id, broker_order_id) WHERE (broker_order_id IS NOT NULL)",
+        "CREATE INDEX idx_position_legs_broker_position ON public.position_legs USING btree (workspace_id, broker_position_id) WHERE (broker_position_id IS NOT NULL)",
+        "CREATE UNIQUE INDEX idx_position_legs_group_runtime_leg ON public.position_legs USING btree (position_group_id, runtime_leg_id)",
+        "CREATE INDEX idx_position_legs_group_status ON public.position_legs USING btree (position_group_id, status)",
+        "CREATE INDEX idx_position_legs_pending_order_lifecycle ON public.position_legs USING btree (workspace_id, broker_order_id) WHERE ((status = 'PENDING'::text) AND (lifecycle_tracking_enabled = true) AND (broker_order_id IS NOT NULL))",
+        "CREATE INDEX idx_position_legs_workspace ON public.position_legs USING btree (workspace_id)",
+        "CREATE UNIQUE INDEX position_legs_pkey ON public.position_legs USING btree (id)",
+        "CREATE UNIQUE INDEX position_legs_position_group_id_target_index_key ON public.position_legs USING btree (position_group_id, target_index)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "position_legs_lots_check",
+          "type": "c",
+          "definition": "CHECK (lots >= 0::numeric)"
+        },
+        {
+          "name": "position_legs_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "position_legs_position_group_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (position_group_id) REFERENCES position_groups(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "position_legs_position_group_id_target_index_key",
+          "type": "u",
+          "definition": "UNIQUE (position_group_id, target_index)"
+        },
+        {
+          "name": "position_legs_target_index_check",
+          "type": "c",
+          "definition": "CHECK (target_index > 0)"
+        },
+        {
+          "name": "position_legs_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_access_code_redemptions",
+      "indexes": [
+        "CREATE INDEX idx_trading_access_code_redemptions_code ON public.trading_access_code_redemptions USING btree (access_code_id, created_at DESC)",
+        "CREATE INDEX idx_trading_access_code_redemptions_workspace ON public.trading_access_code_redemptions USING btree (workspace_id, created_at DESC)",
+        "CREATE UNIQUE INDEX trading_access_code_redemptions_pkey ON public.trading_access_code_redemptions USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_access_code_redemptions_access_code_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (access_code_id) REFERENCES trading_access_codes(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_access_code_redemptions_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_access_code_redemptions_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['redeemed'::text, 'rejected'::text]))"
+        },
+        {
+          "name": "trading_access_code_redemptions_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_access_codes",
+      "indexes": [
+        "CREATE INDEX idx_trading_access_codes_status_expiry ON public.trading_access_codes USING btree (status, expires_at)",
+        "CREATE INDEX idx_trading_access_codes_workspace ON public.trading_access_codes USING btree (workspace_id)",
+        "CREATE UNIQUE INDEX trading_access_codes_code_hash_key ON public.trading_access_codes USING btree (code_hash)",
+        "CREATE UNIQUE INDEX trading_access_codes_pkey ON public.trading_access_codes USING btree (id)"
+      ],
+      "triggers": [
+        {
+          "name": "trading_access_code_workspace_lock",
+          "function": "CREATE OR REPLACE FUNCTION public.sync_trading_workspace_access_code_status()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nDECLARE\n    v_now TIMESTAMPTZ := now();\nBEGIN\n    IF NEW.product = 'trading'\n       AND NEW.status IS DISTINCT FROM 'active'\n       AND OLD.status = 'active' THEN\n        UPDATE public.trading_workspace_access\n           SET trading_access_enabled = false,\n               metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(\n                   'accessLockedAt', v_now,\n                   'accessLockReason', 'revoked'\n               ),\n               updated_at = v_now\n         WHERE id = NEW.workspace_id\n           AND metadata ->> 'accessCodeId' = NEW.id::text;\n    END IF;\n    RETURN NEW;\nEND;\n$function$\n",
+          "definition": "CREATE TRIGGER trading_access_code_workspace_lock AFTER UPDATE OF status ON trading_access_codes FOR EACH ROW EXECUTE FUNCTION sync_trading_workspace_access_code_status()"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "trading_access_codes_code_hash_key",
+          "type": "u",
+          "definition": "UNIQUE (code_hash)"
+        },
+        {
+          "name": "trading_access_codes_max_redemptions_check",
+          "type": "c",
+          "definition": "CHECK (max_redemptions > 0)"
+        },
+        {
+          "name": "trading_access_codes_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_access_codes_product_check",
+          "type": "c",
+          "definition": "CHECK (product = 'trading'::text)"
+        },
+        {
+          "name": "trading_access_codes_redeemed_count_check",
+          "type": "c",
+          "definition": "CHECK (redeemed_count >= 0)"
+        },
+        {
+          "name": "trading_access_codes_role_check",
+          "type": "c",
+          "definition": "CHECK (role = 'owner'::text)"
+        },
+        {
+          "name": "trading_access_codes_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text, 'revoked'::text]))"
+        },
+        {
+          "name": "trading_access_codes_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_destination_templates",
+      "indexes": [
+        "CREATE INDEX idx_trading_destination_templates_workspace ON public.trading_destination_templates USING btree (workspace_id, is_default DESC, created_at)",
+        "CREATE UNIQUE INDEX trading_destination_templates_pkey ON public.trading_destination_templates USING btree (id)",
+        "CREATE UNIQUE INDEX trading_destination_templates_workspace_id_id_key ON public.trading_destination_templates USING btree (workspace_id, id)",
+        "CREATE UNIQUE INDEX trading_destination_templates_workspace_id_template_name_key ON public.trading_destination_templates USING btree (workspace_id, template_name)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_destination_templates_formatting_mode_check",
+          "type": "c",
+          "definition": "CHECK (formatting_mode = ANY (ARRAY['none'::text, 'clean'::text, 'template'::text, 'ai_then_fallback'::text, 'clean_ai_fallback'::text]))"
+        },
+        {
+          "name": "trading_destination_templates_parse_mode_check",
+          "type": "c",
+          "definition": "CHECK (parse_mode = ANY (ARRAY['HTML'::text, 'Markdown'::text, 'MarkdownV2'::text, 'plain'::text]))"
+        },
+        {
+          "name": "trading_destination_templates_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_destination_templates_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_destination_templates_workspace_id_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, id)"
+        },
+        {
+          "name": "trading_destination_templates_workspace_id_template_name_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, template_name)"
+        }
+      ]
+    },
+    {
+      "table": "trading_destinations",
+      "indexes": [
+        "CREATE INDEX idx_trading_destinations_credential_connection ON public.trading_destinations USING btree (workspace_id, credential_connection_id) WHERE (credential_connection_id IS NOT NULL)",
+        "CREATE INDEX idx_trading_destinations_workspace ON public.trading_destinations USING btree (workspace_id, destination_type, is_active, created_at)",
+        "CREATE UNIQUE INDEX trading_destinations_pkey ON public.trading_destinations USING btree (id)",
+        "CREATE UNIQUE INDEX trading_destinations_workspace_id_id_key ON public.trading_destinations USING btree (workspace_id, id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_destinations_destination_type_check",
+          "type": "c",
+          "definition": "CHECK (destination_type = ANY (ARRAY['telegram'::text, 'broker_account'::text, 'internal_webhook'::text, 'audit_only'::text]))"
+        },
+        {
+          "name": "trading_destinations_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_destinations_workspace_credential_connection_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, credential_connection_id) REFERENCES trading_destination_connections(workspace_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "trading_destinations_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_destinations_workspace_id_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, id)"
+        },
+        {
+          "name": "trading_destinations_workspace_template_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, template_id) REFERENCES trading_destination_templates(workspace_id, id) ON DELETE SET NULL (template_id)"
+        }
+      ]
+    },
+    {
+      "table": "trading_workspace_hostnames",
+      "indexes": [
+        "CREATE INDEX idx_trading_workspace_hostnames_workspace_status ON public.trading_workspace_hostnames USING btree (workspace_id, status)",
+        "CREATE UNIQUE INDEX trading_workspace_hostnames_hostname_key ON public.trading_workspace_hostnames USING btree (hostname)",
+        "CREATE UNIQUE INDEX trading_workspace_hostnames_pkey ON public.trading_workspace_hostnames USING btree (id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_workspace_hostnames_check",
+          "type": "c",
+          "definition": "CHECK (status <> 'active'::text OR verified_at IS NOT NULL)"
+        },
+        {
+          "name": "trading_workspace_hostnames_hostname_check",
+          "type": "c",
+          "definition": "CHECK (hostname = lower(hostname))"
+        },
+        {
+          "name": "trading_workspace_hostnames_hostname_check1",
+          "type": "c",
+          "definition": "CHECK (hostname = btrim(hostname))"
+        },
+        {
+          "name": "trading_workspace_hostnames_hostname_check2",
+          "type": "c",
+          "definition": "CHECK (hostname !~ '\\.$'::text)"
+        },
+        {
+          "name": "trading_workspace_hostnames_hostname_key",
+          "type": "u",
+          "definition": "UNIQUE (hostname)"
+        },
+        {
+          "name": "trading_workspace_hostnames_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_workspace_hostnames_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['pending'::text, 'active'::text, 'disabled'::text]))"
+        },
+        {
+          "name": "trading_workspace_hostnames_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_workspace_memberships",
+      "indexes": [
+        "CREATE INDEX idx_trading_workspace_memberships_subject ON public.trading_workspace_memberships USING btree (zitadel_subject, membership_enabled)",
+        "CREATE INDEX idx_trading_workspace_memberships_workspace ON public.trading_workspace_memberships USING btree (workspace_id, membership_enabled)",
+        "CREATE UNIQUE INDEX trading_workspace_memberships_pkey ON public.trading_workspace_memberships USING btree (id)",
+        "CREATE UNIQUE INDEX trading_workspace_memberships_workspace_id_zitadel_subject_key ON public.trading_workspace_memberships USING btree (workspace_id, zitadel_subject)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_workspace_memberships_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_workspace_memberships_trading_role_check",
+          "type": "c",
+          "definition": "CHECK (trading_role = ANY (ARRAY['owner'::text, 'admin'::text, 'operator'::text, 'viewer'::text]))"
+        },
+        {
+          "name": "trading_workspace_memberships_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_workspace_memberships_workspace_id_zitadel_subject_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, zitadel_subject)"
+        }
+      ]
+    },
+    {
+      "table": "operation_journal",
+      "indexes": [
+        "CREATE INDEX operation_journal_correlation_time_idx ON public.operation_journal USING btree (workspace_id, correlation_id, observed_at)",
+        "CREATE INDEX operation_journal_event_time_idx ON public.operation_journal USING btree (trading_event_id, observed_at) WHERE (trading_event_id IS NOT NULL)",
+        "CREATE UNIQUE INDEX operation_journal_pkey ON public.operation_journal USING btree (id)",
+        "CREATE INDEX operation_journal_stage_status_time_idx ON public.operation_journal USING btree (workspace_id, stage, status, observed_at DESC)",
+        "CREATE UNIQUE INDEX operation_journal_workspace_id_evidence_key_key ON public.operation_journal USING btree (workspace_id, evidence_key)",
+        "CREATE INDEX operation_journal_workspace_time_idx ON public.operation_journal USING btree (workspace_id, observed_at DESC)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "operation_journal_ai_provider_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (ai_provider_id) REFERENCES ai_providers(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_destination_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (destination_id) REFERENCES trading_destinations(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "operation_journal_position_group_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (position_group_id) REFERENCES position_groups(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_route_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (route_id) REFERENCES source_destination_routes(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_source_connection_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (source_connection_id) REFERENCES source_connections(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_source_feed_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (source_feed_id) REFERENCES source_feeds(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_stage_check",
+          "type": "c",
+          "definition": "CHECK (stage = ANY (ARRAY['INGRESS'::text, 'AUTHORIZATION'::text, 'INTERPRETATION'::text, 'AI_PROVIDER'::text, 'CORRELATION'::text, 'ROUTE'::text, 'DESTINATION'::text, 'BROKER_PLANNING'::text, 'BROKER_EXECUTION'::text, 'MANAGEMENT'::text, 'REPLAY'::text, 'RECONCILIATION'::text, 'CONNECTOR'::text, 'PERSISTENCE'::text]))"
+        },
+        {
+          "name": "operation_journal_status_check",
+          "type": "c",
+          "definition": "CHECK (status = ANY (ARRAY['SUCCEEDED'::text, 'FAILED'::text, 'SKIPPED'::text, 'BLOCKED'::text, 'RETRYABLE'::text, 'UNCERTAIN'::text, 'INFO'::text]))"
+        },
+        {
+          "name": "operation_journal_trade_account_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (trade_account_id) REFERENCES trade_accounts(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_trading_event_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (trading_event_id) REFERENCES trading_events(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "operation_journal_workspace_id_evidence_key_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, evidence_key)"
+        },
+        {
+          "name": "operation_journal_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "orphan_signal_recovery_cursors",
+      "indexes": [
+        "CREATE UNIQUE INDEX orphan_signal_recovery_cursors_pkey ON public.orphan_signal_recovery_cursors USING btree (cursor_key)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "orphan_signal_recovery_cursor_pair_check",
+          "type": "c",
+          "definition": "CHECK (last_received_at IS NULL AND last_event_id IS NULL OR last_received_at IS NOT NULL AND last_event_id IS NOT NULL)"
+        },
+        {
+          "name": "orphan_signal_recovery_cursors_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (cursor_key)"
+        }
+      ]
+    },
+    {
+      "table": "source_destination_routes",
+      "indexes": [
+        "CREATE INDEX idx_source_destination_routes_destination ON public.source_destination_routes USING btree (workspace_id, destination_id, is_active, priority)",
+        "CREATE INDEX idx_source_destination_routes_feed ON public.source_destination_routes USING btree (workspace_id, source_feed_id, is_active, priority) WHERE (source_feed_id IS NOT NULL)",
+        "CREATE INDEX idx_source_destination_routes_source ON public.source_destination_routes USING btree (workspace_id, source_connection_id, is_active, priority)",
+        "CREATE UNIQUE INDEX source_destination_routes_pkey ON public.source_destination_routes USING btree (id)",
+        "CREATE UNIQUE INDEX uq_source_destination_routes_connection_default ON public.source_destination_routes USING btree (workspace_id, source_connection_id, destination_id) WHERE (source_feed_id IS NULL)",
+        "CREATE UNIQUE INDEX uq_source_destination_routes_feed_destination ON public.source_destination_routes USING btree (workspace_id, source_feed_id, destination_id) WHERE (source_feed_id IS NOT NULL)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "source_destination_routes_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "source_destination_routes_workspace_destination_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, destination_id) REFERENCES trading_destinations(workspace_id, id) ON DELETE CASCADE"
+        },
+        {
+          "name": "source_destination_routes_workspace_feed_source_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, source_feed_id, source_connection_id) REFERENCES source_feeds(workspace_id, id, source_connection_id) ON DELETE CASCADE"
+        },
+        {
+          "name": "source_destination_routes_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "source_destination_routes_workspace_source_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, source_connection_id) REFERENCES source_connections(workspace_id, id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "source_feeds",
+      "indexes": [
+        "CREATE INDEX idx_source_feeds_connection ON public.source_feeds USING btree (workspace_id, source_connection_id, is_active, provider_feed_id)",
+        "CREATE UNIQUE INDEX source_feeds_pkey ON public.source_feeds USING btree (id)",
+        "CREATE UNIQUE INDEX source_feeds_workspace_id_id_key ON public.source_feeds USING btree (workspace_id, id)",
+        "CREATE UNIQUE INDEX source_feeds_workspace_id_id_source_connection_id_key ON public.source_feeds USING btree (workspace_id, id, source_connection_id)",
+        "CREATE UNIQUE INDEX source_feeds_workspace_id_source_connection_id_provider_fee_key ON public.source_feeds USING btree (workspace_id, source_connection_id, provider_feed_id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "source_feeds_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "source_feeds_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "source_feeds_workspace_id_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, id)"
+        },
+        {
+          "name": "source_feeds_workspace_id_id_source_connection_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, id, source_connection_id)"
+        },
+        {
+          "name": "source_feeds_workspace_id_source_connection_id_provider_fee_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, source_connection_id, provider_feed_id)"
+        },
+        {
+          "name": "source_feeds_workspace_source_fk",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id, source_connection_id) REFERENCES source_connections(workspace_id, id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_ctrader_oauth_states",
+      "indexes": [
+        "CREATE UNIQUE INDEX trading_ctrader_oauth_states_pkey ON public.trading_ctrader_oauth_states USING btree (id)",
+        "CREATE UNIQUE INDEX trading_ctrader_oauth_states_state_token_key ON public.trading_ctrader_oauth_states USING btree (state_token)",
+        "CREATE INDEX trading_ctrader_oauth_states_workspace_expiry_idx ON public.trading_ctrader_oauth_states USING btree (workspace_id, expires_at DESC)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_ctrader_oauth_states_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_ctrader_oauth_states_state_token_key",
+          "type": "u",
+          "definition": "UNIQUE (state_token)"
+        },
+        {
+          "name": "trading_ctrader_oauth_states_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_destination_connections",
+      "indexes": [
+        "CREATE INDEX idx_trading_destination_connections_workspace ON public.trading_destination_connections USING btree (workspace_id, provider_type, is_active, created_at)",
+        "CREATE UNIQUE INDEX trading_destination_connections_pkey ON public.trading_destination_connections USING btree (id)",
+        "CREATE UNIQUE INDEX trading_destination_connections_workspace_id_display_name_key ON public.trading_destination_connections USING btree (workspace_id, display_name)",
+        "CREATE UNIQUE INDEX trading_destination_connections_workspace_id_id_key ON public.trading_destination_connections USING btree (workspace_id, id)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_destination_connections_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_destination_connections_provider_type_check",
+          "type": "c",
+          "definition": "CHECK (provider_type = 'telegram_bot_api'::text)"
+        },
+        {
+          "name": "trading_destination_connections_workspace_id_display_name_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, display_name)"
+        },
+        {
+          "name": "trading_destination_connections_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_destination_connections_workspace_id_id_key",
+          "type": "u",
+          "definition": "UNIQUE (workspace_id, id)"
+        }
+      ]
+    },
+    {
+      "table": "trading_event_revisions",
+      "indexes": [
+        "CREATE INDEX idx_trading_event_revisions_event_created ON public.trading_event_revisions USING btree (trading_event_id, created_at DESC)",
+        "CREATE INDEX idx_trading_event_revisions_workspace_created ON public.trading_event_revisions USING btree (workspace_id, created_at DESC)",
+        "CREATE UNIQUE INDEX trading_event_revisions_pkey ON public.trading_event_revisions USING btree (id)",
+        "CREATE UNIQUE INDEX trading_event_revisions_trading_event_id_revision_key_key ON public.trading_event_revisions USING btree (trading_event_id, revision_key)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_event_revisions_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_event_revisions_trading_event_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (trading_event_id) REFERENCES trading_events(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "trading_event_revisions_trading_event_id_revision_key_key",
+          "type": "u",
+          "definition": "UNIQUE (trading_event_id, revision_key)"
+        },
+        {
+          "name": "trading_event_revisions_workspace_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (workspace_id) REFERENCES trading_workspace_access(id) ON DELETE CASCADE"
+        }
+      ]
+    },
+    {
+      "table": "trading_ingress_collectors",
+      "indexes": [
+        "CREATE INDEX idx_trading_ingress_collectors_active ON public.trading_ingress_collectors USING btree (is_active, id) WHERE (is_active = true)",
+        "CREATE UNIQUE INDEX trading_ingress_collectors_pkey ON public.trading_ingress_collectors USING btree (id)",
+        "CREATE UNIQUE INDEX trading_ingress_collectors_token_hash_key ON public.trading_ingress_collectors USING btree (token_hash)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_ingress_collectors_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "trading_ingress_collectors_token_hash_key",
+          "type": "u",
+          "definition": "UNIQUE (token_hash)"
+        }
+      ]
+    },
+    {
+      "table": "trading_runtime_controls",
+      "indexes": [
+        "CREATE UNIQUE INDEX trading_runtime_controls_pkey ON public.trading_runtime_controls USING btree (control_key)"
+      ],
+      "triggers": null,
+      "constraints": [
+        {
+          "name": "trading_runtime_controls_known_key",
+          "type": "c",
+          "definition": "CHECK (control_key = ANY (ARRAY['broker_execution_enabled'::text, 'trading_access_enabled'::text, 'live_broker_execution_enabled'::text]))"
+        },
+        {
+          "name": "trading_runtime_controls_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (control_key)"
+        }
+      ]
+    }
+  ],
+  "rpcs": [
+    {
+      "name": "rotate_trading_access_code",
+      "schema": "public",
+      "definition": "CREATE OR REPLACE FUNCTION public.rotate_trading_access_code(p_workspace_id uuid, p_owner_email text, p_workspace_display_name text, p_owner_name text, p_code_hash text, p_entitlements jsonb, p_max_redemptions integer, p_expires_at timestamp with time zone, p_metadata jsonb DEFAULT '{}'::jsonb)\n RETURNS trading_access_codes\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\nDECLARE\n    v_workspace public.trading_workspace_access%ROWTYPE;\n    v_created public.trading_access_codes%ROWTYPE;\n    v_owner_email TEXT := lower(trim(coalesce(p_owner_email, '')));\n    v_now TIMESTAMPTZ := now();\n    v_workspace_metadata JSONB;\n    v_existing_entitlements JSONB;\n    v_requested_entitlements JSONB := coalesce(p_entitlements, '{}'::jsonb);\n    v_effective_entitlements JSONB;\n    v_source_types JSONB;\n    v_destinations JSONB;\nBEGIN\n    SELECT *\n      INTO v_workspace\n      FROM public.trading_workspace_access\n     WHERE id = p_workspace_id\n     FOR UPDATE;\n\n    IF NOT FOUND THEN\n        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'ACCESS_CODE_REISSUE_WORKSPACE_NOT_FOUND';\n    END IF;\n\n    IF coalesce(trim(v_workspace.owner_email), '') <> ''\n       AND lower(trim(v_workspace.owner_email)) <> v_owner_email THEN\n        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'ACCESS_CODE_REISSUE_OWNER_MISMATCH';\n    END IF;\n\n    IF v_owner_email = '' THEN\n        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'OWNER_EMAIL_REQUIRED';\n    END IF;\n\n    v_existing_entitlements := coalesce(v_workspace.metadata -> 'entitlements', '{}'::jsonb);\n\n    SELECT coalesce(jsonb_agg(value ORDER BY value), '[]'::jsonb)\n      INTO v_source_types\n      FROM (\n        SELECT DISTINCT value\n          FROM jsonb_array_elements_text(coalesce(v_existing_entitlements -> 'sourceTypes', '[]'::jsonb)) AS existing(value)\n        UNION\n        SELECT DISTINCT value\n          FROM jsonb_array_elements_text(coalesce(v_requested_entitlements -> 'sourceTypes', '[]'::jsonb)) AS requested(value)\n      ) merged_sources;\n\n    SELECT coalesce(jsonb_agg(value ORDER BY value), '[]'::jsonb)\n      INTO v_destinations\n      FROM (\n        SELECT DISTINCT value\n          FROM jsonb_array_elements_text(coalesce(v_existing_entitlements -> 'destinations', '[]'::jsonb)) AS existing(value)\n        UNION\n        SELECT DISTINCT value\n          FROM jsonb_array_elements_text(coalesce(v_requested_entitlements -> 'destinations', '[]'::jsonb)) AS requested(value)\n      ) merged_destinations;\n\n    v_effective_entitlements := v_existing_entitlements || v_requested_entitlements || jsonb_build_object(\n        'customSubdomain', coalesce((v_existing_entitlements ->> 'customSubdomain')::boolean, false)\n            OR coalesce((v_requested_entitlements ->> 'customSubdomain')::boolean, false),\n        'customHostname', coalesce((v_existing_entitlements ->> 'customHostname')::boolean, false)\n            OR coalesce((v_requested_entitlements ->> 'customHostname')::boolean, false),\n        'tradingExecutionDestination', coalesce((v_existing_entitlements ->> 'tradingExecutionDestination')::boolean, false)\n            OR coalesce((v_requested_entitlements ->> 'tradingExecutionDestination')::boolean, false),\n        'telegramDestination', coalesce((v_existing_entitlements ->> 'telegramDestination')::boolean, false)\n            OR coalesce((v_requested_entitlements ->> 'telegramDestination')::boolean, false),\n        'sourceTypes', v_source_types,\n        'destinations', v_destinations,\n        'brokerModes', jsonb_build_array('demo'),\n        'liveExecution', false,\n        'maxTeamMembers', greatest(\n            coalesce((v_existing_entitlements ->> 'maxTeamMembers')::integer, 1),\n            coalesce((v_requested_entitlements ->> 'maxTeamMembers')::integer, 1)\n        )\n    );\n\n    INSERT INTO public.trading_access_codes (\n        code_hash,\n        product,\n        status,\n        workspace_id,\n        workspace_display_name,\n        owner_email,\n        owner_name,\n        role,\n        entitlements,\n        max_redemptions,\n        redeemed_count,\n        expires_at,\n        metadata,\n        created_at,\n        updated_at\n    ) VALUES (\n        p_code_hash,\n        'trading',\n        'active',\n        p_workspace_id,\n        coalesce(nullif(v_workspace.display_name, ''), p_workspace_display_name),\n        coalesce(nullif(v_workspace.owner_email, ''), v_owner_email),\n        p_owner_name,\n        'owner',\n        v_effective_entitlements,\n        greatest(coalesce(p_max_redemptions, 1), 1),\n        0,\n        p_expires_at,\n        coalesce(p_metadata, '{}'::jsonb),\n        v_now,\n        v_now\n    )\n    RETURNING * INTO v_created;\n\n    UPDATE public.trading_access_codes\n       SET status = 'revoked', updated_at = v_now\n     WHERE workspace_id = p_workspace_id\n       AND status = 'active'\n       AND id <> v_created.id;\n\n    v_workspace_metadata := (coalesce(v_workspace.metadata, '{}'::jsonb) - 'accessLockedAt' - 'accessLockReason')\n        || jsonb_build_object(\n            'accessCodeProvisioned', true,\n            'accessCodeId', v_created.id,\n            'entitlements', v_effective_entitlements\n        );\n\n    UPDATE public.trading_workspace_access\n       SET display_name = coalesce(nullif(v_workspace.display_name, ''), p_workspace_display_name),\n           owner_email = coalesce(nullif(v_workspace.owner_email, ''), v_owner_email),\n           trading_access_enabled = true,\n           metadata = v_workspace_metadata,\n           updated_at = v_now\n     WHERE id = p_workspace_id;\n\n    RETURN v_created;\nEND;\n$function$\n",
+      "configuration": [
+        "search_path=\"\""
+      ],
+      "anonCanExecute": false,
+      "securityDefiner": true,
+      "publicCanExecute": false,
+      "identityArguments": "p_workspace_id uuid, p_owner_email text, p_workspace_display_name text, p_owner_name text, p_code_hash text, p_entitlements jsonb, p_max_redemptions integer, p_expires_at timestamp with time zone, p_metadata jsonb",
+      "serviceRoleCanExecute": true,
+      "authenticatedCanExecute": false
+    },
+    {
+      "name": "trading_set_default_source",
+      "schema": "public",
+      "definition": "CREATE OR REPLACE FUNCTION public.trading_set_default_source(p_workspace_id uuid, p_source_family text, p_source_id uuid)\n RETURNS source_connections\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nDECLARE\n    target public.source_connections;\nBEGIN\n    SELECT * INTO target\n    FROM public.source_connections\n    WHERE id = p_source_id\n      AND workspace_id = p_workspace_id\n      AND source_family = p_source_family\n      AND is_active = TRUE\n    FOR UPDATE;\n\n    IF target.id IS NULL THEN\n        RAISE EXCEPTION 'source not enabled for workspace/family';\n    END IF;\n\n    UPDATE public.source_connections\n    SET is_default = FALSE,\n        updated_at = NOW()\n    WHERE workspace_id = p_workspace_id\n      AND source_family = p_source_family\n      AND is_default = TRUE\n      AND id <> p_source_id;\n\n    UPDATE public.source_connections\n    SET is_default = TRUE,\n        updated_at = NOW()\n    WHERE id = p_source_id\n    RETURNING * INTO target;\n\n    RETURN target;\nEND;\n$function$\n",
+      "configuration": [
+        "search_path=\"\""
+      ],
+      "anonCanExecute": false,
+      "securityDefiner": false,
+      "publicCanExecute": false,
+      "identityArguments": "p_workspace_id uuid, p_source_family text, p_source_id uuid",
+      "serviceRoleCanExecute": true,
+      "authenticatedCanExecute": false
+    }
+  ]
+}

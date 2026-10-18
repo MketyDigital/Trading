@@ -62,6 +62,21 @@ async function readJson(request) {
 }
 
 export function createBrandingStore(supabase) {
+  if (supabase?.workspaceAccess?.updateWorkspace && supabase?.workspaceAccess?.getWorkspace && supabase?.hostnames?.getActiveHostname) {
+    return {
+      async update(workspaceId, metadata) {
+        const row = await supabase.workspaceAccess.updateWorkspace(String(workspaceId), { metadata });
+        if (!row) throw new Error('BRANDING_UPDATE_FAILED');
+        return row;
+      },
+      async byHostname(hostname) {
+        const mapping = await supabase.hostnames.getActiveHostname(hostname);
+        if (!mapping?.workspaceId) return null;
+        const workspace = await supabase.workspaceAccess.getWorkspace(mapping.workspaceId);
+        return workspace?.trading_access_enabled ? workspace : null;
+      },
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async update(workspaceId, metadata) {
@@ -119,14 +134,19 @@ export async function handleAuthorizedBrandingRequest(request, authorization, { 
   } catch { return json({ ok: false, reason: 'BRANDING_UPDATE_FAILED' }, 503); }
 }
 
-export async function handlePublicBrandingRequest(request, env = {}, { supabase } = {}) {
+export async function handlePublicBrandingRequest(request, env = {}, { supabase, persistenceRuntime = null } = {}) {
   if (request.method !== 'GET') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
   const host = new URL(request.url).hostname.toLowerCase();
   const canonical = new Set(canonicalTradingHostsFromEnv(env).map((value) => String(value).toLowerCase()));
   if (canonical.has(host)) return json({ ok: true, kind: 'canonical', branding: safeBranding({}) });
-  if (!supabase?.from) return json({ ok: false, reason: 'BRANDING_DATABASE_UNAVAILABLE' }, 503);
-  const store = createBrandingStore(supabase);
-  const workspace = await store.byHostname(host);
+  let workspace;
+  if (persistenceRuntime?.hostnames?.getActiveHostname && persistenceRuntime?.workspaceAccess?.getWorkspace) {
+    workspace = await createBrandingStore(persistenceRuntime).byHostname(host);
+  } else {
+    if (!supabase?.from) return json({ ok: false, reason: 'BRANDING_DATABASE_UNAVAILABLE' }, 503);
+    const store = createBrandingStore(supabase);
+    workspace = await store.byHostname(host);
+  }
   if (!workspace) return json({ ok: false, reason: 'WHITE_LABEL_HOSTNAME_NOT_ACTIVE' }, 404);
   return json({ ok: true, kind: 'white_label', workspaceId: workspace.id, branding: safeBranding(workspace?.metadata?.branding || { brandName: workspace.display_name }) });
 }

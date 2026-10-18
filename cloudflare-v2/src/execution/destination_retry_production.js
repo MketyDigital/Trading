@@ -9,6 +9,7 @@ import { executeProductionPlan } from './production_execution_coordinator.js';
 import {
   resolveBrokerExecutionRuntimeControl,
   resolveLiveBrokerExecutionRuntimeControl,
+  resolveTradingAccessRuntimeControl,
 } from '../persistence/supabase_runtime_control_store.js';
 
 function text(value) {
@@ -30,16 +31,8 @@ function accessDisabledSummary() {
   };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = text(env.SUPABASE_URL);
-  const key = text(
-    env.SUPABASE_SERVICE_ROLE ||
-    env.SUPABASE_SERVICE_ROLE_KEY ||
-    env.SUPABASE_SERVICE_KEY,
-  );
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function deliveryAgeMs(delivery = {}, now) {
@@ -150,6 +143,7 @@ export function createProductionDestinationRetryRuntime({
   executeProductionFn = executeProductionPlan,
   brokerExecutionControlResolver = resolveBrokerExecutionRuntimeControl,
   liveBrokerExecutionControlResolver = resolveLiveBrokerExecutionRuntimeControl,
+  tradingAccessControlResolver = resolveTradingAccessRuntimeControl,
   batchLimit = 10,
   leaseMs = 30000,
   maxAttempts = 5,
@@ -166,7 +160,11 @@ export function createProductionDestinationRetryRuntime({
   const safeMaxOpenRetryAgeMs = Math.max(30000, Math.min(10 * 60 * 1000, Math.trunc(Number(maxOpenRetryAgeMs) || (3 * 60 * 1000))));
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
-    if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
+    const persistenceRuntime = options.persistenceRuntime || null;
+    if (persistenceRuntime) {
+      const access = await tradingAccessControlResolver({ env, supabase: null, runtimeControls: persistenceRuntime.runtimeControls });
+      if (access?.ok !== true || access.enabled !== true) return { ...accessDisabledSummary(), status: access?.ok ? 'TRADING_ACCESS_DISABLED' : 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' };
+    } else if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
 
     // Per-invocation store map prevents claims from leaking between scheduled runs.
     const stores = new Map();
@@ -176,25 +174,23 @@ export function createProductionDestinationRetryRuntime({
       brokerExecutionControlResolver,
       batchLimit,
       leaseMs,
-      listDueFn: ({ supabase, now, limit }) => listDueFn({
-        supabase,
-        now,
-        limit,
-        maxAttempts,
-      }),
-      claimFn: async ({ supabase, delivery, now, leaseUntil }) => {
-        const baseStore = deliveryStoreFactory(supabase, {
+      listDueFn: ({ supabase, now, limit, persistenceRuntime }) => persistenceRuntime
+        ? persistenceRuntime.listDueDeliveries({ now, limit, maxAttempts })
+        : listDueFn({ supabase, now, limit, maxAttempts }),
+      claimFn: async ({ supabase, delivery, now, leaseUntil, persistenceRuntime }) => {
+        const storeOptions = {
           workspaceId: delivery.workspace_id,
           destinationType: delivery.destination_type,
           destinationRef: delivery.destination_ref,
           tradingEventId: delivery.trading_event_id || null,
-        });
+        };
+        const baseStore = persistenceRuntime ? persistenceRuntime.delivery(storeOptions) : deliveryStoreFactory(supabase, storeOptions);
         stores.set(storeKey(delivery), baseStore);
         const claim = await baseStore.claimRetry(delivery.idempotency_key, { now, leaseUntil });
         if (claim?.claimed && claim.row) stores.set(storeKey(claim.row), baseStore);
         return claim;
       },
-      recoverFn: async ({ supabase, delivery, now }) => {
+      recoverFn: async ({ supabase, delivery, now, persistenceRuntime }) => {
         const baseStore = stores.get(storeKey(delivery));
         if (!baseStore) throw new Error('claimed destination delivery store is unavailable');
 
@@ -220,6 +216,7 @@ export function createProductionDestinationRetryRuntime({
           deps = await executionDepsFactory({
             env,
             supabase,
+            persistenceRuntime,
             workspaceId: delivery.workspace_id,
             tradingEventId: delivery.trading_event_id || null,
           }, {
@@ -255,7 +252,7 @@ export function createProductionDestinationRetryRuntime({
 
           let liveControl;
           try {
-            liveControl = await liveBrokerExecutionControlResolver({ env, supabase });
+            liveControl = await liveBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls });
           } catch {
             liveControl = { ok: false, enabled: false };
           }

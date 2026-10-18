@@ -36,6 +36,12 @@ function toDatabasePatch(patch = {}) {
 }
 
 export function createMtprotoRecoveryStore(supabase) {
+  if (typeof supabase?.listRecoverableMtprotoSources === 'function' && typeof supabase?.updateMtprotoRecoveryState === 'function') {
+    return {
+      listRecoverableSources: () => supabase.listRecoverableMtprotoSources(),
+      updateRecoveryState: (workspaceId, sourceId, patch) => supabase.updateMtprotoRecoveryState(workspaceId, sourceId, toDatabasePatch(patch)),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
 
   return {

@@ -1,5 +1,7 @@
 import { TradeStateStore, TradeStateCoordinator } from './trade_state_store.js';
-import { createSupabaseTradeStatePersistence } from '../persistence/supabase_trade_state_persistence.js';
+import { resolveTradingStorageAuthority } from '../persistence/trading_storage_authority.js';
+import { createPostgresTradingDatabase } from '../persistence/postgres_database.js';
+import { createTradingTradeStatePersistence } from '../persistence/trading_trade_state_repository.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -13,21 +15,36 @@ function workspaceHeader(request) {
   return String(request.headers.get('x-mkety-workspace-id') || '').trim();
 }
 
-function hasSupabaseCredentials(env = {}) {
-  return Boolean(env.SUPABASE_URL && (env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY));
+function storageRuntimeEnabled(env = {}) {
+  return /^(1|true|yes|on)$/i.test(String(env.TRADING_STORAGE_RUNTIME_ENABLED || '').trim());
 }
 
-function lazyPersistence(promise) {
+async function withTradingPersistence(env, method, ...args) {
+  const authority = resolveTradingStorageAuthority(env);
+  let postgresDatabase = null;
+  try {
+    if (authority.kind === 'postgres') postgresDatabase = await createPostgresTradingDatabase(authority.binding);
+    const persistence = createTradingTradeStatePersistence({ authority, postgresDatabase });
+    return await persistence[method](...args);
+  } finally {
+    await postgresDatabase?.close();
+  }
+}
+
+function lazyPersistence(promise, env = {}) {
   return {
     async saveGroup(group) {
+      if (storageRuntimeEnabled(env)) return withTradingPersistence(env, 'saveGroup', group);
       const persistence = await promise;
       return persistence ? persistence.saveGroup(group) : group;
     },
     async loadGroup(workspaceId, groupId) {
+      if (storageRuntimeEnabled(env)) return withTradingPersistence(env, 'loadGroup', workspaceId, groupId);
       const persistence = await promise;
       return persistence ? persistence.loadGroup(workspaceId, groupId) : null;
     },
     async loadActive(workspaceId) {
+      if (storageRuntimeEnabled(env)) return withTradingPersistence(env, 'loadActive', workspaceId);
       const persistence = await promise;
       return persistence ? persistence.loadActive(workspaceId) : [];
     },
@@ -38,8 +55,8 @@ export class TradeStateNode {
   constructor(state, env = {}) {
     this.state = state;
     this.env = env;
-    const persistencePromise = hasSupabaseCredentials(env) ? createSupabaseTradeStatePersistence(env) : Promise.resolve(null);
-    this.persistence = lazyPersistence(persistencePromise);
+    const persistencePromise = Promise.resolve(null);
+    this.persistence = lazyPersistence(persistencePromise, env);
     this.store = new TradeStateStore(state.storage, { persistence: this.persistence });
     this.coordinator = new TradeStateCoordinator(this.store, {
       correlationWindowMs: Number(env.TRADE_CORRELATION_WINDOW_MS || 120000),

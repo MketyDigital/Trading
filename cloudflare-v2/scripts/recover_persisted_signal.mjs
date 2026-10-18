@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createPostgrestMigrationClient } from './postgrest_migration_reader.mjs';
 import { createSupabaseIngestStores } from '../src/storage/supabase_ingest_store.js';
 import { createSourceEventQueue } from '../src/sources/source_event_queue.js';
 
@@ -71,7 +71,7 @@ const eventId = required('RECOVERY_EVENT_ID');
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) {
   throw new Error('RECOVERY_EVENT_ID must be a UUID');
 }
-const supabase = createClient(required('SUPABASE_URL'), required('SUPABASE_SERVICE_ROLE'));
+const supabase = createPostgrestMigrationClient({ url: required('SUPABASE_URL'), serviceRole: required('SUPABASE_SERVICE_ROLE') });
 const masterKey = required('TRADING_MASTER_KEY');
 const workerBaseUrl = new URL(required('TRADING_WORKER_BASE_URL'));
 if (workerBaseUrl.protocol !== 'https:' || workerBaseUrl.username || workerBaseUrl.password) {

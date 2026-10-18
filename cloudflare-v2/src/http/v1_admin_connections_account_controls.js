@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
 import {
@@ -24,11 +23,8 @@ function requiredText(value, reason) {
   return text;
 }
 
-async function defaultSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
-  return createClient(url, key);
+async function defaultSupabase() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function readJson(request) {
@@ -43,13 +39,13 @@ async function readJson(request) {
 function decorate(account = {}, row = {}) {
   const safety = safeObject(row.safety_policy);
   const executionEnabled = Boolean(row.execution_enabled ?? account.executionEnabled);
-  const killSwitch = safety.killSwitch !== false;
+  const killSwitch = safety.killSwitch == null ? account.killSwitch !== false : safety.killSwitch !== false;
   return {
     ...account,
     executionEnabled,
     killSwitch,
     tradingEnabled: executionEnabled && !killSwitch,
-    liveExecutionEnabled: Boolean(row.live_execution_enabled),
+    liveExecutionEnabled: Boolean(row.live_execution_enabled ?? account.liveExecutionEnabled),
   };
 }
 
@@ -64,7 +60,15 @@ export function buildCompleteCTraderCredentials(existing = {}, env = {}) {
 
 async function authorize(request, env, dependencies, supabase) {
   const authorizeFn = dependencies.authorizeFn || authorizeV1AdminRequest;
-  return authorizeFn(request, env, { supabase });
+  return authorizeFn(request, env, {
+    supabase,
+    ...(dependencies.persistenceRuntime ? {
+      workspaceAccess: dependencies.persistenceRuntime.workspaceAccess,
+      accessCodeStore: dependencies.persistenceRuntime.accessCodes,
+      membershipStore: dependencies.persistenceRuntime.workspaceAccess,
+      hostnameStore: dependencies.persistenceRuntime.hostnames,
+    } : {}),
+  });
 }
 
 async function readControlRows(supabase, workspaceId, accountId = null) {
@@ -123,8 +127,11 @@ async function repairCTraderOAuthCredentials(supabase, workspaceId, env, account
 async function handleSimplifiedUpdate(request, env, dependencies, accountId, body) {
   let supabase;
   try {
+    if (dependencies.persistenceRuntime) supabase = null;
+    else {
     const factory = dependencies.supabaseFactory || defaultSupabase;
     supabase = await factory(env);
+    }
   } catch {
     return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503);
   }
@@ -137,8 +144,9 @@ async function handleSimplifiedUpdate(request, env, dependencies, accountId, bod
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   }
 
-  const rows = await readControlRows(supabase, authorization.workspace.id, accountId);
-  const current = rows[0];
+  const current = dependencies.persistenceRuntime
+    ? await dependencies.persistenceRuntime.accounts.getAccount(authorization.workspace.id, accountId)
+    : (await readControlRows(supabase, authorization.workspace.id, accountId))[0];
   if (!current) return json({ ok: false, reason: 'ACCOUNT_NOT_FOUND' }, 404);
 
   const hasTrading = Object.prototype.hasOwnProperty.call(body, 'tradingEnabled');
@@ -169,6 +177,13 @@ async function handleSimplifiedUpdate(request, env, dependencies, accountId, bod
   }
   if (hasLive) update.live_execution_enabled = body.allowLiveExecution === true;
 
+  if (dependencies.persistenceRuntime) {
+    try {
+      const data = await dependencies.persistenceRuntime.accounts.updateAccount(String(authorization.workspace.id), String(accountId), update);
+      if (!data) return json({ ok: false, reason: 'ACCOUNT_UPDATE_FAILED' }, 503);
+      return json({ ok: true, account: decorate({ id: data.id, environment: data.environment }, data) });
+    } catch { return json({ ok: false, reason: 'ACCOUNT_UPDATE_FAILED' }, 503); }
+  }
   const { data, error } = await supabase
     .from('trade_accounts')
     .update(update)
@@ -191,6 +206,11 @@ async function enrichReadResponse(response, request, env, dependencies, accountI
   if (!payload?.ok || (!payload.account && !Array.isArray(payload.accounts))) return response;
 
   try {
+    if (dependencies.persistenceRuntime) {
+      if (payload.account) payload.account = decorate(payload.account, payload.account);
+      if (Array.isArray(payload.accounts)) payload.accounts = payload.accounts.map((account) => decorate(account, account));
+      return json(payload, response.status);
+    }
     const factory = dependencies.supabaseFactory || defaultSupabase;
     const supabase = await factory(env);
     const authorization = await authorize(request, env, dependencies, supabase);
@@ -223,7 +243,7 @@ async function enrichReadResponse(response, request, env, dependencies, accountI
   }
 }
 
-async function finalizeCTraderOAuthResponse(response, request, env, dependencies) {
+export async function finalizeCTraderOAuthResponse(response, request, env, dependencies) {
   if (!response?.ok) return response;
   let payload;
   try { payload = await response.clone().json(); } catch { return response; }
@@ -233,6 +253,33 @@ async function finalizeCTraderOAuthResponse(response, request, env, dependencies
   if (!accountIds.length) return response;
 
   try {
+    if (dependencies.persistenceRuntime) {
+      const authorization = await authorize(request, env, dependencies, null);
+      if (!authorization?.ok) return response;
+      const accounts = await dependencies.persistenceRuntime.accounts.listAccounts(String(authorization.workspace.id));
+      const selected = new Set(accountIds);
+      for (const row of accounts) {
+        if (!selected.has(String(row.id))
+          || String(row.platform).toLowerCase() !== 'ctrader'
+          || String(row.provider_mode ?? row.providerMode).toLowerCase() !== 'ctrader_oauth'
+          || !row.credential_ciphertext) continue;
+        const decrypt = dependencies.decryptCredentials || decryptConnectionCredentials;
+        const encrypt = dependencies.encryptCredentials || encryptConnectionCredentials;
+        const existing = await decrypt('ctrader', row.credential_ciphertext, requiredText(env.TRADING_MASTER_KEY, 'TRADING_MASTER_KEY_REQUIRED'));
+        if (existing.clientId && existing.clientSecret) continue;
+        const credentialCiphertext = await encrypt(
+          'ctrader',
+          buildCompleteCTraderCredentials(existing, env),
+          env.TRADING_MASTER_KEY,
+        );
+        await dependencies.persistenceRuntime.accounts.updateAccount(
+          String(authorization.workspace.id),
+          String(row.id),
+          { credential_ciphertext: credentialCiphertext },
+        );
+      }
+      return response;
+    }
     const factory = dependencies.supabaseFactory || defaultSupabase;
     const supabase = await factory(env);
     const authorization = await authorize(request, env, dependencies, supabase);

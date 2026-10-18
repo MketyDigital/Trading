@@ -2,12 +2,8 @@ import { createSourceQueueConsumer } from './source_queue_consumer.js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { handleV1EventsRequest } from '../http/v1_events.js';
 
-async function defaultSupabaseFactory(env) {
-  const url = env?.SUPABASE_URL;
-  const key = env?.SUPABASE_SERVICE_ROLE || env?.SUPABASE_SERVICE_ROLE_KEY || env?.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function messagesOf(batch) {
@@ -67,7 +63,7 @@ export function createSourceQueueRuntime({
   eventsHandler = handleV1EventsRequest,
   now = Date.now,
 } = {}) {
-  return async function consumeSourceQueue(batch, env = {}) {
+  return async function consumeSourceQueue(batch, env = {}, { persistenceRuntime = null } = {}) {
     if (!env?.TRADING_MASTER_KEY) {
       return retryAll(batch, new Error('TRADING_MASTER_KEY_NOT_CONFIGURED'));
     }
@@ -75,8 +71,11 @@ export function createSourceQueueRuntime({
     let supabase;
     let stores;
     try {
-      supabase = await supabaseFactory(env);
-      stores = storesFactory(supabase, { masterKey: env.TRADING_MASTER_KEY });
+      if (persistenceRuntime) stores = persistenceRuntime.ingest;
+      else {
+        supabase = await supabaseFactory(env);
+        stores = storesFactory(supabase, { masterKey: env.TRADING_MASTER_KEY });
+      }
       if (!stores?.sourceStore?.getActiveSource) {
         throw new Error('source store is unavailable');
       }
@@ -89,8 +88,10 @@ export function createSourceQueueRuntime({
       now,
       dispatch: async (signed) => {
         const response = await eventsHandler(signedRequest(signed), env, {
-          supabaseFactory: async () => supabase,
-          storesFactory: () => stores,
+          ...(persistenceRuntime ? { persistenceRuntime } : {
+            supabaseFactory: async () => supabase,
+            storesFactory: () => stores,
+          }),
           orchestrateDuplicates: true,
         });
 

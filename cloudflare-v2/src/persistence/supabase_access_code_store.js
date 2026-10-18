@@ -5,7 +5,7 @@ import {
 import { normalizeTradingEntitlements } from '../security/trading_entitlements.js';
 
 function requireSupabase(supabase) {
-  if (!supabase?.from) throw new Error('SUPABASE_CLIENT_REQUIRED');
+  if (!supabase?.from) throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function object(value) {
@@ -38,6 +38,7 @@ function subscriptionFailure(record, now = new Date()) {
 }
 
 export function createTradingAccessCodeStore(supabase) {
+  if (typeof supabase?.redeem === 'function' && typeof supabase?.restoreSession === 'function') return supabase;
   requireSupabase(supabase);
 
   async function restoreSession({ workspaceId, subject, accessCodeId, now = new Date() } = {}) {

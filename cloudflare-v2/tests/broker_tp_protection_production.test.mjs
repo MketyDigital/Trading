@@ -73,7 +73,7 @@ test('broker TP production runtime records a stable event then invokes the exist
   assert.equal(result.confirmed, 1);
   assert.equal(result.applied, 1);
   assert.equal(calls.upserts.length, 1);
-  assert.equal(calls.upserts[0].body.processing_status, 'BROKER_TP_DETECTED');
+  assert.equal(calls.upserts[0].body.processing_status, 'MANAGEMENT');
   assert.equal(calls.upserts[0].body.canonical_intent.management.type, 'TARGET_HIT');
   assert.equal(calls.upserts[0].body.canonical_intent.management.targetIndex, 1);
   assert.equal(calls.simulation[0].sourceId, 'source-1');
@@ -83,4 +83,19 @@ test('broker TP production runtime records a stable event then invokes the exist
   assert.match(calls.observations[0].url, /\/groups\/group-1\/legs\/leg-1\/broker-observation$/);
   assert.equal(calls.observations[0].body.status, 'TP_CONFIRMED');
   assert.deepEqual(calls.observations[0].body.dealIds, ['deal-1']);
+});
+
+test('storage runtime loads broker TP candidates without constructing Supabase persistence', async () => {
+  let persistenceFactoryCalls = 0;
+  const persistenceRuntime = {
+    tradeState: { async listBrokerTpProtectionCandidates() { return []; } },
+  };
+  const runtime = createProductionBrokerTpProtectionRuntime({
+    persistenceFactory: async () => { persistenceFactoryCalls += 1; throw new Error('Supabase must not be used'); },
+  });
+
+  const result = await runtime({}, { persistenceRuntime });
+
+  assert.deepEqual(result, { status: 'ok', scanned: 0, confirmed: 0, applied: 0, skipped: 0, failed: 0 });
+  assert.equal(persistenceFactoryCalls, 0);
 });

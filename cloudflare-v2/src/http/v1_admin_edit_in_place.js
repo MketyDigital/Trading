@@ -1,6 +1,6 @@
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
-import { reconcileTelegramSourceFeeds } from '../sources/source_feed_reconcile.js';
+import { desiredTelegramFeedIds, reconcileTelegramSourceFeeds } from '../sources/source_feed_reconcile.js';
 
 function text(value) {
   const result = String(value ?? '').trim();
@@ -31,12 +31,8 @@ async function readJson(request) {
   }
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function canWrite(authorization) {
@@ -195,13 +191,19 @@ function normalizeRouteFilters(value) {
   return result;
 }
 
-async function updateSource(request, authorization, supabase, sourceId) {
+async function updateSource(request, authorization, supabase, sourceId, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-  const { data: current, error: readError } = await supabase.from('source_connections').select('*')
-    .eq('workspace_id', workspaceId).eq('id', sourceId).maybeSingle();
-  if (readError) return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
+  let current;
+  if (persistenceRuntime) {
+    try { current = await persistenceRuntime.sourceConnections.getSourceForAdmin(workspaceId, sourceId); }
+    catch { return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('source_connections').select('*').eq('workspace_id', workspaceId).eq('id', sourceId).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'SOURCE_READ_FAILED' }, 503);
+    current = result.data;
+  }
   if (!current) return json({ ok: false, reason: 'SOURCE_NOT_FOUND' }, 404);
 
   const patch = { updated_at: new Date().toISOString() };
@@ -224,17 +226,36 @@ async function updateSource(request, authorization, supabase, sourceId) {
     patch.config = parsed.config;
   }
 
-  const { data: updated, error } = await supabase.from('source_connections').update(patch)
-    .eq('workspace_id', workspaceId).eq('id', sourceId).select('*').maybeSingle();
-  if (error || !updated) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
+  let updated;
+  if (persistenceRuntime) {
+    try { updated = await persistenceRuntime.sourceConnections.update(workspaceId, sourceId, patch); }
+    catch { return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('source_connections').update(patch).eq('workspace_id', workspaceId).eq('id', sourceId).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
+    updated = result.data;
+  }
+  if (!updated) return json({ ok: false, reason: 'SOURCE_UPDATE_FAILED' }, 503);
   if (hasOwn(patch, 'config') && updated.source_family === 'telegram') {
-    try { await reconcileTelegramSourceFeeds(supabase, workspaceId, sourceId, updated.provider_type, updated.config || {}); }
+    try {
+      if (persistenceRuntime) {
+        const desired = desiredTelegramFeedIds(updated.provider_type, updated.config || {});
+        if (desired !== null) {
+          const wanted = new Set(desired);
+          await persistenceRuntime.sourceFeeds.upsertAllowedFeeds(workspaceId, sourceId, desired, { feedType: 'telegram_chat' });
+          const existing = await persistenceRuntime.sourceFeeds.listFeeds(workspaceId, sourceId);
+          for (const feed of existing) if (!wanted.has(text(feed.provider_feed_id)) && (feed.is_active === true || Number(feed.is_active) === 1)) {
+            await persistenceRuntime.sourceFeeds.update(workspaceId, feed.id, { is_active: false });
+          }
+        }
+      } else await reconcileTelegramSourceFeeds(supabase, workspaceId, sourceId, updated.provider_type, updated.config || {});
+    }
     catch { return json({ ok: false, reason: 'SOURCE_FEED_RECONCILE_FAILED' }, 503); }
   }
   return json({ ok: true, workspaceId, source: sourcePublic(updated) });
 }
 
-async function updateFeed(request, authorization, supabase, sourceId, feedId) {
+async function updateFeed(request, authorization, supabase, sourceId, feedId, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
@@ -243,21 +264,35 @@ async function updateFeed(request, authorization, supabase, sourceId, feedId) {
   if (hasOwn(body, 'enabled') || hasOwn(body, 'isActive') || hasOwn(body, 'is_active')) {
     patch.is_active = Boolean(body.enabled ?? body.isActive ?? body.is_active);
   }
-  const { data, error } = await supabase.from('source_feeds').update(patch)
-    .eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('id', feedId)
-    .select('*').maybeSingle();
-  if (error) return json({ ok: false, reason: 'SOURCE_FEED_UPDATE_FAILED' }, 503);
+  let data;
+  if (persistenceRuntime) {
+    try {
+      const existing = await persistenceRuntime.sourceFeeds.listFeeds(workspaceId, sourceId);
+      if (!existing.some((feed) => String(feed.id) === String(feedId))) return json({ ok: false, reason: 'SOURCE_FEED_NOT_FOUND' }, 404);
+      data = await persistenceRuntime.sourceFeeds.update(workspaceId, feedId, patch);
+    } catch { return json({ ok: false, reason: 'SOURCE_FEED_UPDATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('source_feeds').update(patch).eq('workspace_id', workspaceId).eq('source_connection_id', sourceId).eq('id', feedId).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'SOURCE_FEED_UPDATE_FAILED' }, 503);
+    data = result.data;
+  }
   if (!data) return json({ ok: false, reason: 'SOURCE_FEED_NOT_FOUND' }, 404);
   return json({ ok: true, workspaceId, feed: feedPublic(data) });
 }
 
-async function updateDestination(request, authorization, supabase, id) {
+async function updateDestination(request, authorization, supabase, id, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-  const { data: current, error: readError } = await supabase.from('trading_destinations').select('*')
-    .eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
-  if (readError) return json({ ok: false, reason: 'DESTINATION_READ_FAILED' }, 503);
+  let current;
+  if (persistenceRuntime) {
+    try { current = (await persistenceRuntime.destinations.listDestinations(workspaceId)).find((row) => String(row.id) === String(id)); }
+    catch { return json({ ok: false, reason: 'DESTINATION_READ_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trading_destinations').select('*').eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'DESTINATION_READ_FAILED' }, 503);
+    current = result.data;
+  }
   if (!current) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
   const patch = { updated_at: new Date().toISOString() };
   if (hasOwn(body, 'displayName') || hasOwn(body, 'display_name')) {
@@ -274,19 +309,39 @@ async function updateDestination(request, authorization, supabase, id) {
   }
   const effectiveRef = hasOwn(patch, 'destination_ref') ? patch.destination_ref : current.destination_ref;
   if (current.destination_type !== 'audit_only' && !effectiveRef) return json({ ok: false, reason: 'DESTINATION_REF_REQUIRED' }, 400);
-  const { data, error } = await supabase.from('trading_destinations').update(patch)
-    .eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
-  if (error) return json({ ok: false, reason: 'DESTINATION_UPDATE_FAILED' }, 503);
+  let data;
+  if (persistenceRuntime) {
+    try {
+      data = await persistenceRuntime.destinations.updateDestination(workspaceId, id, {
+        displayName: patch.display_name ?? current.display_name,
+        destinationRef: hasOwn(patch, 'destination_ref') ? patch.destination_ref : current.destination_ref,
+        templateId: hasOwn(patch, 'template_id') ? patch.template_id : current.template_id,
+        credentialConnectionId: hasOwn(patch, 'credential_connection_id') ? patch.credential_connection_id : current.credential_connection_id,
+        settings: patch.settings ?? current.settings ?? {},
+      });
+    } catch { return json({ ok: false, reason: 'DESTINATION_UPDATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trading_destinations').update(patch).eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'DESTINATION_UPDATE_FAILED' }, 503);
+    data = result.data;
+  }
+  if (!data) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
   return json({ ok: true, workspaceId, destination: destinationPublic(data) });
 }
 
-async function updateTemplate(request, authorization, supabase, id) {
+async function updateTemplate(request, authorization, supabase, id, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-  const { data: current, error: readError } = await supabase.from('trading_destination_templates').select('*')
-    .eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
-  if (readError) return json({ ok: false, reason: 'TEMPLATE_READ_FAILED' }, 503);
+  let current;
+  if (persistenceRuntime) {
+    try { current = (await persistenceRuntime.destinations.listTemplates(workspaceId)).find((row) => String(row.id) === String(id)); }
+    catch { return json({ ok: false, reason: 'TEMPLATE_READ_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trading_destination_templates').select('*').eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'TEMPLATE_READ_FAILED' }, 503);
+    current = result.data;
+  }
   if (!current) return json({ ok: false, reason: 'TEMPLATE_NOT_FOUND' }, 404);
   const patch = { updated_at: new Date().toISOString() };
   const map = [
@@ -302,19 +357,45 @@ async function updateTemplate(request, authorization, supabase, id) {
   if (hasOwn(body, 'cleanupRules') || hasOwn(body, 'cleanup_rules')) patch.cleanup_rules = safeObject(body.cleanupRules ?? body.cleanup_rules);
   if (hasOwn(body, 'layout')) patch.layout = safeObject(body.layout);
   if (hasOwn(body, 'isDefault') || hasOwn(body, 'is_default')) patch.is_default = Boolean(body.isDefault ?? body.is_default);
-  const { data, error } = await supabase.from('trading_destination_templates').update(patch)
-    .eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
-  if (error) return json({ ok: false, reason: 'TEMPLATE_UPDATE_FAILED' }, 503);
+  let data;
+  if (persistenceRuntime) {
+    try {
+      data = await persistenceRuntime.destinations.updateTemplate(workspaceId, id, {
+        templateName: patch.template_name ?? current.template_name,
+        formattingMode: patch.formatting_mode ?? current.formatting_mode,
+        parseMode: patch.parse_mode ?? current.parse_mode,
+        brandName: hasOwn(patch, 'brand_name') ? patch.brand_name : current.brand_name,
+        header: hasOwn(patch, 'header') ? patch.header : current.header,
+        footer: hasOwn(patch, 'footer') ? patch.footer : current.footer,
+        disclaimer: hasOwn(patch, 'disclaimer') ? patch.disclaimer : current.disclaimer,
+        emojiStyle: hasOwn(patch, 'emoji_style') ? patch.emoji_style : current.emoji_style,
+        cleanupRules: patch.cleanup_rules ?? current.cleanup_rules ?? {},
+        layout: patch.layout ?? current.layout ?? {},
+        isDefault: hasOwn(patch, 'is_default') ? patch.is_default : Boolean(current.is_default),
+      });
+    } catch { return json({ ok: false, reason: 'TEMPLATE_UPDATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trading_destination_templates').update(patch).eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'TEMPLATE_UPDATE_FAILED' }, 503);
+    data = result.data;
+  }
+  if (!data) return json({ ok: false, reason: 'TEMPLATE_NOT_FOUND' }, 404);
   return json({ ok: true, workspaceId, template: templatePublic(data) });
 }
 
-async function updateRoute(request, authorization, supabase, id) {
+async function updateRoute(request, authorization, supabase, id, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
-  const { data: current, error: readError } = await supabase.from('source_destination_routes').select('*')
-    .eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
-  if (readError) return json({ ok: false, reason: 'ROUTE_READ_FAILED' }, 503);
+  let current;
+  if (persistenceRuntime) {
+    try { current = (await persistenceRuntime.routes.list(workspaceId)).find((row) => String(row.id) === String(id)); }
+    catch { return json({ ok: false, reason: 'ROUTE_READ_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('source_destination_routes').select('*').eq('workspace_id', workspaceId).eq('id', id).maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'ROUTE_READ_FAILED' }, 503);
+    current = result.data;
+  }
   if (!current) return json({ ok: false, reason: 'ROUTE_NOT_FOUND' }, 404);
   const patch = { updated_at: new Date().toISOString() };
   if (hasOwn(body, 'sourceConnectionId') || hasOwn(body, 'source_connection_id')) {
@@ -335,13 +416,20 @@ async function updateRoute(request, authorization, supabase, id) {
     try { patch.filters = normalizeRouteFilters(body.filters); }
     catch { return json({ ok: false, reason: 'ROUTE_FILTERS_INVALID' }, 400); }
   }
-  const { data, error } = await supabase.from('source_destination_routes').update(patch)
-    .eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
-  if (error) return json({ ok: false, reason: 'ROUTE_UPDATE_FAILED' }, 409);
+  let data;
+  if (persistenceRuntime) {
+    try { data = await persistenceRuntime.routes.update(workspaceId, id, patch); }
+    catch { return json({ ok: false, reason: 'ROUTE_UPDATE_FAILED' }, 409); }
+  } else {
+    const result = await supabase.from('source_destination_routes').update(patch).eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'ROUTE_UPDATE_FAILED' }, 409);
+    data = result.data;
+  }
+  if (!data) return json({ ok: false, reason: 'ROUTE_NOT_FOUND' }, 404);
   return json({ ok: true, workspaceId, route: routePublic(data) });
 }
 
-async function updateDestinationConnection(request, authorization, supabase, id) {
+async function updateDestinationConnection(request, authorization, supabase, id, persistenceRuntime = null) {
   const workspaceId = String(authorization.workspace.id);
   const body = await readJson(request);
   if (!body) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
@@ -352,9 +440,21 @@ async function updateDestinationConnection(request, authorization, supabase, id)
     patch.display_name = value;
   }
   if (hasOwn(body, 'enabled') || hasOwn(body, 'isActive') || hasOwn(body, 'is_active')) patch.is_active = Boolean(body.enabled ?? body.isActive ?? body.is_active);
-  const { data, error } = await supabase.from('trading_destination_connections').update(patch)
-    .eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
-  if (error) return json({ ok: false, reason: 'DESTINATION_CONNECTION_UPDATE_FAILED' }, 503);
+  let data;
+  if (persistenceRuntime) {
+    try {
+      const current = (await persistenceRuntime.destinations.listConnections(workspaceId)).find((row) => String(row.id) === String(id));
+      if (!current) return json({ ok: false, reason: 'DESTINATION_CONNECTION_NOT_FOUND' }, 404);
+      data = await persistenceRuntime.destinations.updateConnection(workspaceId, id, {
+        ...(hasOwn(patch, 'display_name') ? { displayName: patch.display_name } : {}),
+        ...(hasOwn(patch, 'is_active') ? { enabled: patch.is_active } : {}),
+      });
+    } catch { return json({ ok: false, reason: 'DESTINATION_CONNECTION_UPDATE_FAILED' }, 503); }
+  } else {
+    const result = await supabase.from('trading_destination_connections').update(patch).eq('workspace_id', workspaceId).eq('id', id).select('*').maybeSingle();
+    if (result.error) return json({ ok: false, reason: 'DESTINATION_CONNECTION_UPDATE_FAILED' }, 503);
+    data = result.data;
+  }
   if (!data) return json({ ok: false, reason: 'DESTINATION_CONNECTION_NOT_FOUND' }, 404);
   return json({ ok: true, workspaceId, destinationConnection: connectionPublic(data) });
 }
@@ -375,33 +475,44 @@ export function isEditInPlaceAdminRequest(request) {
 export async function handleV1AdminEditInPlaceRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   authorizeFn = authorizeV1AdminRequest,
+  persistenceRuntime = null,
 } = {}) {
   if (!isEditInPlaceAdminRequest(request)) return null;
   let supabase;
-  try { supabase = await supabaseFactory(env); }
-  catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
-  const authorization = await authorizeFn(request, env, { supabase });
+  if (!persistenceRuntime) {
+    try { supabase = await supabaseFactory(env); }
+    catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
+  }
+  const authorization = await authorizeFn(request, env, {
+    supabase,
+    ...(persistenceRuntime ? {
+      workspaceAccess: persistenceRuntime.workspaceAccess,
+      accessCodeStore: persistenceRuntime.accessCodes,
+      membershipStore: persistenceRuntime.workspaceAccess,
+      hostnameStore: persistenceRuntime.hostnames,
+    } : {}),
+  });
   if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   if (!canWrite(authorization)) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
   const path = new URL(request.url).pathname;
   let match;
   if ((match = path.match(/^\/api\/v1\/admin\/sources\/([^/]+)\/feeds\/([^/]+)$/))) {
-    return updateFeed(request, authorization, supabase, decodeURIComponent(match[1]), decodeURIComponent(match[2]));
+    return updateFeed(request, authorization, supabase, decodeURIComponent(match[1]), decodeURIComponent(match[2]), persistenceRuntime);
   }
   if ((match = path.match(/^\/api\/v1\/admin\/sources\/([^/]+)$/))) {
-    return updateSource(request, authorization, supabase, decodeURIComponent(match[1]));
+    return updateSource(request, authorization, supabase, decodeURIComponent(match[1]), persistenceRuntime);
   }
   if ((match = path.match(/^\/api\/v1\/admin\/routes\/([^/]+)$/))) {
-    return updateRoute(request, authorization, supabase, decodeURIComponent(match[1]));
+    return updateRoute(request, authorization, supabase, decodeURIComponent(match[1]), persistenceRuntime);
   }
   if ((match = path.match(/^\/api\/v1\/admin\/destinations\/([^/]+)$/))) {
-    return updateDestination(request, authorization, supabase, decodeURIComponent(match[1]));
+    return updateDestination(request, authorization, supabase, decodeURIComponent(match[1]), persistenceRuntime);
   }
   if ((match = path.match(/^\/api\/v1\/admin\/templates\/([^/]+)$/))) {
-    return updateTemplate(request, authorization, supabase, decodeURIComponent(match[1]));
+    return updateTemplate(request, authorization, supabase, decodeURIComponent(match[1]), persistenceRuntime);
   }
   if ((match = path.match(/^\/api\/v1\/admin\/destination-connections\/([^/]+)$/))) {
-    return updateDestinationConnection(request, authorization, supabase, decodeURIComponent(match[1]));
+    return updateDestinationConnection(request, authorization, supabase, decodeURIComponent(match[1]), persistenceRuntime);
   }
   return null;
 }

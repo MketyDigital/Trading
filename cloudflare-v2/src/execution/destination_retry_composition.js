@@ -14,6 +14,8 @@ function dueTime(row = {}) {
   return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
 }
 
+const DUE_RETRY_SELECT = 'workspace_id,trading_event_id,destination_type,destination_ref,idempotency_key,status,request_payload,next_attempt_at,lease_expires_at,created_at';
+
 export async function listDueDestinationRetries({
   supabase,
   now,
@@ -32,7 +34,7 @@ export async function listDueDestinationRetries({
   const [retryableResult, expiredClaimResult] = await Promise.all([
     supabase
       .from('destination_deliveries')
-      .select('*')
+      .select(DUE_RETRY_SELECT)
       .eq('status', 'RETRYABLE')
       .lte('next_attempt_at', normalizedNow)
       .lt('attempt_count', Number(maxAttempts))
@@ -41,7 +43,7 @@ export async function listDueDestinationRetries({
       .limit(safeLimit),
     supabase
       .from('destination_deliveries')
-      .select('*')
+      .select(DUE_RETRY_SELECT)
       .eq('status', 'PENDING')
       .lt('lease_expires_at', normalizedNow)
       .order('lease_expires_at', { ascending: true })

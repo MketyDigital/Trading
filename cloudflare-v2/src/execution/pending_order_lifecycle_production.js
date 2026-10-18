@@ -26,16 +26,18 @@ export function createProductionPendingOrderLifecycleRuntime({
   applySnapshot = applyLifecycleSnapshot,
   clock = Date.now,
 } = {}) {
-  return async function run(env = {}) {
+  return async function run(env = {}, { persistenceRuntime = null } = {}) {
     if (env.PENDING_ORDER_LIFECYCLE_SYNC_ENABLED !== 'true') return { status: 'disabled', scanned: 0, applied: 0 };
-    const persistence = await persistenceFactory(env);
-    const rows = await persistence.listPendingOrderLifecycles();
+    const persistence = persistenceRuntime ? null : await persistenceFactory(env);
+    const rows = persistenceRuntime
+      ? await persistenceRuntime.tradeState.listPendingOrderLifecycles()
+      : await persistence.listPendingOrderLifecycles();
     const dependencyByWorkspace = new Map();
     const runtime = createPendingOrderLifecycleRuntime({
       loadCandidates: async () => rows,
       loadAccount: async (workspaceId, accountId) => {
         if (!dependencyByWorkspace.has(workspaceId)) dependencyByWorkspace.set(workspaceId,
-          dependenciesFactory({ env, supabase: persistence.supabase, workspaceId }));
+          dependenciesFactory({ env, supabase: persistence?.supabase || null, persistenceRuntime, workspaceId }));
         return dependencyByWorkspace.get(workspaceId).accountLoader(workspaceId, accountId);
       },
       readStatus: async ({ account, lifecycle }) => {

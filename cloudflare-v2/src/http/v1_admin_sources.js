@@ -262,12 +262,14 @@ function canonicalTradingOrigin(env = {}) {
 }
 
 export function createAdminSourceStore(supabase, env = {}) {
-  if (!supabase?.from) throw new TypeError('Supabase client is required');
-  const feedStore = createSourceFeedStore(supabase);
+  const sourceRepository = supabase?.sourceConnections || null;
+  const feedStore = supabase?.sourceFeeds || (supabase?.from ? createSourceFeedStore(supabase) : null);
+  if (!sourceRepository && !supabase?.from) throw new TypeError('Supabase client or Trading source repositories are required');
 
   return {
     async listSources(workspaceId) {
       if (!workspaceId) return [];
+      if (sourceRepository) return (await sourceRepository.listSources(String(workspaceId))).map(normalizeSource).sort((a, b) => a.priority - b.priority);
       const { data, error } = await supabase
         .from('source_connections')
         .select(SOURCE_SELECT)
@@ -279,6 +281,8 @@ export function createAdminSourceStore(supabase, env = {}) {
 
     async getSource(workspaceId, sourceId) {
       if (!workspaceId || !sourceId) return null;
+      if (sourceRepository) return normalizeSource(await sourceRepository.getSource(String(workspaceId), String(sourceId)));
+      if (sourceRepository) return normalizeSource(await sourceRepository.createSource(String(workspaceId), insert));
       const { data, error } = await supabase
         .from('source_connections')
         .select(SOURCE_SELECT)
@@ -338,10 +342,12 @@ export function createAdminSourceStore(supabase, env = {}) {
 
     async syncSourceFeeds(workspaceId, sourceId, providerType, config = {}) {
       const ids = configuredTelegramFeedIds(providerType, config);
+      if (sourceRepository && feedStore) return ids.length ? feedStore.upsertAllowedFeeds(String(workspaceId), String(sourceId), ids) : [];
       return ids.length ? feedStore.upsertAllowedFeeds(workspaceId, sourceId, ids) : [];
     },
 
     async listSourceFeeds(workspaceId, sourceId) {
+      if (!feedStore) throw new Error('SOURCE_FEED_STORE_UNAVAILABLE');
       return feedStore.listFeeds(workspaceId, sourceId);
     },
 
@@ -349,6 +355,7 @@ export function createAdminSourceStore(supabase, env = {}) {
       if (!workspaceId || !sourceId || !providerSecretCiphertext) {
         throw new Error('SOURCE_CREDENTIAL_REPLACE_FAILED');
       }
+      if (sourceRepository) return normalizeSource(await sourceRepository.replaceSourceCredentials(String(workspaceId), String(sourceId), String(providerSecretCiphertext)));
       const { data, error } = await supabase
         .from('source_connections')
         .update({ provider_secret_ciphertext: String(providerSecretCiphertext) })
@@ -364,6 +371,7 @@ export function createAdminSourceStore(supabase, env = {}) {
       if (!workspaceId || !sourceId || !secretCiphertext) {
         throw new Error('SOURCE_INGRESS_SECRET_REPLACE_FAILED');
       }
+      if (sourceRepository) return normalizeSource(await sourceRepository.replaceIngressSecret(String(workspaceId), String(sourceId), String(secretCiphertext)));
       const { data, error } = await supabase
         .from('source_connections')
         .update({ secret_ciphertext: String(secretCiphertext) })
@@ -376,9 +384,10 @@ export function createAdminSourceStore(supabase, env = {}) {
     },
 
     async setDefaultSource(workspaceId, sourceFamily, sourceId) {
-      if (!workspaceId || !sourceFamily || !sourceId || !supabase?.rpc) {
+      if (!workspaceId || !sourceFamily || !sourceId || (!sourceRepository && !supabase?.rpc)) {
         throw new Error('SOURCE_DEFAULT_UPDATE_REJECTED');
       }
+      if (sourceRepository) return normalizeSource(await sourceRepository.setDefaultSource(String(workspaceId), String(sourceFamily), String(sourceId)));
       const { data, error } = await supabase.rpc('trading_set_default_source', {
         p_workspace_id: String(workspaceId),
         p_source_family: String(sourceFamily),
@@ -391,6 +400,7 @@ export function createAdminSourceStore(supabase, env = {}) {
     async setSourceEnabled(workspaceId, sourceId, enabled) {
       if (!workspaceId || !sourceId) throw new Error('SOURCE_STATE_UPDATE_FAILED');
       const active = Boolean(enabled);
+      if (sourceRepository) return normalizeSource(await sourceRepository.setSourceEnabled(String(workspaceId), String(sourceId), active));
       const update = active ? { is_active: true } : { is_active: false, is_default: false };
       const { data, error } = await supabase
         .from('source_connections')

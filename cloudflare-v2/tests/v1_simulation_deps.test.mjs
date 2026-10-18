@@ -269,7 +269,11 @@ test('routed cTrader account hydrates a missing broker catalog before planning',
       throw new Error(`unexpected table ${table}`);
     },
   };
-  const hydratedCatalog = [{ platformSymbol: 'XAUUSD', platformId: 41, tradable: true }];
+  const hydratedCatalog = [{
+    platformSymbol: 'XAUUSD', platformId: 41, tradable: true,
+    raw: { symbolId: 41, symbolName: 'XAUUSD', brokerPayload: 'must-not-be-persisted' },
+  }];
+  const compactCatalog = [{ platformSymbol: 'XAUUSD', platformId: 41, tradable: true, aliases: [] }];
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
     supabase,
@@ -285,9 +289,10 @@ test('routed cTrader account hydrates a missing broker catalog before planning',
   const instrument = await deps.instrumentProvider(routed, { symbol: { canonical: 'XAUUSD' } });
 
   assert.equal(instrument.platformSymbol, 'XAUUSD');
-  assert.deepEqual(routed.provider_config.symbolCatalog, hydratedCatalog);
+  assert.deepEqual(routed.provider_config.symbolCatalog, compactCatalog);
   assert.equal(updates.length, 1);
-  assert.deepEqual(updates[0].provider_config.symbolCatalog, hydratedCatalog);
+  assert.deepEqual(updates[0].provider_config.symbolCatalog, compactCatalog);
+  assert.equal(JSON.stringify(updates[0].provider_config).includes('must-not-be-persisted'), false);
 });
 
 
@@ -483,7 +488,7 @@ test('new routed MT5 connector account hydrates its own broker catalog before pl
 
   assert.equal(instrument.platformSymbol, 'XAUUSD.r');
   assert.equal(routed.lot_value, 0.2);
-  assert.deepEqual(routed.provider_config.symbolCatalog, hydratedCatalog);
+  assert.deepEqual(routed.provider_config.symbolCatalog, [{ ...hydratedCatalog[0], aliases: [] }]);
   assert.equal(updates.length, 1);
 });
 

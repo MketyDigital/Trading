@@ -33,6 +33,7 @@ function normalizeChatIds(config) {
 
 export async function resolveMtprotoContainerBootstrap({
   supabase,
+  sourceRepository = null,
   workspaceId,
   sourceId,
   masterKey,
@@ -40,7 +41,7 @@ export async function resolveMtprotoContainerBootstrap({
   internalSourceToken,
   decryptFn = decryptSecret,
 } = {}) {
-  if (!supabase?.from) throw new TypeError('Supabase client is required');
+  if (!sourceRepository && !supabase?.from) throw new TypeError('Source repository or Supabase client is required');
 
   const trustedWorkspaceId = required(workspaceId, 'MTPROTO_WORKSPACE_REQUIRED');
   const trustedSourceId = required(sourceId, 'MTPROTO_SOURCE_REQUIRED');
@@ -48,7 +49,10 @@ export async function resolveMtprotoContainerBootstrap({
   const trustedInternalUrl = required(internalSourceUrl, 'MTPROTO_INTERNAL_SOURCE_URL_NOT_CONFIGURED');
   const trustedInternalToken = required(internalSourceToken, 'INTERNAL_SOURCE_TRANSPORT_TOKEN_NOT_CONFIGURED');
 
-  const { data, error } = await supabase
+  let data;
+  if (sourceRepository) data = await sourceRepository.getMtprotoBootstrapSource(trustedWorkspaceId, trustedSourceId);
+  else {
+  const { data: row, error } = await supabase
     .from('source_connections')
     .select('id,workspace_id,source_family,provider_type,external_identity,is_active,config,provider_secret_ciphertext')
     .eq('workspace_id', trustedWorkspaceId)
@@ -58,10 +62,13 @@ export async function resolveMtprotoContainerBootstrap({
     .eq('is_active', true)
     .maybeSingle();
 
-  if (error || !data?.id) throw new Error('MTPROTO_SOURCE_NOT_AVAILABLE');
-  if (!data.provider_secret_ciphertext) throw new Error('MTPROTO_PROVIDER_SECRET_NOT_CONFIGURED');
+  if (error || !row?.id) throw new Error('MTPROTO_SOURCE_NOT_AVAILABLE');
+  data = row;
+  }
+  if (!data?.id) throw new Error('MTPROTO_SOURCE_NOT_AVAILABLE');
+  if (!data.provider_secret && !data.provider_secret_ciphertext) throw new Error('MTPROTO_PROVIDER_SECRET_NOT_CONFIGURED');
 
-  const decrypted = await decryptFn(data.provider_secret_ciphertext, trustedMasterKey);
+  const decrypted = data.provider_secret ?? await decryptFn(data.provider_secret_ciphertext, trustedMasterKey);
   const credentials = parseProviderSecret(decrypted);
   const accountScope = required(data.external_identity, 'MTPROTO_EXTERNAL_IDENTITY_NOT_CONFIGURED');
   const chatIds = normalizeChatIds(data.config || {});

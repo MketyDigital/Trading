@@ -4,8 +4,9 @@ import { validateStagingReadiness } from '../src/config/staging_readiness.js';
 
 function accessCodeEnv(overrides = {}) {
   return {
-    SUPABASE_URL: 'https://staging.supabase.co',
-    SUPABASE_SERVICE_ROLE: 'service-role',
+    TRADING_STORAGE_RUNTIME_ENABLED: 'true',
+    DB: { prepare() {} },
+    TRADING_PG: { connectionString: 'postgres://secret' },
     TRADING_MASTER_KEY: 'master-key',
     TRADING_ACCESS_ENABLED: 'true',
     TRADING_ACCESS_CODE_SESSION_ENABLED: 'true',

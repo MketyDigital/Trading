@@ -21,12 +21,8 @@ function authorize(request, env = {}) {
   return { ok: true };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function readJson(request) {
@@ -40,6 +36,7 @@ async function readJson(request) {
 
 export async function handleMketyAdminTradeRepairRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
+  persistenceRuntime = null,
   repairFn = repairLivePositionGroup,
 } = {}) {
   const auth = authorize(request, env);
@@ -60,11 +57,11 @@ export async function handleMketyAdminTradeRepairRequest(request, env = {}, {
   if (body.confirmLive !== true) return json({ ok: false, reason: 'LIVE_CONFIRMATION_REQUIRED' }, 409);
 
   let supabase;
-  try { supabase = await supabaseFactory(env); }
+  try { if (!persistenceRuntime) supabase = await supabaseFactory(env); }
   catch { return json({ ok: false, reason: 'MKETY_ADMIN_DATABASE_UNAVAILABLE' }, 503); }
 
   try {
-    const result = await repairFn({ env, supabase, workspaceId, groupId, confirmLive: true });
+    const result = await repairFn({ env, supabase, persistenceRuntime, workspaceId, groupId, confirmLive: true });
     const status = result?.ok === true ? 200
       : result?.reason === 'SIGNAL_STOP_ALREADY_INVALIDATED' ? 409
       : result?.reason?.includes('NOT_FOUND') ? 404

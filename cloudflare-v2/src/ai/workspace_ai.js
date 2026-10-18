@@ -10,15 +10,21 @@ export async function createWorkspaceAIRouter(supabase, workspaceId, {
 } = {}) {
   const trustedWorkspaceId = String(workspaceId ?? '').trim() || null;
   const routerOptions = { env, fetchFn, workspaceId: trustedWorkspaceId, circuitBreaker };
-  if (!supabase?.from || !trustedWorkspaceId) return new UniversalAIRouter([], routerOptions);
+  if (!trustedWorkspaceId) return new UniversalAIRouter([], routerOptions);
+  let data;
+  if (typeof supabase?.list === 'function') {
+    try { data = await supabase.list(trustedWorkspaceId); } catch { data = null; }
+    if (Array.isArray(data)) data = data.filter((provider) => provider?.is_active === true || provider?.is_active === 1);
+  } else if (supabase?.from) {
+    const result = await supabase
+      .from('ai_providers')
+      .select('*')
+      .eq('workspace_id', trustedWorkspaceId)
+      .eq('is_active', true);
+    data = result.error ? null : result.data;
+  }
 
-  const { data, error } = await supabase
-    .from('ai_providers')
-    .select('*')
-    .eq('workspace_id', trustedWorkspaceId)
-    .eq('is_active', true);
-
-  if (error || !Array.isArray(data)) {
+  if (!Array.isArray(data)) {
     return new UniversalAIRouter([], routerOptions);
   }
 

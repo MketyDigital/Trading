@@ -26,12 +26,8 @@ function authorizeMketyAdmin(request, env = {}) {
   return { ok: true };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function readJson(request) {
@@ -191,6 +187,13 @@ function atomicRotationError(error) {
 }
 
 export function createMketyAdminAccessCodeStore(supabase) {
+  if (typeof supabase?.listAccessCodes === 'function' && typeof supabase?.createAccessCode === 'function' && typeof supabase?.revokeAccessCode === 'function') {
+    return {
+      listAccessCodes: (...args) => supabase.listAccessCodes(...args),
+      createAccessCode: (...args) => supabase.createAccessCode(...args),
+      revokeAccessCode: (...args) => supabase.revokeAccessCode(...args),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listAccessCodes() {

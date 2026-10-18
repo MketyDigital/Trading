@@ -38,7 +38,8 @@ function constantTimeEqual(left, right) {
   return diff === 0;
 }
 
-async function findHostnameMapping(supabase, hostname) {
+async function findHostnameMapping(supabase, hostname, hostnameStore) {
+  if (hostnameStore?.getHostname) return hostnameStore.getHostname(hostname);
   if (!supabase?.from) throw new Error('CUSTOM_HOSTNAME_ROUTE_PROOF_STORE_UNAVAILABLE');
   const { data, error } = await supabase
     .from('trading_workspace_hostnames')
@@ -49,7 +50,7 @@ async function findHostnameMapping(supabase, hostname) {
   return data || null;
 }
 
-export async function handleCustomHostnameRouteProofRequest(request, env = {}, { supabase } = {}) {
+export async function handleCustomHostnameRouteProofRequest(request, env = {}, { supabase, hostnameStore = null } = {}) {
   if (request.method !== 'GET') {
     return new Response(JSON.stringify({ ok: false, reason: 'METHOD_NOT_ALLOWED' }), {
       status: 405,
@@ -68,14 +69,15 @@ export async function handleCustomHostnameRouteProofRequest(request, env = {}, {
   }
 
   let mapping;
-  try { mapping = await findHostnameMapping(supabase, hostname); }
+  try { mapping = await findHostnameMapping(supabase, hostname, hostnameStore); }
   catch {
     return new Response(JSON.stringify({ ok: false, reason: 'CUSTOM_HOSTNAME_ROUTE_PROOF_UNAVAILABLE' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
     });
   }
-  if (!mapping?.workspace_id) {
+  const workspaceId = mapping?.workspace_id ?? mapping?.workspaceId;
+  if (!workspaceId) {
     return new Response(JSON.stringify({ ok: false, reason: 'CUSTOM_HOSTNAME_ROUTE_PROOF_NOT_FOUND' }), {
       status: 404,
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -83,7 +85,7 @@ export async function handleCustomHostnameRouteProofRequest(request, env = {}, {
   }
 
   let proof;
-  try { proof = await hmacHex(requiredSecret(env), proofMessage(hostname, mapping.workspace_id, nonce)); }
+  try { proof = await hmacHex(requiredSecret(env), proofMessage(hostname, workspaceId, nonce)); }
   catch {
     return new Response(JSON.stringify({ ok: false, reason: 'CUSTOM_HOSTNAME_ROUTE_PROOF_UNAVAILABLE' }), {
       status: 503,

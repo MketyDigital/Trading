@@ -9,4 +9,5 @@ test('production deploy derives a stable separated access-code session secret wh
   assert.match(workflow, /mkety-trading-access-code-session-v1/);
   assert.match(workflow, /createHmac\(['"]sha256['"]/);
   assert.doesNotMatch(workflow, /openssl rand -base64 48/);
+  assert.doesNotMatch(workflow, /SUPABASE_(?:URL|SERVICE_ROLE|SERVICE_KEY)/);
 });

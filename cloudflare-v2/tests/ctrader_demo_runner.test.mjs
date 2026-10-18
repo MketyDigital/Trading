@@ -62,8 +62,10 @@ test('cTrader runner lifecycle builds persistent dependencies and stays behind e
   let acceptanceCalls = 0;
   const result = await runCTraderDemoCommand({
     env: {
-      SUPABASE_URL: 'https://project.supabase.co',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-key',
+      TRADING_STORAGE_AUTHORITY: 'postgres',
+      TRADING_STORAGE_AUTHORITY_EPOCH: '1',
+      TRADING_PG_STAGING_DATABASE_URL: 'postgres://user:password@db.example.test:5432/trading',
+      TRADING_MASTER_KEY: 'master-key',
       TRADING_WORKSPACE_ID: 'workspace-1',
       CTRADER_CLIENT_ID: 'id',
       CTRADER_CLIENT_SECRET: 'secret',

@@ -1,0 +1,22 @@
+name = "mkety-trading-storage-staging"
+main = "src/v1_runtime_entry.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+
+[vars]
+TRADING_STORAGE_RUNTIME_ENABLED = "true"
+TRADING_STORAGE_AUTHORITY = "d1"
+TRADING_STORAGE_AUTHORITY_EPOCH = "1"
+TRADING_ACCESS_ENABLED = "false"
+BROKER_EXECUTION_ENABLED = "false"
+LIVE_BROKER_EXECUTION_ENABLED = "false"
+TRADINGVIEW_DIRECT_INGRESS_ENABLED = "false"
+TRADINGVIEW_CERT_PROBE_ENABLED = "false"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-staging"
+database_id = "4f00d59a-3d90-4146-832d-36230d5648bb"
+migrations_dir = "db/d1-migrations"

@@ -1,0 +1,159 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { checkStagingPostgresConnection } from '../scripts/check_staging_postgres_connection.mjs';
+
+test('staging PostgreSQL probe uses a read-only transaction and returns safe identity metadata', async () => {
+  const calls = [];
+  class Client {
+    constructor(options) { calls.push(['constructor', options]); }
+    async connect() { calls.push(['connect']); }
+    async query(sql) {
+      calls.push(['query', sql]);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: false, trading_owner_is_superuser: false, trading_owner_can_login: false, trading_owner_can_create_database: false, trading_owner_can_create_roles: false, trading_owner_bypasses_rls: false, trading_owner_inherits_roles: false, available_trading_database_names: ['trading_stage'] }] };
+      return { rows: [] };
+    }
+    async end() { calls.push(['end']); }
+  }
+
+  const result = await checkStagingPostgresConnection({
+    connectionString: 'postgres://secret-user:secret-password@private.invalid/stage',
+    caFilePath: '/etc/ssl/certs/coolify-ca.crt',
+    caCertificate: 'synthetic trusted CA certificate',
+    ClientClass: Client
+  });
+
+  assert.deepEqual(result, {
+    databaseName: 'trading_stage',
+    schemaName: 'public',
+    transactionReadOnly: true,
+    tradingSchemaExists: false,
+    roleIsSuperuser: false,
+    tradingOwnerRoleIsRestricted: true,
+    availableTradingDatabaseNames: ['trading_stage']
+  });
+  assert.equal(calls[0][0], 'constructor');
+  assert.deepEqual(calls[0][1], {
+    connectionString: 'postgres://secret-user:secret-password@private.invalid/stage?sslmode=verify-ca&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fcoolify-ca.crt&uselibpqcompat=true',
+    connectionTimeoutMillis: 10000,
+    query_timeout: 10000,
+    statement_timeout: 10000
+  });
+  assert.deepEqual(calls.slice(1).map(([kind, sql]) => kind === 'query' ? sql : kind), [
+    'connect',
+    'BEGIN READ ONLY',
+    calls[3][1],
+    'ROLLBACK',
+    'end'
+  ]);
+  assert.match(calls[3][1], /current_database\(\)/);
+  assert.match(calls[3][1], /current_user/);
+  assert.match(calls[3][1], /pg_namespace/);
+  assert.match(calls[3][1], /pg_roles/);
+  assert.match(calls[3][1], /pg_database/);
+  assert.match(calls[3][1], /trading_owner/);
+  assert.doesNotMatch(calls[3][1], /^\s*(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/im);
+  assert.doesNotMatch(JSON.stringify(result), /secret-user|secret-password|private\.invalid/);
+});
+
+test('staging PostgreSQL probe refuses a connection that is not read-only and still closes it', async () => {
+  const calls = [];
+  class Client {
+    async connect() { calls.push('connect'); }
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'trading_stage', schema_name: 'public', transaction_read_only: 'off', trading_schema_exists: false, role_is_superuser: false, available_trading_database_names: ['trading_stage'] }] };
+      return { rows: [] };
+    }
+    async end() { calls.push('end'); }
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
+    /must be read-only/
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.at(-1), 'end');
+});
+
+test('existing Coolify database probe refuses an unexpected database identity', async () => {
+  const calls = [];
+  class Client {
+    async connect() { calls.push('connect'); }
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'other_db', schema_name: 'public', transaction_read_only: 'on', trading_schema_exists: false, role_is_superuser: true }] };
+      return { rows: [] };
+    }
+    async end() { calls.push('end'); }
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({
+      connectionString: 'postgres://secret-user:secret-password@private.invalid/mkety',
+      caFilePath: '/etc/ssl/certs/coolify-ca.crt',
+      caCertificate: 'synthetic trusted CA certificate',
+      expectedDatabaseName: 'mkety',
+      ClientClass: Client
+    }),
+    /expected database identity/i
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.at(-1), 'end');
+});
+
+test('staging PostgreSQL probe requires its explicitly scoped staging URL', async () => {
+  await assert.rejects(checkStagingPostgresConnection({ connectionString: '' }), /TRADING_PG_STAGING_DATABASE_URL/);
+});
+
+test('staging PostgreSQL probe refuses to connect without the trusted Coolify CA', async () => {
+  let connected = false;
+  class Client {
+    async connect() { connected = true; }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', ClientClass: Client, caFilePath: '' }),
+    /load trusted Coolify PostgreSQL CA/i
+  );
+  assert.equal(connected, false);
+});
+
+test('staging PostgreSQL probe surfaces only a safe failure stage and code', async () => {
+  class Client {
+    async connect() {
+      throw Object.assign(new Error('failed for postgres://secret-user:secret-password@private.invalid/stage'), { code: 'ECONNREFUSED' });
+    }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://secret-user:secret-password@private.invalid/stage', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
+    error => {
+      assert.match(error.message, /connect.*ECONNREFUSED/i);
+      assert.doesNotMatch(error.message, /secret-user|secret-password|private\.invalid/);
+      return true;
+    }
+  );
+});
+
+test('staging PostgreSQL probe safely classifies TLS failures without exposing host details', async () => {
+  class Client {
+    async connect() {
+      throw new Error('self-signed certificate in certificate chain for private-db.internal');
+    }
+    async query() { throw new Error('unexpected query'); }
+    async end() {}
+  }
+
+  await assert.rejects(
+    checkStagingPostgresConnection({ connectionString: 'postgres://staging', caFilePath: '/etc/ssl/certs/coolify-ca.crt', caCertificate: 'synthetic trusted CA certificate', ClientClass: Client }),
+    error => {
+      assert.match(error.message, /connect.*TLS_CERTIFICATE/i);
+      assert.doesNotMatch(error.message, /self-signed|private-db\.internal/);
+      return true;
+    }
+  );
+});

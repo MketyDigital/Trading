@@ -78,7 +78,7 @@ test('serializes composite runtime ids beside UUID relational keys and preserves
   assert.equal(rows.legs[0].requested_lots, 0.01);
   assert.equal(rows.legs[0].executed_lots, 0.01);
   assert.equal(rows.legs[0].remaining_lots, 0.01);
-  assert.deepEqual(rows.legs.map((row) => row.broker_deal_ids), [undefined, undefined]);
+  assert.deepEqual(rows.legs.map((row) => row.broker_deal_ids), [[], []]);
   assert.equal(Object.hasOwn(rows.legs[0], 'last_broker_status'), false);
   assert.equal(Object.hasOwn(rows.legs[0], 'last_broker_source_version'), false);
   assert.equal(rows.legs[1].lifecycle_tracking_enabled, true);
@@ -105,7 +105,7 @@ test('stale hydrated null observation fields cannot erase newer broker evidence 
   const row = rows.legs[0];
   assert.equal(Object.hasOwn(row, 'last_broker_observed_at'), false);
   assert.equal(Object.hasOwn(row, 'last_broker_status'), false);
-  assert.equal(Object.hasOwn(row, 'broker_deal_ids'), false);
+  assert.deepEqual(row.broker_deal_ids, []);
 });
 
 test('allows fully closed legs to persist with zero remaining lots', () => {

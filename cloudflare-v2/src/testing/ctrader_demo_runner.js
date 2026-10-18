@@ -15,9 +15,9 @@ export async function runCTraderDemoCommand({
   acceptanceRunner = runCTraderDemoAcceptanceFromEnv,
 } = {}) {
   const mode = String(env.CTRADER_DEMO_ACCEPTANCE_MODE || 'probe').trim().toLowerCase();
+  let dependencies = {};
 
   try {
-    let dependencies = {};
     if (mode === 'lifecycle') {
       const readiness = validateCTraderDemoCommandEnvironment(env);
       if (!readiness.ok) {
@@ -25,7 +25,7 @@ export async function runCTraderDemoCommand({
         logger?.error?.(message);
         return { ok: false, exitCode: 1, error: message };
       }
-      dependencies = dependencyBuilder({ env });
+      dependencies = await dependencyBuilder({ env });
     }
 
     const output = await acceptanceRunner({ env, ...dependencies });
@@ -35,5 +35,7 @@ export async function runCTraderDemoCommand({
     const message = safeErrorMessage(error);
     logger?.error?.(message);
     return { ok: false, exitCode: 1, error: message };
+  } finally {
+    try { await dependencies.close?.(); } catch { /* Keep the acceptance result. */ }
   }
 }

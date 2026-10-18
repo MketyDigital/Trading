@@ -62,6 +62,7 @@ test('superseded local bearer is rejected immediately at the V1 admin boundary',
     TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret',
   }, {
     supabase: workspaceSupabase(),
+    accessCodeStore: { getAccessCodeById: async (id) => ({ id, workspace_id: workspaceId, product: 'trading', status: 'active' }) },
     resolveHostnameFn: async () => ({ ok: true, kind: 'canonical' }),
     membershipStoreFactory: () => ({
       getMembership: async () => ({
@@ -99,6 +100,7 @@ test('current locally bound bearer continues to authorize the same workspace', a
     TRADING_ACCESS_CODE_SESSION_SECRET: 'super-secret',
   }, {
     supabase: workspaceSupabase(),
+    accessCodeStore: { getAccessCodeById: async (id) => ({ id, workspace_id: workspaceId, product: 'trading', status: 'active' }) },
     resolveHostnameFn: async () => ({ ok: true, kind: 'canonical' }),
     membershipStoreFactory: () => ({
       getMembership: async () => ({

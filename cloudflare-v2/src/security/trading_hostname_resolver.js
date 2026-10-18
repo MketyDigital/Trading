@@ -26,6 +26,7 @@ function normalizeMapping(data) {
 }
 
 export function createTradingHostnameStore(supabase) {
+  if (supabase?.getActiveHostname && supabase?.getHostname && supabase?.activateHostname) return supabase;
   if (!supabase?.from) throw new Error('TRADING_HOSTNAME_STORE_UNAVAILABLE');
 
   return {

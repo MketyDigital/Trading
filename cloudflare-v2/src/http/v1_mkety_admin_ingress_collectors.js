@@ -24,12 +24,8 @@ function authorize(request, env = {}) {
     : { ok: false, status: 401, reason: 'MKETY_ADMIN_UNAUTHORIZED' };
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function sha256Hex(value) {
@@ -59,6 +55,14 @@ function safeCollector(row = {}) {
 const SELECT = 'id,collector_name,is_active,metadata,last_seen_at,created_at,updated_at';
 
 export function createIngressCollectorStore(supabase) {
+  if (typeof supabase?.list === 'function' && typeof supabase?.create === 'function' && typeof supabase?.update === 'function') {
+    return {
+      listCollectors: (...args) => supabase.list(...args),
+      createCollector: (...args) => supabase.create(...args),
+      rotateCollector: (id, tokenHash) => supabase.update(id, { token_hash: tokenHash, updated_at: new Date().toISOString() }),
+      setCollectorActive: (id, enabled) => supabase.update(id, { is_active: Boolean(enabled), updated_at: new Date().toISOString() }),
+    };
+  }
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async listCollectors() {

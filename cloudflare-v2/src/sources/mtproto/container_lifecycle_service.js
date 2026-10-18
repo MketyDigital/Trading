@@ -24,13 +24,14 @@ function runtimeName(identity) {
 export function createMtprotoContainerLifecycleService({
   namespace,
   supabase,
+  sourceRepository = null,
   masterKey,
   internalSourceUrl,
   internalSourceToken,
   bootstrapResolver = resolveMtprotoContainerBootstrap,
 } = {}) {
   if (!namespace?.getByName) throw new TypeError('Cloudflare Container namespace binding is required');
-  if (!supabase?.from) throw new TypeError('Supabase client is required');
+  if (!sourceRepository && !supabase?.from) throw new TypeError('Source repository or Supabase client is required');
 
   async function resolveTrusted(request = {}) {
     const workspaceId = trustedId(request.workspaceId, 'MTPROTO_WORKSPACE_REQUIRED');
@@ -40,6 +41,7 @@ export function createMtprotoContainerLifecycleService({
     // Any request.bootstrap or credential-like caller field is ignored.
     const resolved = await bootstrapResolver({
       supabase,
+      sourceRepository,
       workspaceId,
       sourceId,
       masterKey,

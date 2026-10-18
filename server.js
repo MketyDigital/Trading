@@ -1,28 +1,11 @@
 import http from 'http';
-import { createClient } from '@supabase/supabase-js';
 import { renderDashboard } from './cloudflare-v2/src/dashboard.js';
 
 const PORT = 3000;
 
-// Initialize Supabase using environment variables
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE || 
-                    process.env.SUPABASE_SERVICE_ROLE_KEY || 
-                    process.env.SUPABASE_KEY || 
-                    process.env.SUPABASE_SERVICE_KEY || 
-                    process.env.SUPABASE_ANON_KEY || '';
-
-let supabase = null;
-if (supabaseUrl && supabaseKey) {
-    try {
-        supabase = createClient(supabaseUrl, supabaseKey);
-        console.log("Supabase Client initialized successfully in server.js preview mode!");
-    } catch (e) {
-        console.error("Failed to initialize Supabase:", e.message);
-    }
-} else {
-    console.warn("⚠️ Warning: SUPABASE_URL and key are missing in the environment variables.");
-}
+// The legacy Node preview no longer carries a database client. Trading data
+// is served by the configured Cloudflare D1/PostgreSQL runtime.
+const legacyStore = null;
 
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -62,12 +45,12 @@ const server = http.createServer(async (req, res) => {
     try {
         // Route 1: Database Proxy for Dashboard (Runs in development applet context)
         if (path === "/api/admin/data/proxy" && method === "POST") {
-            if (!supabase) {
-                return sendJSON({ error: "Supabase not configured in preview environment variables." }, 500);
+            if (!legacyStore) {
+                return sendJSON({ error: "Trading storage not configured in preview environment variables." }, 500);
             }
             const body = await getJSONBody();
             const { table, action, match, payload } = body;
-            let query = supabase.from(table);
+            let query = legacyStore.from(table);
             
             if (action === "select") query = query.select('*').order('created_at', { ascending: false }).limit(50);
             if (action === "insert") query = query.insert(payload).select();
@@ -80,8 +63,8 @@ const server = http.createServer(async (req, res) => {
 
         // Route 2: 1-Click Bot Webhook Authorization
         if (path === "/api/admin/bot/authorize" && method === "POST") {
-            if (!supabase) {
-                return sendJSON({ error: "Supabase not configured." }, 500);
+            if (!legacyStore) {
+                return sendJSON({ error: "Trading storage not configured." }, 500);
             }
             const body = await getJSONBody();
             const { workspace_id, bot_token } = body;
@@ -91,7 +74,7 @@ const server = http.createServer(async (req, res) => {
             const tgData = await tgRes.json();
             
             if (tgData.ok) {
-                await supabase.from("workspaces").update({ tg_bot_token: bot_token }).eq("id", workspace_id);
+                await legacyStore.from("workspaces").update({ tg_bot_token: bot_token }).eq("id", workspace_id);
                 return sendJSON({ success: true });
             } else {
                 return sendJSON({ success: false, error: tgData.description }, 400);
@@ -100,13 +83,13 @@ const server = http.createServer(async (req, res) => {
 
         // Route 3: Bank Approvals Decision Manager
         if (path === "/api/admin/bank/decision" && method === "POST") {
-            if (!supabase) {
-                return sendJSON({ error: "Supabase not configured." }, 500);
+            if (!legacyStore) {
+                return sendJSON({ error: "Trading storage not configured." }, 500);
             }
             const body = await getJSONBody();
             const { deposit_id, action } = body; // 'approved' or 'declined'
             
-            const { data: deposit, error: depErr } = await supabase.from("bank_deposits").select("*").eq("id", deposit_id).maybeSingle();
+            const { data: deposit, error: depErr } = await legacyStore.from("bank_deposits").select("*").eq("id", deposit_id).maybeSingle();
             if (depErr || !deposit) {
                 return sendJSON({ success: false, error: "Deposit record not found" }, 404);
             }
@@ -115,14 +98,14 @@ const server = http.createServer(async (req, res) => {
                 return sendJSON({ success: false, error: "Deposit already processed" }, 400);
             }
             
-            await supabase.from("bank_deposits").update({ status: action }).eq("id", deposit_id);
+            await legacyStore.from("bank_deposits").update({ status: action }).eq("id", deposit_id);
             
             if (action === 'approved') {
                 const months = deposit.plan_requested === 'quarterly' ? 3 : 1;
                 const expiresAt = new Date();
                 expiresAt.setMonth(expiresAt.getMonth() + months);
                 
-                const { data: ws } = await supabase.from("workspaces").select("*").eq("id", deposit.workspace_id).maybeSingle();
+                const { data: ws } = await legacyStore.from("workspaces").select("*").eq("id", deposit.workspace_id).maybeSingle();
                 let inviteLink = "Direct Manual Approval (Invite Link generation requires valid Bot Token and VIP Group ID)";
                 
                 if (ws && ws.tg_bot_token && ws.tg_vip_chat_id) {
@@ -144,7 +127,7 @@ const server = http.createServer(async (req, res) => {
                     }
                 }
                 
-                await supabase.from("vip_members").upsert({
+                await legacyStore.from("vip_members").upsert({
                     workspace_id: deposit.workspace_id,
                     telegram_id: deposit.telegram_id,
                     username: deposit.username,
@@ -171,7 +154,7 @@ const server = http.createServer(async (req, res) => {
                     }
                 }
             } else {
-                const { data: ws } = await supabase.from("workspaces").select("*").eq("id", deposit.workspace_id).maybeSingle();
+                const { data: ws } = await legacyStore.from("workspaces").select("*").eq("id", deposit.workspace_id).maybeSingle();
                 if (ws && ws.tg_bot_token) {
                     try {
                         await fetch(`https://api.telegram.org/bot${ws.tg_bot_token}/sendMessage`, {

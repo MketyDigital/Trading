@@ -13,6 +13,7 @@ function errorBody(message) {
  */
 export function createProductionBindingRepairRecorder({
   supabase,
+  persistenceRuntime = null,
   workspaceId,
   tradingEventId,
 } = {}) {
@@ -20,7 +21,7 @@ export function createProductionBindingRepairRecorder({
   const boundEventId = text(tradingEventId);
 
   return async function bindingRepairRecorder(locator = {}) {
-    if (!supabase?.from) throw new TypeError('Supabase client is required');
+    if (!supabase?.from && !persistenceRuntime) throw new TypeError('Trading persistence is required');
     const requestedWorkspaceId = text(locator.workspaceId);
     const requestedEventId = text(locator.eventId);
     const accountId = text(locator.accountId);
@@ -34,6 +35,23 @@ export function createProductionBindingRepairRecorder({
     }
     if (!accountId || !groupId || !legId || !idempotencyKey) {
       throw new Error('binding repair locator is incomplete');
+    }
+
+    if (persistenceRuntime?.delivery) {
+      const repo = persistenceRuntime.delivery({
+        workspaceId: boundWorkspaceId,
+        destinationType: 'trade_account',
+        destinationRef: `trade-account:${accountId}`,
+        tradingEventId: boundEventId,
+      });
+      const row = await repo.findForStateBinding(idempotencyKey);
+      if (!row) throw new Error('successful broker delivery for binding repair was not found');
+      const request = row.request_payload;
+      if (text(request?.accountId) !== accountId || text(request?.groupId) !== groupId) throw new Error('binding repair durable account/group identity mismatch');
+      if (text(request?.action?.legId) !== legId || text(request?.action?.idempotencyKey) !== idempotencyKey) throw new Error('binding repair durable action identity mismatch');
+      if (!row.response_payload || typeof row.response_payload !== 'object') throw new Error('binding repair broker result is not durable');
+      await repo.markBindingPending(idempotencyKey, { code: 'STATE_BIND_FAILED', message: errorBody('Trade State binding failed after successful broker delivery').message });
+      return { recorded: true, deliveryId: row.id };
     }
 
     const { data: row, error: lookupError } = await supabase

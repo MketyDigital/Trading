@@ -10,9 +10,15 @@ import {
 } from '../src/config/config_ownership.js';
 
 test('platform bootstrap secrets remain valid deployment configuration', () => {
-  for (const key of ['TRADING_MASTER_KEY', 'SUPABASE_SERVICE_ROLE', 'CBOT_TOKEN_SIGNING_KEY', 'CTRADER_CLIENT_ID']) {
+  for (const key of ['TRADING_MASTER_KEY', 'TRADING_STORAGE_AUTHORITY', 'CBOT_TOKEN_SIGNING_KEY', 'CTRADER_CLIENT_ID']) {
     assert.equal(isPlatformBootstrapKey(key), true, key);
     assert.equal(isCustomerSpecificEnvironmentKey(key), false, key);
+  }
+});
+
+test('Supabase credentials are not platform bootstrap configuration', () => {
+  for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE', 'SUPABASE_SERVICE_ROLE_KEY']) {
+    assert.equal(isPlatformBootstrapKey(key), false, key);
   }
 });
 

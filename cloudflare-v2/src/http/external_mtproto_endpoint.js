@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { signSourcePayload } from '../security/source_auth.js';
 import { handleV1EventsRequest } from './v1_events.js';
@@ -140,14 +139,8 @@ function normalizeExternalMtprotoBody(rawBody) {
   });
 }
 
-async function defaultResolveActiveSource(sourceId, env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  const masterKey = env.TRADING_MASTER_KEY;
-  if (!url || !key || !masterKey) throw new Error('SOURCE_RUNTIME_UNAVAILABLE');
-  const supabase = createClient(url, key);
-  const stores = createSupabaseIngestStores(supabase, { masterKey });
-  return stores.sourceStore.getActiveSource(sourceId);
+async function defaultResolveActiveSource() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 export async function handleExternalMtprotoEndpointRequest(request, env = {}, {

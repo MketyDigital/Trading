@@ -78,6 +78,7 @@ export function createSupabaseIngestStores(supabase, {
   masterKey,
   decryptFn = decryptSecret,
 } = {}) {
+  if (supabase?.sourceStore && supabase?.eventStore) return supabase;
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   if (!masterKey) throw new TypeError('Trading master key is required');
 

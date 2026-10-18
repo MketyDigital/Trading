@@ -8,12 +8,6 @@ function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
 }
 
-function hasServiceRole(env = {}) {
-  return present(env.SUPABASE_SERVICE_ROLE) ||
-    present(env.SUPABASE_SERVICE_ROLE_KEY) ||
-    present(env.SUPABASE_SERVICE_KEY);
-}
-
 const OPTIONAL_KEYS = [
   'MKETY_ACCESS_ISSUER',
   'MKETY_ACCESS_AUDIENCE',
@@ -28,13 +22,15 @@ export function validateStagingReadiness(
 ) {
   const missing = [];
   const accessEnabled = enabled(env.TRADING_ACCESS_ENABLED);
+  const storageRuntimeEnabled = enabled(env.TRADING_STORAGE_RUNTIME_ENABLED);
   const localAccessCodeAuthEnabled = enabled(env.TRADING_ACCESS_CODE_SESSION_ENABLED);
   const centralAccessAuthEnabled = present(env.MKETY_ACCESS_ISSUER)
     && present(env.MKETY_ACCESS_AUDIENCE)
     && present(env.MKETY_ACCESS_JWKS_URL);
 
-  if (!present(env.SUPABASE_URL)) missing.push('SUPABASE_URL');
-  if (!hasServiceRole(env)) missing.push('SUPABASE_SERVICE_ROLE');
+  if (!storageRuntimeEnabled) missing.push('TRADING_STORAGE_RUNTIME_ENABLED');
+  if (!env.DB || typeof env.DB.prepare !== 'function') missing.push('D1_DB_BINDING');
+  if (!env.TRADING_PG || typeof env.TRADING_PG.connectionString !== 'string' || !env.TRADING_PG.connectionString.trim()) missing.push('TRADING_PG_HYPERDRIVE_BINDING');
   if (!present(env.TRADING_MASTER_KEY)) missing.push('TRADING_MASTER_KEY');
 
   if (accessEnabled) {
@@ -67,6 +63,7 @@ export function validateStagingReadiness(
     optionalMissing: OPTIONAL_KEYS.filter((key) => !present(env[key])),
     features: {
       accessEnabled,
+      storageRuntimeEnabled,
       localAccessCodeAuthEnabled,
       centralAccessAuthEnabled,
       simulationRequested: Boolean(requireSimulation),

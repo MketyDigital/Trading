@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { createAdminSourceStore } from './v1_admin_sources.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
@@ -15,11 +14,8 @@ function json(body, status = 200, extraHeaders = {}) {
   });
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('ADMIN_DATABASE_UNAVAILABLE');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 function randomSourceSecret() {
@@ -33,6 +29,7 @@ export async function handleV1AdminSourceIngressSecretRequest(request, env = {},
   sourceStoreFactory = createAdminSourceStore,
   encryptFn = encryptSecret,
   generateSecret = randomSourceSecret,
+  persistenceRuntime = null,
 } = {}) {
   if (request.method !== 'POST') return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'POST' });
 
@@ -46,10 +43,16 @@ export async function handleV1AdminSourceIngressSecretRequest(request, env = {},
   if (!String(sourceId || '').trim()) return json({ ok: false, reason: 'SOURCE_ID_INVALID' }, 400);
 
   let supabase;
-  try { supabase = await supabaseFactory(env); }
+  try { if (!persistenceRuntime) supabase = await supabaseFactory(env); }
   catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
 
-  const authorization = await authorizeFn(request, env, { supabase });
+  const authorization = await authorizeFn(request, env, {
+    supabase,
+    workspaceAccess: persistenceRuntime?.workspaceAccess,
+    accessCodeStore: persistenceRuntime?.accessCodes,
+    membershipStore: persistenceRuntime?.workspaceAccess,
+    hostnameStore: persistenceRuntime?.hostnames,
+  });
   if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   if (!hasTradingPermission(authorization?.membership?.role, 'sources.write')) {
     return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
@@ -57,7 +60,7 @@ export async function handleV1AdminSourceIngressSecretRequest(request, env = {},
   if (!env.TRADING_MASTER_KEY) return json({ ok: false, reason: 'SOURCE_ENCRYPTION_NOT_CONFIGURED' }, 503);
 
   let sourceStore;
-  try { sourceStore = sourceStoreFactory(supabase, env); }
+  try { sourceStore = sourceStoreFactory(persistenceRuntime?.adminSources || supabase, env); }
   catch { return json({ ok: false, reason: 'SOURCE_STORE_UNAVAILABLE' }, 503); }
 
   const workspaceId = String(authorization?.workspace?.id || '').trim();

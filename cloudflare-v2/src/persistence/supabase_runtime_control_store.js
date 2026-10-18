@@ -69,23 +69,23 @@ export function createTradingRuntimeControlStore(supabase) {
   };
 }
 
-async function resolveControl(supabase, getter) {
+async function resolveControl(supabase, getter, runtimeControls = null) {
   try {
-    const store = createTradingRuntimeControlStore(supabase);
+    const store = runtimeControls || createTradingRuntimeControlStore(supabase);
     return await store[getter]();
   } catch {
     return unavailable();
   }
 }
 
-export function resolveTradingAccessRuntimeControl({ supabase } = {}) {
-  return resolveControl(supabase, 'getTradingAccessEnabled');
+export function resolveTradingAccessRuntimeControl({ supabase, runtimeControls } = {}) {
+  return resolveControl(supabase, 'getTradingAccessEnabled', runtimeControls);
 }
 
-export function resolveBrokerExecutionRuntimeControl({ supabase } = {}) {
-  return resolveControl(supabase, 'getBrokerExecutionEnabled');
+export function resolveBrokerExecutionRuntimeControl({ supabase, runtimeControls } = {}) {
+  return resolveControl(supabase, 'getBrokerExecutionEnabled', runtimeControls);
 }
 
-export function resolveLiveBrokerExecutionRuntimeControl({ supabase } = {}) {
-  return resolveControl(supabase, 'getLiveBrokerExecutionEnabled');
+export function resolveLiveBrokerExecutionRuntimeControl({ supabase, runtimeControls } = {}) {
+  return resolveControl(supabase, 'getLiveBrokerExecutionEnabled', runtimeControls);
 }

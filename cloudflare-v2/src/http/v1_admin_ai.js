@@ -92,6 +92,7 @@ function publicProvider(row = {}) {
 }
 
 export function createAdminAIStore(supabase) {
+  if (supabase?.list && supabase?.get && supabase?.create && supabase?.update && supabase?.recordHealth && supabase?.remove) return supabase;
   if (!supabase?.from) throw new TypeError('Supabase client is required');
   return {
     async list(workspaceId) {

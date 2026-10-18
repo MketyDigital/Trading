@@ -24,12 +24,8 @@ function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
 }
 
-async function defaultSupabaseFactory(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('Supabase service credentials are not configured');
-  const { createClient } = await import('@supabase/supabase-js');
-  return createClient(url, key);
+async function defaultSupabaseFactory() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function parseJson(request) {
@@ -40,7 +36,8 @@ async function parseJson(request) {
   }
 }
 
-async function createStore(env, supabaseFactory, storeFactory) {
+async function createStore(env, supabaseFactory, storeFactory, injectedStore = null) {
+  if (injectedStore) return injectedStore;
   const supabase = await supabaseFactory(env);
   return storeFactory(supabase, env);
 }
@@ -81,6 +78,7 @@ async function issueSession(result, env, nowSec, mode, { includeRefreshCookie = 
 export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
   supabaseFactory = defaultSupabaseFactory,
   storeFactory = createTradingAccessCodeStore,
+  store: injectedStore = null,
   now = new Date(),
   nowSec = Math.floor(Date.now() / 1000),
   refreshVerifier = verifyTradingRefreshToken,
@@ -107,7 +105,7 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
     let store;
     try {
-      store = await createStore(env, supabaseFactory, storeFactory);
+      store = await createStore(env, supabaseFactory, storeFactory, injectedStore);
     } catch {
       return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
     }
@@ -149,7 +147,7 @@ export async function handleTradingAccessCodeRedeemRequest(request, env = {}, {
 
   let store;
   try {
-    store = await createStore(env, supabaseFactory, storeFactory);
+    store = await createStore(env, supabaseFactory, storeFactory, injectedStore);
   } catch {
     return json({ ok: false, reason: 'ACCESS_CODE_STORE_UNAVAILABLE' }, 503);
   }

@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { createSupabaseIngestStores } from '../storage/supabase_ingest_store.js';
 import { signSourcePayload } from '../security/source_auth.js';
 import { handleV1EventsRequest } from './v1_events.js';
@@ -117,11 +116,8 @@ async function sha256Hex(value) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function defaultSupabase(env = {}) {
-  const url = env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE || env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) throw new Error('COLLECTOR_RUNTIME_UNAVAILABLE');
-  return createClient(url, key);
+async function defaultSupabase() {
+  throw new Error('TRADING_STORAGE_RUNTIME_REQUIRED');
 }
 
 async function defaultResolveCollector(token, env = {}) {
