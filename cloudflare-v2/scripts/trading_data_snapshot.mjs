@@ -3,6 +3,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, resolve, sep } from 'node:path';
 import { encryptSecret, decryptSecret } from '../src/security/secret_box.js';
+import { sanitizeAccountSymbolCatalog } from '../src/execution/account_symbol_catalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(here, '../..');
@@ -129,6 +130,7 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
     if (!Array.isArray(rows)) throw new Error(`Snapshot table ${table} did not return rows`);
   }
   const output = Object.fromEntries(Object.entries(rowsByTable).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]));
+  const catalogNormalization = { accountsChanged: 0, catalogsChanged: 0, beforeBytes: 0, afterBytes: 0, bytesSaved: 0 };
 
   const requiredControls = new Set(['trading_access_enabled', 'broker_execution_enabled', 'live_broker_execution_enabled']);
   const controls = output.trading_runtime_controls;
@@ -147,6 +149,33 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
   let accountsExecutionFenced = 0;
   let demoExecutionPreserved = 0;
   for (const row of accounts) {
+    if (row.provider_config != null) {
+      const configWasString = typeof row.provider_config === 'string';
+      let config = row.provider_config;
+      if (configWasString) {
+        try { config = JSON.parse(config); } catch { throw new Error('Trade account provider config is not valid JSON'); }
+      }
+      if (config && typeof config === 'object' && !Array.isArray(config)) {
+        config = structuredClone(config);
+        let configChanged = false;
+        for (const key of ['symbolCatalog', 'symbol_catalog']) {
+          if (!Array.isArray(config[key])) continue;
+          const before = config[key];
+          const after = sanitizeAccountSymbolCatalog(before);
+          catalogNormalization.beforeBytes += Buffer.byteLength(JSON.stringify(before));
+          catalogNormalization.afterBytes += Buffer.byteLength(JSON.stringify(after));
+          if (stable(before) !== stable(after)) {
+            configChanged = true;
+            catalogNormalization.catalogsChanged += 1;
+          }
+          config[key] = after;
+        }
+        if (configChanged) {
+          catalogNormalization.accountsChanged += 1;
+          row.provider_config = configWasString ? JSON.stringify(config) : config;
+        }
+      }
+    }
     let policy = row.safety_policy;
     if (typeof policy === 'string') {
       try { policy = JSON.parse(policy); } catch { throw new Error('Trade account safety policy is not valid JSON'); }
@@ -171,8 +200,11 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
   if (!Array.isArray(workspaces)) throw new Error('Snapshot trading_workspace_access table is missing');
   for (const row of workspaces) row.trading_access_enabled = target === 'd1' ? 0 : false;
 
+  catalogNormalization.bytesSaved = catalogNormalization.beforeBytes - catalogNormalization.afterBytes;
+
   return {
     rowsByTable: output,
+    catalogNormalization,
     overrides: {
       globalControlsFenced: controls.length,
       workspaceAccessFenced: workspaces.length,

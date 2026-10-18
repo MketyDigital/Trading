@@ -102,6 +102,48 @@ test('import projection preserves business state but fences access and broker ex
   assert.equal(postgres.rowsByTable.trade_accounts[0].execution_enabled, false);
 });
 
+test('import projection compacts legacy account symbol catalogs and reports byte savings', () => {
+  const legacyCatalog = [{
+    symbol: 'EURUSD',
+    canonical: 'EURUSD',
+    aliases: ['EUR/USD', 'EURUSD'],
+    platformId: 17,
+    minVolume: 1000,
+    maxVolume: 1000000,
+    stepVolume: 1000,
+    description: 'Euro / US Dollar',
+    raw: { symbolId: 17, vendorPayload: 'x'.repeat(5000) },
+    unusedVendorMetadata: { large: 'y'.repeat(5000) }
+  }];
+  const sourceRows = {
+    trading_runtime_controls: [
+      { control_key: 'trading_access_enabled', enabled: true },
+      { control_key: 'broker_execution_enabled', enabled: true },
+      { control_key: 'live_broker_execution_enabled', enabled: true }
+    ],
+    trading_workspace_access: [],
+    trade_accounts: [{
+      id: 'acct-demo', environment: 'demo', execution_enabled: true, live_execution_enabled: false,
+      safety_policy: { killSwitch: false },
+      provider_config: { accountLabel: 'primary', symbolCatalog: legacyCatalog }
+    }]
+  };
+
+  const imported = prepareTradingSnapshotForImport(sourceRows, { target: 'd1' });
+  const projectedConfig = imported.rowsByTable.trade_accounts[0].provider_config;
+  assert.deepEqual(projectedConfig.accountLabel, 'primary');
+  assert.equal(projectedConfig.symbolCatalog[0].platformSymbol, 'EURUSD');
+  assert.equal(projectedConfig.symbolCatalog[0].platformId, 17);
+  assert.equal(projectedConfig.symbolCatalog[0].minVolume, 1000);
+  assert.equal('raw' in projectedConfig.symbolCatalog[0], false);
+  assert.equal('unusedVendorMetadata' in projectedConfig.symbolCatalog[0], false);
+  assert.equal(imported.catalogNormalization.accountsChanged, 1);
+  assert.equal(imported.catalogNormalization.catalogsChanged, 1);
+  assert.ok(imported.catalogNormalization.beforeBytes > imported.catalogNormalization.afterBytes);
+  assert.ok(imported.catalogNormalization.bytesSaved > 0);
+  assert.equal(sourceRows.trade_accounts[0].provider_config.symbolCatalog[0].raw.vendorPayload.length, 5000);
+});
+
 test('snapshot import plan uses only schema-checked idempotent upserts and maps PostgreSQL controls', () => {
   const snapshot = {
     rowsByTable: {
