@@ -61,11 +61,11 @@ jobs:
             {
               title: 'Accounts by safe execution flags',
               sql: "SELECT lower(COALESCE(environment, 'unknown')) AS environment, platform, is_active, execution_enabled, live_execution_enabled, COUNT(*) AS accounts FROM trade_accounts GROUP BY lower(COALESCE(environment, 'unknown')), platform, is_active, execution_enabled, live_execution_enabled ORDER BY environment, platform",
-      params: [],
+              params: [],
             },
             {
               title: 'Recent position and leg states',
-              sql: "SELECT lower(COALESCE(a.environment, 'unknown')) AS environment, g.status AS group_status, COALESCE(l.status, 'NO_LEG') AS leg_status, COALESCE(l.failure_code, '') AS failure_code, COUNT(DISTINCT g.id) AS groups, COUNT(DISTINCT l.id) AS legs FROM position_groups g LEFT JOIN trade_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.trade_account_id LEFT JOIN position_legs l ON l.workspace_id = g.workspace_id AND l.position_group_id = g.id WHERE datetime(g.updated_at) >= datetime(?) GROUP BY environment, group_status, leg_status, failure_code ORDER BY groups DESC LIMIT 100",
+              sql: "SELECT lower(COALESCE(a.environment, 'unknown')) AS environment, g.status AS group_status, COALESCE(l.status, 'NO_LEG') AS leg_status, COALESCE(l.failure_code, '') AS failure_code, COUNT(DISTINCT g.id) AS groups, COUNT(DISTINCT l.id) AS legs FROM position_groups g LEFT JOIN trade_accounts a ON a.workspace_id = g.workspace_id AND a.id = g.trade_account_id LEFT JOIN position_legs l ON l.workspace_id = g.workspace_id AND l.position_group_id = g.id WHERE datetime(g.updated_at) >= datetime(?) GROUP BY lower(COALESCE(a.environment, 'unknown')), g.status, COALESCE(l.status, 'NO_LEG'), COALESCE(l.failure_code, '') ORDER BY groups DESC LIMIT 100",
             },
             {
               title: 'Recent operation journal outcomes',
