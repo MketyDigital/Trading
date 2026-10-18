@@ -120,7 +120,7 @@ export async function prepareTradingSnapshotRows(rowsByTable, {
   return output;
 }
 
-/** Preserve imported trading state while explicitly keeping the target inert. */
+/** Preserve owner access and imported state while fencing broker execution on the target. */
 export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new Date().toISOString() } = {}) {
   if (!['d1', 'postgres'].includes(target)) throw new Error('Snapshot import target must be d1 or postgres');
   if (!rowsByTable || typeof rowsByTable !== 'object' || Array.isArray(rowsByTable)) {
@@ -138,10 +138,13 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
     || controls.some((row) => !requiredControls.delete(String(row.control_key))) || requiredControls.size) {
     throw new Error('Snapshot must contain each supported runtime control exactly once');
   }
+  let globalControlsFenced = 0;
   for (const row of controls) {
+    if (row.control_key === 'trading_access_enabled') continue;
     row.enabled = target === 'd1' ? 0 : false;
     row.updated_by = 'migration-import-fenced';
     row.updated_at = now;
+    globalControlsFenced += 1;
   }
 
   const accounts = output.trade_accounts;
@@ -198,7 +201,6 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
 
   const workspaces = output.trading_workspace_access;
   if (!Array.isArray(workspaces)) throw new Error('Snapshot trading_workspace_access table is missing');
-  for (const row of workspaces) row.trading_access_enabled = target === 'd1' ? 0 : false;
 
   catalogNormalization.bytesSaved = catalogNormalization.beforeBytes - catalogNormalization.afterBytes;
 
@@ -206,8 +208,8 @@ export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new
     rowsByTable: output,
     catalogNormalization,
     overrides: {
-      globalControlsFenced: controls.length,
-      workspaceAccessFenced: workspaces.length,
+      globalControlsFenced,
+      workspaceAccessPreserved: workspaces.length,
       accountsExecutionFenced,
       demoExecutionPreserved
     }

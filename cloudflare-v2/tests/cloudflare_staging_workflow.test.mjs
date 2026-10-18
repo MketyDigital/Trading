@@ -233,22 +233,37 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   const inventoryBlock = workflow.slice(inventoryStart, workflow.indexOf('\n  cloudflare-inspect:', inventoryStart));
 
   assert.match(triggerBlock, /workflow_dispatch:[\s\S]*?default: inspect[\s\S]*?apply-existing-mkety-schema/);
+  assert.match(triggerBlock, /import-existing-trading-data/);
   assert.equal((triggerBlock.match(/^  workflow_dispatch:/gm) || []).length, 1,
     'workflow_dispatch must be declared only once');
-  assert.match(triggerBlock, /confirmation:[\s\S]*?APPLY_TRADING_STORAGE_SCHEMA/);
+  assert.match(triggerBlock, /confirmation:[\s\S]*?type: string/);
+  assert.match(triggerBlock, /freeze_evidence:[\s\S]*?source-freeze/);
   assert.match(testBlock, /github\.event_name == 'workflow_dispatch'/);
   assert.match(testBlock, /github\.ref == 'refs\/heads\/feat\/trading-d1-cutover-implementation'/);
   assert.match(testBlock, /inputs\.mode == 'inspect'/);
   assert.match(testBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(testBlock, /inputs\.confirmation == 'IMPORT_TRADING_DATA_TO_EXISTING_TARGETS'/);
+  assert.match(testBlock, /startsWith\(inputs\.freeze_evidence, 'source-freeze:'\)/);
   assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
   assert.match(inventoryBlock, /successful backup from the last 24 hours/);
   assert.match(inventoryBlock, /TRADING_PG_SCHEMA_MIGRATION_CONFIRM/);
+  assert.match(inventoryBlock, /TRADING_SNAPSHOT_IMPORT_CONFIRM/);
+  assert.match(inventoryBlock, /targetsParityVerified/);
+  assert.match(inventoryBlock, /authorityActivated/);
+  assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);
   assert.match(inventoryBlock, /if \[ "\$STAGING_MODE" = 'apply-existing-mkety-schema' \]; then\n\s+npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml[\s\S]*?\n\s+fi/,
     'D1 schema changes must require the exact schema-apply mode');
   assert.doesNotMatch(inventoryBlock, /npx wrangler (?:deploy --config wrangler\.toml|deploy --config wrangler\.free\.toml)/);
   assert.doesNotMatch(inventoryBlock, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
+  const dockerfile = await readFile(coolifyProbeDockerfilePath, 'utf8');
+  assert.match(dockerfile, /scripts\/run_trading_snapshot_import\.mjs/);
+  assert.match(dockerfile, /db\/d1-migrations/);
+  const probe = await readFile(coolifyProbeScriptPath, 'utf8');
+  assert.match(probe, /runTradingSnapshotImport/);
+  const importer = await readFile(new URL('../scripts/run_trading_snapshot_import.mjs', import.meta.url), 'utf8');
+  assert.match(importer, /source drifted during export/);
 });
 
 test('feature branch regression runs once via PR while exact push gates still retain test dependency', async () => {

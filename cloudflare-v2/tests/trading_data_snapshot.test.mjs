@@ -66,7 +66,7 @@ test('snapshot drift comparison distinguishes inserts from updates and deletions
   ), { added: 1, removed: 0, modified: 1 });
 });
 
-test('import projection preserves business state but fences access and broker execution', () => {
+test('import projection preserves workspace access but fences broker execution', () => {
   const sourceRows = {
     trading_runtime_controls: [
       { control_key: 'trading_access_enabled', enabled: true, metadata: {}, updated_by: 'live-operator', created_at: '2026-01-01', updated_at: '2026-10-18' },
@@ -82,9 +82,10 @@ test('import projection preserves business state but fences access and broker ex
   };
   const imported = prepareTradingSnapshotForImport(sourceRows, { target: 'd1', now: '2026-10-18T00:00:00.000Z' });
 
-  assert.equal(imported.rowsByTable.trading_runtime_controls.every((row) => row.enabled === 0), true);
-  assert.equal(imported.rowsByTable.trading_runtime_controls.every((row) => row.updated_by === 'migration-import-fenced'), true);
-  assert.equal(imported.rowsByTable.trading_workspace_access[0].trading_access_enabled, 0);
+  assert.equal(imported.rowsByTable.trading_runtime_controls.find((row) => row.control_key === 'trading_access_enabled').enabled, true);
+  assert.equal(imported.rowsByTable.trading_runtime_controls.filter((row) => row.control_key !== 'trading_access_enabled').every((row) => row.enabled === 0), true);
+  assert.equal(imported.rowsByTable.trading_runtime_controls.filter((row) => row.control_key !== 'trading_access_enabled').every((row) => row.updated_by === 'migration-import-fenced'), true);
+  assert.equal(imported.rowsByTable.trading_workspace_access[0].trading_access_enabled, true);
   assert.equal(imported.rowsByTable.trade_accounts[0].execution_enabled, 0);
   assert.equal(imported.rowsByTable.trade_accounts[0].live_execution_enabled, 0);
   assert.deepEqual(imported.rowsByTable.trade_accounts[0].safety_policy, { killSwitch: true, limit: 3 });
@@ -93,12 +94,12 @@ test('import projection preserves business state but fences access and broker ex
   assert.equal(imported.rowsByTable.trade_accounts[1].live_execution_enabled, 0);
   assert.deepEqual(imported.rowsByTable.trade_accounts[1].safety_policy, { killSwitch: false });
   assert.equal(imported.rowsByTable.trading_events[0].processing_status, 'READY');
-  assert.deepEqual(imported.overrides, { globalControlsFenced: 3, workspaceAccessFenced: 1, accountsExecutionFenced: 1, demoExecutionPreserved: 1 });
+  assert.deepEqual(imported.overrides, { globalControlsFenced: 2, workspaceAccessPreserved: 1, accountsExecutionFenced: 1, demoExecutionPreserved: 1 });
   assert.equal(sourceRows.trade_accounts[0].execution_enabled, true);
   assert.equal(sourceRows.trade_accounts[0].safety_policy.killSwitch, false);
 
   const postgres = prepareTradingSnapshotForImport(sourceRows, { target: 'postgres', now: '2026-10-18T00:00:00.000Z' });
-  assert.equal(postgres.rowsByTable.trading_runtime_controls[0].enabled, false);
+  assert.equal(postgres.rowsByTable.trading_runtime_controls[0].enabled, true);
   assert.equal(postgres.rowsByTable.trade_accounts[0].execution_enabled, false);
 });
 
