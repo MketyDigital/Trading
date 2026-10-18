@@ -254,6 +254,13 @@ function importValue(value, target, column) {
     if (typeof value === 'boolean') return value ? 1 : 0;
     if (value && typeof value === 'object') return JSON.stringify(value);
   }
+  if (target === 'postgres' && typeof value === 'string' && String(column?.type || '').toLowerCase().includes('json')) {
+    // PostgREST decodes JSON string scalars into JavaScript strings. Passing a
+    // scalar such as "legacy-metadata" directly to a PostgreSQL json/jsonb
+    // column is invalid JSON; preserve already-serialized JSON and quote scalar
+    // strings as JSON values.
+    try { JSON.parse(value); return value; } catch { return JSON.stringify(value); }
+  }
   return value;
 }
 

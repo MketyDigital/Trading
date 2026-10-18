@@ -206,6 +206,20 @@ test('snapshot import plan converts booleans and JSON values for D1', () => {
   assert.match(plan.statements[0].sql, /^INSERT INTO "trading_runtime_controls"/);
 });
 
+test('snapshot import plan JSON-encodes scalar strings for PostgreSQL JSON columns', () => {
+  const plan = createTradingSnapshotImportPlan({
+    target: 'postgres',
+    snapshot: {
+      rowsByTable: { workspaces: [{ id: 'ws-legacy', metadata: 'legacy-metadata' }] },
+      tableManifest: [{ name: 'workspaces', primaryKeys: ['id'] }]
+    },
+    tableDefinitions: {
+      workspaces: { columns: [{ name: 'id', type: 'text' }, { name: 'metadata', type: 'jsonb' }], primaryKeys: ['id'] }
+    }
+  });
+  assert.deepEqual(plan.statements[0].values, ['ws-legacy', '"legacy-metadata"']);
+});
+
 test('snapshot import plan rejects target schema gaps, key drift, malformed names and unverified tables', () => {
   const snapshot = {
     rowsByTable: { trading_events: [{ id: 'event-1', processing_status: 'READY' }] },
