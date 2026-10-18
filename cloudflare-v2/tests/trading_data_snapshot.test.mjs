@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decryptSecret, encryptSecret } from '../src/security/secret_box.js';
-import { exportTradingDataSnapshot, prepareTradingSnapshotRows, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
+import { exportTradingDataSnapshot, prepareTradingSnapshotRows, prepareTradingSnapshotForImport, readTradingDataSnapshot, validateTradingSnapshotRequest } from '../scripts/trading_data_snapshot.mjs';
 
 test('legacy plaintext workspace and AI credentials become encrypted target columns only', async () => {
   const calls = [];
@@ -57,6 +57,42 @@ test('snapshot request accepts only the pinned production source and a bounded p
     sourceProjectRef: 'vdblajgxrfndjesoyayy',
     pageSize: 5000
   }), /between 1 and 500/);
+});
+
+test('import projection preserves business state but fences access and broker execution', () => {
+  const sourceRows = {
+    trading_runtime_controls: [
+      { control_key: 'trading_access_enabled', enabled: true, metadata: {}, updated_by: 'live-operator', created_at: '2026-01-01', updated_at: '2026-10-18' },
+      { control_key: 'broker_execution_enabled', enabled: true, metadata: {}, updated_by: 'live-operator', created_at: '2026-01-01', updated_at: '2026-10-18' },
+      { control_key: 'live_broker_execution_enabled', enabled: true, metadata: {}, updated_by: 'live-operator', created_at: '2026-01-01', updated_at: '2026-10-18' }
+    ],
+    trading_workspace_access: [{ id: 'ws-1', trading_access_enabled: true, metadata: {} }],
+    trade_accounts: [
+      { id: 'acct-live', environment: 'live', execution_enabled: true, live_execution_enabled: true, is_active: true, safety_policy: { killSwitch: false, limit: 3 } },
+      { id: 'acct-demo', environment: 'demo', execution_enabled: true, live_execution_enabled: false, is_active: true, roles: ['execution'], safety_policy: { killSwitch: false } }
+    ],
+    trading_events: [{ id: 'event-1', processing_status: 'READY' }]
+  };
+  const imported = prepareTradingSnapshotForImport(sourceRows, { target: 'd1', now: '2026-10-18T00:00:00.000Z' });
+
+  assert.equal(imported.rowsByTable.trading_runtime_controls.every((row) => row.enabled === 0), true);
+  assert.equal(imported.rowsByTable.trading_runtime_controls.every((row) => row.updated_by === 'migration-import-fenced'), true);
+  assert.equal(imported.rowsByTable.trading_workspace_access[0].trading_access_enabled, 0);
+  assert.equal(imported.rowsByTable.trade_accounts[0].execution_enabled, 0);
+  assert.equal(imported.rowsByTable.trade_accounts[0].live_execution_enabled, 0);
+  assert.deepEqual(imported.rowsByTable.trade_accounts[0].safety_policy, { killSwitch: true, limit: 3 });
+  assert.equal(imported.rowsByTable.trade_accounts[0].is_active, true);
+  assert.equal(imported.rowsByTable.trade_accounts[1].execution_enabled, true);
+  assert.equal(imported.rowsByTable.trade_accounts[1].live_execution_enabled, 0);
+  assert.deepEqual(imported.rowsByTable.trade_accounts[1].safety_policy, { killSwitch: false });
+  assert.equal(imported.rowsByTable.trading_events[0].processing_status, 'READY');
+  assert.deepEqual(imported.overrides, { globalControlsFenced: 3, workspaceAccessFenced: 1, accountsExecutionFenced: 1, demoExecutionPreserved: 1 });
+  assert.equal(sourceRows.trade_accounts[0].execution_enabled, true);
+  assert.equal(sourceRows.trade_accounts[0].safety_policy.killSwitch, false);
+
+  const postgres = prepareTradingSnapshotForImport(sourceRows, { target: 'postgres', now: '2026-10-18T00:00:00.000Z' });
+  assert.equal(postgres.rowsByTable.trading_runtime_controls[0].enabled, false);
+  assert.equal(postgres.rowsByTable.trade_accounts[0].execution_enabled, false);
 });
 
 test('snapshot artifact is encrypted at rest and includes only keyed checksums in its clear manifest', async () => {

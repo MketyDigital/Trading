@@ -118,6 +118,69 @@ export async function prepareTradingSnapshotRows(rowsByTable, {
   return output;
 }
 
+/** Preserve imported trading state while explicitly keeping the target inert. */
+export function prepareTradingSnapshotForImport(rowsByTable, { target, now = new Date().toISOString() } = {}) {
+  if (!['d1', 'postgres'].includes(target)) throw new Error('Snapshot import target must be d1 or postgres');
+  if (!rowsByTable || typeof rowsByTable !== 'object' || Array.isArray(rowsByTable)) {
+    throw new Error('Trading snapshot rows are invalid');
+  }
+  for (const [table, rows] of Object.entries(rowsByTable)) {
+    if (!Array.isArray(rows)) throw new Error(`Snapshot table ${table} did not return rows`);
+  }
+  const output = Object.fromEntries(Object.entries(rowsByTable).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]));
+
+  const requiredControls = new Set(['trading_access_enabled', 'broker_execution_enabled', 'live_broker_execution_enabled']);
+  const controls = output.trading_runtime_controls;
+  if (!Array.isArray(controls) || controls.length !== requiredControls.size
+    || controls.some((row) => !requiredControls.delete(String(row.control_key))) || requiredControls.size) {
+    throw new Error('Snapshot must contain each supported runtime control exactly once');
+  }
+  for (const row of controls) {
+    row.enabled = target === 'd1' ? 0 : false;
+    row.updated_by = 'migration-import-fenced';
+    row.updated_at = now;
+  }
+
+  const accounts = output.trade_accounts;
+  if (!Array.isArray(accounts)) throw new Error('Snapshot trade_accounts table is missing');
+  let accountsExecutionFenced = 0;
+  let demoExecutionPreserved = 0;
+  for (const row of accounts) {
+    let policy = row.safety_policy;
+    if (typeof policy === 'string') {
+      try { policy = JSON.parse(policy); } catch { throw new Error('Trade account safety policy is not valid JSON'); }
+    }
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+      throw new Error('Trade account safety policy must be a JSON object');
+    }
+    row.live_execution_enabled = target === 'd1' ? 0 : false;
+    if (String(row.environment || '').toLowerCase() === 'demo') {
+      // Existing D1/PostgreSQL invariants deliberately enable connected DEMO accounts.
+      // The copied global controls below remain disabled, so these cannot execute yet.
+      demoExecutionPreserved += 1;
+      row.safety_policy = { ...policy };
+    } else {
+      row.execution_enabled = target === 'd1' ? 0 : false;
+      row.safety_policy = { ...policy, killSwitch: true };
+      accountsExecutionFenced += 1;
+    }
+  }
+
+  const workspaces = output.trading_workspace_access;
+  if (!Array.isArray(workspaces)) throw new Error('Snapshot trading_workspace_access table is missing');
+  for (const row of workspaces) row.trading_access_enabled = target === 'd1' ? 0 : false;
+
+  return {
+    rowsByTable: output,
+    overrides: {
+      globalControlsFenced: controls.length,
+      workspaceAccessFenced: workspaces.length,
+      accountsExecutionFenced,
+      demoExecutionPreserved
+    }
+  };
+}
+
 async function loadTableInventory() {
   const snapshot = JSON.parse(await readFile(SNAPSHOT_SCHEMA_PATH, 'utf8'));
   const inventory = snapshot.tables.map((table) => ({ name: table.name, primaryKeys: table.primaryKeys }));
