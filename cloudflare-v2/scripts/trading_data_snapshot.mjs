@@ -265,6 +265,65 @@ export function createTradingSnapshotImportPlan({ snapshot, target, tableDefinit
   return { target, rowCount: statements.length, tableCounts, statements };
 }
 
+function snapshotTargetNames(tableManifest, target) {
+  if (!Array.isArray(tableManifest) || !tableManifest.length) throw new Error('Snapshot target table manifest is invalid');
+  return tableManifest.map(({ name }) => importTableName(quoteImportIdentifier(name).slice(1, -1), target));
+}
+
+/** Read only the D1 table definitions present in the verified snapshot manifest. */
+export async function getD1SnapshotTargetDefinitions(db, tableManifest) {
+  if (!db?.prepare) throw new Error('D1 snapshot import binding is unavailable');
+  const result = {};
+  for (const tableName of snapshotTargetNames(tableManifest, 'd1')) {
+    const rowsResult = await db.prepare(`PRAGMA table_info(${quoteImportIdentifier(tableName)})`).all();
+    const rows = Array.isArray(rowsResult) ? rowsResult : rowsResult?.results;
+    if (!Array.isArray(rows) || !rows.length) throw new Error(`Snapshot table ${tableName} is missing from D1`);
+    result[tableName] = {
+      columns: rows.map((row) => ({ name: row.name, type: row.type || '' })),
+      primaryKeys: rows.filter((row) => Number(row.pk) > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk)).map((row) => row.name)
+    };
+  }
+  return result;
+}
+
+/** Read only the Trading-schema definitions used by the verified snapshot manifest. */
+export async function getPostgresSnapshotTargetDefinitions(client, tableManifest) {
+  if (!client?.query) throw new Error('PostgreSQL snapshot import client is unavailable');
+  const tableNames = snapshotTargetNames(tableManifest, 'postgres');
+  const columnsResult = await client.query(`
+    SELECT table_name, column_name, data_type, udt_name, ordinal_position
+      FROM information_schema.columns
+     WHERE table_schema = $1 AND table_name = ANY($2::text[])
+     ORDER BY table_name, ordinal_position
+  `, ['trading_storage', tableNames]);
+  const keysResult = await client.query(`
+    SELECT tc.table_name, kcu.column_name, kcu.ordinal_position
+      FROM information_schema.table_constraints AS tc
+      JOIN information_schema.key_column_usage AS kcu
+        ON tc.constraint_catalog = kcu.constraint_catalog
+       AND tc.constraint_schema = kcu.constraint_schema
+       AND tc.constraint_name = kcu.constraint_name
+       AND tc.table_name = kcu.table_name
+     WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'
+       AND tc.table_name = ANY($2::text[])
+     ORDER BY tc.table_name, kcu.ordinal_position
+  `, ['trading_storage', tableNames]);
+  const result = Object.fromEntries(tableNames.map((name) => [name, { columns: [], primaryKeys: [] }]));
+  for (const column of columnsResult?.rows || []) {
+    if (!result[column.table_name]) throw new Error('PostgreSQL returned a table outside the Trading snapshot manifest');
+    result[column.table_name].columns.push({ name: column.column_name, type: column.data_type || column.udt_name || '' });
+  }
+  for (const key of keysResult?.rows || []) {
+    if (!result[key.table_name]) throw new Error('PostgreSQL returned a key outside the Trading snapshot manifest');
+    result[key.table_name].primaryKeys.push(key.column_name);
+  }
+  for (const [tableName, definition] of Object.entries(result)) {
+    if (!definition.columns.length) throw new Error(`Snapshot table ${tableName} is missing from PostgreSQL trading_storage`);
+  }
+  return result;
+}
+
 /** Execute a reviewed plan in retry-safe, caller-provided atomic batches. */
 export async function applyTradingSnapshotImportPlan(plan, {
   executeBatchAtomically,
@@ -345,7 +404,17 @@ async function loadTableInventory() {
   if (!inventory.length || inventory.some((table) => !table.name || !table.primaryKeys?.length)) {
     throw new Error('Reviewed Supabase Trading table allowlist is incomplete');
   }
-  return inventory;
+  // Preserve target migration creation order so referenced parent rows are imported first.
+  const migrationPaths = [
+    resolve(here, '../db/d1-migrations/0001_trading_storage_replication.sql'),
+    resolve(here, '../db/d1-migrations/0002_trading_domain_schema.sql')
+  ];
+  const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
+  const targetOrder = [...migrationSql.matchAll(/CREATE TABLE IF NOT EXISTS\s+(?:"([a-z][a-z0-9_]{0,62})"|([a-z][a-z0-9_]{0,62}))/gi)]
+    .map((match) => match[1] || match[2]);
+  const order = new Map(targetOrder.map((name, index) => [name, index]));
+  if (inventory.some(({ name }) => !order.has(name))) throw new Error('Reviewed snapshot table is absent from the D1 migration order');
+  return inventory.sort((left, right) => order.get(left.name) - order.get(right.name));
 }
 
 async function fetchTableRows(client, table, pageSize) {
