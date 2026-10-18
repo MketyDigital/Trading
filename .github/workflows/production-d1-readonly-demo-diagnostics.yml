@@ -122,5 +122,6 @@ jobs:
             }
           }
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+          console.log(report);
           console.log('Production D1 read-only diagnostics completed; only grouped status/error summaries were emitted.');
           NODE
