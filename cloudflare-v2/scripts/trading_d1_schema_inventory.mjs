@@ -13,7 +13,7 @@ export function compareD1MigrationTableInventory({ migrationSql, actualTables } 
     throw new Error('D1 remote table inventory is invalid');
   }
   const actual = [...new Set(actualTables.map((name) => name.trim()).filter((name) =>
-    !name.startsWith('sqlite_') && name !== 'd1_migrations'))].sort();
+    !name.startsWith('sqlite_') && name !== 'd1_migrations' && name !== '_cf_KV'))].sort();
   const expectedSet = new Set(uniqueExpected);
   const actualSet = new Set(actual);
   return {
