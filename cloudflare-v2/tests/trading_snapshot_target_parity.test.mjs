@@ -62,6 +62,36 @@ test('target parity mismatch progress reports only safe value shapes', async () 
   assert.equal(JSON.stringify(progress).includes('not-json-sensitive-value'), false);
 });
 
+test('target parity compares D1 JSON text with its source JSON value', async () => {
+  const metadata = { source: 'migration-default', nested: { enabled: true } };
+  const result = await verifyTradingSnapshotTarget({
+    target: 'd1',
+    database: { async query() { return { results: [{ id: 'control-1', metadata: JSON.stringify(metadata) }] }; } },
+    rowsByTable: { trading_runtime_controls: [{ id: 'control-1', metadata }] },
+    tableManifest: [{ name: 'trading_runtime_controls', primaryKeys: ['id'] }],
+    tableDefinitions: { trading_runtime_controls: { columns: [
+      { name: 'id', type: 'TEXT' }, { name: 'metadata', type: 'TEXT' },
+    ], primaryKeys: ['id'] } },
+    masterKey: 'test-master-key',
+  });
+  assert.deepEqual(result, { target: 'd1', tables: 1, rows: 1, verifiedRows: { trading_runtime_controls: 1 } });
+});
+
+test('target parity compares PostgreSQL JSON text with its source JSON value', async () => {
+  const metadata = { source: 'migration-default', nested: { enabled: true } };
+  const result = await verifyTradingSnapshotTarget({
+    target: 'postgres',
+    database: { async query() { return { rows: [{ control_key: 'control-1', metadata: JSON.stringify(metadata) }] }; } },
+    rowsByTable: { trading_runtime_controls: [{ control_key: 'control-1', metadata }] },
+    tableManifest: [{ name: 'trading_runtime_controls', primaryKeys: ['control_key'] }],
+    tableDefinitions: { runtime_controls: { columns: [
+      { name: 'control_key', type: 'text' }, { name: 'metadata', type: 'jsonb' },
+    ], primaryKeys: ['control_key'] } },
+    masterKey: 'test-master-key',
+  });
+  assert.deepEqual(result, { target: 'postgres', tables: 1, rows: 1, verifiedRows: { trading_runtime_controls: 1 } });
+});
+
 test('target parity rejects extra target rows and unsupported targets', async () => {
   const input = {
     target: 'd1',

@@ -238,10 +238,10 @@ function normalizeValue(value, column, target) {
   if (target === 'd1') {
     if (type.includes('int') && typeof value === 'boolean') return value ? 1 : 0;
     if ((type.includes('json') || type === 'text') && typeof value === 'string') {
-      try { return stable(JSON.parse(value)); } catch { return value; }
+      try { return JSON.parse(value); } catch { return value; }
     }
   } else if (type.includes('json') && typeof value === 'string') {
-    try { return stable(JSON.parse(value)); } catch { return value; }
+    try { return JSON.parse(value); } catch { return value; }
   }
   if (/smallint|integer|bigint|numeric|decimal|real|double precision/.test(type)) {
     const numeric = Number(value);
