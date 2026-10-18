@@ -928,7 +928,8 @@ jobs:
                 executionControlsFenced: result.fences?.globalControlsFenced === 2,
                 targetResetFenced: result.reset?.writesFenced === true
               };
-              throw new Error(`Continuity import acceptance failed gates: ${failedGates.join(',')}; safeImportSummary=${JSON.stringify(safeImportSummary)}`);
+              console.error(`Continuity import acceptance failed gates: ${failedGates.join(',')}; safeImportSummary=${JSON.stringify(safeImportSummary)}`);
+              process.exit(2);
             }
             const driftSummary = sourceDrift.map((change) => `${change.table}:${change.added}/${change.modified}/${change.removed}`).join(',') || 'none';
             console.log(`Existing D1 and mkety continuity parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; stale operational tables empty in both targets; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
