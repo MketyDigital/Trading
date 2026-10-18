@@ -27,11 +27,20 @@ test('Worker runtime and Cloudflare deploy paths have no Supabase SDK or credent
     readFile(join(repositoryRoot, '.github/workflows/cloudflare-staging-gate.yml'), 'utf8'),
   ]);
   const runtimeSource = (await Promise.all(sourceFiles.map((path) => readFile(path, 'utf8')))).join('\n');
-  const deployConfig = `${productionDeploy}\n${stagingInspection}`;
+  const cleanupStart = productionDeploy.indexOf('- name: Remove legacy Supabase Worker secrets');
+  const healthProbe = productionDeploy.indexOf('- name: Probe production health');
+  assert.ok(cleanupStart >= 0, 'production deploy must remove any secrets left by the old Worker');
+  assert.ok(healthProbe > cleanupStart, 'production health must be checked after old Worker secrets are removed');
+  const deployWithoutLegacyCleanup = cleanupStart >= 0 && healthProbe > cleanupStart
+    ? productionDeploy.slice(0, cleanupStart) + productionDeploy.slice(healthProbe)
+    : productionDeploy;
+  const deployConfig = `${deployWithoutLegacyCleanup}\n${stagingInspection}`;
 
   assert.equal(JSON.parse(packageJson).dependencies?.['@supabase/supabase-js'], undefined);
   assert.doesNotMatch(packageLock, /"node_modules\/@supabase\/supabase-js"/);
   assert.doesNotMatch(runtimeSource, /@supabase\/supabase-js|createClient\s*\(|(?:env|process\.env)\.?SUPABASE_[A-Z0-9_]*/i);
   assert.doesNotMatch(deployConfig, /SUPABASE_[A-Z0-9_]*/i);
+  assert.match(productionDeploy.slice(cleanupStart, healthProbe), /wrangler secret list/);
+  assert.match(productionDeploy.slice(cleanupStart, healthProbe), /wrangler secret delete/);
   assert.doesNotMatch(stagingInspection, /wrangler deploy --config/);
 });
