@@ -273,6 +273,7 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /authorityActivated/);
   assert.match(inventoryBlock, /failedGates/);
   assert.match(inventoryBlock, /safeImportSummary/);
+  assert.match(inventoryBlock, /if \(!\(important\.workspaces > 0\) && !\(important\.trading_workspace_access > 0\)\) failedGates\.push\('workspace-preservation'\)/);
   assert.doesNotMatch(inventoryBlock, /JSON\.stringify\(result\.importantRows|JSON\.stringify\(result\.fences/,
     'import diagnostics must not serialize arbitrary snapshot rows or settings');
   assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);
