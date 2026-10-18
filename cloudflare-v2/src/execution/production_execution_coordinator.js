@@ -205,7 +205,13 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     if (typeof authorityLoader === 'function') {
       try {
         executionAuthority = await authorityLoader({ workspaceId, tradingEventId: eventId, accountId: requestedAccountId });
-        currentAccount = executionAuthority?.account || null;
+        const freshAuthorityAccount = executionAuthority?.account;
+        // The initial account load contains execution configuration and broker
+        // credentials. The per-action authority read is intentionally a narrow
+        // projection; overlay its fresh safety flags without discarding config.
+        currentAccount = account && freshAuthorityAccount
+          ? { ...account, ...freshAuthorityAccount }
+          : null;
       } catch (error) {
         if (error?.code === 'EXECUTION_AUTHORITY_REVOKED') return blockedAccount(requestedAccountId, 'EXECUTION_AUTHORITY_REVOKED');
         return failedAccount(requestedAccountId, 'EXECUTION_AUTHORITY_LOAD_FAILED', outcomes);

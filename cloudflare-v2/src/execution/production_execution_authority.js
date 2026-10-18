@@ -104,7 +104,7 @@ export function createProductionExecutionAuthorityLoader({
     const account = await exactSingle(
       supabase
         .from('trade_accounts')
-        .select('*')
+        .select('id,workspace_id,is_active,execution_enabled,live_execution_enabled,safety_policy')
         .eq('workspace_id', boundWorkspaceId)
         .eq('id', accountRef),
       'execution account authority unavailable',

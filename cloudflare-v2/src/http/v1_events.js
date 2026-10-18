@@ -17,12 +17,39 @@ import { buildV1LifecycleEvidence, appendV1LifecycleEvidenceBestEffort } from '.
 import { resolveTradingAccessRuntimeControl, resolveBrokerExecutionRuntimeControl } from '../persistence/supabase_runtime_control_store.js';
 
 const ambiguityAiCircuitBreaker = createProviderCircuitBreaker();
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   });
+}
+
+
+async function readBodyLimited(request, maxBytes) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let rawBody = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        const error = new Error('V1_EVENT_BODY_TOO_LARGE');
+        error.code = 'V1_EVENT_BODY_TOO_LARGE';
+        throw error;
+      }
+      rawBody += decoder.decode(value, { stream: true });
+    }
+    return rawBody + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function blockedSimulation() {
@@ -86,6 +113,7 @@ export async function handleV1EventsRequest(request, env = {}, {
   operationJournalStoreFactory = createOperationJournalStore,
   orchestrateDuplicates = false,
   persistenceRuntime = null,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 } = {}) {
   if (request.method !== 'POST') {
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405);
@@ -102,8 +130,22 @@ export async function handleV1EventsRequest(request, env = {}, {
   if (!masterKey) {
     return json({ ok: false, reason: 'TRADING_MASTER_KEY_NOT_CONFIGURED' }, 503);
   }
+  const bodyLimit = Number.isFinite(Number(maxBodyBytes)) && Number(maxBodyBytes) > 0
+    ? Number(maxBodyBytes)
+    : DEFAULT_MAX_BODY_BYTES;
+  const declaredLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > bodyLimit) {
+    return json({ ok: false, reason: 'V1_EVENT_BODY_TOO_LARGE' }, 413);
+  }
+
   try {
-    const rawBody = await request.text();
+    let rawBody;
+    try {
+      rawBody = await readBodyLimited(request, bodyLimit);
+    } catch (error) {
+      if (error?.code === 'V1_EVENT_BODY_TOO_LARGE') return json({ ok: false, reason: 'V1_EVENT_BODY_TOO_LARGE' }, 413);
+      throw error;
+    }
     const supabase = persistenceRuntime ? null : await supabaseFactory(env);
     const stores = persistenceRuntime?.ingest || storesFactory(supabase, { masterKey });
     let operationJournal = null;

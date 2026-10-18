@@ -81,6 +81,8 @@ test('loads exact event source workspace entitlement and account from server-own
   assert.equal(authority.source.is_active, true);
   assert.equal(authority.workspace.trading_access_enabled, true);
   assert.equal(authority.account.execution_enabled, true);
+  const accountSelect = supabase.calls.find((call) => call[0] === 'select' && call[1] === 'trade_accounts');
+  assert.equal(accountSelect[2], 'id,workspace_id,is_active,execution_enabled,live_execution_enabled,safety_policy');
   assert.deepEqual(supabase.calls.filter(([name]) => name === 'from').map(([, table]) => table), [
     'trading_events',
     'source_connections',

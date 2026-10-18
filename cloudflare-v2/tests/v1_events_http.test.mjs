@@ -46,6 +46,19 @@ test('rejects non-POST methods and missing source authentication headers', async
   assert.equal(authResponse.status, 401);
 });
 
+test('rejects oversized signed event bodies before loading database dependencies', async () => {
+  let databaseLoads = 0;
+  const response = await handleV1EventsRequest(request('12345'), { TRADING_MASTER_KEY: 'master' }, {
+    maxBodyBytes: 4,
+    supabaseFactory: async () => { databaseLoads += 1; return {}; },
+    ingestFn: async () => ({ ok: true, duplicate: true }),
+  });
+
+  assert.equal(response.status, 413);
+  assert.equal(databaseLoads, 0);
+  assert.equal((await response.json()).reason, 'V1_EVENT_BODY_TOO_LARGE');
+});
+
 test('passes exact raw body and signed source headers into persistent ingest pipeline', async () => {
   const raw = '{"text":"BUY XAUUSD"}';
   let ingestInput;

@@ -107,7 +107,10 @@ export function groupToPersistenceRows(group = {}) {
         last_broker_status: nonEmpty(leg.lastBrokerStatus),
         last_broker_snapshot_fingerprint: nonEmpty(leg.lastBrokerSnapshotFingerprint),
       } : {}),
-      ...(brokerDealIds.length ? { broker_deal_ids: brokerDealIds } : {}),
+      // Supabase's JSON recordset upsert treats an omitted field as NULL when
+      // another row in the same batch includes it. Keep the NOT NULL array
+      // explicit for every leg so mixed batches do not fail with SQLSTATE 23502.
+      broker_deal_ids: brokerDealIds,
       opened_at: iso(leg.openedAt),
       closed_at: iso(leg.closedAt),
       updated_at: iso(group.updatedAt),

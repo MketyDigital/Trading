@@ -58,6 +58,34 @@ test('broker master fuse fails before account, authority, dispatch, or state dep
   assert.deepEqual(touched, []);
 });
 
+test('fresh authorization flags overlay the loaded account without discarding its execution configuration', async () => {
+  let dispatchedAccount;
+  const loaded = account({
+    live_execution_enabled: true,
+    provider_config: { symbolCatalog: [{ symbol: 'XAUUSD' }] },
+    credential_ciphertext: 'ciphertext',
+    safety_policy: { enabled: true, killSwitch: false },
+  });
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-1', brokerExecutionEnabled: true,
+    liveBrokerExecutionEnabled: true, accountPlans: [plan()],
+  }, {
+    accountLoader: async () => loaded,
+    authorityLoader: async () => ({ account: {
+      id: 'acct-a', workspace_id: 'ws-a', is_active: true, execution_enabled: true, live_execution_enabled: true,
+      safety_policy: { enabled: true, killSwitch: false, maxOpenPositions: 7 },
+    } }),
+    dispatchAction: async ({ account: current }) => { dispatchedAccount = current; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+  assert.deepEqual(dispatchedAccount.provider_config, loaded.provider_config);
+  assert.equal(dispatchedAccount.credential_ciphertext, 'ciphertext');
+  assert.equal(dispatchedAccount.live_execution_enabled, true);
+  assert.deepEqual(dispatchedAccount.safety_policy, { enabled: true, killSwitch: false, maxOpenPositions: 7 });
+});
+
 test('supersession opens the replacement side after a failed close, then retries only the old position', async () => {
   const dispatched = [];
   const closeKeys = [];
