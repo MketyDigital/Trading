@@ -1,4 +1,4 @@
-import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol } from '../execution/account_symbol_catalog.js';
+import { accountSymbolCatalogFromProviderConfig, resolveAccountSymbol, sanitizeAccountSymbolCatalog } from '../execution/account_symbol_catalog.js';
 import { decryptConnectionCredentials } from '../security/connection_credentials.js';
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { CTraderMarketData } from '../adapters/ctrader_market_data.js';
@@ -500,7 +500,9 @@ async function persistAccountCatalog(supabase, account, hydrated = {}, persisten
     : (currentConfig.symbolAliases || {});
   const providerConfig = {
     ...currentConfig,
-    symbolCatalog: catalog,
+    // Broker responses include large raw protocol objects that the trading
+    // resolver never consumes. Persist only the bounded, normalized catalog.
+    symbolCatalog: sanitizeAccountSymbolCatalog(catalog),
     symbolAliases: aliases,
     symbolCatalogUpdatedAt: new Date().toISOString(),
   };
