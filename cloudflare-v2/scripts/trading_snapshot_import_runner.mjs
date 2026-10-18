@@ -333,15 +333,16 @@ export async function verifyTradingSnapshotTarget({
         const identity = rowIdentity(row, manifest.primaryKeys, definition, target);
         const source = expectedByKey.get(identity);
         if (!source || seen.has(identity)) throw new Error(`Snapshot parity mismatch for ${sourceName}`);
-        const projected = {};
         for (const column of columns) {
-          projected[column.name] = normalizeValue(row[column.name], column, target);
+          const actual = normalizeValue(row[column.name], column, target);
+          const expectedValue = normalizeValue(source[column.name], column, target);
+          if (stable(actual) !== stable(expectedValue)) {
+            await onProgress({ phase: 'target-parity-mismatch', target, table: sourceName, column: column.name });
+            // Column names and target are sufficient to diagnose schema/value
+            // representation drift; never log the row or its credentials.
+            throw new Error(`Snapshot parity mismatch for ${sourceName}.${column.name} (${target})`);
+          }
         }
-        const expectedProjected = {};
-        for (const column of columns) {
-          expectedProjected[column.name] = normalizeValue(source[column.name], column, target);
-        }
-        if (stable(projected) !== stable(expectedProjected)) throw new Error(`Snapshot parity mismatch for ${sourceName}`);
         seen.add(identity);
       }
       pageNumber += 1;
