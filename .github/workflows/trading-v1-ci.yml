@@ -898,17 +898,37 @@ jobs:
             }, 0);
             const excluded = result.excludedOperationalTables || {};
             const excludedEmpty = ['d1', 'postgres'].every((target) => excluded[target]?.tables === 8 && excluded[target]?.rows === 0);
-            if (result.tables !== 20 || result.targetsParityVerified !== true || result.authorityActivated !== true
-              || result.snapshotConsistency !== 'bounded-rolling-live-source' || !Array.isArray(result.sourceDrift)
-              || driftedRows > 10000
-              || !Number.isSafeInteger(result.d1Rows) || result.d1Rows !== result.postgresRows
-              || result.snapshotProfile !== 'continuity-fresh-start'
-              || result.reset?.tablesResetPerTarget !== 28 || result.reset?.storageAuthorityPreserved !== true
-              || result.reset?.writesFenced !== true || !excludedEmpty
-              || !(important.workspaces > 0) || !(important.trading_workspace_access > 0)
-              || result.fences?.globalControlsFenced !== 2
-              || result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) {
-              throw new Error('Continuity fresh-start import did not verify target parity, empty stale operational tables, owner access, and the broker execution fence.');
+            const failedGates = [];
+            if (result.tables !== 20) failedGates.push('continuity-table-count');
+            if (result.targetsParityVerified !== true) failedGates.push('exact-target-parity');
+            if (result.authorityActivated !== true) failedGates.push('d1-authority-activation');
+            if (result.snapshotConsistency !== 'bounded-rolling-live-source') failedGates.push('snapshot-consistency');
+            if (!Array.isArray(result.sourceDrift) || driftedRows > 10000) failedGates.push('bounded-source-drift');
+            if (!Number.isSafeInteger(result.d1Rows) || result.d1Rows !== result.postgresRows) failedGates.push('target-row-count-parity');
+            if (result.snapshotProfile !== 'continuity-fresh-start') failedGates.push('approved-snapshot-profile');
+            if (result.reset?.tablesResetPerTarget !== 28 || result.reset?.storageAuthorityPreserved !== true
+              || result.reset?.writesFenced !== true) failedGates.push('guarded-target-reset');
+            if (!excludedEmpty) failedGates.push('excluded-operational-tables-empty');
+            if (!(important.workspaces > 0)) failedGates.push('workspace-preservation');
+            if (!(important.trading_workspace_access > 0)) failedGates.push('workspace-access-preservation');
+            if (result.fences?.globalControlsFenced !== 2) failedGates.push('global-execution-fence');
+            if (result.fences?.workspaceAccessPreserved !== important.trading_workspace_access) failedGates.push('workspace-access-fence-accounting');
+            if (failedGates.length) {
+              const safeCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+              const safeImportSummary = {
+                tables: safeCount(result.tables),
+                d1Rows: safeCount(result.d1Rows),
+                postgresRows: safeCount(result.postgresRows),
+                workspaceRows: safeCount(important.workspaces),
+                workspaceAccessRows: safeCount(important.trading_workspace_access),
+                sourceDriftRows: safeCount(driftedRows),
+                excludedD1: { tables: safeCount(excluded.d1?.tables), rows: safeCount(excluded.d1?.rows) },
+                excludedPostgres: { tables: safeCount(excluded.postgres?.tables), rows: safeCount(excluded.postgres?.rows) },
+                d1AuthorityActivated: result.authorityActivated === true,
+                executionControlsFenced: result.fences?.globalControlsFenced === 2,
+                targetResetFenced: result.reset?.writesFenced === true
+              };
+              throw new Error(`Continuity import acceptance failed gates: ${failedGates.join(',')}; safeImportSummary=${JSON.stringify(safeImportSummary)}`);
             }
             const driftSummary = sourceDrift.map((change) => `${change.table}:${change.added}/${change.modified}/${change.removed}`).join(',') || 'none';
             console.log(`Existing D1 and mkety continuity parity verified: tables=${result.tables}, rows=${result.d1Rows}; owner workspace/access rows=${important.workspaces}/${important.trading_workspace_access}; stale operational tables empty in both targets; rolling source drift added/modified/removed=${driftSummary}; broker execution remains fenced.`);
