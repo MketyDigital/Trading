@@ -249,6 +249,10 @@ export function createTradingSnapshotImportPlan({ snapshot, target, tableDefinit
       }
       const columns = definition.columns.filter((column) => Object.hasOwn(row, column.name));
       if (columns.length !== rowColumns.length) throw new Error(`Snapshot table ${sourceName} contains unsupported columns`);
+      const omittedRequired = definition.columns.find((column) => !Object.hasOwn(row, column.name)
+        && (column.nullable === false || column.notNull === true)
+        && column.hasDefault !== true);
+      if (omittedRequired) throw new Error(`Snapshot row omits required target column ${targetName}.${omittedRequired.name}`);
       const names = columns.map((column) => quoteImportIdentifier(column.name));
       const values = columns.map((column) => importValue(row[column.name], target, column));
       const placeholders = values.map((_, index) => target === 'postgres' ? `$${index + 1}` : '?');
@@ -279,7 +283,12 @@ export async function getD1SnapshotTargetDefinitions(db, tableManifest) {
     const rows = Array.isArray(rowsResult) ? rowsResult : rowsResult?.results;
     if (!Array.isArray(rows) || !rows.length) throw new Error(`Snapshot table ${tableName} is missing from D1`);
     result[tableName] = {
-      columns: rows.map((row) => ({ name: row.name, type: row.type || '' })),
+      columns: rows.map((row) => ({
+        name: row.name,
+        type: row.type || '',
+        nullable: Number(row.notnull) !== 1,
+        hasDefault: row.dflt_value != null
+      })),
       primaryKeys: rows.filter((row) => Number(row.pk) > 0)
         .sort((left, right) => Number(left.pk) - Number(right.pk)).map((row) => row.name)
     };
@@ -292,7 +301,7 @@ export async function getPostgresSnapshotTargetDefinitions(client, tableManifest
   if (!client?.query) throw new Error('PostgreSQL snapshot import client is unavailable');
   const tableNames = snapshotTargetNames(tableManifest, 'postgres');
   const columnsResult = await client.query(`
-    SELECT table_name, column_name, data_type, udt_name, ordinal_position
+    SELECT table_name, column_name, data_type, udt_name, is_nullable, column_default, ordinal_position
       FROM information_schema.columns
      WHERE table_schema = $1 AND table_name = ANY($2::text[])
      ORDER BY table_name, ordinal_position
@@ -312,7 +321,12 @@ export async function getPostgresSnapshotTargetDefinitions(client, tableManifest
   const result = Object.fromEntries(tableNames.map((name) => [name, { columns: [], primaryKeys: [] }]));
   for (const column of columnsResult?.rows || []) {
     if (!result[column.table_name]) throw new Error('PostgreSQL returned a table outside the Trading snapshot manifest');
-    result[column.table_name].columns.push({ name: column.column_name, type: column.data_type || column.udt_name || '' });
+    result[column.table_name].columns.push({
+      name: column.column_name,
+      type: column.data_type || column.udt_name || '',
+      nullable: column.is_nullable === 'YES',
+      hasDefault: column.column_default != null
+    });
   }
   for (const key of keysResult?.rows || []) {
     if (!result[key.table_name]) throw new Error('PostgreSQL returned a key outside the Trading snapshot manifest');
