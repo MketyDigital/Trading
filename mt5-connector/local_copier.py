@@ -34,7 +34,13 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
     if not isinstance(parent_positions, list) or not isinstance(follower_positions, list):
         return []
     parent_by_ticket = {_source_ticket(row): row for row in parent_positions if _source_ticket(row)}
-    follower_by_ticket = {_source_ticket(row): row for row in follower_positions if _source_ticket(row)}
+    # Only touch follower positions that the copy journal explicitly links to a
+    # parent ticket. Unlinked/manual positions belong to the follower owner.
+    follower_by_ticket = {
+        str(row.get("source_ticket") or "").strip(): row
+        for row in follower_positions
+        if str(row.get("source_ticket") or "").strip()
+    }
     actions = []
     for source_ticket, parent in sorted(parent_by_ticket.items()):
         symbol = str(parent.get("symbol") or "").strip()
