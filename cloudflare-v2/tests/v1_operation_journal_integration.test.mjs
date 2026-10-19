@@ -225,6 +225,33 @@ test('broker planning evidence preserves per-account blocked reason and nested a
   ]);
 });
 
+test('broker lifecycle evidence classifies simulated ready plans and non-executable results accurately', () => {
+  const readyRows = buildV1LifecycleEvidence({
+    sourceId: 'src-1',
+    result: { ok: true, duplicate: false, eventId: 'db-event-1', event, interpretation },
+    simulation: {
+      status: 'SIMULATED',
+      accounts: [{ accountId: 'acct-ready', status: 'READY', actions: [{ type: 'OPEN_POSITION' }] }],
+    },
+    execution: { status: 'NOT_EXECUTABLE', reason: 'NO_READY_PLAN', executionEnabled: true },
+  });
+  const planning = readyRows.find((row) => row.stage === 'BROKER_PLANNING');
+  const execution = readyRows.find((row) => row.stage === 'BROKER_EXECUTION');
+  assert.equal(planning.status, 'SUCCEEDED');
+  assert.equal(execution.status, 'BLOCKED');
+  assert.equal(execution.errorCode, 'NO_READY_PLAN');
+
+  const blockedRows = buildV1LifecycleEvidence({
+    sourceId: 'src-1',
+    result: { ok: true, duplicate: false, eventId: 'db-event-1', event, interpretation },
+    simulation: {
+      status: 'SIMULATED',
+      accounts: [{ accountId: 'acct-blocked', status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', actions: [] }],
+    },
+  });
+  assert.equal(blockedRows.find((row) => row.stage === 'BROKER_PLANNING').status, 'BLOCKED');
+});
+
 test('V1 handler writes lifecycle evidence without changing trading or destination results', async () => {
   const appended = [];
   const response = await handleV1EventsRequest(request(), {
