@@ -283,7 +283,14 @@ class MT5Engine:
             req['action'] = self.mt5.TRADE_ACTION_PENDING
             req['type'] = type_map[(side, order_type)]
             req['price'] = self._normalize_price(command['entryPrice'], symbol_info)
-            req['type_time'] = self.mt5.ORDER_TIME_GTC
+            if order_type == 'STOP_LIMIT':
+                if command.get('stopLimitPrice') is None:
+                    raise RuntimeError('stop-limit pending order requires stopLimitPrice')
+                req['stoplimit'] = self._normalize_price(command['stopLimitPrice'], symbol_info)
+            req['type_time'] = int(command.get('timeType') if command.get('timeType') is not None else self.mt5.ORDER_TIME_GTC)
+            expiration = int(command.get('expiration') or 0)
+            if expiration:
+                req['expiration'] = expiration
             result = self._check_and_send(req, pending=True, symbol_info=symbol_info)
         normalized = self._result(result)
         if order_type == 'MARKET' and command.get('resolvePosition') is True:
@@ -351,6 +358,32 @@ class MT5Engine:
 
     def _cancel(self, command, command_id):
         request = {'action': self.mt5.TRADE_ACTION_REMOVE, 'order': int(command['orderId'])}
+        return self._result(self._check_and_send(request, use_filling=False))
+
+    def _modify_pending(self, command, command_id):
+        order_id = int(command['orderId'])
+        orders = self.mt5.orders_get(ticket=order_id)
+        if orders is None:
+            raise RuntimeError(f'pending order query failed: {order_id}{self._last_error_text()}')
+        exact = [order for order in orders if str(getattr(order, 'ticket', '')) == str(order_id)]
+        if len(exact) != 1:
+            raise RuntimeError(f'pending order not uniquely available: {order_id}')
+        order = exact[0]
+        symbol_info = self._symbol(getattr(order, 'symbol', ''))
+        request = {
+            'action': self.mt5.TRADE_ACTION_MODIFY,
+            'order': order_id,
+            'price': self._normalize_price(command['entryPrice'], symbol_info),
+            # Explicit zero removes a protection that the source removed.
+            'sl': self._normalize_price(command['stopLoss'], symbol_info) if command.get('stopLoss') else 0.0,
+            'tp': self._normalize_price(command['takeProfit'], symbol_info) if command.get('takeProfit') else 0.0,
+            'type_time': int(command.get('timeType') if command.get('timeType') is not None
+                             else getattr(order, 'type_time', getattr(self.mt5, 'ORDER_TIME_GTC', 0))),
+            'expiration': int(command.get('expiration') if command.get('expiration') is not None
+                              else getattr(order, 'time_expiration', 0) or 0),
+        }
+        if command.get('stopLimitPrice') is not None:
+            request['stoplimit'] = self._normalize_price(command['stopLimitPrice'], symbol_info)
         return self._result(self._check_and_send(request, use_filling=False))
 
     def _result(self, result):
@@ -662,6 +695,8 @@ class MT5Engine:
             return self._modify(command, command_id)
         if action in ('CLOSE_POSITION', 'CLOSE_PARTIAL'):
             return self._close(command, command_id)
+        if action == 'MODIFY_PENDING':
+            return self._modify_pending(command, command_id)
         if action == 'CANCEL_PENDING':
             return self._cancel(command, command_id)
         raise RuntimeError(f'unsupported command action: {action}')

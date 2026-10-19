@@ -53,6 +53,9 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
         positions = mt5.positions_get()
         if positions is None:
             return {'complete': False, 'reason': 'MT5_POSITIONS_UNAVAILABLE'}
+        pending = mt5.orders_get()
+        if pending is None:
+            return {'complete': False, 'reason': 'MT5_PENDING_ORDERS_UNAVAILABLE'}
         result = []
         symbols = {}
         for row in positions:
@@ -61,10 +64,44 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
                 symbols[symbol] = mt5.symbol_info(symbol)
             symbol_info = symbols[symbol]
             side = 'BUY' if int(getattr(row, 'type', 1)) == int(getattr(mt5, 'ORDER_TYPE_BUY', 0)) else 'SELL'
-            result.append({'ticket': str(getattr(row, 'ticket', '')), 'symbol': symbol, 'side': side,
+            result.append({'ticket': str(getattr(row, 'ticket', '')), 'identifier': str(getattr(row, 'identifier', '') or ''),
+                           'comment': str(getattr(row, 'comment', '') or ''), 'symbol': symbol, 'side': side,
                            'volume': float(getattr(row, 'volume', 0) or 0), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
                            'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_step': getattr(symbol_info, 'volume_step', None)})
-        return {'complete': True, 'account_mode': account_mode, 'positions': result}
+        type_names = {
+            getattr(mt5, 'ORDER_TYPE_BUY_LIMIT', 2): ('BUY', 'LIMIT'),
+            getattr(mt5, 'ORDER_TYPE_SELL_LIMIT', 3): ('SELL', 'LIMIT'),
+            getattr(mt5, 'ORDER_TYPE_BUY_STOP', 4): ('BUY', 'STOP'),
+            getattr(mt5, 'ORDER_TYPE_SELL_STOP', 5): ('SELL', 'STOP'),
+        }
+        for constant, value in (('ORDER_TYPE_BUY_STOP_LIMIT', ('BUY', 'STOP_LIMIT')),
+                                ('ORDER_TYPE_SELL_STOP_LIMIT', ('SELL', 'STOP_LIMIT'))):
+            order_value = getattr(mt5, constant, None)
+            if order_value is not None:
+                type_names[order_value] = value
+        pending_rows = []
+        for row in pending:
+            order_type = type_names.get(getattr(row, 'type', None))
+            if order_type is None:
+                # Stop-limit and broker-specific orders are deliberately not
+                # coerced into a different order type.
+                continue
+            symbol = str(getattr(row, 'symbol', ''))
+            if symbol not in symbols:
+                symbols[symbol] = mt5.symbol_info(symbol)
+            symbol_info = symbols[symbol]
+            pending_rows.append({
+                'ticket': str(getattr(row, 'ticket', '')), 'comment': str(getattr(row, 'comment', '') or ''),
+                'symbol': symbol, 'side': order_type[0], 'order_type': order_type[1],
+                'volume': float(getattr(row, 'volume_current', 0) or getattr(row, 'volume_initial', 0) or 0),
+                'entry_price': getattr(row, 'price_open', None), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
+                'stop_limit_price': getattr(row, 'price_stoplimit', None),
+                'time_type': int(getattr(row, 'type_time', getattr(mt5, 'ORDER_TIME_GTC', 0)) or 0),
+                'expiration': int(getattr(row, 'time_expiration', 0) or 0),
+                'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_max': getattr(symbol_info, 'volume_max', None),
+                'volume_step': getattr(symbol_info, 'volume_step', None),
+            })
+        return {'complete': True, 'account_mode': account_mode, 'positions': result, 'pending_orders': pending_rows}
     finally:
         mt5.shutdown()
 
@@ -82,6 +119,12 @@ class CopyJournal:
         except sqlite3.OperationalError as exc:
             raise RuntimeError(f'could not open local copier journal at {self.path}: {exc}') from exc
         self.db.execute('CREATE TABLE IF NOT EXISTS copy_state(source_ticket TEXT PRIMARY KEY, follower_position_id TEXT, fingerprint TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS copy_pending_state(source_ticket TEXT PRIMARY KEY, follower_order_id TEXT NOT NULL, comment_marker TEXT NOT NULL)')
+        pending_columns = {row[1] for row in self.db.execute('PRAGMA table_info(copy_pending_state)')}
+        if 'symbol' not in pending_columns:
+            self.db.execute('ALTER TABLE copy_pending_state ADD COLUMN symbol TEXT')
+        if 'side' not in pending_columns:
+            self.db.execute('ALTER TABLE copy_pending_state ADD COLUMN side TEXT')
         columns = {row[1] for row in self.db.execute('PRAGMA table_info(copy_state)')}
         if 'source_initial_volume' not in columns:
             self.db.execute('ALTER TABLE copy_state ADD COLUMN source_initial_volume REAL')
@@ -102,6 +145,22 @@ class CopyJournal:
     def follower_rows(self):
         return {str(row[0]): {'source_ticket': str(row[0]), 'ticket': row[1], 'source_initial_volume': row[2]}
                 for row in self.db.execute('SELECT source_ticket,follower_position_id,source_initial_volume FROM copy_state')}
+
+    def follower_pending_rows(self):
+        return {str(row[0]): {'source_ticket': str(row[0]), 'ticket': str(row[1]), 'comment_marker': str(row[2]),
+                              'symbol': row[3], 'side': row[4]}
+                for row in self.db.execute('SELECT source_ticket,follower_order_id,comment_marker,symbol,side FROM copy_pending_state')}
+
+    def record_pending(self, source_ticket, follower_order_id, comment_marker, symbol=None, side=None):
+        self.db.execute('INSERT INTO copy_pending_state(source_ticket,follower_order_id,comment_marker,symbol,side) VALUES(?,?,?,?,?) '
+                        'ON CONFLICT(source_ticket) DO UPDATE SET follower_order_id=excluded.follower_order_id, comment_marker=excluded.comment_marker, '
+                        'symbol=COALESCE(excluded.symbol,copy_pending_state.symbol), side=COALESCE(excluded.side,copy_pending_state.side)',
+                        (str(source_ticket), str(follower_order_id or ''), str(comment_marker), symbol, side))
+        self.db.commit()
+
+    def remove_pending(self, source_ticket):
+        self.db.execute('DELETE FROM copy_pending_state WHERE source_ticket=?', (str(source_ticket),))
+        self.db.commit()
 
     def record(self, source_ticket, follower_position_id, fingerprint, source_initial_volume=None):
         self.db.execute(
@@ -150,6 +209,49 @@ def run(args):
             follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), ''),
                                       'source_initial_volume': initial_source_volume.get(source_by_follower.get(str(row.get('ticket')), ''))}
                                      for row in follower.get('positions', [])]
+            pending_rows = journal.follower_pending_rows()
+            parent_pending_by_ticket = {str(row.get('ticket')): row for row in parent.get('pending_orders', [])}
+            follower_pending_by_ticket = {str(row.get('ticket')): row for row in follower.get('pending_orders', [])}
+            follower['pending_orders'] = [{**row, 'source_ticket': next((source for source, linked in pending_rows.items()
+                                                                         if linked.get('ticket') == str(row.get('ticket'))), '')}
+                                          for row in follower.get('pending_orders', [])]
+
+            # A broker may fill a copied pending order between snapshots. If
+            # the resulting follower position retains its unique copy marker,
+            # bind it to the sole matching newly-opened parent position. This
+            # prevents the market-position reconciler from duplicating a fill.
+            used_parent_tickets = {str(row.get('source_ticket') or '') for row in follower.get('positions', []) if row.get('source_ticket')}
+            for source_order, linked in pending_rows.items():
+                parent_candidates = [row for row in parent.get('positions', [])
+                                     if str(row.get('symbol') or '') == str(linked.get('symbol') or '')
+                                     and str(row.get('side') or '').upper() == str(linked.get('side') or '').upper()
+                                     and str(row.get('ticket') or '') not in used_parent_tickets]
+                follower_candidates = [row for row in follower.get('positions', [])
+                                       if not row.get('source_ticket') and row.get('comment') == linked.get('comment_marker')]
+                if len(parent_candidates) == 1 and len(follower_candidates) == 1:
+                    parent_ticket = str(parent_candidates[0].get('ticket'))
+                    follower_ticket = str(follower_candidates[0].get('ticket'))
+                    follower_candidates[0]['source_ticket'] = parent_ticket
+                    journal.record(parent_ticket, follower_ticket, _fingerprint(parent), _positive(parent_candidates[0].get('volume')))
+                    used_parent_tickets.add(parent_ticket)
+                elif len(parent_candidates) > 1 and follower_candidates:
+                    for candidate in parent_candidates:
+                        candidate['pending_link_unresolved'] = True
+                    for candidate in follower_candidates:
+                        candidate['pending_link_unresolved'] = True
+                elif not parent_candidates and follower_candidates and source_order not in parent_pending_by_ticket:
+                    # The parent canceled/expired the order while a follower
+                    # fill raced with cancellation. Close only the position
+                    # carrying our unique broker marker.
+                    for candidate in follower_candidates:
+                        candidate['orphan_pending_source_ticket'] = source_order
+            active_follower_order_ids = {str(row.get('ticket')) for row in follower.get('pending_orders', [])}
+            open_follower_comments = {str(row.get('comment') or '') for row in follower.get('positions', [])}
+            for source_order, linked in pending_rows.items():
+                if (source_order not in parent_pending_by_ticket
+                        and str(linked.get('ticket')) not in active_follower_order_ids
+                        and linked.get('comment_marker') not in open_follower_comments):
+                    journal.remove_pending(source_order)
             try:
                 symbol_map = json.loads(getattr(args, 'symbol_map', '{}') or '{}')
             except json.JSONDecodeError as exc:
@@ -170,19 +272,54 @@ def run(args):
                             command = {'action': 'OPEN_POSITION', 'symbol': action['symbol'], 'side': action['side'], 'volume': action['lots'],
                                        'orderType': 'MARKET', 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit'),
                                        'resolvePosition': True}
+                        elif action_type == 'OPEN_PENDING':
+                            command = {'action': 'OPEN_POSITION', 'symbol': action['symbol'], 'side': action['side'], 'volume': action['lots'],
+                                       'orderType': action['order_type'], 'entryPrice': action['entry_price'],
+                                       'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit'),
+                                       'stopLimitPrice': action.get('stop_limit_price'),
+                                       'timeType': action.get('time_type'), 'expiration': action.get('expiration')}
+                        elif action_type == 'MODIFY_PENDING':
+                            command = {'action': 'MODIFY_PENDING', 'orderId': action.get('order_id'),
+                                       'entryPrice': action['entry_price'], 'stopLoss': action.get('stop_loss'),
+                                       'takeProfit': action.get('take_profit'), 'timeType': action.get('time_type'),
+                                       'expiration': action.get('expiration'), 'stopLimitPrice': action.get('stop_limit_price')}
+                        elif action_type == 'CANCEL_PENDING':
+                            command = {'action': 'CANCEL_PENDING', 'orderId': action.get('order_id')}
                         elif action_type == 'MODIFY_POSITION':
                             command = {'action': 'MODIFY_POSITION', 'positionId': action.get('position_id'), 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
-                        elif action_type == 'CLOSE_POSITION':
+                        elif action_type in {'CLOSE_POSITION', 'CLOSE_PENDING_FILL'}:
                             command = {'action': 'CLOSE_POSITION', 'positionId': action.get('position_id')}
                         elif action_type == 'CLOSE_PARTIAL':
                             command = {'action': 'CLOSE_PARTIAL', 'positionId': action.get('position_id'), 'volume': action['lots']}
                         else:
                             continue
-                        result = broker.execute_reconciled(command, command_id)
+                        if action_type == 'OPEN_PENDING':
+                            command_id = f'local-copy-pending:{args.parent_profile}:{args.follower_profile}:{source_ticket}'
+                        try:
+                            result = broker.execute_reconciled(command, command_id)
+                        except Exception as exc:
+                            print(f'local copier action failed ({action_type}): {exc}', flush=True)
+                            # In particular, never follow a failed pending
+                            # cancellation with a market open that could
+                            # duplicate an order which filled during cancel.
+                            if action_type == 'CANCEL_PENDING':
+                                break
+                            continue
                         if result.get('ok'):
-                            if action_type == 'CLOSE_POSITION':
+                            if action_type == 'CLOSE_PENDING_FILL':
+                                journal.remove_pending(source_ticket)
+                            elif action_type == 'CLOSE_POSITION':
                                 # A closed source must not be re-emitted on every poll.
                                 journal.remove(source_ticket)
+                            elif action_type == 'OPEN_PENDING':
+                                from mt5_bridge import command_marker
+                                source_order = parent_pending_by_ticket.get(str(source_ticket), {})
+                                follower_order_id = result.get('order_id') or result.get('ticket')
+                                if follower_order_id:
+                                    journal.record_pending(source_ticket, follower_order_id,
+                                                          command_marker(command_id), source_order.get('symbol'), source_order.get('side'))
+                            elif action_type == 'CANCEL_PENDING':
+                                journal.remove_pending(source_ticket)
                             else:
                                 source_position = parent_by_ticket.get(str(source_ticket), {})
                                 if action_type == 'OPEN_POSITION':
