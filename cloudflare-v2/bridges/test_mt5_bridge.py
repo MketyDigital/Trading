@@ -15,6 +15,7 @@ class FakeMT5:
     TRADE_ACTION_DEAL = 1
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_SLTP = 6
+    TRADE_ACTION_MODIFY = 7
     TRADE_ACTION_REMOVE = 8
     ORDER_TYPE_BUY = 0
     ORDER_TYPE_SELL = 1
@@ -22,6 +23,8 @@ class FakeMT5:
     ORDER_TYPE_SELL_LIMIT = 3
     ORDER_TYPE_BUY_STOP = 4
     ORDER_TYPE_SELL_STOP = 5
+    ORDER_TYPE_BUY_STOP_LIMIT = 6
+    ORDER_TYPE_SELL_STOP_LIMIT = 7
     ORDER_TIME_GTC = 0
     ORDER_FILLING_FOK = 0
     ORDER_FILLING_IOC = 1
@@ -58,6 +61,11 @@ class FakeMT5:
         if ticket is not None:
             return (SimpleNamespace(ticket=ticket, symbol='XAUUSD.a', volume=0.03, type=self.ORDER_TYPE_BUY),)
         return ()
+
+    def orders_get(self, ticket=None):
+        if ticket is None:
+            return ()
+        return (SimpleNamespace(ticket=ticket, symbol='EURUSD', type_time=self.ORDER_TIME_GTC, time_expiration=0),)
 
 
 class FakeMT5Source:
@@ -132,6 +140,30 @@ class MT5BridgeTests(unittest.TestCase):
         self.assertEqual(MT5Engine(CatalogMT5(['EURUSD.a']))._symbol('EURUSD').name, 'EURUSD.a')
         with self.assertRaisesRegex(RuntimeError, 'symbol resolution ambiguous'):
             MT5Engine(CatalogMT5(['EURUSD.a', 'EURUSD.pro']))._symbol('EURUSD')
+
+    def test_pending_limit_open_and_modify_are_broker_checked(self):
+        mt5 = FakeMT5()
+        engine = MT5Engine(mt5)
+        opened = engine.execute({'action': 'OPEN_POSITION', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+                                 'orderType': 'LIMIT', 'entryPrice': 1.08, 'stopLoss': 1.07, 'takeProfit': 1.10}, 'pending-open-1')
+        self.assertTrue(opened['ok'])
+        self.assertEqual(mt5.sent[-1]['action'], mt5.TRADE_ACTION_PENDING)
+        self.assertEqual(mt5.sent[-1]['type'], mt5.ORDER_TYPE_BUY_LIMIT)
+        modified = engine.execute({'action': 'MODIFY_PENDING', 'orderId': 9001, 'entryPrice': 1.081,
+                                   'stopLoss': None, 'takeProfit': 1.11}, 'pending-modify-1')
+        self.assertTrue(modified['ok'])
+        self.assertEqual(mt5.sent[-1]['action'], mt5.TRADE_ACTION_MODIFY)
+        self.assertEqual(mt5.sent[-1]['sl'], 0.0)
+        self.assertEqual(mt5.sent[-1]['tp'], 1.11)
+
+    def test_pending_stop_limit_requires_and_sets_stop_limit_price(self):
+        mt5 = FakeMT5()
+        engine = MT5Engine(mt5)
+        result = engine.execute({'action': 'OPEN_POSITION', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+                                 'orderType': 'STOP_LIMIT', 'entryPrice': 1.08, 'stopLimitPrice': 1.081}, 'pending-stop-limit-1')
+        self.assertTrue(result['ok'])
+        self.assertEqual(mt5.sent[-1]['type'], mt5.ORDER_TYPE_BUY_STOP_LIMIT)
+        self.assertEqual(mt5.sent[-1]['stoplimit'], 1.081)
 
     def test_unique_shorter_broker_symbol_is_resolved_in_reverse_copy_direction(self):
         class CatalogMT5(FakeMT5):

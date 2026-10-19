@@ -14,6 +14,10 @@ class LocalCopierTests(unittest.TestCase):
         from local_copier_worker import _snapshot
         class FakeMT5:
             ORDER_TYPE_BUY = 0
+            ORDER_TYPE_BUY_LIMIT = 2
+            ORDER_TYPE_SELL_LIMIT = 3
+            ORDER_TYPE_BUY_STOP = 4
+            ORDER_TYPE_SELL_STOP = 5
             ACCOUNT_MARGIN_MODE_RETAIL_NETTING = 0
             ACCOUNT_MARGIN_MODE_EXCHANGE = 1
             ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
@@ -21,12 +25,20 @@ class LocalCopierTests(unittest.TestCase):
             def shutdown(self): pass
             def account_info(self): return SimpleNamespace(margin_mode=self.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
             def positions_get(self): return (SimpleNamespace(ticket=12, symbol='Volatility 75 Index', type=0, volume=0.2, sl=0, tp=0),)
+            def orders_get(self): return (SimpleNamespace(ticket=24, symbol='Volatility 75 Index', type=2, volume_current=0.3, volume_initial=0.3,
+                                                          price_open=100.0, sl=90.0, tp=120.0, comment='parent-order'),)
             def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_step=0.1)
         snapshot = _snapshot(FakeMT5(), 'deriv-terminal.exe')
         self.assertTrue(snapshot['complete'])
         self.assertEqual(snapshot['account_mode'], 'HEDGING')
         self.assertEqual(snapshot['positions'][0]['volume_min'], 0.1)
         self.assertEqual(snapshot['positions'][0]['volume_step'], 0.1)
+        self.assertEqual(snapshot['pending_orders'], [{'ticket': '24', 'comment': 'parent-order', 'symbol': 'Volatility 75 Index',
+                                                       'side': 'BUY', 'order_type': 'LIMIT', 'volume': 0.3,
+                                                       'entry_price': 100.0, 'sl': 90.0, 'tp': 120.0,
+                                                       'stop_limit_price': None,
+                                                       'time_type': 0, 'expiration': 0,
+                                                       'volume_min': 0.1, 'volume_max': None, 'volume_step': 0.1}])
 
     def test_profile_copy_metadata_defaults_off(self):
         profile = TerminalProfile('p1', 'Primary')
@@ -54,6 +66,78 @@ class LocalCopierTests(unittest.TestCase):
         follower = {'positions': []}
         actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
         self.assertEqual(actions, [{'type': 'OPEN_POSITION', 'source_ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'lots': 0.1, 'stop_loss': 2300, 'take_profit': 2400}])
+
+    def test_pending_limit_order_is_copied_with_scaled_lot_and_protection(self):
+        parent = {'complete': True, 'positions': [], 'pending_orders': [{
+            'ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY', 'order_type': 'LIMIT',
+            'volume': 0.2, 'entry_price': 1.08, 'sl': 1.07, 'tp': 1.10,
+        }]}
+        follower = {'complete': True, 'positions': [], 'pending_orders': []}
+        actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
+        self.assertEqual(actions, [{
+            'type': 'OPEN_PENDING', 'source_ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY',
+            'order_type': 'LIMIT', 'lots': 0.1, 'entry_price': 1.08, 'stop_loss': 1.07, 'take_profit': 1.10,
+            'stop_limit_price': None, 'time_type': None, 'expiration': None,
+        }])
+
+    def test_pending_order_edit_and_source_cancel_are_mirrored(self):
+        parent = {'complete': True, 'positions': [], 'pending_orders': [{
+            'ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY', 'order_type': 'LIMIT',
+            'volume': 0.2, 'entry_price': 1.081, 'sl': 1.07, 'tp': 1.10,
+        }]}
+        follower = {'complete': True, 'positions': [], 'pending_orders': [{
+            'ticket': 'copy-20', 'source_ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY',
+            'order_type': 'LIMIT', 'volume': 0.1, 'entry_price': 1.08, 'sl': 1.07, 'tp': 1.10,
+        }]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=0.5), [{
+            'type': 'MODIFY_PENDING', 'source_ticket': 'order-10', 'order_id': 'copy-20',
+            'entry_price': 1.081, 'stop_loss': 1.07, 'take_profit': 1.10,
+            'stop_limit_price': None, 'time_type': None, 'expiration': None,
+        }])
+        parent['pending_orders'] = []
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=0.5), [{
+            'type': 'CANCEL_PENDING', 'source_ticket': 'order-10', 'order_id': 'copy-20',
+        }])
+
+    def test_pending_order_volume_change_is_cancelled_and_recreated_at_scaled_size(self):
+        parent = {'complete': True, 'positions': [], 'pending_orders': [{
+            'ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY', 'order_type': 'LIMIT',
+            'volume': 0.4, 'entry_price': 1.08, 'sl': None, 'tp': None,
+        }]}
+        follower = {'complete': True, 'positions': [], 'pending_orders': [{
+            'ticket': 'copy-20', 'source_ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY',
+            'order_type': 'LIMIT', 'volume': 0.1, 'volume_min': 0.01, 'volume_step': 0.01,
+            'entry_price': 1.08, 'sl': None, 'tp': None,
+        }]}
+        actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
+        self.assertEqual([action['type'] for action in actions], ['CANCEL_PENDING', 'OPEN_PENDING'])
+        self.assertEqual(actions[0]['order_id'], 'copy-20')
+        self.assertEqual(actions[1]['lots'], 0.2)
+
+    def test_ambiguous_pending_fill_does_not_market_duplicate_and_orphan_fill_is_closed(self):
+        parent = {'complete': True, 'positions': [
+            {'ticket': 'pos-1', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1, 'pending_link_unresolved': True},
+        ], 'pending_orders': []}
+        follower = {'complete': True, 'positions': [], 'pending_orders': []}
+        self.assertEqual(plan_snapshot_actions(parent, follower), [])
+
+        parent['positions'] = []
+        follower['positions'] = [{'ticket': 'copy-pos-1', 'comment': 'copy-marker', 'orphan_pending_source_ticket': 'order-10'}]
+        self.assertEqual(plan_snapshot_actions(parent, follower), [{
+            'type': 'CLOSE_PENDING_FILL', 'source_ticket': 'order-10', 'position_id': 'copy-pos-1',
+        }])
+
+    def test_pending_order_links_persist_across_local_copier_restarts(self):
+        from local_copier_worker import CopyJournal
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'copy.sqlite'
+            with CopyJournal(path) as journal:
+                journal.record_pending('parent-order-10', 'follower-order-20', 'mketyabc123', 'EURUSD', 'BUY')
+            with CopyJournal(path) as journal:
+                self.assertEqual(journal.follower_pending_rows(), {'parent-order-10': {
+                    'source_ticket': 'parent-order-10', 'ticket': 'follower-order-20', 'comment_marker': 'mketyabc123',
+                    'symbol': 'EURUSD', 'side': 'BUY',
+                }})
 
     def test_explicit_symbol_mapping_routes_deriv_style_parent_symbol_to_follower_symbol(self):
         parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'Volatility 75 Index', 'side': 'BUY', 'volume': 0.2, 'sl': 1, 'tp': 2}]}
