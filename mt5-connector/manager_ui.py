@@ -210,7 +210,10 @@ class ManagerViewModel:
     def start_copy(self, follower_profile_id: str) -> int:
         follower = self._profile(follower_profile_id)
         if follower.copy_role != 'follower' or not follower.copy_enabled or not follower.copy_parent_profile_id:
-            raise ValueError('local copy is not enabled for this follower profile')
+            raise ValueError(
+                f'{follower.label} is not configured as a local follower. '
+                'Select the follower profile, choose Mark selected as local follower, and choose the main MT5 profile.'
+            )
         parent = self._profile(follower.copy_parent_profile_id)
         if not parent.terminal_path or not follower.terminal_path:
             raise ValueError('both parent and follower profiles need an MT5 terminal selected')
@@ -658,11 +661,46 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     def mark_selected_follower():
         profile_id = selected_profile_id()
         if not profile_id:
-            messagebox.showinfo("Select follower", "Select the MT5 profile that should follow another terminal.", parent=root)
+            messagebox.showinfo("Select saved follower profile", "Select the follower account's row in the lower saved profiles table. The upper terminal discovery list is not a saved profile. You need separate saved profiles for the main and follower terminals.", parent=root)
             return
         choices = [row for row in model.profile_rows() if row["profile_id"] != profile_id]
-        options = "\n".join(f"{row['profile_id']} — {row['label']} ({row['account']})" for row in choices)
-        parent_id = simpledialog.askstring("Main MT5 profile", "Enter the Profile ID of the main account from the table:\n\n" + (options or "Add the main terminal first."), parent=root)
+        if not choices:
+            messagebox.showinfo("Add the main MT5 profile", "Add and save the main MT5 terminal as a separate profile first, then mark the follower profile.", parent=root)
+            return
+
+        # A dropdown avoids mistyped profile IDs and account numbers being passed
+        # to configure_copy as though they were saved profile IDs.
+        choice_labels = {
+            f"{row['label']} | {row['account']} | {row['server']} | {row['environment']} | Profile ID: {row['profile_id']}": row["profile_id"]
+            for row in choices
+        }
+        dialog = tk.Toplevel(root)
+        dialog.title("Choose main MT5 profile")
+        dialog.transient(root)
+        dialog.resizable(False, False)
+        ttk.Label(dialog, text="Select the saved main account this follower should copy:", wraplength=440).pack(anchor="w", padx=16, pady=(16, 8))
+        parent_choice = tk.StringVar(value="")
+        parent_box = ttk.Combobox(dialog, textvariable=parent_choice, values=list(choice_labels), state="readonly", width=68)
+        parent_box.pack(fill="x", padx=16, pady=(0, 12))
+        selected_parent = {"profile_id": None}
+
+        def accept_parent_choice():
+            selected_parent["profile_id"] = choice_labels.get(parent_choice.get())
+            if selected_parent["profile_id"]:
+                dialog.destroy()
+            else:
+                messagebox.showinfo("Choose a main profile", "Select one of the saved main profiles in the list.", parent=dialog)
+
+        parent_buttons = ttk.Frame(dialog)
+        parent_buttons.pack(anchor="e", padx=16, pady=(0, 14))
+        ttk.Button(parent_buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(parent_buttons, text="Use selected main", command=accept_parent_choice).pack(side="right")
+        dialog.bind("<Return>", lambda _event: accept_parent_choice())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        parent_box.focus_set()
+        dialog.grab_set()
+        root.wait_window(dialog)
+        parent_id = selected_parent["profile_id"]
         if not parent_id:
             return
         use_fixed_lots = messagebox.askyesno(
@@ -694,6 +732,9 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             fixed_lot = None
         try:
             model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot)
+            saved_follower = model._profile(profile_id)
+            if saved_follower.copy_role != 'follower' or not saved_follower.copy_enabled or saved_follower.copy_parent_profile_id != parent_id:
+                raise ValueError("The follower link did not persist. Select the two profiles and try again.")
             sizing = f"fixed {fixed_lot:g} lots" if fixed_lot is not None else f"{multiplier:g}× multiplier"
             refresh_profiles()
             select_saved_profile(profile_id)
