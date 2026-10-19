@@ -732,33 +732,54 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             if multiplier is None:
                 return
             fixed_lot = None
-        existing_map = "\n".join(f"{source} = {target}" for source, target in (model._profile(profile_id).copy_symbol_map or {}).items())
-        symbol_map_text = simpledialog.askstring(
-            "Optional broker symbol mapping",
-            "Only map symbols whose names differ between these accounts. Enter one pair per line:\n"
-            "Parent symbol = Follower symbol\n\n"
-            "Example: XAUUSD = GOLD\n"
-            "Leave blank when names match or the connector resolves a unique broker suffix.",
-            initialvalue=existing_map,
-            parent=root,
-        )
-        if symbol_map_text is None:
-            return
         try:
-            symbol_map = validate_symbol_map(symbol_map_text)
-            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map)
+            # Symbol resolution is automatic for exact names and unique broker
+            # prefixes/suffixes. Keep the advanced alias map already saved on
+            # the profile, but do not interrupt the normal follower setup.
+            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot)
             saved_follower = model._profile(profile_id)
             if saved_follower.copy_role != 'follower' or not saved_follower.copy_enabled or saved_follower.copy_parent_profile_id != parent_id:
                 raise ValueError("The follower link did not persist. Select the two profiles and try again.")
             sizing = f"fixed {fixed_lot:g} lots" if fixed_lot is not None else f"{multiplier:g}× multiplier"
-            if symbol_map:
-                sizing += f" | {len(symbol_map)} symbol mapping(s)"
             refresh_profiles()
             select_saved_profile(profile_id)
             parent = model._profile(parent_id)
             flow_text.set(f"{model._profile(profile_id).label} is now a local follower of {parent.label} at {sizing}. Select this follower row and click Start local copy.")
         except Exception as exc:
             messagebox.showerror("Could not enable local copy", str(exc), parent=root)
+
+    def edit_selected_symbol_aliases():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            messagebox.showinfo("Select follower profile", "Select a saved follower profile first.", parent=root)
+            return
+        try:
+            follower = model._profile(profile_id)
+            if follower.copy_role != 'follower' or not follower.copy_parent_profile_id:
+                messagebox.showinfo("Configure follower first", "Mark this profile as a local follower before editing symbol aliases.", parent=root)
+                return
+            existing_map = "\n".join(f"{source} = {target}" for source, target in (follower.copy_symbol_map or {}).items())
+            symbol_map_text = simpledialog.askstring(
+                "Advanced symbol aliases",
+                "Usually not needed: symbols match automatically by exact name or a unique broker suffix.\n"
+                "Only add an alias when the brokers use unrelated names. One pair per line:\n"
+                "Parent symbol = Follower symbol\n\n"
+                "Example: XAUUSD = GOLD\n"
+                "An alias changes the name only; it does not convert contract size or risk.",
+                initialvalue=existing_map,
+                parent=root,
+            )
+            if symbol_map_text is None:
+                return
+            symbol_map = validate_symbol_map(symbol_map_text)
+            model.configure_copy(profile_id, follower.copy_parent_profile_id, enabled=follower.copy_enabled,
+                                 lot_multiplier=follower.copy_lot_multiplier, fixed_lot=follower.copy_fixed_lot,
+                                 symbol_map=symbol_map)
+            refresh_profiles()
+            select_saved_profile(profile_id)
+            flow_text.set(f"Saved {len(symbol_map)} advanced symbol alias(es).")
+        except Exception as exc:
+            messagebox.showerror("Could not save symbol aliases", str(exc), parent=root)
 
     def inspect_selected_account():
         profile_id = selected_profile_id()
@@ -802,6 +823,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             messagebox.showerror("Could not start local copier", str(exc), parent=root)
 
     ttk.Button(copy_bar, text="Mark selected as local follower", command=mark_selected_follower).pack(side="left", padx=(0, 8))
+    ttk.Button(copy_bar, text="Advanced symbol aliases", command=edit_selected_symbol_aliases).pack(side="left", padx=(0, 8))
     ttk.Button(copy_bar, text="Start local copy", command=start_selected_copy).pack(side="left", padx=(0, 8))
     def stop_selected_copy():
         profile_id = selected_profile_id()

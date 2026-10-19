@@ -101,7 +101,12 @@ class MT5Engine:
                 candidate_key = self._symbol_key(candidate_name)
                 if not candidate_name or not requested_key:
                     continue
-                if candidate_key == requested_key or candidate_key.startswith(requested_key) or candidate_key.endswith(requested_key):
+                # Broker suffixes/prefixes occur on either side of a copy
+                # link (e.g. source EURUSD.a -> follower EURUSD). Resolve only
+                # when the relationship identifies exactly one tradable name.
+                if (candidate_key == requested_key or candidate_key.startswith(requested_key)
+                        or candidate_key.endswith(requested_key) or requested_key.startswith(candidate_key)
+                        or requested_key.endswith(candidate_key)):
                     matches.append(candidate)
             if len(matches) == 1:
                 info = matches[0]
