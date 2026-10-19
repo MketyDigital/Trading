@@ -79,15 +79,22 @@ async function recordReplicationHealth(authority, postgresDatabase, { direction,
       ON CONFLICT(consumer,direction,authority_epoch) DO UPDATE SET source_sequence=excluded.source_sequence,
         applied_sequence=excluded.applied_sequence,last_success_at=COALESCE(excluded.last_success_at,trading_replication_health.last_success_at),
         last_error_at=COALESCE(excluded.last_error_at,trading_replication_health.last_error_at),last_error_code=excluded.last_error_code,updated_at=excluded.updated_at
+      WHERE trading_replication_health.source_sequence != excluded.source_sequence
+         OR trading_replication_health.applied_sequence != excluded.applied_sequence
+         OR COALESCE(trading_replication_health.last_error_code, '') != COALESCE(excluded.last_error_code, '')
     `).bind(CONSUMER,direction,authority.authorityEpoch,sourceSequence,appliedSequence,errorCode?null:timestamp,errorCode?timestamp:null,errorCode,timestamp,authority.authorityEpoch).run();
-    if (Number(result?.meta?.changes || 0) !== 1) throw new Error('Replication health write rejected by D1 authority fence');
+    // A zero-change upsert is the healthy idle case: the source and applied
+    // sequences (and error state) are unchanged, so avoid rewriting the same
+    // health row every minute. A one-change result covers the initial insert
+    // and real progress/error transitions.
+    if (![0, 1].includes(Number(result?.meta?.changes || 0))) throw new Error('Replication health write rejected by D1 authority fence');
     return;
   }
   await postgresDatabase.transaction(async query => {
     const control = await query(`SELECT active_authority,authority_epoch,writes_fenced FROM trading_storage.authority_control WHERE singleton_id=1 FOR SHARE`);
     const row=control.rows?.[0];
     if(!row||row.active_authority!=='postgres'||Number(row.authority_epoch)!==Number(authority.authorityEpoch)||row.writes_fenced!==false)throw new Error('Replication health write rejected by PostgreSQL authority fence');
-    await query(`INSERT INTO trading_storage.replication_health(consumer,direction,authority_epoch,source_sequence,applied_sequence,last_success_at,last_error_at,last_error_code,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(consumer,direction,authority_epoch) DO UPDATE SET source_sequence=EXCLUDED.source_sequence,applied_sequence=EXCLUDED.applied_sequence,last_success_at=COALESCE(EXCLUDED.last_success_at,trading_storage.replication_health.last_success_at),last_error_at=COALESCE(EXCLUDED.last_error_at,trading_storage.replication_health.last_error_at),last_error_code=EXCLUDED.last_error_code,updated_at=EXCLUDED.updated_at`,[CONSUMER,direction,authority.authorityEpoch,sourceSequence,appliedSequence,errorCode?null:timestamp,errorCode?timestamp:null,errorCode,timestamp]);
+    await query(`INSERT INTO trading_storage.replication_health(consumer,direction,authority_epoch,source_sequence,applied_sequence,last_success_at,last_error_at,last_error_code,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(consumer,direction,authority_epoch) DO UPDATE SET source_sequence=EXCLUDED.source_sequence,applied_sequence=EXCLUDED.applied_sequence,last_success_at=COALESCE(EXCLUDED.last_success_at,trading_storage.replication_health.last_success_at),last_error_at=COALESCE(EXCLUDED.last_error_at,trading_storage.replication_health.last_error_at),last_error_code=EXCLUDED.last_error_code,updated_at=EXCLUDED.updated_at WHERE trading_storage.replication_health.source_sequence <> EXCLUDED.source_sequence OR trading_storage.replication_health.applied_sequence <> EXCLUDED.applied_sequence OR COALESCE(trading_storage.replication_health.last_error_code, '') <> COALESCE(EXCLUDED.last_error_code, '')`,[CONSUMER,direction,authority.authorityEpoch,sourceSequence,appliedSequence,errorCode?null:timestamp,errorCode?timestamp:null,errorCode,timestamp]);
   });
 }
 
