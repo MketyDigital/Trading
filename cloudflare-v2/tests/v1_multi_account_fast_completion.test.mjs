@@ -121,12 +121,12 @@ test('completed signal reconciles every matched fast account and opens normally 
 
   const byAccount = new Map(result.accounts.map((row) => [row.accountId, row]));
   assert.deepEqual(byAccount.get('acct-a').actions.map((action) => action.type), [
-    'MODIFY_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
+    'OPEN_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
   ]);
   assert.equal(byAccount.get('acct-a').groupId, 'group-a');
   assert.deepEqual(byAccount.get('acct-a').actions.slice(1).map((action) => action.lots), [0.09, 0.09]);
   assert.deepEqual(byAccount.get('acct-b').actions.map((action) => action.type), [
-    'MODIFY_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
+    'OPEN_POSITION', 'OPEN_POSITION', 'OPEN_POSITION',
   ]);
   assert.equal(byAccount.get('acct-b').groupId, 'group-b');
   assert.deepEqual(byAccount.get('acct-b').actions.slice(1).map((action) => action.lots), [0.09, 0.09]);
