@@ -171,6 +171,16 @@ function protectionValueValidAtMarket(side, kind, value, currentMarketPrice) {
   return false;
 }
 
+function hasStandaloneCompletionIntent(intent = {}) {
+  const symbol = String(intent?.symbol?.canonical ?? intent?.symbol ?? '').trim();
+  const side = String(intent?.side ?? '').trim().toUpperCase();
+  const stopLoss = finitePositive(intent?.stopLoss);
+  const takeProfits = Array.isArray(intent?.takeProfits)
+    ? intent.takeProfits.map(finitePositive).filter((value) => value != null)
+    : [];
+  return Boolean(symbol) && ['BUY', 'SELL'].includes(side) && stopLoss != null && takeProfits.length > 0;
+}
+
 function progressiveFastIntent(existing = {}, incoming = {}) {
   const existingStopLoss = finitePositive(existing.stopLoss)
     ?? finitePositive(existing.legs?.find((leg) => finitePositive(leg?.stopLoss) != null)?.stopLoss);
@@ -203,13 +213,17 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     finitePositive(existing?.entry?.executedPrice),
     finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice),
   ].filter((value) => value != null);
-  if (references.length === 0 || !Array.isArray(intent?.takeProfits) || intent.takeProfits.length === 0) {
+  if (references.length === 0) {
     return { intent, logicalTakeProfits: null };
   }
   const side = String(intent.side || existing?.side || '').toUpperCase();
-  let changed = false;
+  const incomingStopLoss = finitePositive(intent?.stopLoss);
+  const stopValid = incomingStopLoss == null
+    || references.every((reference) => protectionValueValidAtMarket(side, 'stopLoss', incomingStopLoss, reference));
+  let changed = incomingStopLoss != null && !stopValid;
   const passedIndexes = [];
-  const takeProfits = intent.takeProfits.map((value, index) => {
+  const originalTakeProfits = Array.isArray(intent?.takeProfits) ? [...intent.takeProfits] : [];
+  const takeProfits = originalTakeProfits.map((value, index) => {
     if (finitePositive(value) == null || references.every((reference) => protectionValueValidAtMarket(side, 'takeProfit', value, reference))) return value;
     changed = true;
     passedIndexes.push(index + 1);
@@ -233,9 +247,9 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     intent: {
       ...intent,
       takeProfits,
-      ...(breakEvenStop == null ? {} : { stopLoss: breakEvenStop }),
+      ...(breakEvenStop == null ? { stopLoss: stopValid ? intent.stopLoss : null } : { stopLoss: breakEvenStop }),
     },
-    logicalTakeProfits: [...intent.takeProfits],
+    logicalTakeProfits: originalTakeProfits,
   };
 }
 
@@ -295,6 +309,31 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       || protectionValueValidAtMarket(side, 'takeProfit', desiredLeg.takeProfit, currentPrice);
 
     if (existingLeg) {
+      const hasBrokerBinding = Boolean(existingLeg.brokerPositionId || existingLeg.brokerOrderId);
+      const status = String(existingLeg.status || '').toUpperCase();
+      // A failed/planned/cancelled fast leg has no broker identity to modify.
+      // Reuse its durable leg identity but issue a fresh open action so the
+      // complete signal can recover the missing first leg without duplicating
+      // a genuinely closed broker position.
+      if (!hasBrokerBinding && status !== 'CLOSED') {
+        const open = plannedOpenByTarget.get(targetIndex);
+        if (open) {
+          const retryOpen = {
+            ...open,
+            legId: existingLeg.legId,
+            idempotencyKey: `${existing.id}:leg:${targetIndex}:retry:${updateIdentity}`,
+          };
+          nextLegs.push({
+            ...desiredLeg,
+            legId: existingLeg.legId,
+            brokerPositionId: null,
+            brokerOrderId: null,
+            status: 'PLANNED',
+          });
+          actions.push(retryOpen);
+          continue;
+        }
+      }
       const mergedLeg = {
         ...existingLeg,
         ...desiredLeg,
@@ -754,8 +793,8 @@ export async function orchestrateTradingEventSimulation({
     });
   }
 
-  const isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
-  const isFastSupersession = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_SUPERSESSION';
+  let isFastCompletion = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_COMPLETION';
+  let isFastSupersession = correlation?.status === 'MATCHED' && correlation?.reason === 'FAST_ENTRY_SUPERSESSION';
   if (correlation?.status !== 'NEW_GROUP' && !isFastCompletion && !isFastSupersession) {
     return { ...base, status: 'CORRELATED', correlation, accounts: [] };
   }
@@ -764,9 +803,17 @@ export async function orchestrateTradingEventSimulation({
   if (isFastCompletion || isFastSupersession) {
     const loaded = await loadMatchedFastGroups(correlation, stateStore);
     if (!loaded.ok) {
-      return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
+      // The predecessor is optional context. A complete signal remains a
+      // valid standalone trade when that context is stale, failed, or gone.
+      if (hasStandaloneCompletionIntent(interpretation.intent)) {
+        isFastCompletion = false;
+        isFastSupersession = false;
+      } else {
+        return { ...base, status: 'BLOCKED', correlation, accounts: [], reason: loaded.reason };
+      }
+    } else {
+      matchedByAccount = new Map(loaded.groups.map((group) => [String(group.tradeAccountId), group]));
     }
-    matchedByAccount = new Map(loaded.groups.map((group) => [String(group.tradeAccountId), group]));
   }
 
   const accounts = await accountProvider(event.workspace_hint, event, interpretation);
