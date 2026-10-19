@@ -240,8 +240,8 @@ public class MketyCloudAutoTrader : Robot
     {
         try
         {
-            if (!long.TryParse(brokerPositionId, out var id) || id <= 0) throw new InvalidOperationException("POSITION_ID_INVALID");
-            var position = Positions.FindById(id);
+            if (!long.TryParse(brokerPositionId, out var parsedId) || parsedId <= 0 || parsedId > int.MaxValue) throw new InvalidOperationException("POSITION_ID_INVALID");
+            var position = Positions.FindById((int)parsedId);
             if (position == null)
             {
                 Send(new { type = "position_status_result", requestId, ok = true, snapshot = new { positionId = brokerPositionId, isOpen = false, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo" } });
