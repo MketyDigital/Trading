@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL, utcCalendarWindowStart, queryD1Metrics } from '../scripts/cloudflare_resource_audit.mjs';
+import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL, utcCalendarWindowStart, queryD1Metrics, queryQueueMetrics, queryContainerMetrics } from '../scripts/cloudflare_resource_audit.mjs';
 
 test('redacts SQL literals and bounds long statements before reporting', () => {
   const sql = `UPDATE sessions SET token='private-token', n=123 WHERE user_id="secret-user"`;
@@ -31,6 +31,23 @@ test('D1 analytics query ranks the heaviest query signatures by both rows read a
   assert.match(query, /d1TopQuerySignaturesByRowsWritten: d1QueriesAdaptiveGroups/);
   assert.match(query, /sum_rowsRead_DESC/);
   assert.match(query, /sum_rowsWritten_DESC/);
+});
+
+test('Queue metrics aggregate across the selected window to avoid hourly result truncation', () => {
+  const query = queryQueueMetrics();
+  assert.match(query, /queueMessageOperationsAdaptiveGroups\(limit: 1000/);
+  assert.match(query, /dimensions \{ queueID actionType outcome \}/);
+  assert.match(query, /queuesBacklogAdaptiveGroups\(limit: 1000/);
+  assert.match(query, /dimensions \{ queueID \} avg \{ messages bytes \}/);
+  assert.match(query, /queueConsumerMetricsAdaptiveGroups\(limit: 1000/);
+  assert.doesNotMatch(query, /datetimeHour/);
+});
+
+test('Container metrics aggregate per instance over the selected date range', () => {
+  const query = queryContainerMetrics();
+  assert.match(query, /containersMetricsAdaptiveGroups\(limit: 1000/);
+  assert.match(query, /dimensions \{ applicationId instanceId \}/);
+  assert.doesNotMatch(query, /dimensions \{ date applicationId instanceId \}/);
 });
 
 test('reads only resource identifiers and bounded runtime settings from Wrangler config', () => {
