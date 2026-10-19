@@ -11,7 +11,7 @@ const env = {
 
 function brandingHandler(request) {
   const hostname = new URL(request.url).hostname;
-  if (hostname === 'copier.starpipsforex.com') {
+  if (hostname === 'copier.starpipsforex.com' || hostname === 'starpips-first-paint.example.test') {
     return new Response(JSON.stringify({
       ok: true,
       kind: 'white_label',
@@ -38,6 +38,7 @@ test('active custom hostname renders saved white-label branding before any brows
   assert.match(html, /src="https:\/\/cdn\.example\.test\/starpips\.png"/);
   assert.match(html, /--accent:#022474/i);
   assert.doesNotMatch(html, /<title>Mkety Trading<\/title>/);
+  assert.doesNotMatch(html, /loadPublicBranding/);
 });
 
 test('canonical trade.mkety.com keeps Mkety Trading initial branding', async () => {
@@ -47,4 +48,34 @@ test('canonical trade.mkety.com keeps Mkety Trading initial branding', async () 
   const html = await response.text();
   assert.match(html, /<title>Mkety Trading<\/title>/);
   assert.match(html, /<h1 id="brandTitle">Mkety Trading<\/h1>/);
+});
+
+test('persistence-backed StarPips branding is server-rendered and hostname lookup is cached briefly', async () => {
+  let brandingLookups = 0;
+  let runtimeCreations = 0;
+  const worker = createTradingV1Entrypoint({
+    persistenceRuntimeFactory: async () => {
+      runtimeCreations += 1;
+      return {
+        hostnames: { getActiveHostname: async () => { throw new Error('handler owns lookup'); } },
+        workspaceAccess: { getWorkspace: async () => { throw new Error('handler owns lookup'); } },
+      };
+    },
+    publicBrandingHandler: async (request, _env, { persistenceRuntime } = {}) => {
+      assert.ok(persistenceRuntime);
+      brandingLookups += 1;
+      return brandingHandler(request);
+    },
+  });
+
+  const first = await worker.fetch(new Request('https://starpips-first-paint.example.test/'), env, {});
+  const firstHtml = await first.text();
+  assert.match(firstHtml, /<title>Starpips Forex Trade Copier<\/title>/);
+  assert.doesNotMatch(firstHtml, /<title>Mkety Trading<\/title>/);
+  assert.doesNotMatch(firstHtml, /loadPublicBranding/);
+
+  const second = await worker.fetch(new Request('https://starpips-first-paint.example.test/'), env, {});
+  assert.match(await second.text(), /<title>Starpips Forex Trade Copier<\/title>/);
+  assert.equal(brandingLookups, 1);
+  assert.equal(runtimeCreations, 1);
 });

@@ -38,6 +38,10 @@ const LEGACY_VIP_LIFECYCLE_CRON = '*/15 * * * *';
 const pendingOrderLifecycleRuntime = createProductionPendingOrderLifecycleRuntime();
 const brokerTpProtectionRuntime = createProductionBrokerTpProtectionRuntime();
 const orphanSignalRecoveryRuntime = createOrphanSignalRecoveryRuntime();
+const PUBLIC_BRANDING_CACHE_TTL_MS = 30_000;
+const PUBLIC_BRANDING_CACHE_MAX_HOSTS = 256;
+const publicBrandingCache = new Map();
+const publicBrandingInFlight = new Map();
 
 function scheduledMaintenanceDue(event, env = {}) {
   // Tests and manual invocations may omit scheduledTime; preserve the old
@@ -114,13 +118,64 @@ function normalizeEnterprisePortalHtml(html) {
   return String(html).replace('placeholder="gpt-5-mini"', 'placeholder="Enter the current provider model ID"');
 }
 
-async function resolveInitialBranding(request, env, publicBrandingHandler) {
-  try {
-    const response = await publicBrandingHandler(request, env, {});
-    if (!response?.ok) return null;
-    const payload = await response.json();
-    return payload?.ok && payload?.branding ? payload : null;
-  } catch { return null; }
+function cachedPublicBranding(hostname) {
+  const now = Date.now();
+  const cached = publicBrandingCache.get(hostname);
+  if (cached?.expiresAt > now) return cached.payload;
+  if (cached) publicBrandingCache.delete(hostname);
+  return null;
+}
+
+async function resolveInitialBranding(request, env, publicBrandingHandler, persistenceRuntime = null) {
+  const hostname = new URL(request.url).hostname.toLowerCase();
+  const cached = cachedPublicBranding(hostname);
+  if (cached) return cached;
+  const pending = publicBrandingInFlight.get(hostname);
+  if (pending) return pending;
+
+  const loading = (async () => {
+    try {
+      const response = await publicBrandingHandler(request, env, persistenceRuntime ? { persistenceRuntime } : {});
+      if (!response?.ok) return null;
+      const payload = await response.json();
+      if (!payload?.ok || !payload?.branding) return null;
+      if (publicBrandingCache.size >= PUBLIC_BRANDING_CACHE_MAX_HOSTS) {
+        const oldest = publicBrandingCache.keys().next().value;
+        if (oldest) publicBrandingCache.delete(oldest);
+      }
+      publicBrandingCache.set(hostname, { payload, expiresAt: Date.now() + PUBLIC_BRANDING_CACHE_TTL_MS });
+      return payload;
+    } catch { return null; }
+  })();
+  publicBrandingInFlight.set(hostname, loading);
+  try { return await loading; }
+  finally { if (publicBrandingInFlight.get(hostname) === loading) publicBrandingInFlight.delete(hostname); }
+}
+
+async function initialPortalResponse(request, env, ctx, {
+  portal,
+  usePersistenceRuntime,
+  persistenceRuntimeFactory,
+  publicBrandingHandler,
+}) {
+  let branding = cachedPublicBranding(new URL(request.url).hostname.toLowerCase());
+  let runtime = null;
+  if (!branding && usePersistenceRuntime) {
+    try {
+      runtime = ctx?.tradingPersistenceRuntime || await persistenceRuntimeFactory(env);
+      branding = await resolveInitialBranding(request, env, publicBrandingHandler, runtime);
+    } catch {
+      // The public portal should still load if storage is temporarily unavailable.
+    } finally {
+      if (!ctx?.tradingPersistenceRuntime) {
+        try { await runtime?.close?.(); } catch { /* Preserve the portal response. */ }
+      }
+    }
+  } else if (!branding) {
+    branding = await resolveInitialBranding(request, env, publicBrandingHandler);
+  }
+  const initial = withReturningOwnerSession(applyInitialBranding(portal, branding));
+  return htmlResponse(branding ? initial : withPublicBrandingBootstrap(initial));
 }
 
 function retiredLegacyAdminResponse() {
@@ -223,7 +278,16 @@ export function createTradingV1Entrypoint({
       if (url.pathname === '/' || url.pathname === '') {
         const branding = usePersistenceRuntime ? null : await resolveInitialBranding(request, env, publicBrandingHandler);
         const portal = normalizeEnterprisePortalHtml(withUserAcceptanceControls(withRoutingAiCompletion(withEnterpriseConnectionEnhancements(normalizeEnterprisePortalHtml(renderEnterpriseTradingPortal(env))))));
-        return htmlResponse(withPublicBrandingBootstrap(withReturningOwnerSession(applyInitialBranding(portal, branding))));
+        if (usePersistenceRuntime) {
+          return initialPortalResponse(request, env, ctx, {
+            portal,
+            usePersistenceRuntime,
+            persistenceRuntimeFactory,
+            publicBrandingHandler,
+          });
+        }
+        const initial = withReturningOwnerSession(applyInitialBranding(portal, branding));
+        return htmlResponse(branding ? initial : withPublicBrandingBootstrap(initial));
       }
       if (url.pathname === '/workspace-console' || url.pathname === '/workspace-console/' || url.pathname === '/launch-console' || url.pathname === '/launch-console/') return new Response(null, { status: 302, headers: { Location: '/' } });
       if (url.pathname === '/mkety-admin/access-codes' || url.pathname === '/mkety-admin/access-codes/') return htmlResponse(renderMketyAdminAccessCodesPage());
