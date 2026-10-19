@@ -59,7 +59,7 @@ const group = {
   id: 'signal-1:account-1', workspaceId: 'workspace-1', tradeAccountId: 'account-1',
   symbol: 'EURJPY', side: 'BUY', orderType: 'MARKET', status: 'OPEN', entry: { kind: 'PRICE', value: 160.25 },
   entryPrice: 160.25, stopLoss: 159.8, riskPlan: { logicalTakeProfits: [160.7, 161.1] },
-  legs: [{ legId: 'signal-1:leg-1', targetIndex: 1, lots: 0.02, status: 'OPEN', brokerPositionId: 'position-1', takeProfit: 160.7 }],
+  legs: [{ legId: 'signal-1:leg-1', targetIndex: 1, lots: 0.02, status: 'OPEN', brokerPositionId: 'position-1', takeProfit: 160.7, lifecycleTrackingEnabled: true }],
 };
 
 test('D1 trade state saves group, legs and passive outbox atomically, then hydrates the group', async () => {
@@ -69,6 +69,7 @@ test('D1 trade state saves group, legs and passive outbox atomically, then hydra
   const saved = await store.loadGroup(group.workspaceId, group.id);
   assert.equal(saved.id, group.id);
   assert.equal(saved.legs[0].brokerPositionId, 'position-1');
+  assert.equal(saved.legs[0].lifecycleTrackingEnabled, true);
   assert.deepEqual(saved.riskPlan.logicalTakeProfits, [160.7, 161.1]);
   const beforeActive = setup.binding.prepared.length;
   assert.equal((await store.loadActive(group.workspaceId)).length, 1);
