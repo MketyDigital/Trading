@@ -59,6 +59,7 @@ jobs:
             --hidden-import mt5_bridge `
             --hidden-import websocket `
             --hidden-import manager_ui `
+            --hidden-import local_copier_worker `
             --hidden-import process_supervisor `
             --hidden-import profile_store `
             --hidden-import terminal_catalog `
@@ -86,6 +87,8 @@ jobs:
           if ($worker.ExitCode -ne 2) { throw "Packaged worker did not fail closed when its pairing config was missing" }
           $workerStatus = Get-Content $status -Raw | ConvertFrom-Json
           if ($workerStatus.state -ne 'stopped') { throw "Packaged worker did not write its stopped status" }
+          $copyHelp = Start-Process -FilePath "dist/MketyMT5Connector.exe" -ArgumentList @('--local-copy-worker','--help') -PassThru -Wait
+          if ($copyHelp.ExitCode -ne 0) { throw "Packaged local copier worker entrypoint failed" }
 
       - name: Create SHA256 checksum
         shell: pwsh

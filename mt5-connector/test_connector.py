@@ -104,6 +104,14 @@ class FakeMT5:
 
 
 class ConnectorTests(unittest.TestCase):
+    def test_packaged_copier_worker_mode_dispatches_arguments_to_worker(self):
+        calls = []
+        worker = SimpleNamespace(main=lambda argv: calls.append(argv) or 17)
+        with patch.object(module.sys, 'argv', ['MketyMT5Connector.exe', '--local-copy-worker', '--help']), \
+                patch.dict('sys.modules', {'local_copier_worker': worker}):
+            self.assertEqual(module.main(), 17)
+        self.assertEqual(calls, [['--help']])
+
     def test_position_close_status_request_returns_read_only_tp_history_and_terminal_identity(self):
         connector = module.MketyMt5Connector(FakeMT5(), lambda *args, **kwargs: None,
             {'gateway_url': module.DEFAULT_GATEWAY, 'connection_token': 'token'}, ledger_path=':memory:')

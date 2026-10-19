@@ -82,14 +82,20 @@ def run(args):
     journal = CopyJournal(Path(args.journal))
     try:
         while True:
+            if args.stop_file and Path(args.stop_file).exists():
+                return
             parent = _snapshot(mt5, args.parent_terminal)
             if not parent.get('complete'):
                 time.sleep(args.poll_seconds)
                 continue
+            if args.stop_file and Path(args.stop_file).exists():
+                return
             follower = _snapshot(mt5, args.follower_terminal)
             if not follower.get('complete'):
                 time.sleep(args.poll_seconds)
                 continue
+            if args.stop_file and Path(args.stop_file).exists():
+                return
             source_by_follower = {str(row.get('ticket')): source for source, row in journal.follower_rows().items() if row.get('ticket')}
             follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), '')} for row in follower.get('positions', [])]
             engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot, True)
@@ -98,6 +104,8 @@ def run(args):
                 try:
                     broker = _load_engine(mt5)
                     for index, action in enumerate(actions, 1):
+                        if args.stop_file and Path(args.stop_file).exists():
+                            return
                         source_ticket = action.get('source_ticket')
                         command_id = f'local-copy:{args.parent_profile}:{args.follower_profile}:{source_ticket}:{index}'
                         action_type = action.get('type')
@@ -134,6 +142,7 @@ def main(argv=None):
     parser.add_argument('--fixed-lot', type=float, default=None)
     parser.add_argument('--poll-seconds', type=int, default=2)
     parser.add_argument('--journal', default='local-copy-ledger.sqlite')
+    parser.add_argument('--stop-file', default=None)
     return run(parser.parse_args(argv))
 
 
