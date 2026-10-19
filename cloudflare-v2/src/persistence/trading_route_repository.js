@@ -5,7 +5,7 @@ import { appendPostgresReplicationEventInTransaction } from './postgres_replicat
 const FIELDS=new Set(['workspace_id','source_connection_id','source_feed_id','destination_id','route_name','priority','is_active','filters','created_at','updated_at']);
 const SELECT='id,workspace_id,source_connection_id,source_feed_id,destination_id,route_name,priority,is_active,filters,created_at,updated_at';
 function encode(row,d1){return Object.fromEntries(Object.entries(row).map(([k,v])=>[k,k==='filters'&&v!=null?JSON.stringify(v):typeof v==='boolean'&&d1?Number(v):v]));}
-function decode(row){if(!row)return row;const out={...row};if(typeof out.filters==='string'){try{out.filters=JSON.parse(out.filters);}catch{out.filters={};}}return out;}
+function decode(row){if(!row)return row;const out={...row};if(typeof out.filters==='string'){try{out.filters=JSON.parse(out.filters);}catch{out.filters={};}}if('is_active'in out)out.is_active=out.is_active===true||out.is_active===1||out.is_active==='1';return out;}
 function validate(row){const out={};for(const [k,v] of Object.entries(row||{})){if(!FIELDS.has(k))throw new Error(`Unsupported route field: ${k}`);out[k]=v;}if(!out.workspace_id||!out.source_connection_id||!out.destination_id)throw new Error('Route workspace, source, and destination are required');if(out.source_feed_id==null)out.source_feed_id=null;if(out.filters==null)out.filters={};return out;}
 
 /** Workspace-scoped route primitives; multi-row reconciles can sequence these narrow-first operations. */
