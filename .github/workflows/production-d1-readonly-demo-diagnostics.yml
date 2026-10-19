@@ -76,6 +76,29 @@ jobs:
               title: 'Recent events without a linked position group',
               sql: "SELECT CASE lower(COALESCE(processing_status, '')) WHEN 'ready' THEN 'READY' WHEN 'management' THEN 'MANAGEMENT' WHEN 'no_action' THEN 'NO_ACTION' WHEN 'needs_review' THEN 'NEEDS_REVIEW' WHEN 'received' THEN 'RECEIVED' WHEN 'interpreted' THEN 'LEGACY_INTERPRETED' WHEN 'processed' THEN 'PROCESSED' WHEN 'executed' THEN 'EXECUTED' WHEN 'failed' THEN 'FAILED' WHEN 'rejected' THEN 'REJECTED' WHEN 'ignored' THEN 'IGNORED' WHEN 'pending' THEN 'PENDING' WHEN 'processing' THEN 'PROCESSING' ELSE 'OTHER' END AS processing_state, CASE WHEN COALESCE(error_code, '') = '' THEN 0 ELSE 1 END AS has_error, COUNT(*) AS events FROM trading_events e WHERE datetime(e.received_at) >= datetime(?) AND NOT EXISTS (SELECT 1 FROM position_groups g WHERE g.workspace_id = e.workspace_id AND (g.source_event_id = e.id OR EXISTS (SELECT 1 FROM json_each(COALESCE(g.source_event_ids, '[]')) WHERE value = e.id))) GROUP BY processing_state, has_error ORDER BY events DESC LIMIT 50",
             },
+            {
+              title: 'Recent destination outcome categories',
+              sql: "SELECT CASE upper(COALESCE(json_extract(outcome.value, '$.status'), '')) WHEN 'SUCCEEDED' THEN 'SUCCEEDED' WHEN 'FAILED' THEN 'FAILED' WHEN 'REJECTED' THEN 'REJECTED' WHEN 'BLOCKED' THEN 'BLOCKED' WHEN 'ROUTED' THEN 'ROUTED' ELSE 'OTHER' END AS outcome_state, CASE upper(COALESCE(json_extract(outcome.value, '$.errorCode'), '')) WHEN 'DESTINATION_DISABLED' THEN 'DESTINATION_DISABLED' WHEN 'DESTINATION_WORKSPACE_MISMATCH' THEN 'DESTINATION_WORKSPACE_MISMATCH' WHEN 'DESTINATION_TYPE_UNSUPPORTED' THEN 'DESTINATION_TYPE_UNSUPPORTED' WHEN 'DESTINATION_CREDENTIALS_MISSING' THEN 'DESTINATION_CREDENTIALS_MISSING' WHEN 'DESTINATION_CREDENTIALS_INVALID' THEN 'DESTINATION_CREDENTIALS_INVALID' WHEN 'DESTINATION_REF_MISSING' THEN 'DESTINATION_REF_MISSING' WHEN 'TELEGRAM_BOT_TOKEN_MISSING' THEN 'TELEGRAM_BOT_TOKEN_MISSING' WHEN 'TELEGRAM_DELIVERY_FAILED' THEN 'TELEGRAM_DELIVERY_FAILED' WHEN 'TELEGRAM_EDIT_PARENT_UNRESOLVED' THEN 'TELEGRAM_EDIT_PARENT_UNRESOLVED' WHEN 'WEBHOOK_HTTPS_REQUIRED' THEN 'WEBHOOK_HTTPS_REQUIRED' WHEN 'WEBHOOK_SIGNING_SECRET_MISSING' THEN 'WEBHOOK_SIGNING_SECRET_MISSING' WHEN 'WEBHOOK_HTTP_ERROR' THEN 'WEBHOOK_HTTP_ERROR' WHEN 'WEBHOOK_TIMEOUT' THEN 'WEBHOOK_TIMEOUT' WHEN 'WEBHOOK_TRANSPORT_FAILED' THEN 'WEBHOOK_TRANSPORT_FAILED' WHEN 'DESTINATION_FORMAT_FAILED' THEN 'DESTINATION_FORMAT_FAILED' WHEN 'DESTINATION_DELIVERY_FAILED' THEN 'DESTINATION_DELIVERY_FAILED' ELSE CASE WHEN COALESCE(json_extract(outcome.value, '$.errorCode'), '') = '' THEN 'NO_ERROR_CODE' ELSE 'OTHER_ERROR_CODE' END END AS error_category, COUNT(*) AS outcomes FROM operation_journal j, json_each(COALESCE(json_extract(j.details, '$.outcomes'), '[]')) AS outcome WHERE upper(COALESCE(j.stage, '')) = 'DESTINATION' AND datetime(j.observed_at) >= datetime(?) GROUP BY outcome_state, error_category ORDER BY outcomes DESC LIMIT 50",
+            },
+            {
+              title: 'Recent broker planning and execution result categories',
+              sql: "SELECT CASE upper(COALESCE(stage, '')) WHEN 'BROKER_PLANNING' THEN 'BROKER_PLANNING' ELSE 'BROKER_EXECUTION' END AS stage, CASE upper(COALESCE(json_extract(details, '$.status'), '')) WHEN 'SIMULATED' THEN 'SIMULATED' WHEN 'NOT_EXECUTABLE' THEN 'NOT_EXECUTABLE' WHEN 'EXECUTED' THEN 'EXECUTED' WHEN 'SUCCEEDED' THEN 'SUCCEEDED' WHEN 'PARTIAL_SUCCESS' THEN 'PARTIAL_SUCCESS' WHEN 'PARTIAL_FAILURE' THEN 'PARTIAL_FAILURE' WHEN 'FAILED' THEN 'FAILED' WHEN 'BLOCKED' THEN 'BLOCKED' WHEN 'TRADING_ACCESS_DISABLED' THEN 'TRADING_ACCESS_DISABLED' WHEN 'BROKER_OWNER_SWITCH_OFF' THEN 'BROKER_OWNER_SWITCH_OFF' WHEN 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' THEN 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' WHEN 'BROKER_RUNTIME_CONTROL_UNAVAILABLE' THEN 'BROKER_RUNTIME_CONTROL_UNAVAILABLE' WHEN 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE' THEN 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE' ELSE 'OTHER' END AS result_state, CASE upper(COALESCE(error_code, '')) WHEN 'NO_READY_PLAN' THEN 'NO_READY_PLAN' WHEN 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' THEN 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' WHEN 'RUNTIME_CONTROL_UNAVAILABLE' THEN 'RUNTIME_CONTROL_UNAVAILABLE' WHEN 'BROKER_OWNER_SWITCH_OFF' THEN 'BROKER_OWNER_SWITCH_OFF' WHEN 'TRADING_ACCESS_DISABLED' THEN 'TRADING_ACCESS_DISABLED' WHEN 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE' THEN 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE' ELSE CASE WHEN COALESCE(error_code, '') = '' THEN 'NO_ERROR_CODE' ELSE 'OTHER_ERROR_CODE' END END AS error_category, COUNT(*) AS operations FROM operation_journal WHERE upper(COALESCE(stage, '')) IN ('BROKER_PLANNING', 'BROKER_EXECUTION') AND datetime(observed_at) >= datetime(?) GROUP BY stage, result_state, error_category ORDER BY operations DESC LIMIT 50",
+            },
+            {
+              title: 'Application D1 table inventory',
+              sql: "SELECT name AS table_name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name <> 'd1_migrations' ORDER BY name",
+              params: [],
+            },
+            {
+              title: 'D1 quick integrity check',
+              sql: "SELECT CASE WHEN COUNT(*) = 1 AND SUM(CASE WHEN quick_check = 'ok' THEN 1 ELSE 0 END) = 1 THEN 'OK' ELSE 'ISSUES' END AS integrity_status FROM pragma_quick_check",
+              params: [],
+            },
+            {
+              title: 'D1 foreign key violation count',
+              sql: "SELECT COUNT(*) AS violations FROM pragma_foreign_key_check",
+              params: [],
+            },
           ];
 
           const url = 'https://api.cloudflare.com/client/v4/accounts/'
@@ -101,6 +124,29 @@ jobs:
               throw new Error('A bounded D1 diagnostics query did not complete successfully');
             }
           }
+
+          const expectedApplicationTables = new Set([
+            'trading_storage_control', 'trading_runtime_controls', 'trading_replication_counters',
+            'trading_replication_journal', 'trading_replication_checkpoints', 'workspaces',
+            'signal_routes', 'vip_members', 'bank_deposits', 'signal_logs', 'trading_workspace_access',
+            'source_connections', 'trading_events', 'destination_deliveries', 'trading_workspace_memberships',
+            'trading_workspace_hostnames', 'trading_access_codes', 'trading_access_code_redemptions',
+            'trading_destination_templates', 'trading_ctrader_oauth_states', 'trading_ingress_collectors',
+            'source_feeds', 'trading_destination_connections', 'trading_event_revisions',
+            'orphan_signal_recovery_cursors', 'ai_providers', 'trade_accounts', 'position_groups',
+            'position_legs', 'trading_destinations', 'source_destination_routes', 'operation_journal',
+            'trading_replication_health', 'trading_replication_quarantine',
+          ]);
+          const actualApplicationTables = new Set(payload.result[7].results.map((row) => String(row.table_name)));
+          const missingApplicationTables = [...expectedApplicationTables].filter((name) => !actualApplicationTables.has(name));
+          const unexpectedApplicationTables = [...actualApplicationTables].filter((name) => !expectedApplicationTables.has(name));
+          if (missingApplicationTables.length || unexpectedApplicationTables.length) {
+            console.log('D1_SCHEMA_INVENTORY=DIFF missing=' + missingApplicationTables.join(',') + ' unexpected=' + unexpectedApplicationTables.join(','));
+          } else {
+            console.log('D1_SCHEMA_INVENTORY=PASS tables=' + actualApplicationTables.size);
+          }
+          console.log('D1_QUICK_INTEGRITY=' + String(payload.result[8].results[0]?.integrity_status || 'UNKNOWN'));
+          console.log('D1_FOREIGN_KEY_VIOLATIONS=' + String(payload.result[9].results[0]?.violations ?? 'UNKNOWN'));
 
           const escapeCell = (value) => String(value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
           let report = '# Production D1 read-only diagnostics\n\n'
