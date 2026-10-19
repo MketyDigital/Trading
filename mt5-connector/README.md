@@ -62,7 +62,11 @@ The local copier is an optional MT5-to-MT5 feature inside the same Windows manag
 
 1. Install or add two separate MT5 terminal installations on the same Windows PC/VPS. Sign in to the main account in one terminal and the follower account in the other. Keep both terminals open and connected to their brokers.
 2. Open `MketyMT5Connector.exe`, click **Refresh terminals**, select the main terminal and click **Add another terminal**. Repeat for the follower terminal. The manager lists each saved profile and its **Profile ID**.
-3. Select the follower row and click **Mark selected as local follower**. Enter the main account's **Profile ID** from the table. Enter a lot multiplier: `1` copies the same volume, `0.5` copies half, and `2` copies double. The released manager currently offers multiplier sizing, not fixed-lot sizing.
+3. Select the follower row and click **Mark selected as local follower**. Enter the main account's **Profile ID** from the table. Choose one lot-sizing mode:
+   - **Fixed lots:** enter the follower volume in lots, such as `0.01`, `0.1`, or `1.0`. This requests that volume for each copied position.
+   - **Multiplier:** `1` copies the same volume as the main position, `0.5` copies half, and `2` copies double.
+
+   MT5 applies the follower broker's supported volume minimum, maximum and step. A requested fixed volume below the broker minimum is raised to that minimum; one above its maximum is capped. Check the effective volume on a demo account before using live accounts.
 4. Select the follower profile and click **Start local copy**. Confirm the warning. Start with demo accounts. Any positions already open on the main account can be copied as soon as the copier starts.
 5. Click **Stop local copy** to stop that pair. **Disable local copy** stops it and removes the follower link. On manager close, choosing **Yes** stops connector and copier workers; choosing **No** leaves them running. Keep the manager open while managing pairs.
 
