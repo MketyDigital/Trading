@@ -27,6 +27,24 @@ class LocalCopierTests(unittest.TestCase):
         follower = {'positions': [{'source_ticket': '10', 'symbol': 'XAUUSD'}]}
         self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [])
 
+    def test_unlinked_follower_positions_are_never_closed_by_copy_reconciliation(self):
+        parent = {'complete': True, 'positions': []}
+        follower = {'positions': [
+            {'ticket': 'manual-22', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1},
+            {'ticket': 'copy-33', 'source_ticket': '', 'symbol': 'XAUUSD', 'side': 'SELL', 'volume': 0.2},
+        ]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [])
+
+    def test_parent_close_only_closes_the_follower_position_owned_by_this_copy_link(self):
+        parent = {'complete': True, 'positions': []}
+        follower = {'positions': [
+            {'ticket': 'copy-33', 'source_ticket': 'parent-10'},
+            {'ticket': 'manual-22', 'symbol': 'EURUSD'},
+        ]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [
+            {'type': 'CLOSE_POSITION', 'source_ticket': 'parent-10', 'position_id': 'copy-33'}
+        ])
+
     def test_closed_source_is_not_replayed_by_journal(self):
         from local_copier_worker import CopyJournal
         with tempfile.TemporaryDirectory() as folder:

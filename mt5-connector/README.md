@@ -66,7 +66,7 @@ The local copier is an optional MT5-to-MT5 feature inside the same Windows manag
 4. Select the follower profile and click **Start local copy**. Confirm the warning. Start with demo accounts. Any positions already open on the main account can be copied as soon as the copier starts.
 5. Click **Stop local copy** to stop that pair. **Disable local copy** stops it and removes the follower link. On manager close, choosing **Yes** stops connector and copier workers; choosing **No** leaves them running. Keep the manager open while managing pairs.
 
-The local copier checks open positions about every two seconds. It mirrors market-position opens, SL/TP changes (including manual edits observed in the main MT5 terminal), and full closes. It does not copy pending orders or partial volume closes. A running copier can place real broker orders on the follower account; test its symbol availability, lot sizing, SL/TP and stop behavior on demo accounts before using live accounts.
+The local copier checks open positions about every two seconds. It mirrors market-position opens, SL/TP changes (including manual edits observed in the main MT5 terminal), and full closes. It only manages follower positions recorded in its local copy journal; unrelated/manual follower positions are left alone. It does not copy pending orders or partial volume closes. A running copier can place real broker orders on the follower account; test its symbol availability, lot sizing, SL/TP and stop behavior on demo accounts before using live accounts.
 
 The installer path is available for a downloaded MetaQuotes or broker-specific setup file. Copying an existing terminal directory is intentionally unavailable until its layout can be validated to exclude terminal data and credentials.
 
