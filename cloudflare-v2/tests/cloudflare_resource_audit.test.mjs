@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL } from '../scripts/cloudflare_resource_audit.mjs';
+import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL, utcCalendarWindowStart } from '../scripts/cloudflare_resource_audit.mjs';
 
 test('redacts SQL literals and bounds long statements before reporting', () => {
   const sql = `UPDATE sessions SET token='private-token', n=123 WHERE user_id="secret-user"`;
@@ -13,6 +13,11 @@ test('accepts only supported analytics windows', () => {
   assert.equal(normalizeWindowDays('31'), 31);
   assert.throws(() => normalizeWindowDays('32'), /7 or 31/);
   assert.throws(() => normalizeWindowDays('7; DROP TABLE'), /7 or 31/);
+});
+
+test('calendar analytics window includes exactly the selected number of UTC dates', () => {
+  const start = utcCalendarWindowStart(new Date('2026-10-19T13:00:00.000Z'), 7);
+  assert.equal(start.toISOString(), '2026-10-13T00:00:00.000Z');
 });
 
 test('fails closed unless Cloudflare GraphQL document is a read-only query', () => {
