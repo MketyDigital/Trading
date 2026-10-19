@@ -313,8 +313,11 @@ export function createTradingV1Entrypoint({
         let runtime;
         try {
           runtime = await persistenceRuntimeFactory(env);
-          replicationRuntime = await replicationRuntimeFactory(env, { postgresDatabase: runtime.postgresDatabase || null });
-          const replication = await replicationRuntime.run();
+          let replication = { ok: true, skipped: true };
+          if (runMtprotoRecovery) {
+            replicationRuntime = await replicationRuntimeFactory(env, { postgresDatabase: runtime.postgresDatabase || null });
+            replication = await replicationRuntime.run();
+          }
           let vipLifecycle;
           if (runVipLifecycle) {
             const workspaces = await runtime.legacyWorkspaces.listBotEnabled();
