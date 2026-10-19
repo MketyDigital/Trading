@@ -22,6 +22,23 @@ def _source_ticket(position):
     return str(position.get("source_ticket") or position.get("ticket") or "").strip()
 
 
+def _closable_volume(value, minimum, step):
+    """Round partial closes down to broker volume steps; never round upward."""
+    try:
+        amount = float(value)
+        min_lot = float(minimum or 0)
+        lot_step = float(step or 0)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0:
+        return None
+    if lot_step > 0:
+        amount = (int((amount + 1e-9) / lot_step)) * lot_step
+    if amount <= 0 or (min_lot > 0 and amount + 1e-9 < min_lot):
+        return None
+    return round(amount, 8)
+
+
 def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot_multiplier=1, fixed_lot=None):
     if not isinstance(parent_snapshot, dict) or parent_snapshot.get("complete") is not True:
         return []
@@ -59,6 +76,16 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
         if current.get("sl") != parent.get("sl") or current.get("tp") != parent.get("tp"):
             actions.append({"type": "MODIFY_POSITION", "source_ticket": source_ticket, "position_id": current.get("ticket"),
                             "symbol": symbol, "stop_loss": parent.get("sl"), "take_profit": parent.get("tp")})
+        follower_lots = _positive(current.get("volume"))
+        if fixed is not None:
+            initial_source_lots = _positive(current.get("source_initial_volume"))
+            if initial_source_lots is not None:
+                desired_lots = fixed * lots / initial_source_lots
+        if follower_lots is not None and follower_lots > desired_lots + 1e-7:
+            close_lots = _closable_volume(follower_lots - desired_lots, current.get("volume_min"), current.get("volume_step"))
+            if close_lots is not None:
+                actions.append({"type": "CLOSE_PARTIAL", "source_ticket": source_ticket,
+                                "position_id": current.get("ticket"), "lots": close_lots})
     for source_ticket, current in sorted(follower_by_ticket.items()):
         if source_ticket not in parent_by_ticket:
             actions.append({"type": "CLOSE_POSITION", "source_ticket": source_ticket, "position_id": current.get("ticket")})

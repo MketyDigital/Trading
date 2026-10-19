@@ -56,6 +56,28 @@ class LocalCopierTests(unittest.TestCase):
             {'type': 'CLOSE_POSITION', 'source_ticket': 'parent-10', 'position_id': 'copy-33'}
         ])
 
+    def test_partial_parent_close_closes_the_same_fraction_of_a_fixed_lot_follower(self):
+        parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.1, 'sl': 0, 'tp': 0}]}
+        follower = {'positions': [{'ticket': 'copy-33', 'source_ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 1.0,
+                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.01, 'volume_step': 0.01}]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1, fixed_lot=1.0), [
+            {'type': 'CLOSE_PARTIAL', 'source_ticket': 'parent-10', 'position_id': 'copy-33', 'lots': 0.5}
+        ])
+
+    def test_partial_parent_close_scales_the_follower_by_multiplier(self):
+        parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'EURUSD', 'side': 'SELL', 'volume': 0.1, 'sl': 0, 'tp': 0}]}
+        follower = {'positions': [{'ticket': 'copy-33', 'source_ticket': 'parent-10', 'symbol': 'EURUSD', 'side': 'SELL', 'volume': 0.2,
+                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.01, 'volume_step': 0.01}]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [
+            {'type': 'CLOSE_PARTIAL', 'source_ticket': 'parent-10', 'position_id': 'copy-33', 'lots': 0.1}
+        ])
+
+    def test_partial_close_below_broker_minimum_is_not_rounded_up(self):
+        parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.19, 'sl': 0, 'tp': 0}]}
+        follower = {'positions': [{'ticket': 'copy-33', 'source_ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 1.0,
+                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.1, 'volume_step': 0.1}]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, fixed_lot=1.0), [])
+
     def test_closed_source_is_not_replayed_by_journal(self):
         from local_copier_worker import CopyJournal
         with tempfile.TemporaryDirectory() as folder:
@@ -64,6 +86,49 @@ class LocalCopierTests(unittest.TestCase):
                 self.assertIn('10', journal.follower_rows())
                 journal.remove('10')
                 self.assertNotIn('10', journal.follower_rows())
+
+    def test_copy_journal_preserves_initial_source_volume_across_updates(self):
+        from local_copier_worker import CopyJournal
+        with tempfile.TemporaryDirectory() as folder:
+            with CopyJournal(Path(folder) / 'copy.sqlite') as journal:
+                journal.record('10', '20', 'first', 0.2)
+                journal.record('10', '20', 'updated', 0.1)
+                self.assertEqual(journal.follower_rows()['10']['source_initial_volume'], 0.2)
+
+    def test_worker_sends_partial_close_volume_and_keeps_follower_position_link(self):
+        from argparse import Namespace
+        from local_copier_worker import CopyJournal, run
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            journal_path = root / 'copy.sqlite'
+            with CopyJournal(journal_path) as journal:
+                journal.record('parent-10', 'follower-20', 'initial', 0.2)
+            stop_file = root / 'stop.signal'
+            parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.1, 'sl': 0, 'tp': 0}]}
+            follower = {'complete': True, 'positions': [{'ticket': 'follower-20', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 1.0,
+                                                           'sl': 0, 'tp': 0, 'volume_min': 0.01, 'volume_step': 0.01}]}
+            snapshots = iter([parent, follower])
+            calls = []
+            class FakeMT5:
+                def initialize(self, **_kwargs): return True
+                def shutdown(self): pass
+            class FakeBroker:
+                def execute_reconciled(self, command, command_id):
+                    calls.append((command, command_id))
+                    return {'ok': True, 'ticket': 'close-deal-999'}
+            def sleep(_seconds):
+                stop_file.touch()
+            with patch('local_copier_worker._load_mt5', return_value=FakeMT5()), \
+                    patch('local_copier_worker._snapshot', side_effect=lambda *_args, **_kwargs: next(snapshots)), \
+                    patch('local_copier_worker._load_engine', return_value=FakeBroker()), \
+                    patch('local_copier_worker.time.sleep', side_effect=sleep):
+                run(Namespace(journal=str(journal_path), stop_file=str(stop_file), parent_terminal='parent.exe', follower_terminal='follower.exe',
+                              parent_profile='main', follower_profile='copy', lot_multiplier=1.0, fixed_lot=1.0, poll_seconds=1))
+            self.assertEqual(calls[0][0], {'action': 'CLOSE_PARTIAL', 'positionId': 'follower-20', 'volume': 0.5})
+            with CopyJournal(journal_path) as journal:
+                row = journal.follower_rows()['parent-10']
+                self.assertEqual(row['ticket'], 'follower-20')
+                self.assertEqual(row['source_initial_volume'], 0.2)
 
     def test_copy_journal_creates_missing_profile_directory(self):
         from local_copier_worker import CopyJournal

@@ -12,6 +12,14 @@ from pathlib import Path
 from local_copier import LocalCopyEngine
 
 
+def _positive(value):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
 def _load_engine(mt5):
     import sys
     bridge_path = Path(__file__).resolve().parents[1] / 'cloudflare-v2' / 'bridges'
@@ -34,10 +42,16 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
         if positions is None:
             return {'complete': False, 'reason': 'MT5_POSITIONS_UNAVAILABLE'}
         result = []
+        symbols = {}
         for row in positions:
+            symbol = str(getattr(row, 'symbol', ''))
+            if symbol not in symbols:
+                symbols[symbol] = mt5.symbol_info(symbol)
+            symbol_info = symbols[symbol]
             side = 'BUY' if int(getattr(row, 'type', 1)) == int(getattr(mt5, 'ORDER_TYPE_BUY', 0)) else 'SELL'
-            result.append({'ticket': str(getattr(row, 'ticket', '')), 'symbol': str(getattr(row, 'symbol', '')), 'side': side,
-                           'volume': float(getattr(row, 'volume', 0) or 0), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None)})
+            result.append({'ticket': str(getattr(row, 'ticket', '')), 'symbol': symbol, 'side': side,
+                           'volume': float(getattr(row, 'volume', 0) or 0), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
+                           'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_step': getattr(symbol_info, 'volume_step', None)})
         return {'complete': True, 'positions': result}
     finally:
         mt5.shutdown()
@@ -56,6 +70,9 @@ class CopyJournal:
         except sqlite3.OperationalError as exc:
             raise RuntimeError(f'could not open local copier journal at {self.path}: {exc}') from exc
         self.db.execute('CREATE TABLE IF NOT EXISTS copy_state(source_ticket TEXT PRIMARY KEY, follower_position_id TEXT, fingerprint TEXT NOT NULL)')
+        columns = {row[1] for row in self.db.execute('PRAGMA table_info(copy_state)')}
+        if 'source_initial_volume' not in columns:
+            self.db.execute('ALTER TABLE copy_state ADD COLUMN source_initial_volume REAL')
         self.db.commit()
 
     def close(self):
@@ -71,10 +88,16 @@ class CopyJournal:
         self.close()
 
     def follower_rows(self):
-        return {str(row[0]): {'source_ticket': str(row[0]), 'ticket': row[1]} for row in self.db.execute('SELECT source_ticket,follower_position_id FROM copy_state')}
+        return {str(row[0]): {'source_ticket': str(row[0]), 'ticket': row[1], 'source_initial_volume': row[2]}
+                for row in self.db.execute('SELECT source_ticket,follower_position_id,source_initial_volume FROM copy_state')}
 
-    def record(self, source_ticket, follower_position_id, fingerprint):
-        self.db.execute('INSERT OR REPLACE INTO copy_state(source_ticket,follower_position_id,fingerprint) VALUES(?,?,?)', (str(source_ticket), str(follower_position_id or ''), str(fingerprint)))
+    def record(self, source_ticket, follower_position_id, fingerprint, source_initial_volume=None):
+        self.db.execute(
+            'INSERT INTO copy_state(source_ticket,follower_position_id,fingerprint,source_initial_volume) VALUES(?,?,?,?) '
+            'ON CONFLICT(source_ticket) DO UPDATE SET follower_position_id=excluded.follower_position_id, '
+            'fingerprint=excluded.fingerprint, source_initial_volume=COALESCE(copy_state.source_initial_volume, excluded.source_initial_volume)',
+            (str(source_ticket), str(follower_position_id or ''), str(fingerprint), source_initial_volume),
+        )
         self.db.commit()
 
     def remove(self, source_ticket):
@@ -102,7 +125,19 @@ def run(args):
             if args.stop_file and Path(args.stop_file).exists():
                 return
             source_by_follower = {str(row.get('ticket')): source for source, row in journal.follower_rows().items() if row.get('ticket')}
-            follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), '')} for row in follower.get('positions', [])]
+            journal_rows = journal.follower_rows()
+            parent_by_ticket = {str(row.get('ticket')): row for row in parent.get('positions', []) if row.get('ticket')}
+            for source_ticket, linked in journal_rows.items():
+                source_position = parent_by_ticket.get(source_ticket)
+                if source_position and _positive(source_position.get('volume')) and not linked.get('source_initial_volume'):
+                    # Existing journal rows predate proportional sizing. Treat
+                    # their first post-upgrade snapshot as the safe baseline.
+                    journal.record(source_ticket, linked.get('ticket'), _fingerprint(parent), _positive(source_position.get('volume')))
+            journal_rows = journal.follower_rows()
+            initial_source_volume = {source: row.get('source_initial_volume') for source, row in journal_rows.items()}
+            follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), ''),
+                                      'source_initial_volume': initial_source_volume.get(source_by_follower.get(str(row.get('ticket')), ''))}
+                                     for row in follower.get('positions', [])]
             engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot, True)
             actions = engine.plan(parent, follower)
             if actions and mt5.initialize(path=str(args.follower_terminal)):
@@ -121,6 +156,8 @@ def run(args):
                             command = {'action': 'MODIFY_POSITION', 'positionId': action.get('position_id'), 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
                         elif action_type == 'CLOSE_POSITION':
                             command = {'action': 'CLOSE_POSITION', 'positionId': action.get('position_id')}
+                        elif action_type == 'CLOSE_PARTIAL':
+                            command = {'action': 'CLOSE_PARTIAL', 'positionId': action.get('position_id'), 'volume': action['lots']}
                         else:
                             continue
                         result = broker.execute_reconciled(command, command_id)
@@ -129,7 +166,16 @@ def run(args):
                                 # A closed source must not be re-emitted on every poll.
                                 journal.remove(source_ticket)
                             else:
-                                journal.record(source_ticket, result.get('position_id') or result.get('ticket') or action.get('position_id'), _fingerprint(parent))
+                                source_position = parent_by_ticket.get(str(source_ticket), {})
+                                if action_type == 'OPEN_POSITION':
+                                    follower_position_id = result.get('position_id') or result.get('ticket')
+                                else:
+                                    # Modify/close responses may identify the
+                                    # order or deal. Keep the actual linked
+                                    # follower position ticket in the journal.
+                                    follower_position_id = action.get('position_id')
+                                journal.record(source_ticket, follower_position_id,
+                                               _fingerprint(parent), _positive(source_position.get('volume')))
                 finally:
                     mt5.shutdown()
             time.sleep(args.poll_seconds)
