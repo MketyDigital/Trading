@@ -63,7 +63,10 @@ export function parseWranglerResources(config) {
 function safeError(error) {
   const status = Number(error?.status || 0);
   const codes = Array.isArray(error?.codes) ? error.codes.filter((code) => Number.isFinite(Number(code))).slice(0, 5) : [];
-  return { ok: false, status: status || undefined, codes, message: String(error?.message || 'request failed').slice(0, 180) };
+  const details = Array.isArray(error?.details)
+    ? error.details.map((detail) => String(detail || '').replace(/[\r\n]/g, ' ').slice(0, 180)).filter(Boolean).slice(0, 5)
+    : [];
+  return { ok: false, status: status || undefined, codes, details, message: String(error?.message || 'request failed').slice(0, 180) };
 }
 
 async function requestJson(url, token, options = {}) {
@@ -95,7 +98,8 @@ async function graph(query, variables, token) {
   });
   if (result.errors?.length) {
     const error = new Error(`GraphQL rejected ${query.match(/\b(?:query|mutation)\s+(\w+)/)?.[1] || 'query'}`);
-    error.codes = result.errors.map((item) => item.extensions?.code || item.message?.slice(0, 100));
+    error.codes = result.errors.map((item) => item.extensions?.code).filter(Boolean);
+    error.details = result.errors.map((item) => item.message).filter(Boolean);
     throw error;
   }
   return result.data?.viewer?.accounts?.[0] || {};
@@ -119,7 +123,20 @@ async function listD1(token, account) {
 
 async function listQueues(token, account) {
   const result = await restGet(`/accounts/${account}/queues`, token);
-  return (result.result || []).map(({ queue_id, queue_name, created_on, producers, consumers }) => ({ id: queue_id, name: queue_name, createdAt: created_on, producers: producers?.length || 0, consumers: consumers?.length || 0 }));
+  const queues = [];
+  for (const { queue_id, queue_name, created_on, producers, consumers } of (result.result || [])) {
+    const currentMetrics = await optional(`queue_metrics:${queue_id}`, async () => {
+      const metrics = await restGet(`/accounts/${account}/queues/${encodeURIComponent(queue_id)}/metrics`, token);
+      const item = metrics.result || {};
+      return {
+        backlogCount: item.backlog_count ?? null,
+        backlogBytes: item.backlog_bytes ?? null,
+        oldestMessageTimestampMs: item.oldest_message_timestamp_ms ?? null,
+      };
+    });
+    queues.push({ id: queue_id, name: queue_name, createdAt: created_on, producers: producers?.length || 0, consumers: consumers?.length || 0, currentMetrics });
+  }
+  return queues;
 }
 
 async function listContainerApps(token, account) {
