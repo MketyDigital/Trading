@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,7 @@ class CopyPairSpec:
     poll_seconds: int = 2
     journal_path: Path | None = None
     stop_file: Path | None = None
+    follower_symbol_map: dict | None = None
 
 
 class LocalCopySupervisor:
@@ -50,6 +52,8 @@ class LocalCopySupervisor:
         ]
         if spec.follower_fixed_lot is not None:
             args.extend(['--fixed-lot', str(spec.follower_fixed_lot)])
+        if spec.follower_symbol_map:
+            args.extend(['--symbol-map', json.dumps(spec.follower_symbol_map, separators=(',', ':'))])
         if spec.journal_path is not None:
             args.extend(['--journal', str(spec.journal_path)])
         if spec.stop_file is not None:

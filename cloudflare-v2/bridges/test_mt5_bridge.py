@@ -43,6 +43,9 @@ class FakeMT5:
     def symbol_select(self, _symbol, _enabled):
         return True
 
+    def symbols_get(self):
+        return ()
+
     def order_check(self, request):
         self.checked.append(dict(request))
         return SimpleNamespace(retcode=0, comment='Done')
@@ -109,6 +112,27 @@ def captured_source_event(ticket='9001', occurred_at='2026-02-02T02:40:00.100000
 
 
 class MT5BridgeTests(unittest.TestCase):
+    def test_volume_normalization_uses_target_broker_minimum_and_step(self):
+        mt5 = FakeMT5()
+        engine = MT5Engine(mt5)
+        info = SimpleNamespace(volume_min=0.1, volume_max=2.0, volume_step=0.1)
+        self.assertEqual(engine._normalize_volume(0.35, info), 0.3)
+        self.assertEqual(engine._normalize_volume(0.01, info), 0.1)
+
+    def test_unique_broker_suffix_is_resolved_but_ambiguous_symbol_fails_closed(self):
+        class CatalogMT5(FakeMT5):
+            def __init__(self, names):
+                super().__init__()
+                self.names = names
+            def symbol_info(self, symbol):
+                return next((SimpleNamespace(name=name, visible=True) for name in self.names if name == symbol), None)
+            def symbols_get(self):
+                return tuple(SimpleNamespace(name=name) for name in self.names)
+
+        self.assertEqual(MT5Engine(CatalogMT5(['EURUSD.a']))._symbol('EURUSD').name, 'EURUSD.a')
+        with self.assertRaisesRegex(RuntimeError, 'symbol resolution ambiguous'):
+            MT5Engine(CatalogMT5(['EURUSD.a', 'EURUSD.pro']))._symbol('EURUSD')
+
     def test_market_open_uses_ask_for_buy_and_checks_before_send(self):
         mt5 = FakeMT5()
         engine = MT5Engine(mt5)
@@ -121,6 +145,20 @@ class MT5BridgeTests(unittest.TestCase):
         self.assertEqual(mt5.sent[0]['sl'], 2518)
         self.assertEqual(mt5.sent[0]['tp'], 2535)
         self.assertEqual(result['fill_price'], 2526.15)
+
+    def test_market_open_links_actual_position_ticket_when_order_ticket_differs(self):
+        class FilledMT5(FakeMT5):
+            def positions_get(self, ticket=None, symbol=None):
+                if symbol:
+                    return (SimpleNamespace(ticket=7777, symbol=symbol, magic=460051, type=self.ORDER_TYPE_BUY),)
+                return super().positions_get(ticket=ticket, symbol=symbol)
+
+        result = MT5Engine(FilledMT5()).execute({
+            'action': 'OPEN_POSITION', 'symbol': 'XAUUSD.a', 'side': 'BUY', 'orderType': 'MARKET', 'volume': 0.03,
+            'resolvePosition': True,
+        }, command_id='copy-open')
+        self.assertEqual(result['order_id'], 9001)
+        self.assertEqual(result['position_id'], 7777)
 
     def test_partial_close_uses_opposite_side_and_requested_volume(self):
         mt5 = FakeMT5()

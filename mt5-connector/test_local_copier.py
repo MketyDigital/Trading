@@ -10,6 +10,24 @@ from copy_supervisor import CopyPairSpec, LocalCopySupervisor
 
 
 class LocalCopierTests(unittest.TestCase):
+    def test_snapshot_reads_account_mode_and_follower_symbol_volume_rules(self):
+        from local_copier_worker import _snapshot
+        class FakeMT5:
+            ORDER_TYPE_BUY = 0
+            ACCOUNT_MARGIN_MODE_RETAIL_NETTING = 0
+            ACCOUNT_MARGIN_MODE_EXCHANGE = 1
+            ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
+            def initialize(self, **_kwargs): return True
+            def shutdown(self): pass
+            def account_info(self): return SimpleNamespace(margin_mode=self.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+            def positions_get(self): return (SimpleNamespace(ticket=12, symbol='Volatility 75 Index', type=0, volume=0.2, sl=0, tp=0),)
+            def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_step=0.1)
+        snapshot = _snapshot(FakeMT5(), 'deriv-terminal.exe')
+        self.assertTrue(snapshot['complete'])
+        self.assertEqual(snapshot['account_mode'], 'HEDGING')
+        self.assertEqual(snapshot['positions'][0]['volume_min'], 0.1)
+        self.assertEqual(snapshot['positions'][0]['volume_step'], 0.1)
+
     def test_profile_copy_metadata_defaults_off(self):
         profile = TerminalProfile('p1', 'Primary')
         self.assertEqual(profile.copy_role, 'none')
@@ -21,6 +39,24 @@ class LocalCopierTests(unittest.TestCase):
         follower = {'positions': []}
         actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
         self.assertEqual(actions, [{'type': 'OPEN_POSITION', 'source_ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'lots': 0.1, 'stop_loss': 2300, 'take_profit': 2400}])
+
+    def test_explicit_symbol_mapping_routes_deriv_style_parent_symbol_to_follower_symbol(self):
+        parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'Volatility 75 Index', 'side': 'BUY', 'volume': 0.2, 'sl': 1, 'tp': 2}]}
+        actions = plan_snapshot_actions(parent, {'positions': []}, lot_multiplier=1, symbol_map={'Volatility 75 Index': 'Volatility 75 (1s) Index'})
+        self.assertEqual(actions[0]['symbol'], 'Volatility 75 (1s) Index')
+
+    def test_netting_follower_does_not_merge_multiple_parent_positions_on_one_symbol(self):
+        parent = {'complete': True, 'positions': [
+            {'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1},
+            {'ticket': '11', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.2},
+        ]}
+        follower = {'account_mode': 'NETTING', 'positions': []}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [])
+
+    def test_netting_follower_does_not_add_to_an_unlinked_manual_position(self):
+        parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1}]}
+        follower = {'account_mode': 'NETTING', 'positions': [{'ticket': 'manual-1', 'symbol': 'EURUSD', 'volume': 0.3}]}
+        self.assertEqual(plan_snapshot_actions(parent, follower, lot_multiplier=1), [])
 
     def test_fixed_lot_size_uses_the_requested_follower_volume(self):
         parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.2}]}
@@ -146,11 +182,20 @@ class LocalCopierTests(unittest.TestCase):
             follower = TerminalProfile('p2', 'Follower', Path('C:/follower/terminal64.exe'))
             save_profile(parent, root)
             save_profile(follower, root)
-            update_copy_settings(follower, root, role='follower', parent_profile_id='p1', lot_multiplier=0.5, enabled=True)
+            update_copy_settings(follower, root, role='follower', parent_profile_id='p1', lot_multiplier=0.5, enabled=True,
+                                 symbol_map={'XAUUSD': 'GOLD'})
             loaded = {row.profile_id: row for row in load_profiles(root)}
             self.assertEqual(loaded['p2'].copy_parent_profile_id, 'p1')
             self.assertTrue(loaded['p2'].copy_enabled)
             self.assertEqual(loaded['p2'].copy_lot_multiplier, 0.5)
+            self.assertEqual(loaded['p2'].copy_symbol_map, {'XAUUSD': 'GOLD'})
+
+    def test_symbol_mapping_text_accepts_pairs_and_rejects_incomplete_entries(self):
+        from profile_store import validate_symbol_map
+        self.assertEqual(validate_symbol_map('XAUUSD = GOLD\nVolatility 75 Index = Volatility 75 (1s) Index'),
+                         {'XAUUSD': 'GOLD', 'Volatility 75 Index': 'Volatility 75 (1s) Index'})
+        with self.assertRaisesRegex(ValueError, 'ParentSymbol = FollowerSymbol'):
+            validate_symbol_map('XAUUSD')
 
     def test_fixed_lot_mode_round_trips_and_is_passed_to_copy_worker(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -177,11 +222,12 @@ class LocalCopierTests(unittest.TestCase):
             )
             parent = model.add_terminal(parent_path, 'Main')
             follower = model.add_terminal(follower_path, 'Follower')
-            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.01)
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.01, symbol_map={'XAUUSD': 'GOLD'})
             loaded = {row.profile_id: row for row in load_profiles(root / 'appdata')}
             self.assertEqual(loaded[follower.profile_id].copy_fixed_lot, 0.01)
             model.start_copy(follower.profile_id)
             self.assertEqual(calls[0].follower_fixed_lot, 0.01)
+            self.assertEqual(calls[0].follower_symbol_map, {'XAUUSD': 'GOLD'})
 
     def test_fixed_one_lot_is_saved_as_a_follower_and_starts_copying(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -274,6 +320,17 @@ class LocalCopierTests(unittest.TestCase):
         supervisor = LocalCopySupervisor(popen_factory=lambda args, close_fds=True: (calls.append(args) or Process()))
         supervisor.start(CopyPairSpec('p1', 'p2', Path('parent.exe'), Path('follower.exe'), journal_path=Path('copy.sqlite')))
         self.assertIn('--journal', calls[0])
+
+    def test_copy_supervisor_passes_saved_symbol_mapping_to_worker(self):
+        calls = []
+        class Process:
+            pid = 44
+            def poll(self): return None
+        supervisor = LocalCopySupervisor(popen_factory=lambda args, close_fds=True: (calls.append(args) or Process()))
+        spec = CopyPairSpec('p1', 'p2', Path('parent.exe'), Path('follower.exe'), follower_symbol_map={'XAUUSD': 'GOLD'})
+        supervisor.start(spec)
+        mapping_arg = calls[0][calls[0].index('--symbol-map') + 1]
+        self.assertEqual(__import__('json').loads(mapping_arg), {'XAUUSD': 'GOLD'})
 
     def test_stop_signal_can_be_written_after_manager_restart(self):
         with tempfile.TemporaryDirectory() as folder:

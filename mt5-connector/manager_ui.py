@@ -19,6 +19,7 @@ from profile_store import (
     profile_paths,
     save_profile,
     update_copy_settings,
+    validate_symbol_map,
 )
 from copy_supervisor import CopyPairSpec, LocalCopySupervisor
 from terminal_catalog import (
@@ -174,7 +175,7 @@ class ManagerViewModel:
         for profile in self.profiles():
             self.supervisor.stop(profile.profile_id)
 
-    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None) -> TerminalProfile:
+    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None, symbol_map=None) -> TerminalProfile:
         follower = self._profile(follower_profile_id)
         parent = self._profile(parent_profile_id)
         if follower.profile_id == parent.profile_id:
@@ -182,7 +183,7 @@ class ManagerViewModel:
         if not follower.terminal_path or not parent.terminal_path:
             raise ValueError('both MT5 terminals must be selected before enabling local copy')
         return update_copy_settings(follower, self.app_data_dir, role='follower', parent_profile_id=parent.profile_id,
-                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot)
+                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map)
 
     def disable_copy(self, profile_id: str) -> TerminalProfile:
         follower = self._profile(profile_id)
@@ -220,7 +221,8 @@ class ManagerViewModel:
         follower_paths = profile_paths(follower, self.app_data_dir)
         journal_path = follower_paths.ledger_path.with_name('local-copy-ledger.sqlite')
         return self.copy_supervisor.start(CopyPairSpec(parent.profile_id, follower.profile_id, parent.terminal_path, follower.terminal_path,
-                                                        follower.copy_lot_multiplier, follower.copy_fixed_lot, journal_path=journal_path,
+                                                        follower.copy_lot_multiplier, follower.copy_fixed_lot,
+                                                        follower_symbol_map=follower.copy_symbol_map, journal_path=journal_path,
                                                         stop_file=self._copy_stop_file(follower)))
 
     def observe_account(self, profile_id: str, *, probe=None) -> dict:
@@ -730,12 +732,27 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             if multiplier is None:
                 return
             fixed_lot = None
+        existing_map = "\n".join(f"{source} = {target}" for source, target in (model._profile(profile_id).copy_symbol_map or {}).items())
+        symbol_map_text = simpledialog.askstring(
+            "Optional broker symbol mapping",
+            "Only map symbols whose names differ between these accounts. Enter one pair per line:\n"
+            "Parent symbol = Follower symbol\n\n"
+            "Example: XAUUSD = GOLD\n"
+            "Leave blank when names match or the connector resolves a unique broker suffix.",
+            initialvalue=existing_map,
+            parent=root,
+        )
+        if symbol_map_text is None:
+            return
         try:
-            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot)
+            symbol_map = validate_symbol_map(symbol_map_text)
+            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map)
             saved_follower = model._profile(profile_id)
             if saved_follower.copy_role != 'follower' or not saved_follower.copy_enabled or saved_follower.copy_parent_profile_id != parent_id:
                 raise ValueError("The follower link did not persist. Select the two profiles and try again.")
             sizing = f"fixed {fixed_lot:g} lots" if fixed_lot is not None else f"{multiplier:g}× multiplier"
+            if symbol_map:
+                sizing += f" | {len(symbol_map)} symbol mapping(s)"
             refresh_profiles()
             select_saved_profile(profile_id)
             parent = model._profile(parent_id)

@@ -280,7 +280,28 @@ class MT5Engine:
             req['price'] = self._normalize_price(command['entryPrice'], symbol_info)
             req['type_time'] = self.mt5.ORDER_TIME_GTC
             result = self._check_and_send(req, pending=True, symbol_info=symbol_info)
-        return self._result(result)
+        normalized = self._result(result)
+        if order_type == 'MARKET' and command.get('resolvePosition') is True:
+            position_id = self._opened_position_id(symbol, side, normalized.get('order_id'))
+            if position_id is not None:
+                normalized['position_id'] = position_id
+        return normalized
+
+    def _opened_position_id(self, symbol, side, order_id=None):
+        """Resolve the actual position ticket after a market fill, including netting accounts."""
+        try:
+            positions = self.mt5.positions_get(symbol=symbol) or ()
+        except Exception:
+            return None
+        if order_id is not None:
+            exact = [row for row in positions if str(getattr(row, 'ticket', '')) == str(order_id)]
+            if len(exact) == 1:
+                return getattr(exact[0], 'ticket', None)
+        expected_type = self.mt5.ORDER_TYPE_BUY if side == 'BUY' else self.mt5.ORDER_TYPE_SELL
+        owned = [row for row in positions
+                 if int(getattr(row, 'magic', -1)) == self.magic
+                 and int(getattr(row, 'type', -1)) == int(expected_type)]
+        return getattr(owned[0], 'ticket', None) if len(owned) == 1 else None
 
     def _modify(self, command, command_id):
         position_id = int(command['positionId'])

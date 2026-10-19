@@ -38,6 +38,18 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
     if not mt5.initialize(path=str(terminal_path)):
         return {'complete': False, 'reason': 'MT5_INITIALIZE_FAILED'}
     try:
+        account = mt5.account_info()
+        if account is None:
+            return {'complete': False, 'reason': 'MT5_ACCOUNT_UNAVAILABLE'}
+        margin_mode = getattr(account, 'margin_mode', None)
+        if margin_mode == getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_HEDGING', 2):
+            account_mode = 'HEDGING'
+        elif margin_mode == getattr(mt5, 'ACCOUNT_MARGIN_MODE_EXCHANGE', 1):
+            account_mode = 'EXCHANGE_NETTING'
+        elif margin_mode == getattr(mt5, 'ACCOUNT_MARGIN_MODE_RETAIL_NETTING', 0):
+            account_mode = 'NETTING'
+        else:
+            account_mode = 'UNKNOWN'
         positions = mt5.positions_get()
         if positions is None:
             return {'complete': False, 'reason': 'MT5_POSITIONS_UNAVAILABLE'}
@@ -52,7 +64,7 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
             result.append({'ticket': str(getattr(row, 'ticket', '')), 'symbol': symbol, 'side': side,
                            'volume': float(getattr(row, 'volume', 0) or 0), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
                            'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_step': getattr(symbol_info, 'volume_step', None)})
-        return {'complete': True, 'positions': result}
+        return {'complete': True, 'account_mode': account_mode, 'positions': result}
     finally:
         mt5.shutdown()
 
@@ -138,7 +150,12 @@ def run(args):
             follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), ''),
                                       'source_initial_volume': initial_source_volume.get(source_by_follower.get(str(row.get('ticket')), ''))}
                                      for row in follower.get('positions', [])]
-            engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot, True)
+            try:
+                symbol_map = json.loads(getattr(args, 'symbol_map', '{}') or '{}')
+            except json.JSONDecodeError as exc:
+                raise RuntimeError('invalid local copier symbol map') from exc
+            engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot,
+                                     enabled=True, symbol_map=symbol_map)
             actions = engine.plan(parent, follower)
             if actions and mt5.initialize(path=str(args.follower_terminal)):
                 try:
@@ -151,7 +168,8 @@ def run(args):
                         action_type = action.get('type')
                         if action_type == 'OPEN_POSITION':
                             command = {'action': 'OPEN_POSITION', 'symbol': action['symbol'], 'side': action['side'], 'volume': action['lots'],
-                                       'orderType': 'MARKET', 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
+                                       'orderType': 'MARKET', 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit'),
+                                       'resolvePosition': True}
                         elif action_type == 'MODIFY_POSITION':
                             command = {'action': 'MODIFY_POSITION', 'positionId': action.get('position_id'), 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
                         elif action_type == 'CLOSE_POSITION':
@@ -191,6 +209,7 @@ def main(argv=None):
     parser.add_argument('--follower-terminal', required=True)
     parser.add_argument('--lot-multiplier', type=float, default=1.0)
     parser.add_argument('--fixed-lot', type=float, default=None)
+    parser.add_argument('--symbol-map', default='{}')
     parser.add_argument('--poll-seconds', type=int, default=2)
     parser.add_argument('--journal', default='local-copy-ledger.sqlite')
     parser.add_argument('--stop-file', default=None)
