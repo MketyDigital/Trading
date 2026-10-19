@@ -6,7 +6,7 @@ const JSON_FIELDS=new Set(['safety_policy','fast_entry_policy','entry_zone_polic
 const FIELDS=new Set(['workspace_id','account_label','platform','account_id','api_token_encrypted','lot_sizing_type','lot_value','is_active','execution_enabled','safety_policy','fast_entry_policy','entry_zone_policy','credential_ciphertext','server_name','provider_mode','environment','roles','provider_config','live_execution_enabled','lot_sizing_config']);
 const SELECT='id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,created_at,provider_mode,environment,roles,provider_config,live_execution_enabled';
 function encode(row,d1=false){return Object.fromEntries(Object.entries(row).map(([k,v])=>[k,JSON_FIELDS.has(k)&&v!=null?JSON.stringify(v):typeof v==='boolean'&&d1?Number(v):v]));}
-function decode(row){if(!row)return null;const out={...row};for(const key of JSON_FIELDS)if(typeof out[key]==='string'){try{out[key]=JSON.parse(out[key]);}catch{out[key]={};}}return out;}
+function decode(row){if(!row)return null;const out={...row};for(const key of JSON_FIELDS)if(typeof out[key]==='string'){try{out[key]=JSON.parse(out[key]);}catch{out[key]={};}}for(const key of ['is_active','execution_enabled','live_execution_enabled'])if(key in out)out[key]=out[key]===true||out[key]===1||out[key]==='1';return out;}
 function safeRow(row){const out={};for(const [k,v] of Object.entries(row||{})){if(!FIELDS.has(k))throw new Error(`Unsupported trade account field: ${k}`);out[k]=v;}return out;}
 
 /** Account authority repository. Credentials remain encrypted at rest and are never decrypted here. */
