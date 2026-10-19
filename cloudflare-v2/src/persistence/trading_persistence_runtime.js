@@ -2,6 +2,7 @@ import { resolveTradingStorageAuthority } from './trading_storage_authority.js';
 import { createPostgresTradingDatabase } from './postgres_database.js';
 import { createTradingAccessCodeRepository } from './trading_access_code_repository.js';
 import { createTradingAccountRepository } from './trading_account_repository.js';
+import { createTradingAccountFollowerRepository } from './trading_account_follower_repository.js';
 import { createTradingAIProviderRepository } from './trading_ai_provider_repository.js';
 import { createTradingCTraderOAuthStateRepository } from './trading_ctrader_oauth_state_repository.js';
 import { createTradingDeliveryRepository } from './trading_delivery_repository.js';
@@ -48,6 +49,7 @@ export async function createTradingPersistenceRuntime(env = {}, { postgresDataba
     postgresDatabase,
     accessCodes: createTradingAccessCodeRepository(shared),
     accounts: createTradingAccountRepository(shared),
+    accountFollowers: createTradingAccountFollowerRepository(shared),
     aiProviders: createTradingAIProviderRepository(shared),
     cTraderOAuthStates: createTradingCTraderOAuthStateRepository(shared),
     destinations,

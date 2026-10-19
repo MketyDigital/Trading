@@ -24,6 +24,7 @@ const pendingContext = new Map();
 const pendingSizing = new Map();
 const pendingOrderStatus = new Map();
 const pendingPositionCloseStatus = new Map();
+const pendingPositionStatus = new Map();
 const delivered = new Map();
 
 function json(response, status, body) {
@@ -212,6 +213,21 @@ wsServer.on('connection', (socket) => {
       }
       return waiter.resolve({ ok: true, snapshot });
     }
+    if (message?.type === 'position_status_result' && message.requestId) {
+      const key = orderStatusKey(socket.mketyAccountRowId, message.requestId);
+      const waiter = pendingPositionStatus.get(key);
+      if (!waiter) return;
+      pendingPositionStatus.delete(key); clearTimeout(waiter.timer);
+      if (message.ok === false) return waiter.resolve({ ok: false, reason: String(message.reason || 'MT5_POSITION_STATUS_FAILED') });
+      const snapshot = message.snapshot && typeof message.snapshot === 'object' && !Array.isArray(message.snapshot) ? message.snapshot : null;
+      if (!snapshot || String(snapshot.accountId || '') !== String(session?.identity?.accountNumber || '')
+          || String(snapshot.serverName || '') !== String(session?.identity?.serverName || '')
+          || String(snapshot.positionId || '') !== String(waiter.positionId)
+          || typeof snapshot.isLive !== 'boolean') {
+        return waiter.resolve({ ok: false, reason: 'MT5_POSITION_STATUS_IDENTITY_INVALID' });
+      }
+      return waiter.resolve({ ok: true, snapshot });
+    }
     if (message?.type === 'result' && message.commandId) {
       const key = commandKey(socket.mketyAccountRowId, message.commandId);
       const waiter = pending.get(key);
@@ -295,6 +311,27 @@ const controlServer = http.createServer(async (request, response) => {
       });
       return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
     } catch (error) { return json(response, 504, { ok: false, reason: error.message || 'MT5_POSITION_CLOSE_STATUS_TIMEOUT' }); }
+  }
+  const positionStatusMatch = url.pathname.match(/^\/v1\/mt5-position-status\/([^/]+)$/);
+  if (request.method === 'POST' && positionStatusMatch) {
+    const id = decodeURIComponent(positionStatusMatch[1]);
+    let raw = '';
+    for await (const chunk of request) { raw += chunk; if (raw.length > 64 * 1024) return json(response, 413, { ok: false, reason: 'BODY_TOO_LARGE' }); }
+    let body; try { body = JSON.parse(raw || '{}'); } catch { return json(response, 400, { ok: false, reason: 'INVALID_JSON' }); }
+    const positionId = String(body.positionId || '').trim();
+    if (!/^[0-9]+$/.test(positionId)) return json(response, 400, { ok: false, reason: 'BROKER_POSITION_ID_INVALID' });
+    const session = sessions.get(id);
+    if (!session || session.socket.readyState !== WebSocket.OPEN) return json(response, 404, { ok: false, reason: 'MT5_CONNECTOR_OFFLINE' });
+    const requestId = crypto.randomUUID();
+    const key = orderStatusKey(id, requestId);
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pendingPositionStatus.delete(key); reject(new Error('MT5_POSITION_STATUS_TIMEOUT')); }, contextTimeoutMs);
+        pendingPositionStatus.set(key, { resolve, reject, timer, positionId });
+        session.socket.send(JSON.stringify({ type: 'position_status_request', requestId, positionId }));
+      });
+      return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
+    } catch (error) { return json(response, 504, { ok: false, reason: error.message || 'MT5_POSITION_STATUS_TIMEOUT' }); }
   }
   const sizingMatch = url.pathname.match(/^\/v1\/mt5-broker-sizing\/([^/]+)$/);
   if (request.method === 'POST' && sizingMatch) {

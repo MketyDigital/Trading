@@ -114,11 +114,11 @@ export async function runV1ProductionExecutionStage({
   }
 
   const controlContext = { env, supabase, runtimeControls: persistenceRuntime?.runtimeControls };
-  const tradingAccessControl = await resolveRuntimeControl(
-    tradingAccessControlResolver,
-    controlContext,
-    'TRADING_RUNTIME_CONTROL_UNAVAILABLE',
-  );
+  const combinedControls = typeof controlContext.runtimeControls?.getExecutionControls === 'function'
+    ? await controlContext.runtimeControls.getExecutionControls()
+    : null;
+  const tradingAccessControl = combinedControls?.tradingAccess || await resolveRuntimeControl(
+    tradingAccessControlResolver, controlContext, 'TRADING_RUNTIME_CONTROL_UNAVAILABLE');
   if (!tradingAccessControl?.ok) {
     return summary('TRADING_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
   }
@@ -126,11 +126,8 @@ export async function runV1ProductionExecutionStage({
     return summary('TRADING_ACCESS_DISABLED', { blocked: accountPlans.length, transportMode });
   }
 
-  const brokerExecutionControl = await resolveRuntimeControl(
-    brokerExecutionControlResolver,
-    controlContext,
-    'RUNTIME_CONTROL_UNAVAILABLE',
-  );
+  const brokerExecutionControl = combinedControls?.brokerExecution || await resolveRuntimeControl(
+    brokerExecutionControlResolver, controlContext, 'RUNTIME_CONTROL_UNAVAILABLE');
   if (!brokerExecutionControl?.ok) {
     return summary('BROKER_RUNTIME_CONTROL_UNAVAILABLE', { blocked: accountPlans.length, transportMode });
   }
@@ -138,11 +135,8 @@ export async function runV1ProductionExecutionStage({
     return summary('BROKER_OWNER_SWITCH_OFF', { blocked: accountPlans.length, transportMode });
   }
 
-  const liveBrokerExecutionControl = await resolveRuntimeControl(
-    liveBrokerExecutionControlResolver,
-    controlContext,
-    'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE',
-  );
+  const liveBrokerExecutionControl = combinedControls?.liveBrokerExecution || await resolveRuntimeControl(
+    liveBrokerExecutionControlResolver, controlContext, 'LIVE_BROKER_RUNTIME_CONTROL_UNAVAILABLE');
 
   const workspaceId = String(result?.event?.workspace_hint || '').trim();
   const tradingEventId = String(result?.eventId || '').trim();

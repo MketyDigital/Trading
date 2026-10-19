@@ -1,6 +1,7 @@
 import { applyTradingTradeStateReplicationEvent } from './trading_trade_state_replication.js';
 import { applyTradingIngestReplicationEvent } from './trading_ingest_replication.js';
 import { applyTradingAccountReplicationEvent } from './trading_account_replication.js';
+import { applyTradingAccountFollowerReplicationEvent } from './trading_account_follower_replication.js';
 import { applyTradingRouteReplicationEvent } from './trading_route_replication.js';
 import { applyTradingDestinationReplicationEvent } from './trading_destination_replication.js';
 import { applyTradingDeliveryOperationReplicationEvent } from './trading_delivery_operation_replication.js';
@@ -31,6 +32,7 @@ export async function applyTradingReplicationEvent(event,options={}){
   trading_event_revision:applyTradingIngestReplicationEvent,
   trading_interpretation:applyTradingIngestReplicationEvent,
   trade_account:applyTradingAccountReplicationEvent,
+  trading_account_follower:applyTradingAccountFollowerReplicationEvent,
   source_destination_route:applyTradingRouteReplicationEvent,
   trading_destinations:applyTradingDestinationReplicationEvent,
   trading_destination_connections:applyTradingDestinationReplicationEvent,

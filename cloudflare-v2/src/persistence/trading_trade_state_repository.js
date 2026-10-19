@@ -83,14 +83,16 @@ function toCandidate(row) {
     groupUpdatedAt: group.updated_at ? new Date(group.updated_at).getTime() : undefined,
     legId: String(row.runtime_leg_id || ''), targetIndex: Number(row.logical_target_index ?? row.target_index),
     lots: Number(row.lots), executedLots: asNumberOrNull(row.executed_lots), brokerPositionId: String(row.broker_position_id || ''),
-    stopLoss: asNumberOrNull(row.stop_loss ?? group.stop_loss), takeProfit: Number(row.take_profit),
+    stopLoss: asNumberOrNull(row.stop_loss ?? group.stop_loss), takeProfit: asNumberOrNull(row.take_profit),
+    lastBrokerObservedAt: row.last_broker_observed_at ? new Date(row.last_broker_observed_at).getTime() : undefined,
+    lastBrokerSnapshotFingerprint: row.last_broker_snapshot_fingerprint == null ? null : String(row.last_broker_snapshot_fingerprint),
     createdAt: row.created_at ? new Date(row.created_at).getTime() : undefined,
   };
 }
 
 function validCandidate(row) {
   return row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerPositionId
-    && Number.isInteger(row.targetIndex) && row.targetIndex > 0 && Number.isFinite(row.takeProfit) && row.takeProfit > 0;
+    && Number.isInteger(row.targetIndex) && row.targetIndex > 0;
 }
 
 export function createTradingTradeStatePersistence({ authority, postgresDatabase, now = () => new Date().toISOString(), idFactory = () => globalThis.crypto.randomUUID() } = {}) {
@@ -106,7 +108,6 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
       entityType: 'trade_state_group', entityId: `${rows.group.workspace_id}:${rows.group.runtime_group_id}`,
       operation: 'upsert', payload: { group: rows.group, legs: rows.legs },
     };
-    await verifyTradingStorageAuthority(authority, { postgresDatabase });
     if (authority.kind === 'd1') {
       const groupId = idFactory();
       const groupWrite = d1UpsertStatement(authority.binding, 'position_groups', rows.group, {
@@ -120,7 +121,7 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
         now: () => now(), guardSql, guardValues: [authority.authorityEpoch],
       });
       const results = await authority.binding.batch([...statements, ...journal.statements]);
-      if (Number(results?.[0]?.meta?.changes || 0) !== 1) throw new Error('Trading storage authority changed during trade-state update');
+      if (Number(results?.[0]?.meta?.changes || 0) !== 1) throw new Error('Trading storage authority changed or write-fenced during trade-state update');
     } else {
       await postgresDatabase.transaction(async query => {
         const result = await query(`SELECT active_authority, authority_epoch, writes_fenced FROM trading_storage.authority_control WHERE singleton_id = 1 FOR SHARE`);
@@ -184,14 +185,16 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
     return rows.map(persistenceRowsToGroup);
   }
 
-  async function listPendingOrderLifecycles() {
+  async function listPendingOrderLifecycles({ limit = 200 } = {}) {
     await verifyTradingStorageAuthority(authority, { postgresDatabase });
+    const size = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 200)));
     const sql = `SELECT l.workspace_id, l.runtime_leg_id, l.broker_order_id, l.created_at, g.runtime_group_id, g.trade_account_id, g.canonical_symbol
       FROM ${authority.kind === 'd1' ? '' : 'trading_storage.'}position_legs l JOIN ${authority.kind === 'd1' ? '' : 'trading_storage.'}position_groups g ON g.id = l.position_group_id
-      WHERE l.status = 'PENDING' AND l.lifecycle_tracking_enabled = ${authority.kind === 'd1' ? '1' : 'true'} AND l.broker_order_id IS NOT NULL`;
+      WHERE l.status = 'PENDING' AND l.lifecycle_tracking_enabled = ${authority.kind === 'd1' ? '1' : 'true'} AND l.broker_order_id IS NOT NULL
+      ORDER BY l.created_at ASC, l.id ASC LIMIT ${authority.kind === 'd1' ? '?' : '$1'}`;
     const rows = authority.kind === 'd1'
-      ? (await authority.binding.prepare(sql).all()).results || []
-      : (await postgresDatabase.query(sql)).rows || [];
+      ? (await authority.binding.prepare(sql).bind(size).all()).results || []
+      : (await postgresDatabase.query(sql, [size])).rows || [];
     return rows.map(row => ({ workspaceId: String(row.workspace_id), groupId: String(row.runtime_group_id || ''), tradeAccountId: String(row.trade_account_id || ''), legId: String(row.runtime_leg_id || ''), brokerOrderId: String(row.broker_order_id || ''), symbol: String(row.canonical_symbol || ''), createdAt: row.created_at ? new Date(row.created_at).getTime() : undefined }))
       .filter(row => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
@@ -212,42 +215,34 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
     return rows.length > 0;
   }
 
-  async function listBrokerTpProtectionCandidates({ pageSize = 50, pageSeed = 0 } = {}) {
+  async function listBrokerTpProtectionCandidates({ pageSize = 50, pageSeed = 0, observationDueBefore = null } = {}) {
     const limit = Math.max(1, Math.min(500, Math.trunc(Number(pageSize)) || 50));
-    const seed = Math.max(0, Math.trunc(Number(pageSeed)) || 0);
+    // `pageSeed` remains part of the call contract for compatibility with
+    // older runtimes, but due ordering is now the durable fairness mechanism.
+    // Rotating OFFSET pages required an extra COUNT query and could repeatedly
+    // skip newly-due legs when the population changed between scans.
+    void pageSeed;
     await verifyTradingStorageAuthority(authority, { postgresDatabase });
     const schema = authority.kind === 'd1' ? '' : 'trading_storage.';
-    // The runtime only polls the next open target in each group. Counting and
-    // selecting every open leg inflated D1 reads (and then the runtime threw
-    // the later targets away). Select one candidate per group at the SQL
-    // boundary so the bounded page reflects actual broker polls.
-    const nextTargetPredicate = `(COALESCE(l.logical_target_index, l.target_index) = (
-      SELECT MIN(COALESCE(l2.logical_target_index, l2.target_index))
-      FROM ${schema}position_legs l2
-      WHERE l2.position_group_id = l.position_group_id
-        AND l2.status = 'OPEN'
-        AND l2.broker_position_id IS NOT NULL
-        AND l2.take_profit IS NOT NULL
-    ))`;
-    const countSql = `SELECT COUNT(DISTINCT l.position_group_id) AS total FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id = l.position_group_id WHERE l.status = 'OPEN' AND g.status = 'OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate}`;
-    const countRow = authority.kind === 'd1'
-      ? await authority.binding.prepare(countSql).first()
-      : (await postgresDatabase.query(countSql)).rows?.[0];
-    const total = Math.max(0, Number(countRow?.total) || 0);
-    if (!total) return [];
-    const pages = Math.max(1, Math.ceil(total / limit));
-    const offset = (seed % pages) * limit;
-    const selectedSql = `SELECT l.position_group_id FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate} ORDER BY l.created_at ASC, l.id ASC LIMIT ${limit} OFFSET ${offset}`;
-    const selected = authority.kind === 'd1' ? (await authority.binding.prepare(selectedSql).all()).results || [] : (await postgresDatabase.query(selectedSql)).rows || [];
-    const groupIds = [...new Set(selected.map(row => String(row.position_group_id || '')).filter(Boolean))];
-    if (!groupIds.length) return [];
-    const parameters = groupIds.map((_, index) => authority.kind === 'd1' ? '?' : `$${index + 1}`);
-    const rowsSql = `SELECT l.workspace_id, l.position_group_id, l.runtime_leg_id, l.target_index, l.logical_target_index, l.lots, l.executed_lots, l.broker_position_id, l.stop_loss, l.take_profit, l.created_at,
+    // Select only due open broker-bound legs. The runtime caps this page, but
+    // deliberately keeps each leg so protection edits on fast and completed
+    // positions are both observable.
+    // Protection snapshots must include the fast starter even when its TP is
+    // still null and later completion legs already have targets. The previous
+    // TP-only eligibility rule silently skipped exactly that broker position.
+    const eligiblePositionPredicate = '1=1';
+    const duePredicate = observationDueBefore
+      ? `(l.last_broker_observed_at IS NULL OR l.last_broker_observed_at < ${authority.kind === 'd1' ? '?' : '$1'}) AND`
+      : '';
+    const dueValues = observationDueBefore ? [String(observationDueBefore)] : [];
+    const limitParam = authority.kind === 'd1' ? '?' : `$${dueValues.length + 1}`;
+    const rowsSql = `SELECT l.workspace_id, l.position_group_id, l.runtime_leg_id, l.target_index, l.logical_target_index, l.lots, l.executed_lots, l.broker_position_id, l.stop_loss, l.take_profit, l.last_broker_observed_at, l.last_broker_snapshot_fingerprint, l.created_at,
       g.runtime_group_id, g.trade_account_id, g.source_event_id, g.source_instance_id, g.source_event_ids, g.thread_id, g.canonical_symbol, g.side, g.order_type, g.entry, g.stop_loss AS group_stop_loss, g.status AS group_status, g.created_at AS group_created_at, g.updated_at AS group_updated_at
-      FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate} AND l.position_group_id IN (${parameters.join(',')}) ORDER BY l.position_group_id, l.logical_target_index`;
+      FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE ${duePredicate} l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND ${eligiblePositionPredicate}
+      ORDER BY CASE WHEN l.last_broker_observed_at IS NULL THEN 0 ELSE 1 END, l.last_broker_observed_at ASC, l.created_at ASC, l.id ASC LIMIT ${limitParam}`;
     let rows;
-    if (authority.kind === 'd1') rows = (await authority.binding.prepare(rowsSql).bind(...groupIds).all()).results || [];
-    else rows = (await postgresDatabase.query(rowsSql, groupIds)).rows || [];
+    if (authority.kind === 'd1') rows = (await authority.binding.prepare(rowsSql).bind(...dueValues, limit).all()).results || [];
+    else rows = (await postgresDatabase.query(rowsSql, [...dueValues, limit])).rows || [];
     return rows.map(row => toCandidate({ ...row, position_groups: {
       runtime_group_id: row.runtime_group_id, trade_account_id: row.trade_account_id, source_event_id: row.source_event_id,
       source_instance_id: row.source_instance_id, source_event_ids: row.source_event_ids, thread_id: row.thread_id,
@@ -256,5 +251,101 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
     } })).filter(validCandidate);
   }
 
-  return { saveGroup, loadGroup, loadActive, listPendingOrderLifecycles, hasSourceEventGroup, listBrokerTpProtectionCandidates };
+  /**
+   * Persist broker observation evidence without rewriting the full position
+   * group. The runtime calls this only after TradeStateStore has validated the
+   * observation and rejected same/older timestamps.
+   */
+  async function recordBrokerObservation(workspaceId, groupId, legId, observation = {}) {
+    const observedAt = Number(observation.observedAt);
+    const status = String(observation.status || '').trim().toUpperCase();
+    if (!(Number.isFinite(observedAt) && observedAt >= 0) || !status) throw new TypeError('valid broker observation is required');
+    const observedIso = new Date(observedAt).toISOString();
+    const sourceVersion = observation.sourceVersion == null ? null : String(observation.sourceVersion).slice(0, 200);
+    const snapshotFingerprint = observation.snapshotFingerprint == null ? null : String(observation.snapshotFingerprint).slice(0, 200);
+    const dealIds = Array.isArray(observation.dealIds)
+      ? [...new Set(observation.dealIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 100)
+      : [];
+    const patch = {
+      last_broker_observed_at: observedIso,
+      last_broker_source_version: sourceVersion,
+      last_broker_status: status,
+      last_broker_snapshot_fingerprint: snapshotFingerprint,
+      ...(dealIds.length ? { broker_deal_ids: dealIds } : {}),
+    };
+    const event = {
+      authorityEpoch: authority.authorityEpoch,
+      direction: authority.kind === 'd1' ? 'd1_to_postgres' : 'postgres_to_d1',
+      idempotencyKey: `broker-observation:${workspaceId}:${groupId}:${legId}:${observedIso}`,
+      entityType: 'trade_state_broker_observation',
+      entityId: `${workspaceId}:${groupId}:${legId}`,
+      operation: 'upsert',
+      payload: { workspace_id: String(workspaceId), runtime_group_id: String(groupId), runtime_leg_id: String(legId), patch },
+    };
+    await verifyTradingStorageAuthority(authority, { postgresDatabase });
+    if (authority.kind === 'd1') {
+      const encodedPatch = encodeD1Row(patch);
+      const columns = Object.keys(encodedPatch);
+      const assignments = columns.map((column) => `${column} = ?`).join(', ');
+      const update = authority.binding.prepare(`
+        UPDATE position_legs SET ${assignments}
+        WHERE position_group_id = (
+          SELECT g.id FROM position_groups g
+          WHERE g.workspace_id = ? AND g.runtime_group_id = ?
+        )
+          AND runtime_leg_id = ?
+          AND (last_broker_observed_at IS NULL OR last_broker_observed_at < ?)
+          AND EXISTS (
+            SELECT 1 FROM trading_storage_control
+            WHERE singleton_id = 1 AND active_authority = 'd1'
+              AND authority_epoch = ? AND writes_fenced = 0
+          )
+      `).bind(...columns.map((column) => encodedPatch[column]), String(workspaceId), String(groupId), String(legId), observedIso, authority.authorityEpoch);
+      const journal = prepareD1ReplicationAppendStatements(authority.binding, event, {
+        now: () => observedIso,
+        guardSql: `EXISTS (
+          SELECT 1 FROM position_legs l JOIN position_groups g ON g.id = l.position_group_id
+          WHERE g.workspace_id = ? AND g.runtime_group_id = ? AND l.runtime_leg_id = ?
+            AND l.last_broker_observed_at = ?
+        )`,
+        guardValues: [String(workspaceId), String(groupId), String(legId), observedIso],
+      });
+      const results = await authority.binding.batch([update, ...journal.statements]);
+      if (Number(results?.[0]?.meta?.changes || 0) !== 1) return { outcome: 'STALE' };
+      if (Number(results?.[2]?.meta?.changes || 0) !== 1) throw new Error('Broker observation replication journal append failed');
+      return { outcome: 'APPLIED' };
+    }
+
+    return postgresDatabase.transaction(async query => {
+      const authorityResult = await query(`SELECT active_authority, authority_epoch, writes_fenced FROM trading_storage.authority_control WHERE singleton_id = 1 FOR SHARE`);
+      const control = authorityResult.rows?.[0];
+      if (!control || control.active_authority !== 'postgres' || Number(control.authority_epoch) !== Number(authority.authorityEpoch) || control.writes_fenced !== false) {
+        throw new Error('Trading storage authority changed or is fenced during broker observation update');
+      }
+      const values = [observedIso, sourceVersion, status, snapshotFingerprint];
+      const assignments = [
+        'last_broker_observed_at = $1', 'last_broker_source_version = $2',
+        'last_broker_status = $3', 'last_broker_snapshot_fingerprint = $4',
+      ];
+      if (dealIds.length) { values.push(JSON.stringify(dealIds)); assignments.push('broker_deal_ids = $5::jsonb'); }
+      const workspaceParam = values.length + 1;
+      const groupParam = values.length + 2;
+      const legParam = values.length + 3;
+      const observedParam = values.length + 4;
+      values.push(String(workspaceId), String(groupId), String(legId), observedIso);
+      const updated = await query(`
+        UPDATE trading_storage.position_legs l SET ${assignments.join(', ')}
+        FROM trading_storage.position_groups g
+        WHERE l.position_group_id = g.id AND g.workspace_id = $${workspaceParam}
+          AND g.runtime_group_id = $${groupParam} AND l.runtime_leg_id = $${legParam}
+          AND (l.last_broker_observed_at IS NULL OR l.last_broker_observed_at < $${observedParam})
+        RETURNING l.id
+      `, values);
+      if (!updated.rows?.[0]?.id) return { outcome: 'STALE' };
+      await appendPostgresReplicationEventInTransaction(query, event, { now: () => new Date(observedIso) });
+      return { outcome: 'APPLIED' };
+    });
+  }
+
+  return { saveGroup, loadGroup, loadActive, listPendingOrderLifecycles, hasSourceEventGroup, listBrokerTpProtectionCandidates, recordBrokerObservation };
 }

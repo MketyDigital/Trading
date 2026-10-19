@@ -148,6 +148,11 @@ public class MketyCloudAutoTrader : Robot
                 ReadOrderLifecycle(Text(root, "requestId"), Text(root, "brokerOrderId"));
                 return;
             }
+            if (type == "position_status_request")
+            {
+                ReadPositionStatus(Text(root, "requestId"), Text(root, "positionId"));
+                return;
+            }
             if (type != "command" || !root.TryGetProperty("envelope", out var envelope)) return;
             ExecuteEnvelope(envelope);
         }
@@ -228,6 +233,32 @@ public class MketyCloudAutoTrader : Robot
         catch (Exception ex)
         {
             Send(new { type = "lifecycle_result", requestId, ok = false, reason = ex.Message });
+        }
+    }
+
+    private void ReadPositionStatus(string requestId, string brokerPositionId)
+    {
+        try
+        {
+            if (!long.TryParse(brokerPositionId, out var parsedId) || parsedId <= 0 || parsedId > int.MaxValue) throw new InvalidOperationException("POSITION_ID_INVALID");
+            var position = Positions.FindById((int)parsedId);
+            if (position == null)
+            {
+                Send(new { type = "position_status_result", requestId, ok = true, snapshot = new { positionId = brokerPositionId, isOpen = false, accountId = Account.Number.ToString(), isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo" } });
+                return;
+            }
+            var symbol = Symbols.GetSymbol(position.SymbolName);
+            if (symbol == null || symbol.LotSize <= 0 || position.VolumeInUnits <= 0) throw new InvalidOperationException("POSITION_STATUS_UNCERTAIN");
+            Send(new { type = "position_status_result", requestId, ok = true, snapshot = new {
+                positionId = position.Id.ToString(), isOpen = true, accountId = Account.Number.ToString(),
+                isLive = Account.IsLive, environment = Account.IsLive ? "live" : "demo", symbol = position.SymbolName,
+                side = position.TradeType.ToString().ToUpperInvariant(), volume = position.VolumeInUnits / symbol.LotSize,
+                stopLoss = position.StopLoss, takeProfit = position.TakeProfit, openedAt = position.EntryTime,
+            } });
+        }
+        catch (Exception ex)
+        {
+            Send(new { type = "position_status_result", requestId, ok = false, reason = ex.Message });
         }
     }
 

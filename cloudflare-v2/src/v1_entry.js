@@ -39,6 +39,16 @@ const pendingOrderLifecycleRuntime = createProductionPendingOrderLifecycleRuntim
 const brokerTpProtectionRuntime = createProductionBrokerTpProtectionRuntime();
 const orphanSignalRecoveryRuntime = createOrphanSignalRecoveryRuntime();
 
+function scheduledMaintenanceDue(event, env = {}) {
+  // Tests and manual invocations may omit scheduledTime; preserve the old
+  // behavior for those calls. Cloudflare cron events always provide it.
+  if (event?.scheduledTime == null) return true;
+  const interval = Math.max(1, Math.min(60, Math.trunc(Number(env.TRADING_MAINTENANCE_INTERVAL_MINUTES) || 5)));
+  const timestamp = Number(event.scheduledTime);
+  if (!Number.isFinite(timestamp)) return true;
+  return Math.floor(timestamp / 60_000) % interval === 0;
+}
+
 function htmlResponse(html) {
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
@@ -335,12 +345,13 @@ export function createTradingV1Entrypoint({
           const tpProtectionRuntime = configuredBrokerTpProtectionRuntime || brokerTpProtectionRuntime;
           const orphanRuntime = configuredOrphanSignalRecoveryRuntime || orphanSignalRecoveryRuntime;
           const mtprotoRuntime = recoveryRuntime || createMtprotoRecoveryRuntime();
+          const maintenanceDue = scheduledMaintenanceDue(event, env);
           const [retryResult, bindingRepairResult, pendingLifecycleResult, tpProtectionResult, orphanResult, mtprotoResult] = runMtprotoRecovery ? await Promise.allSettled([
             retryRuntime(env, { ctx, persistenceRuntime: runtime }),
-            repairRuntime(env, { ctx, persistenceRuntime: runtime }),
+            maintenanceDue ? repairRuntime(env, { ctx, persistenceRuntime: runtime }) : Promise.resolve({ skipped: true, reason: 'MAINTENANCE_INTERVAL' }),
             pendingOrderLifecycleRuntime(env, { ctx, persistenceRuntime: runtime }),
             tpProtectionRuntime(env, { ctx, persistenceRuntime: runtime }),
-            orphanRuntime(env, { ctx, persistenceRuntime: runtime }),
+            maintenanceDue ? orphanRuntime(env, { ctx, persistenceRuntime: runtime }) : Promise.resolve({ skipped: true, reason: 'MAINTENANCE_INTERVAL' }),
             mtprotoRuntime(env, { ctx, persistenceRuntime: runtime }),
           ]) : Array.from({ length: 6 }, () => ({ status: 'fulfilled', value: { skipped: true } }));
           return {
@@ -367,7 +378,15 @@ export function createTradingV1Entrypoint({
         const repairRuntime = bindingRepairRuntime || runScheduledBindingRepairs;
         const orphanRuntime = configuredOrphanSignalRecoveryRuntime || orphanSignalRecoveryRuntime;
         const tpProtectionRuntime = configuredBrokerTpProtectionRuntime || brokerTpProtectionRuntime;
-        const [mtprotoResult, orphanResult, retryResult, bindingRepairResult, pendingLifecycleResult, tpProtectionResult] = await Promise.allSettled([mtprotoRuntime(env, { ctx }), orphanRuntime(env, { ctx }), retryRuntime(env, { ctx }), repairRuntime(env, { ctx }), pendingOrderLifecycleRuntime(env, { ctx }), tpProtectionRuntime(env, { ctx })]);
+        const maintenanceDue = scheduledMaintenanceDue(event, env);
+        const [mtprotoResult, orphanResult, retryResult, bindingRepairResult, pendingLifecycleResult, tpProtectionResult] = await Promise.allSettled([
+          mtprotoRuntime(env, { ctx }),
+          maintenanceDue ? orphanRuntime(env, { ctx }) : Promise.resolve({ skipped: true, reason: 'MAINTENANCE_INTERVAL' }),
+          retryRuntime(env, { ctx }),
+          maintenanceDue ? repairRuntime(env, { ctx }) : Promise.resolve({ skipped: true, reason: 'MAINTENANCE_INTERVAL' }),
+          pendingOrderLifecycleRuntime(env, { ctx }),
+          tpProtectionRuntime(env, { ctx }),
+        ]);
         return { mtprotoRecovery: mtprotoResult.status, orphanSignalRecovery: orphanResult.status, destinationRetryRecovery: retryResult.status, bindingRepairRecovery: bindingRepairResult.status, pendingOrderLifecycle: pendingLifecycleResult.status, brokerTpProtection: tpProtectionResult.status };
       }
       const activeLegacy = legacy || (await import('./index.js')).default;

@@ -33,12 +33,15 @@ export function createProductionPendingOrderLifecycleRuntime({
       ? await persistenceRuntime.tradeState.listPendingOrderLifecycles()
       : await persistence.listPendingOrderLifecycles();
     const dependencyByWorkspace = new Map();
+    const accountById = new Map();
     const runtime = createPendingOrderLifecycleRuntime({
       loadCandidates: async () => rows,
       loadAccount: async (workspaceId, accountId) => {
         if (!dependencyByWorkspace.has(workspaceId)) dependencyByWorkspace.set(workspaceId,
           dependenciesFactory({ env, supabase: persistence?.supabase || null, persistenceRuntime, workspaceId }));
-        return dependencyByWorkspace.get(workspaceId).accountLoader(workspaceId, accountId);
+        const key = `${text(workspaceId)}:${text(accountId)}`;
+        if (!accountById.has(key)) accountById.set(key, Promise.resolve().then(() => dependencyByWorkspace.get(workspaceId).accountLoader(workspaceId, accountId)));
+        return accountById.get(key);
       },
       readStatus: async ({ account, lifecycle }) => {
         const deps = dependencyByWorkspace.get(lifecycle.workspaceId);

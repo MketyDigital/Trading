@@ -398,5 +398,31 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
     return snapshot;
   }
 
-  return { ...base, riskMaterializer, dispatchAction, readPendingOrderLifecycleStatus, readBrokerPositionCloseStatus };
+  async function readBrokerPositionStatus(input = {}) {
+    const account = input.account;
+    if (!isMt5Connector(account)) return base.readBrokerPositionStatus(input);
+    if (text(input.workspaceId) !== workspaceId) throw new Error('production execution workspace mismatch');
+    assertBoundConnectorAccount(account, workspaceId);
+    const expectedEnvironment = text(account.environment).toLowerCase();
+    if (!['demo', 'live'].includes(expectedEnvironment)) return { status: 'UNRESOLVED' };
+    const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
+    const connection = await loadConnectorIdentity({ account, credentials, fetchFn });
+    const positionId = text(input.brokerPositionId);
+    if (!/^\d+$/.test(positionId) || connection.identity.isLive !== (expectedEnvironment === 'live')) return { status: 'UNRESOLVED' };
+    let response;
+    try {
+      response = await fetchFn(`${connection.baseUrl}/v1/mt5-position-status/${encodeURIComponent(accountRef(account))}`, {
+        method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${connection.controlSecret}` },
+        body: JSON.stringify({ positionId }), signal: AbortSignal.timeout(8000),
+      });
+    } catch { throw new Error('MT5 connector position status request failed'); }
+    const body = await readJson(response, 'MT5 connector position status');
+    const snapshot = body.snapshot;
+    if (String(body.accountRowId || '') !== accountRef(account) || !snapshot || snapshot.isLive !== (expectedEnvironment === 'live')
+      || text(snapshot.accountId) !== brokerAccountIdOf(account) || text(snapshot.serverName) !== text(account.server_name ?? account.serverName)
+      || text(snapshot.positionId) !== positionId || text(snapshot.environment).toLowerCase() !== expectedEnvironment) return { status: 'UNRESOLVED' };
+    return snapshot;
+  }
+
+  return { ...base, riskMaterializer, dispatchAction, readPendingOrderLifecycleStatus, readBrokerPositionCloseStatus, readBrokerPositionStatus };
 }

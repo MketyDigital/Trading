@@ -48,13 +48,17 @@ export class SupabaseTradeStatePersistence {
     return (data || []).map(persistenceRowsToGroup);
   }
 
-  async listPendingOrderLifecycles() {
-    const { data, error } = await this.supabase
+  async listPendingOrderLifecycles({ limit = 200 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 200)));
+    let query = this.supabase
       .from('position_legs')
       .select('workspace_id, position_group_id, runtime_leg_id, broker_order_id, created_at, position_groups!inner(runtime_group_id, trade_account_id, canonical_symbol)')
       .eq('status', 'PENDING')
       .eq('lifecycle_tracking_enabled', true)
       .not('broker_order_id', 'is', null);
+    if (typeof query.order === 'function') query = query.order('created_at', { ascending: true });
+    if (typeof query.limit === 'function') query = query.limit(boundedLimit);
+    const { data, error } = await query;
     if (error) throw new Error(`pending order lifecycle scan failed: ${error.message}`);
     return (data || []).map((row) => ({
       workspaceId: String(row.workspace_id),
@@ -67,29 +71,31 @@ export class SupabaseTradeStatePersistence {
     })).filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId && row.brokerOrderId && row.symbol);
   }
 
-  async listBrokerTpProtectionCandidates({ pageSize = 50, pageSeed = 0 } = {}) {
+  async listBrokerTpProtectionCandidates({ pageSize = 50, pageSeed = 0, observationDueBefore = null } = {}) {
     const limit = Math.max(1, Math.min(500, Math.trunc(Number(pageSize)) || 50));
-    const seed = Math.max(0, Math.trunc(Number(pageSeed)) || 0);
-    const selection = 'workspace_id,position_group_id,runtime_leg_id,target_index,logical_target_index,lots,executed_lots,broker_position_id,stop_loss,take_profit,created_at,position_groups!inner(runtime_group_id,trade_account_id,source_event_id,source_instance_id,source_event_ids,thread_id,canonical_symbol,side,order_type,entry,stop_loss,status,created_at,updated_at)';
-    const query = (options) => this.supabase.from('position_legs')
-      .select(selection, options)
-      .eq('status', 'OPEN').eq('position_groups.status', 'OPEN')
-      .not('broker_position_id', 'is', null).not('take_profit', 'is', null);
+    // Retain the parameter for callers compiled against the previous API.
+    // Old rotating OFFSET pages required a count request and could starve
+    // newly-due legs; oldest-due ordering is cheaper and deterministic.
+    void pageSeed;
+    const selection = 'workspace_id,position_group_id,runtime_leg_id,target_index,logical_target_index,lots,executed_lots,broker_position_id,stop_loss,take_profit,last_broker_observed_at,last_broker_snapshot_fingerprint,created_at,position_groups!inner(runtime_group_id,trade_account_id,source_event_id,source_instance_id,source_event_ids,thread_id,canonical_symbol,side,order_type,entry,stop_loss,status,created_at,updated_at)';
+    const query = (options) => {
+      let builder = this.supabase.from('position_legs')
+        .select(selection, options)
+        .eq('status', 'OPEN').eq('position_groups.status', 'OPEN')
+        .not('broker_position_id', 'is', null);
+      if (observationDueBefore && typeof builder.or === 'function') {
+        const encoded = new Date(observationDueBefore).toISOString();
+        builder = builder.or(`last_broker_observed_at.is.null,last_broker_observed_at.lt.${encoded}`);
+      }
+      return builder;
+    };
 
-    const { count, error: countError } = await query({ count: 'exact', head: true });
-    if (countError) throw new Error(`broker TP candidate count failed: ${countError.message}`);
-    const total = Math.max(0, Number(count) || 0);
-    if (total === 0) return [];
-    const pages = Math.max(1, Math.ceil(total / limit));
-    const offset = (seed % pages) * limit;
-    const { data: selected, error: selectedError } = await query()
-      .order('created_at', { ascending: true }).order('id', { ascending: true }).range(offset, offset + limit - 1);
-    if (selectedError) throw new Error(`broker TP candidate page failed: ${selectedError.message}`);
-    const groupIds = [...new Set((selected || []).map((row) => String(row.position_group_id || '')).filter(Boolean))];
-    if (groupIds.length === 0) return [];
-    const { data, error } = await query().in('position_group_id', groupIds)
-      .order('position_group_id', { ascending: true }).order('logical_target_index', { ascending: true });
-    if (error) throw new Error(`broker TP candidate expansion failed: ${error.message}`);
+    let selectedQuery = query()
+      .order('last_broker_observed_at', { ascending: true, nullsFirst: true })
+      .order('created_at', { ascending: true }).order('id', { ascending: true });
+    if (typeof selectedQuery.limit === 'function') selectedQuery = selectedQuery.limit(limit);
+    const { data, error } = await selectedQuery;
+    if (error) throw new Error(`broker TP candidate page failed: ${error.message}`);
     const rows = (Array.isArray(data) ? data : []).map((row) => {
         const group = row.position_groups || {};
         return {
@@ -107,12 +113,15 @@ export class SupabaseTradeStatePersistence {
           lots: Number(row.lots), executedLots: row.executed_lots == null ? null : Number(row.executed_lots),
           brokerPositionId: String(row.broker_position_id || ''),
           stopLoss: row.stop_loss == null ? (group.stop_loss == null ? null : Number(group.stop_loss)) : Number(row.stop_loss),
-          takeProfit: Number(row.take_profit), createdAt: millis(row.created_at),
+          takeProfit: row.take_profit == null ? null : Number(row.take_profit),
+          lastBrokerObservedAt: millis(row.last_broker_observed_at),
+          lastBrokerSnapshotFingerprint: row.last_broker_snapshot_fingerprint == null ? null : String(row.last_broker_snapshot_fingerprint),
+          createdAt: millis(row.created_at),
         };
       });
     return rows.filter((row) => row.workspaceId && row.groupId && row.tradeAccountId && row.legId
       && row.brokerPositionId && Number.isInteger(row.targetIndex) && row.targetIndex > 0
-      && Number.isFinite(row.takeProfit) && row.takeProfit > 0);
+      && (!observationDueBefore || row.lastBrokerObservedAt == null || row.lastBrokerObservedAt < new Date(observationDueBefore).getTime()));
   }
 }
 

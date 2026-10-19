@@ -99,6 +99,26 @@ def broker_record(*, command_id, position_id=7001, order=9001, deal=9002, magic=
 
 
 class MT5BridgeReconciliationTests(unittest.TestCase):
+    def test_broker_position_status_reads_exact_open_protection_without_sending(self):
+        class PositionStatusMT5:
+            POSITION_TYPE_BUY = 0
+            def __init__(self):
+                self.sent = []
+                self.queries = []
+            def positions_get(self, ticket=None):
+                self.queries.append(ticket)
+                return (SimpleNamespace(ticket=700, symbol='EURUSD', type=0, volume=0.10, sl=1.1, tp=1.12, time=1770000000),)
+            def order_send(self, request): self.sent.append(request)
+        mt5 = PositionStatusMT5()
+        snapshot = MT5Engine(mt5).broker_position_status('700')
+        self.assertEqual(snapshot['positionId'], '700')
+        self.assertTrue(snapshot['isOpen'])
+        self.assertEqual(snapshot['side'], 'BUY')
+        self.assertEqual(snapshot['stopLoss'], 1.1)
+        self.assertEqual(snapshot['takeProfit'], 1.12)
+        self.assertEqual(mt5.queries, [700])
+        self.assertEqual(mt5.sent, [])
+
     def test_broker_position_close_status_reads_tp_reason_and_exact_position_without_sending(self):
         class PositionHistoryMT5:
             DEAL_ENTRY_IN = 0

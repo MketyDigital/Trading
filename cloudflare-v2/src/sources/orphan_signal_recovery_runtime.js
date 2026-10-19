@@ -176,6 +176,10 @@ export function createOrphanSignalRecoveryRuntime({
     let skipped = 0;
     let failed = 0;
     let firstFailedIndex = -1;
+    // Route authority is stable for the bounded recovery page. Cache one
+    // workspace/source lookup instead of rescanning the same routes for every
+    // candidate (and every follower) in the page.
+    const routeDecisionCache = new Map();
     for (const [index, candidate] of candidates.entries()) {
       if (!candidate?.id || !candidate?.workspace_id || !candidate?.source_connection_id
         || !candidate?.external_event_id || !isCompleteSignal(candidate) || !isDue(candidate, nowMs)) {
@@ -183,8 +187,9 @@ export function createOrphanSignalRecoveryRuntime({
         continue;
       }
       try {
-        const routed = persistenceRuntime
-          ? await (async () => {
+        const routeKey = `${candidate.workspace_id}:${candidate.source_connection_id}`;
+        if (!routeDecisionCache.has(routeKey)) routeDecisionCache.set(routeKey, persistenceRuntime
+          ? (async () => {
               const [routes, destinations] = await Promise.all([persistenceRuntime.routes.list(candidate.workspace_id), persistenceRuntime.destinations.listDestinations(candidate.workspace_id)]);
               const destinationById = new Map(destinations.map(item => [String(item.id), item]));
               return routes.some(route => String(route.source_connection_id) === String(candidate.source_connection_id)
@@ -192,7 +197,8 @@ export function createOrphanSignalRecoveryRuntime({
                 && destinationById.get(String(route.destination_id))?.destination_type === 'broker_account'
                 && (destinationById.get(String(route.destination_id))?.is_active === true || Number(destinationById.get(String(route.destination_id))?.is_active) === 1));
             })()
-          : await brokerRouteMatcher({ supabase, candidate });
+          : brokerRouteMatcher({ supabase, candidate }));
+        const routed = await routeDecisionCache.get(routeKey);
         if (!routed) {
           skipped += 1;
           continue;

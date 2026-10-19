@@ -14,6 +14,10 @@ const LEG_COLUMNS = new Set([
   'opened_at', 'closed_at', 'created_at', 'updated_at',
 ]);
 const D1_JSON_COLUMNS = new Set(['entry', 'risk_plan', 'policy_snapshot', 'source_event_ids', 'broker_deal_ids']);
+const OBSERVATION_COLUMNS = new Set([
+  'last_broker_observed_at', 'last_broker_source_version', 'last_broker_status',
+  'last_broker_snapshot_fingerprint', 'broker_deal_ids',
+]);
 
 function validateEvent(event, targetKind) {
   const targetByDirection = { d1_to_postgres: 'postgres', postgres_to_d1: 'd1' };
@@ -30,6 +34,26 @@ function validateEvent(event, targetKind) {
     for (const key of Object.keys(leg)) if (!LEG_COLUMNS.has(key)) throw new Error(`Unsupported trade-state leg field: ${key}`);
   }
   return { group, legs };
+}
+
+function validateObservationEvent(event, targetKind) {
+  const targetByDirection = { d1_to_postgres: 'postgres', postgres_to_d1: 'd1' };
+  if (!event || targetByDirection[event.direction] !== targetKind) throw new Error('Replication target authority does not match event direction');
+  const epoch = assertAuthorityEpoch(event.authorityEpoch);
+  if (event.entityType !== 'trade_state_broker_observation' || event.operation !== 'upsert') throw new Error('Unsupported broker observation replication event');
+  const payload = event.payload || {};
+  if (!payload.workspace_id || !payload.runtime_group_id || !payload.runtime_leg_id || !payload.patch || typeof payload.patch !== 'object') {
+    throw new Error('Invalid broker observation replication payload');
+  }
+  const expectedEntityId = `${payload.workspace_id}:${payload.runtime_group_id}:${payload.runtime_leg_id}`;
+  if (String(event.entityId) !== expectedEntityId) throw new Error('Broker observation replication entity identity mismatch');
+  const patch = {};
+  for (const [key, value] of Object.entries(payload.patch)) {
+    if (!OBSERVATION_COLUMNS.has(key)) throw new Error(`Unsupported broker observation field: ${key}`);
+    patch[key] = value;
+  }
+  if (!patch.last_broker_observed_at || !patch.last_broker_status) throw new Error('Broker observation timestamp and status are required');
+  return { epoch, payload: { ...payload, patch } };
 }
 
 function encodeD1(row) {
@@ -69,6 +93,54 @@ function pgUpsert(table, row, conflict, groupId = null) {
 
 export async function applyTradingTradeStateReplicationEvent(event, { targetAuthority, postgresDatabase, idFactory = () => globalThis.crypto.randomUUID() } = {}) {
   if (!targetAuthority || !['d1', 'postgres'].includes(targetAuthority.kind)) throw new TypeError('Resolved replication target authority is required');
+  if (event?.entityType === 'trade_state_broker_observation') {
+    const { epoch, payload } = validateObservationEvent(event, targetAuthority.kind);
+    if (assertAuthorityEpoch(targetAuthority.authorityEpoch) !== epoch) throw new Error('Replication event authority epoch does not match target runtime epoch');
+    const sourceAuthority = event.direction === 'd1_to_postgres' ? 'd1' : 'postgres';
+    const patch = encodeD1(payload.patch);
+    const columns = Object.keys(patch);
+    if (targetAuthority.kind === 'd1') {
+      const assignments = columns.map((column) => `${column} = ?`).join(', ');
+      const result = await targetAuthority.binding.prepare(`
+        UPDATE position_legs SET ${assignments}
+        WHERE position_group_id = (
+          SELECT g.id FROM position_groups g
+          WHERE g.workspace_id = ? AND g.runtime_group_id = ?
+        )
+          AND runtime_leg_id = ?
+          AND EXISTS (
+            SELECT 1 FROM trading_storage_control
+            WHERE singleton_id = 1 AND active_authority = ?
+              AND authority_epoch = ?
+          )
+      `).bind(...columns.map((column) => patch[column]), String(payload.workspace_id), String(payload.runtime_group_id), String(payload.runtime_leg_id), sourceAuthority, epoch).run();
+      if (Number(result?.meta?.changes || 0) !== 1) throw new Error('Passive D1 replica rejected broker observation');
+      return { applied: true, entityId: event.entityId, observation: true };
+    }
+    if (!postgresDatabase) throw new TypeError('Connected PostgreSQL database is required for replication target');
+    return postgresDatabase.transaction(async query => {
+      const authorityResult = await query(`SELECT active_authority, authority_epoch FROM trading_storage.authority_control WHERE singleton_id=1 FOR SHARE`);
+      const persisted = authorityResult.rows?.[0];
+      if (!persisted || persisted.active_authority !== sourceAuthority || Number(persisted.authority_epoch) !== epoch) {
+        throw new Error('Passive PostgreSQL replica rejected stale or mismatched authority epoch');
+      }
+      const values = columns.map((column) => column === 'broker_deal_ids' ? JSON.stringify(patch[column]) : patch[column]);
+      const assignments = columns.map((column, index) => `${column} = $${index + 1}${column === 'broker_deal_ids' ? '::jsonb' : ''}`);
+      const workspaceParam = values.length + 1;
+      const groupParam = values.length + 2;
+      const legParam = values.length + 3;
+      values.push(String(payload.workspace_id), String(payload.runtime_group_id), String(payload.runtime_leg_id));
+      const updated = await query(`
+        UPDATE trading_storage.position_legs l SET ${assignments.join(', ')}
+        FROM trading_storage.position_groups g
+        WHERE l.position_group_id = g.id AND g.workspace_id = $${workspaceParam}
+          AND g.runtime_group_id = $${groupParam} AND l.runtime_leg_id = $${legParam}
+        RETURNING l.id
+      `, values);
+      if (!updated.rows?.[0]?.id) throw new Error('Passive PostgreSQL replica rejected broker observation');
+      return { applied: true, entityId: event.entityId, observation: true };
+    });
+  }
   const { group, legs } = validateEvent(event, targetAuthority.kind);
   const epoch = assertAuthorityEpoch(event.authorityEpoch);
   if (assertAuthorityEpoch(targetAuthority.authorityEpoch) !== epoch) throw new Error('Replication event authority epoch does not match target runtime epoch');

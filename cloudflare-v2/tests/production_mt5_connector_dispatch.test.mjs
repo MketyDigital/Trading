@@ -180,3 +180,22 @@ test('LIVE MT5 connector reads exact broker position TP history without sending 
   assert.equal(calls[1][1], 'POST');
   assert.deepEqual(JSON.parse(calls[1][2]), { positionId: '7001', openedAt: 1770000000000 });
 });
+
+test('LIVE MT5 connector reads current open-position protection through the read-only gateway route', async () => {
+  const account = { id: 'acct-mt5-live', workspace_id: 'ws-a', platform: 'mt5', provider_mode: 'mt5_connector', account_id: '50123456', environment: 'live', server_name: 'Broker-Live', provider_config: { status: 'connected' }, credential_ciphertext: 'live-cipher' };
+  const calls = [];
+  const deps = createProductionExecutionDependencies({ env: { TRADING_MASTER_KEY: 'master-key' }, supabase: unexpectedSupabase(), workspaceId: 'ws-a' }, {
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'gateway-secret' }),
+    fetchFn: async (url, options = {}) => {
+      calls.push([String(url), options.method || 'GET', options.body]);
+      if (String(url).includes('/v1/mt5-connections/')) return new Response(JSON.stringify({ ok: true, online: true, accountRowId: account.id, identity: { accountNumber: account.account_id, serverName: account.server_name, isLive: true } }), { status: 200 });
+      if (String(url).includes('/v1/mt5-position-status/')) return new Response(JSON.stringify({ ok: true, accountRowId: account.id, snapshot: { accountId: account.account_id, serverName: account.server_name, environment: 'live', isLive: true, positionId: '7001', isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.1, takeProfit: 1.12 } }), { status: 200 });
+      throw new Error('unexpected gateway request');
+    },
+  });
+  const snapshot = await deps.readBrokerPositionStatus({ workspaceId: 'ws-a', account, brokerPositionId: '7001' });
+  assert.equal(snapshot.positionId, '7001');
+  assert.equal(snapshot.stopLoss, 1.1);
+  assert.match(calls[1][0], /\/v1\/mt5-position-status\/acct-mt5-live$/);
+  assert.deepEqual(JSON.parse(calls[1][2]), { positionId: '7001' });
+});

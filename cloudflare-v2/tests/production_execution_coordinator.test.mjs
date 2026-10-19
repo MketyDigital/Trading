@@ -58,6 +58,23 @@ test('broker master fuse fails before account, authority, dispatch, or state dep
   assert.deepEqual(touched, []);
 });
 
+test('one execution batch loads a repeated follower/account configuration once', async () => {
+  let accountLoads = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-1', brokerExecutionEnabled: true,
+    accountPlans: [
+      plan({ actions: [openAction({ legId: 'leg-1' })] }),
+      plan({ actions: [openAction({ legId: 'leg-2', idempotencyKey: 'evt-1:acct-a:leg:2' })] }),
+    ],
+  }, {
+    accountLoader: async () => { accountLoads += 1; return account(); },
+    dispatchAction: async () => ({ ok: true, brokerPositionId: 'position-1' }),
+    stateBinder: async () => {},
+  });
+  assert.equal(summary.succeeded, 2);
+  assert.equal(accountLoads, 1);
+});
+
 test('fresh authorization flags overlay the loaded account without discarding its execution configuration', async () => {
   let dispatchedAccount;
   const loaded = account({

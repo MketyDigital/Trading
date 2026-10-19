@@ -306,7 +306,9 @@ export function buildManagementActions(group, management) {
   if (management?.type === 'MOVE_SL') {
     const stopLoss = Number(management.stopLoss);
     if (!Number.isFinite(stopLoss)) throw new Error('finite stopLoss is required');
-    return openLegs.map((leg) => ({
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null ? openLegs : openLegs.filter((leg) => logicalTargetIndex(leg) === targetIndex);
+    return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
       legId: leg.legId,
       targetIndex: logicalTargetIndex(leg),
@@ -334,7 +336,9 @@ export function buildManagementActions(group, management) {
     }));
   }
   if (management?.type === 'REMOVE_SL') {
-    return openLegs.map((leg) => ({
+    const targetIndex = management.targetIndex == null ? null : Number(management.targetIndex);
+    const matchingLegs = targetIndex == null ? openLegs : openLegs.filter((leg) => logicalTargetIndex(leg) === targetIndex);
+    return matchingLegs.map((leg) => ({
       type: 'MODIFY_POSITION',
       managementType: 'REMOVE_SL',
       legId: leg.legId,

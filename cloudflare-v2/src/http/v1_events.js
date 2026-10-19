@@ -209,10 +209,15 @@ export async function handleV1EventsRequest(request, env = {}, {
     // immediately before planning. This prevents a replay from persisting a
     // PLANNED group after an operator has turned trading or broker execution off.
     if (duplicateReplayRequested) {
-      const [tradingControl, brokerControl] = await Promise.all([
-        recoveryTradingAccessControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
-        recoveryBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
-      ]);
+      const combined = typeof persistenceRuntime?.runtimeControls?.getExecutionControls === 'function'
+        ? await persistenceRuntime.runtimeControls.getExecutionControls()
+        : null;
+      const [tradingControl, brokerControl] = combined
+        ? [combined.tradingAccess, combined.brokerExecution]
+        : await Promise.all([
+            recoveryTradingAccessControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
+            recoveryBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls }),
+          ]);
       let recoveryBlockReason = null;
       if (tradingControl?.ok !== true) recoveryBlockReason = 'TRADING_RUNTIME_CONTROL_UNAVAILABLE';
       else if (tradingControl.enabled !== true) recoveryBlockReason = 'TRADING_ACCESS_DISABLED';

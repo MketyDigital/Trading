@@ -501,6 +501,47 @@ class MT5Engine:
         return {'positionId': str(ticket), 'isOpen': bool(active), 'initialLots': initial,
                 'closedLots': closed, 'deals': deals}
 
+    def broker_position_status(self, position_id):
+        """Read one exact open position, including broker protection, without sending an order."""
+        try:
+            ticket = int(position_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError('MT5_POSITION_ID_INVALID') from exc
+        if ticket <= 0:
+            raise RuntimeError('MT5_POSITION_ID_INVALID')
+        positions = self.mt5.positions_get(ticket=ticket)
+        if positions is None:
+            raise RuntimeError('MT5_POSITION_QUERY_UNCERTAIN')
+        exact = [row for row in positions if str(getattr(row, 'ticket', '')) == str(ticket)]
+        if len(exact) != 1:
+            if len(exact) == 0:
+                return {'positionId': str(ticket), 'isOpen': False}
+            raise RuntimeError('MT5_POSITION_IDENTITY_AMBIGUOUS')
+        position = exact[0]
+        symbol = str(getattr(position, 'symbol', '') or '').strip()
+        side_value = getattr(position, 'type', None)
+        if not symbol or side_value is None:
+            raise RuntimeError('MT5_POSITION_IDENTITY_UNCERTAIN')
+        side = 'BUY' if int(side_value) == int(getattr(self.mt5, 'POSITION_TYPE_BUY', 0)) else 'SELL' if int(side_value) == int(getattr(self.mt5, 'POSITION_TYPE_SELL', 1)) else None
+        if side is None:
+            raise RuntimeError('MT5_POSITION_SIDE_UNCERTAIN')
+        volume = float(getattr(position, 'volume', 0) or 0)
+        if not volume > 0:
+            raise RuntimeError('MT5_POSITION_VOLUME_UNCERTAIN')
+        def protection(value):
+            if value is None or float(value or 0) == 0:
+                return True, None
+            numeric = float(value)
+            return (numeric > 0), (numeric if numeric > 0 else None)
+        sl_present, stop_loss = protection(getattr(position, 'sl')) if hasattr(position, 'sl') else (False, None)
+        tp_present, take_profit = protection(getattr(position, 'tp')) if hasattr(position, 'tp') else (False, None)
+        snapshot = {'positionId': str(ticket), 'isOpen': True, 'symbol': symbol, 'side': side,
+                    'volume': volume, 'openedAt': int(float(getattr(position, 'time_msc', 0) or 0) or float(getattr(position, 'time', 0) or 0) * 1000),
+                    'observedAt': int(time.time() * 1000)}
+        if sl_present: snapshot['stopLoss'] = stop_loss
+        if tp_present: snapshot['takeProfit'] = take_profit
+        return snapshot
+
     def _normalized_recovered_deal(self, deal):
         return {
             'ok': True,
@@ -633,7 +674,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == '/health':
             return self._json(200, {'ok': True})
-        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick', '/v1/order-status', '/v1/position-close-status'):
+        if parsed.path not in ('/v1/health', '/v1/account', '/v1/symbols', '/v1/tick', '/v1/order-status', '/v1/position-close-status', '/v1/position-status'):
             return self._json(404, {'ok': False, 'error': 'not found'})
         if not self._metadata_authorized():
             return self._json(401, {'ok': False, 'error': 'invalid metadata signature'})
@@ -664,6 +705,19 @@ class BridgeHandler(BaseHTTPRequestHandler):
             opened_at = query.get('opened_at', [None])[0]
             try:
                 snapshot = self.engine.broker_position_close_status(position_id, opened_at)
+                account = self.mt5.account_info()
+                if account is None:
+                    raise RuntimeError('MT5_ACCOUNT_UNAVAILABLE')
+                is_live = int(getattr(account, 'trade_mode', -1)) == int(getattr(self.mt5, 'ACCOUNT_TRADE_MODE_REAL', 2))
+                snapshot.update({'accountId': str(account.login), 'serverName': str(account.server),
+                                 'isLive': is_live, 'environment': 'live' if is_live else 'demo'})
+                return self._json(200, {'ok': True, 'snapshot': snapshot})
+            except Exception as exc:
+                return self._json(409, {'ok': False, 'error': str(exc)})
+        if parsed.path == '/v1/position-status':
+            position_id = parse_qs(parsed.query).get('position_id', [None])[0]
+            try:
+                snapshot = self.engine.broker_position_status(position_id)
                 account = self.mt5.account_info()
                 if account is None:
                     raise RuntimeError('MT5_ACCOUNT_UNAVAILABLE')

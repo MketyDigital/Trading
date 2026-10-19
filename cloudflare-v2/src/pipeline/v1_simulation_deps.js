@@ -604,7 +604,7 @@ function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
   );
 }
 
-async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null } = {}) {
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null, portalFollowerEnabled = false } = {}) {
   const trustedSourceId = text(sourceId);
   if (!trustedSourceId) return [];
 
@@ -621,10 +621,11 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     const ids = selected.map(row => text(row.destination_id)).filter(Boolean);
     const destinations = (await persistenceRuntime.destinations.listDestinations(workspaceId)).filter(row => ids.includes(text(row.id)) && String(row.destination_type || '').toLowerCase() === 'broker_account' && (row.is_active === true || Number(row.is_active) === 1));
     const byId = new Map(destinations.map(row => [text(row.id), row]));
-    return selected.map(route => ({ route, destination: byId.get(text(route.destination_id)) }))
+    const parentRefs = selected.map(route => ({ route, destination: byId.get(text(route.destination_id)) }))
       .filter(({ destination }) => destination)
       .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
       .map(({ destination }) => text(destination.destination_ref)).filter(Boolean);
+    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime);
   }
 
   const { data: routesData, error: routeError } = await supabase
@@ -668,12 +669,71 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
   if (destinationError) throw new Error('failed to load broker destinations');
 
   const byDestination = new Map((destinations || []).map((row) => [text(row.id), row]));
-  return selectedRoutes
+  const parentRefs = selectedRoutes
     .map((route) => ({ route, destination: byDestination.get(text(route.destination_id)) }))
     .filter(({ destination }) => Boolean(destination))
     .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
     .map(({ destination }) => text(destination.destination_ref))
     .filter(Boolean);
+  if (!portalFollowerEnabled) return parentRefs;
+  try {
+    const parentIds = parentRefs.map((ref) => text(ref).replace(/^trade-account:/, '')).filter(Boolean);
+    if (!parentIds.length) return parentRefs;
+    const { data, error } = await supabase
+      .from('trading_account_followers')
+      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot')
+      .eq('workspace_id', workspaceId)
+      .eq('enabled', true)
+      .in('parent_account_id', parentIds)
+      .order('parent_account_id', { ascending: true });
+    if (error) return parentRefs;
+    const seen = new Set(parentRefs);
+    const followerRefs = (data || []).map((row) => text(row.follower_account_id)).filter(Boolean).map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id).filter((ref) => !seen.has(ref));
+    return [...parentRefs, ...followerRefs];
+  } catch {
+    return parentRefs;
+  }
+}
+
+async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime) {
+  const refs = [...new Set(parentRefs.map(text).filter(Boolean))];
+  const parentIds = refs.map((ref) => text(ref).replace(/^trade-account:/, '')).filter(Boolean);
+  if (!parentIds.length || typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') return refs;
+  try {
+    const links = await persistenceRuntime.accountFollowers.listEnabledByParents(workspaceId, parentIds);
+    const seen = new Set(refs);
+    for (const link of links) {
+      const followerId = text(link.follower_account_id ?? link.followerAccountId);
+      const ref = followerId ? (refs.some((item) => item.startsWith('trade-account:')) ? `trade-account:${followerId}` : followerId) : '';
+      if (ref && !seen.has(ref)) { seen.add(ref); refs.push(ref); }
+    }
+  } catch {
+    // Follower configuration is additive. A temporary link-table outage must
+    // preserve the existing explicit routes instead of blocking parent trades.
+  }
+  return refs;
+}
+
+async function decorateFollowerAccounts(accounts = [], workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled = false } = {}) {
+  const rows = Array.isArray(accounts) ? accounts : [];
+  const ids = rows.map((account) => text(account?.id)).filter(Boolean);
+  if (!ids.length) return rows;
+  try {
+    let links = [];
+    if (persistenceRuntime?.accountFollowers?.listEnabledByFollowers) {
+      links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
+    } else if (supabase?.from && portalFollowerEnabled) {
+      const response = await supabase.from('trading_account_followers').select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids);
+      if (!response.error) links = response.data || [];
+    }
+    const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
+    return rows.map((account) => {
+      const link = byFollower.get(text(account?.id));
+      return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
+    });
+  } catch {
+    return rows;
+  }
 }
 
 export async function createV1SimulationDependencies({ env = {}, supabase, persistenceRuntime = null, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
@@ -763,7 +823,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
           if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
           const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
           const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
-          return matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean);
+          return decorateFollowerAccounts(matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
         }
         const { data, error } = await supabase
           .from('trade_accounts')
@@ -775,16 +835,16 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
         const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
         // Keep the result bounded to accounts on the already-correlated groups.
         // Do not reapply signal-symbol route filters to a symbol-less reply.
-        return matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean);
+        return decorateFollowerAccounts(matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
       }
-      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation, persistenceRuntime });
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers) });
       if (!accountIds.length) return [];
       if (persistenceRuntime) {
         if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
         const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
         const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
         const orderedAccounts = accountIds.map(id => accountMap.get(id)).filter(Boolean);
-        return hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime });
+        return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: true });
       }
       const { data, error } = await supabase
         .from('trade_accounts')
@@ -795,7 +855,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
       if (error) throw new Error(`failed to load routed execution accounts: ${error.message || 'database error'}`);
       const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
       const orderedAccounts = accountIds.map((id) => accountMap.get(id)).filter(Boolean);
-      return hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader });
+      return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);

@@ -1,6 +1,6 @@
 import { CTraderJsonSession } from './ctrader_session.js';
 import { CTraderMarketData } from './ctrader_market_data.js';
-import { readCTraderPendingOrderStatus, readCTraderPositionCloseStatus } from './ctrader_pending_order_status.js';
+import { readCTraderPendingOrderStatus, readCTraderPositionCloseStatus, readCTraderPositionStatus } from './ctrader_pending_order_status.js';
 import { ctraderEndpoint } from './ctrader_protocol.js';
 import { executeCTraderAction } from './ctrader_executor_v2.js';
 import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer.js';
@@ -123,6 +123,13 @@ export async function createCTraderRuntime({
       return readCTraderPositionCloseStatus({ session, accountRowId, accountId: Number(accountId),
         brokerPositionId, symbol, side, openedAt, nowMs, protocolLotSize: resolved.protocolLotSize ?? resolved.lotSize,
         tickSize: resolved.tickSize, environment: mode, isLive: mode === 'live' });
+    },
+    async readBrokerPositionStatus({ accountRowId, brokerPositionId, symbol, side, nowMs } = {}) {
+      const resolved = resolveSymbolAgainstCatalog(symbol, catalog);
+      if (!resolved.ok) return { snapshot: { status: 'UNRESOLVED', reason: `SYMBOL_${resolved.reason}` } };
+      return readCTraderPositionStatus({ session, accountRowId, accountId: Number(accountId), brokerPositionId, symbol, side, nowMs,
+        expectedPlatformSymbolId: resolved.platformId, protocolLotSize: resolved.protocolLotSize ?? resolved.lotSize,
+        environment: mode, isLive: mode === 'live' });
     },
     async execute(action) {
       if (readOnlyLifecycle === true) throw new Error('cTrader lifecycle runtime is read-only');

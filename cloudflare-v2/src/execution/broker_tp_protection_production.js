@@ -15,7 +15,14 @@ async function stableEventKey(candidate, detection) {
   return `broker-tp:${candidate.tradeAccountId}:${candidate.brokerPositionId}:${hash}`;
 }
 
-async function applyBrokerObservation(env, { candidate, status, reason, dealIds, nowMs }) {
+async function stableProtectionEventKey(candidate, protection) {
+  const identity = [candidate.tradeAccountId, candidate.brokerPositionId, candidate.targetIndex, protection.fingerprint].join(':');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+  const hash = [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, '0')).join('');
+  return `broker-protection:${candidate.tradeAccountId}:${candidate.brokerPositionId}:${hash}`;
+}
+
+async function applyBrokerObservation(env, { candidate, status, reason, dealIds, snapshotFingerprint = null, nowMs }) {
   const token = text(env.TRADE_STATE_INTERNAL_TOKEN);
   const namespace = env.TRADE_STATE_NAMESPACE;
   if (!token || !namespace?.idFromName || !namespace?.get) throw new Error('TRADE_STATE_UNAVAILABLE');
@@ -25,7 +32,7 @@ async function applyBrokerObservation(env, { candidate, status, reason, dealIds,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-mkety-internal-token': token, 'x-mkety-workspace-id': candidate.workspaceId },
-      body: JSON.stringify({ observedAt: Number(nowMs), status, sourceVersion: text(reason) || null,
+        body: JSON.stringify({ observedAt: Number(nowMs), status, sourceVersion: text(reason) || null, snapshotFingerprint: text(snapshotFingerprint) || null,
         dealIds: Array.isArray(dealIds) ? dealIds.map(String) : [] }),
     },
   );
@@ -123,12 +130,75 @@ export function createProductionBrokerTpProtectionRuntime({
         interpretation: eventBody.canonical_intent };
     }
 
+    async function recordActivityEvent({ candidate, activity, sourceEvent, nowMs }) {
+      const externalEventId = await stableEventKey(candidate, activity);
+      const isPartial = String(activity.kind || '').startsWith('PARTIAL_');
+      const fraction = isPartial && Number(activity.initialLots) > 0
+        ? Math.min(1, Math.max(0.000001, Number(activity.closedLots) / Number(activity.initialLots)))
+        : null;
+      const management = isPartial ? { type: 'CLOSE_PARTIAL', fraction, brokerPositionId: activity.positionId, tradeAccountId: candidate.tradeAccountId } : { type: 'CLOSE', brokerPositionId: activity.positionId, tradeAccountId: candidate.tradeAccountId };
+      const eventBody = {
+        workspace_id: candidate.workspaceId, source_connection_id: sourceEvent.sourceId,
+        external_event_id: externalEventId, event_version: '1.0', source_type: sourceEvent.sourceType,
+        source_external_id: sourceEvent.sourceExternalId || externalEventId, occurred_at: new Date(Number(nowMs)).toISOString(),
+        raw_text: `Broker ${String(activity.kind || 'position activity').toLowerCase()} detected`,
+        structured_payload: { kind: 'BROKER_POSITION_ACTIVITY', brokerPositionId: activity.positionId, dealIds: activity.dealIds, activityKind: activity.kind, closedLots: activity.closedLots, initialLots: activity.initialLots },
+        thread: {}, metadata: { ...sourceEvent.metadata, broker_activity: { kind: activity.kind, tradeAccountId: candidate.tradeAccountId, brokerPositionId: activity.positionId, dealIds: activity.dealIds } },
+        processing_status: 'MANAGEMENT', canonical_intent: { status: 'MANAGEMENT', management },
+      };
+      let eventId;
+      if (persistenceRuntime) {
+        const reserved = await persistenceRuntime.ingest.eventStore.reserve(eventBody);
+        eventId = text(reserved?.eventId);
+      } else {
+        const { data: inserted, error: insertError } = await supabase.from('trading_events').upsert(eventBody, { onConflict: 'workspace_id,source_connection_id,external_event_id', ignoreDuplicates: true }).select('id').maybeSingle();
+        errorOf(insertError, 'broker activity event persistence failed');
+        eventId = text(inserted?.id);
+        if (!eventId) {
+          const { data: existing, error } = await supabase.from('trading_events').select('id').eq('workspace_id', candidate.workspaceId).eq('source_connection_id', sourceEvent.sourceId).eq('external_event_id', externalEventId).maybeSingle();
+          errorOf(error, 'broker activity event recovery failed');
+          eventId = text(existing?.id);
+        }
+      }
+      if (!eventId) throw new Error('broker activity event id unavailable');
+      return { eventId, event: { workspace_hint: candidate.workspaceId, external_event_id: externalEventId, source_external_id: sourceEvent.sourceExternalId || externalEventId, occurred_at: eventBody.occurred_at, text: eventBody.raw_text, structured_payload: eventBody.structured_payload, thread: {}, source: { instance_id: sourceEvent.sourceInstanceId }, metadata: eventBody.metadata }, sourceId: sourceEvent.sourceId, interpretation: eventBody.canonical_intent };
+    }
+
+    async function recordProtectionEvent({ candidate, protection, sourceEvent, nowMs }) {
+      const externalEventId = await stableProtectionEventKey(candidate, protection);
+      const management = protection.actions.length === 1 ? { ...protection.actions[0], brokerPositionId: protection.positionId, tradeAccountId: candidate.tradeAccountId }
+        : { type: 'COMPOUND', actions: protection.actions, brokerPositionId: protection.positionId, tradeAccountId: candidate.tradeAccountId };
+      const eventBody = {
+        workspace_id: candidate.workspaceId, source_connection_id: sourceEvent.sourceId, external_event_id: externalEventId,
+        event_version: '1.0', source_type: sourceEvent.sourceType, source_external_id: sourceEvent.sourceExternalId || externalEventId,
+        occurred_at: new Date(Number(nowMs)).toISOString(), raw_text: 'Broker open-position protection change detected',
+        structured_payload: { kind: 'BROKER_PROTECTION_CHANGE', brokerPositionId: protection.positionId, targetIndex: candidate.targetIndex,
+          stopLoss: protection.stopLoss, takeProfit: protection.takeProfit, actions: protection.actions },
+        thread: {}, metadata: { ...sourceEvent.metadata, broker_protection: { tradeAccountId: candidate.tradeAccountId,
+          brokerPositionId: protection.positionId, targetIndex: candidate.targetIndex, fingerprint: protection.fingerprint } },
+        processing_status: 'MANAGEMENT', canonical_intent: { status: 'MANAGEMENT', management },
+      };
+      let eventId;
+      if (persistenceRuntime) eventId = text((await persistenceRuntime.ingest.eventStore.reserve(eventBody))?.eventId);
+      else {
+        const { data: inserted, error: insertError } = await supabase.from('trading_events').upsert(eventBody, { onConflict: 'workspace_id,source_connection_id,external_event_id', ignoreDuplicates: true }).select('id').maybeSingle();
+        errorOf(insertError, 'broker protection event persistence failed');
+        eventId = text(inserted?.id);
+        if (!eventId) {
+          const { data: existing, error } = await supabase.from('trading_events').select('id').eq('workspace_id', candidate.workspaceId).eq('source_connection_id', sourceEvent.sourceId).eq('external_event_id', externalEventId).maybeSingle();
+          errorOf(error, 'broker protection event recovery failed'); eventId = text(existing?.id);
+        }
+      }
+      if (!eventId) throw new Error('broker protection event id unavailable');
+      return { eventId, event: { workspace_hint: candidate.workspaceId, external_event_id: externalEventId, source_external_id: sourceEvent.sourceExternalId || externalEventId, occurred_at: eventBody.occurred_at, text: eventBody.raw_text, structured_payload: eventBody.structured_payload, thread: {}, source: { instance_id: sourceEvent.sourceInstanceId }, metadata: eventBody.metadata }, sourceId: sourceEvent.sourceId, interpretation: eventBody.canonical_intent };
+    }
+
     const depsByWorkspace = new Map();
     const accountLoadById = new Map();
     const runtime = createBrokerTpProtectionRuntime({
-      loadCandidates: async ({ limit, pageSeed }) => persistenceRuntime
-        ? persistenceRuntime.tradeState.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed })
-        : persistence.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed }),
+      loadCandidates: async ({ limit, pageSeed, observationDueBefore }) => persistenceRuntime
+        ? persistenceRuntime.tradeState.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed, observationDueBefore })
+        : persistence.listBrokerTpProtectionCandidates({ pageSize: limit, pageSeed, observationDueBefore }),
       loadAccount: async (workspaceId, accountId) => {
         if (!depsByWorkspace.has(workspaceId)) depsByWorkspace.set(workspaceId,
           (executionDepsFactory || createProductionExecutionDependencies)({ env, supabase, persistenceRuntime, workspaceId }));
@@ -139,12 +209,19 @@ export function createProductionBrokerTpProtectionRuntime({
       },
       loadSourceEvent,
       recordObservation: (input) => applyBrokerObservation(env, input),
+      recordActivityEvent,
       readPositionCloseStatus: async ({ account, candidate, nowMs }) => {
         const workspaceDeps = depsByWorkspace.get(candidate.workspaceId);
         if (typeof workspaceDeps?.readBrokerPositionCloseStatus !== 'function') return null;
         return workspaceDeps.readBrokerPositionCloseStatus({ workspaceId: candidate.workspaceId, account,
           brokerPositionId: candidate.brokerPositionId, symbol: candidate.symbol, side: candidate.side,
           openedAt: candidate.groupCreatedAt ?? candidate.createdAt, nowMs });
+      },
+      readPositionStatus: async ({ account, candidate, nowMs }) => {
+        const workspaceDeps = depsByWorkspace.get(candidate.workspaceId);
+        if (typeof workspaceDeps?.readBrokerPositionStatus !== 'function') return null;
+        return workspaceDeps.readBrokerPositionStatus({ workspaceId: candidate.workspaceId, account,
+          brokerPositionId: candidate.brokerPositionId, symbol: candidate.symbol, side: candidate.side, nowMs });
       },
       recordManagementEvent,
       applyTargetHit: async ({ candidate, event, sourceEvent }) => {
@@ -154,6 +231,21 @@ export function createProductionBrokerTpProtectionRuntime({
           eventId: event.eventId, nowMs: Number(clock()) }, simulationDependencies);
         const result = { ok: true, duplicate: false, eventId: event.eventId, sourceId: sourceEvent?.sourceId,
           event: event.event, interpretation: event.interpretation };
+        const execution = await executionStageFn({ env, supabase, persistenceRuntime, result, simulation });
+        return { simulation, execution };
+      },
+      applyActivity: async ({ candidate, event, sourceEvent }) => {
+        const simulationDependencies = await simulationDepsFactory({ env, supabase, persistenceRuntime, event: event.event, interpretation: event.interpretation, eventId: event.eventId, sourceId: event.sourceId });
+        const simulation = await orchestrateFn({ event: event.event, interpretation: event.interpretation, eventId: event.eventId, nowMs: Number(clock()) }, simulationDependencies);
+        const result = { ok: true, duplicate: false, eventId: event.eventId, sourceId: sourceEvent?.sourceId, event: event.event, interpretation: event.interpretation };
+        const execution = await executionStageFn({ env, supabase, persistenceRuntime, result, simulation });
+        return { simulation, execution };
+      },
+      recordProtectionEvent,
+      applyProtectionChange: async ({ candidate, event, sourceEvent }) => {
+        const simulationDependencies = await simulationDepsFactory({ env, supabase, persistenceRuntime, event: event.event, interpretation: event.interpretation, eventId: event.eventId, sourceId: event.sourceId });
+        const simulation = await orchestrateFn({ event: event.event, interpretation: event.interpretation, eventId: event.eventId, nowMs: Number(clock()) }, simulationDependencies);
+        const result = { ok: true, duplicate: false, eventId: event.eventId, sourceId: sourceEvent?.sourceId, event: event.event, interpretation: event.interpretation };
         const execution = await executionStageFn({ env, supabase, persistenceRuntime, result, simulation });
         return { simulation, execution };
       },
