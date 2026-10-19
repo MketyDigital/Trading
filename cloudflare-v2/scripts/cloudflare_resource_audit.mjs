@@ -234,18 +234,18 @@ function queryWorker(workerName) {
   }`;
 }
 
-function queryQueueMetrics() {
+export function queryQueueMetrics() {
   return `query ResourceAuditQueues($accountTag: String!, $start: Time!, $end: Time!) {
     viewer { accounts(filter: {accountTag: $accountTag}) {
       queueMessageOperationsAdaptiveGroups(limit: 1000, filter: {datetime_geq: $start, datetime_leq: $end}) {
-        dimensions { queueID actionType outcome datetimeHour }
+        dimensions { queueID actionType outcome }
         sum { billableOperations bytes } avg { lagTime retryCount } max { messageSize }
       }
       queuesBacklogAdaptiveGroups(limit: 1000, filter: {datetime_geq: $start, datetime_leq: $end}) {
-        dimensions { queueID datetimeHour } avg { messages bytes }
+        dimensions { queueID } avg { messages bytes }
       }
       queueConsumerMetricsAdaptiveGroups(limit: 1000, filter: {datetime_geq: $start, datetime_leq: $end}) {
-        dimensions { queueID datetimeHour } avg { concurrency }
+        dimensions { queueID } avg { concurrency }
       }
     } }
   }`;
@@ -255,26 +255,26 @@ function queryDoMetrics(workerName, start, end) {
   return `query ResourceAuditDO($accountTag: String!, $start: Date!, $end: Date!, $scriptName: String!) {
     viewer { accounts(filter: {accountTag: $accountTag}) {
       durableObjectsInvocationsAdaptiveGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end, scriptName: $scriptName}) {
-        dimensions { date namespaceId className } sum { requests responseBodySize }
+        dimensions { namespaceId className } sum { requests responseBodySize }
       }
       durableObjectsPeriodicGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end, scriptName: $scriptName}) {
-        dimensions { date namespaceId className } sum { cpuTime }
+        dimensions { namespaceId className } sum { cpuTime }
       }
       durableObjectsStorageGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end, scriptName: $scriptName}) {
-        dimensions { date namespaceId className } max { storedBytes }
+        dimensions { namespaceId className } max { storedBytes }
       }
     } }
   }`;
 }
 
-function queryContainerMetrics() {
+export function queryContainerMetrics() {
   return `query ResourceAuditContainers($accountTag: String!, $start: Date!, $end: Date!) {
     viewer { accounts(filter: {accountTag: $accountTag}) {
-      containersMetricsAdaptiveGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end}, orderBy: [date_DESC]) {
-        dimensions { date applicationId instanceId } sum { cpuTimeSec allocatedMemory allocatedDisk allocatedCpu containerUptime } max { memory diskUsage } quantiles { cpuUtilizationP95 memoryP95 containerUptimeP95 }
+      containersMetricsAdaptiveGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end}) {
+        dimensions { applicationId instanceId } sum { cpuTimeSec allocatedMemory allocatedDisk allocatedCpu containerUptime } max { memory diskUsage } quantiles { cpuUtilizationP95 memoryP95 containerUptimeP95 }
       }
-      containersUsageAdaptiveGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end}, orderBy: [date_DESC]) {
-        dimensions { date applicationId instanceId } sum { cpuTimeSec allocatedMemory allocatedDisk txBytes }
+      containersUsageAdaptiveGroups(limit: 1000, filter: {date_geq: $start, date_leq: $end}) {
+        dimensions { applicationId instanceId } sum { cpuTimeSec allocatedMemory allocatedDisk txBytes }
       }
     } }
   }`;
@@ -291,8 +291,13 @@ function buildReport({ windowDays, generatedAt, windowStart, windowEnd, inventor
   return {
     generatedAt,
     windowDays,
-    windowStart,
-    windowEnd,
+    window: {
+      rollingStartUtc: windowStart,
+      endUtc: windowEnd,
+      calendarStartUtc: metrics.windowCalendarStart,
+      calendarEndUtc: metrics.windowCalendarEnd,
+      note: 'Worker and Queue analytics use a rolling timestamp window; D1, Durable Object, and Container datasets use UTC calendar dates.'
+    },
     readOnly: true,
     scope: 'Cloudflare account resource inventory and aggregated usage; no application rows or message bodies queried',
     configuration: inventory,
@@ -338,7 +343,7 @@ export async function runAudit({ token, account, days, configPath = '../wrangler
     optional('container_analytics', () => graph(queryContainerMetrics(), { accountTag: account, start, end }, token)),
   ]);
   const resources = { d1, queues, workers, durableObjectNamespaces: namespaces, containers };
-  const metrics = { resources, d1: d1Metrics, worker: workerMetrics, queues: queueMetrics, durableObjects: doMetrics, containers: containerMetrics };
+  const metrics = { resources, d1: d1Metrics, worker: workerMetrics, queues: queueMetrics, durableObjects: doMetrics, containers: containerMetrics, windowCalendarStart: start, windowCalendarEnd: end };
   const report = buildReport({ windowDays, generatedAt: now.toISOString(), windowStart: startTime, windowEnd: endTime, inventory, metrics });
   return report;
 }
