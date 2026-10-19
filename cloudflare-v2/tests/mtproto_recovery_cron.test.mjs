@@ -122,3 +122,25 @@ test('wrangler registers both exact cron expressions', async () => {
   const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.match(wrangler, /crons\s*=\s*\[[^\]]*"\*\/15 \* \* \* \*"[^\]]*"\* \* \* \* \*"[^\]]*\]/s);
 });
+
+
+test('overlapping 15-minute VIP cron skips replication already run by the one-minute cron', async () => {
+  let replicationRuntimeCreations = 0;
+  const entry = createTradingV1Entrypoint({
+    persistenceRuntimeFactory: async () => ({
+      legacyWorkspaces: { listBotEnabled: async () => [] },
+      async close() {},
+    }),
+    persistenceRuntimeEnabled: () => true,
+    replicationRuntimeFactory: async () => {
+      replicationRuntimeCreations += 1;
+      return { run: async () => ({ ok: true }), async close() {} };
+    },
+  });
+
+  const result = await entry.scheduled({ cron: LEGACY_CRON }, {}, {});
+
+  assert.equal(replicationRuntimeCreations, 0);
+  assert.deepEqual(result.replication, { ok: true, skipped: true });
+  assert.deepEqual(result.vipLifecycle, { ok: true, processedWorkspaces: 0 });
+});
