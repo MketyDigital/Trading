@@ -32,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
-          const fs = require('node:fs');
+          import fs from 'node:fs';
 
           const hours = Number(process.env.WINDOW_HOURS);
           if (!Number.isInteger(hours) || hours < 1 || hours > 120) {
