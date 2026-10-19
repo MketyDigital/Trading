@@ -87,3 +87,43 @@ test('safe simulation explicitly exposes its synthetic transport mode', async ()
   assert.equal(execution.transportMode, 'simulation');
   assert.equal(execution.status, 'SUCCEEDED');
 });
+
+
+test('D1 execution stage resolves persisted runtime controls without Supabase', async () => {
+  const controlReads = [];
+  const enabled = async (name) => {
+    controlReads.push(name);
+    return { ok: true, enabled: true, reason: 'TEST_D1_CONTROL_ENABLED' };
+  };
+  const runtimeControls = {
+    getTradingAccessEnabled: () => enabled('trading'),
+    getBrokerExecutionEnabled: () => enabled('broker'),
+    getLiveBrokerExecutionEnabled: () => enabled('live'),
+  };
+  let executionInput = null;
+
+  const execution = await runV1ProductionExecutionStage({
+    env: { TRADING_EXECUTION_TRANSPORT_MODE: 'real' },
+    persistenceRuntime: { runtimeControls },
+    result,
+    simulation: readySimulation(),
+    executionDepsFactory: async () => ({}),
+    bindingRepairRecorderFactory: () => ({}),
+    executeProductionFn: async (input) => {
+      executionInput = input;
+      return {
+        executionEnabled: true,
+        status: 'SUCCEEDED',
+        accounts: [],
+        succeeded: 1,
+        failed: 0,
+        blocked: 0,
+      };
+    },
+  });
+
+  assert.equal(execution.status, 'SUCCEEDED');
+  assert.deepEqual(controlReads, ['trading', 'broker', 'live']);
+  assert.equal(executionInput.liveBrokerExecutionEnabled, true);
+  assert.equal(executionInput.liveBrokerExecutionControlAvailable, true);
+});
