@@ -80,9 +80,9 @@ function summary(status, { executionEnabled = false, blocked = 0, transportMode 
   }, transportMode);
 }
 
-async function resolveRuntimeControl(resolver, { env, supabase }, unavailableReason) {
+async function resolveRuntimeControl(resolver, context, unavailableReason) {
   try {
-    return await resolver({ env, supabase });
+    return await resolver(context);
   } catch {
     return { ok: false, enabled: false, reason: unavailableReason };
   }
