@@ -203,7 +203,7 @@ async function listDoNamespaces(token, account) {
   return (result.result || []).map(({ id, name, script, class: className }) => ({ id, name, script, className: className || null }));
 }
 
-function queryD1Metrics() {
+export function queryD1Metrics() {
   return `query ResourceAuditD1($accountTag: String!, $start: Date!, $end: Date!) {
     viewer { accounts(filter: {accountTag: $accountTag}) {
       d1AnalyticsAdaptiveGroups(limit: 10000, filter: {date_geq: $start, date_leq: $end}, orderBy: [date_DESC]) {
@@ -212,7 +212,10 @@ function queryD1Metrics() {
       d1StorageAdaptiveGroups(limit: 10000, filter: {date_geq: $start, date_leq: $end}, orderBy: [date_DESC]) {
         dimensions { date databaseId } max { databaseSizeBytes }
       }
-      d1QueriesAdaptiveGroups(limit: 100, filter: {date_geq: $start, date_leq: $end}, orderBy: [sum_rowsWritten_DESC]) {
+      d1TopQuerySignaturesByRowsRead: d1QueriesAdaptiveGroups(limit: 50, filter: {date_geq: $start, date_leq: $end}, orderBy: [sum_rowsRead_DESC]) {
+        dimensions { databaseId query } count sum { rowsRead rowsWritten } avg { queryDurationMs rowsRead rowsWritten }
+      }
+      d1TopQuerySignaturesByRowsWritten: d1QueriesAdaptiveGroups(limit: 50, filter: {date_geq: $start, date_leq: $end}, orderBy: [sum_rowsWritten_DESC]) {
         dimensions { databaseId query } count sum { rowsRead rowsWritten } avg { queryDurationMs rowsRead rowsWritten }
       }
     } }
@@ -278,9 +281,10 @@ function queryContainerMetrics() {
 }
 
 function buildReport({ windowDays, generatedAt, windowStart, windowEnd, inventory, metrics }) {
-  const queryInsight = metrics.d1?.data?.d1QueriesAdaptiveGroups;
-  if (Array.isArray(queryInsight)) {
-    for (const item of queryInsight) {
+  const d1Data = metrics.d1?.data || {};
+  for (const group of Object.values(d1Data)) {
+    if (!Array.isArray(group)) continue;
+    for (const item of group) {
       if (item.dimensions?.query) item.dimensions.query = redactSql(item.dimensions.query);
     }
   }
