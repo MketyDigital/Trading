@@ -55,6 +55,9 @@ class ManagerViewModel:
         self.supervisor = supervisor
         self.catalog = catalog
         self.copy_supervisor = copy_supervisor or LocalCopySupervisor()
+        # Account identity is read-only and remains cached for this manager session
+        # when a connector is stopped or an account has not been paired to Mkety.
+        self._identity_cache: dict[str, dict] = {}
 
     def profiles(self) -> list[TerminalProfile]:
         return load_profiles(self.app_data_dir)
@@ -217,8 +220,35 @@ class ManagerViewModel:
                                                         follower.copy_lot_multiplier, follower.copy_fixed_lot, journal_path=journal_path,
                                                         stop_file=self._copy_stop_file(follower)))
 
+    def observe_account(self, profile_id: str, *, probe=None) -> dict:
+        """Read the signed-in account identity from one selected terminal, without pairing/trading."""
+        profile = self._profile(profile_id)
+        if not profile.terminal_path:
+            raise ValueError('select an MT5 terminal for this profile first')
+        status = self.supervisor.status(profile_id)
+        if status.get('process_running'):
+            identity = {
+                'accountNumber': status.get('account_number'),
+                'serverName': status.get('server_name'),
+                'environment': status.get('environment'),
+            }
+            if not all(str(identity.get(key) or '').strip() for key in ('accountNumber', 'serverName', 'environment')):
+                raise ValueError('the running connector has not reported account identity yet; wait for its first status update and retry')
+        else:
+            identity = (probe or probe_terminal_identity)(profile.terminal_path)
+        account = str(identity.get('accountNumber') or '').strip()
+        server = str(identity.get('serverName') or '').strip()
+        environment = str(identity.get('environment') or '').strip().casefold()
+        if not account or not server or environment not in {'demo', 'live'}:
+            raise ValueError('MT5 did not return a complete account number, server and environment')
+        normalized = {'accountNumber': account, 'serverName': server, 'environment': environment}
+        self._identity_cache[profile.profile_id] = normalized
+        return normalized
+
     def profile_rows(self) -> list[dict]:
         rows = []
+        profiles = self.profiles()
+        profiles_by_id = {profile.profile_id: profile for profile in profiles}
         running_paths = set()
         try:
             running_paths = {
@@ -227,11 +257,26 @@ class ManagerViewModel:
             }
         except Exception:
             running_paths = set()
-        for profile in self.profiles():
+        for profile in profiles:
             spec = self._spec(profile)
             self.supervisor.register(spec)
             status = self.supervisor.status(profile.profile_id)
             paths = profile_paths(profile, self.app_data_dir)
+            observed = self._identity_cache.get(profile.profile_id, {})
+            account = status.get("account_number") or observed.get('accountNumber') or "Sign in to MT5"
+            server = status.get("server_name") or observed.get('serverName') or ""
+            environment = status.get("environment") or observed.get('environment') or ""
+            if profile.copy_role == 'follower' and profile.copy_parent_profile_id:
+                parent = profiles_by_id.get(profile.copy_parent_profile_id)
+                parent_label = parent.label if parent else profile.copy_parent_profile_id
+                if profile.copy_fixed_lot is not None:
+                    unit = 'lot' if profile.copy_fixed_lot == 1 else 'lots'
+                    sizing = f"fixed {profile.copy_fixed_lot:g} {unit}"
+                else:
+                    sizing = f"{profile.copy_lot_multiplier:g}× multiplier"
+                copy_status = f"Follower of {parent_label} — {sizing} ({'enabled' if profile.copy_enabled else 'disabled'})"
+            else:
+                copy_status = "Not a local follower"
             rows.append({
                 "profile_id": profile.profile_id,
                 "label": profile.label,
@@ -239,9 +284,10 @@ class ManagerViewModel:
                 "terminal_process": "Running" if profile.terminal_path and str(profile.terminal_path.resolve(strict=False)).casefold() in running_paths else "Stopped",
                 "connector_process": "Running" if status.get("process_running") else "Stopped",
                 "gateway": status.get("state", "stopped"),
-                "account": status.get("account_number") or "Sign in to MT5",
-                "server": status.get("server_name") or "",
-                "environment": status.get("environment") or "",
+                "account": account,
+                "server": server,
+                "environment": environment.upper(),
+                "copy": copy_status,
                 "paired": paths.config_path.exists(),
                 "dashboard_sync": "Not confirmed — sync this account in Mkety",
             })
@@ -375,27 +421,37 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     terminal_list.pack(fill="x", padx=18)
     discovered = []
 
-    profiles_box = ttk.Treeview(root, columns=("terminal", "profile_id", "terminal_process", "connector", "account", "gateway", "sync"), show="headings", height=10)
+    profiles_frame = ttk.Frame(root)
+    profiles_frame.pack(fill="both", expand=True, padx=18, pady=12)
+    profiles_box = ttk.Treeview(profiles_frame, columns=("terminal", "profile_id", "terminal_process", "connector", "account", "gateway", "sync", "copy"), show="headings", height=10)
+    profile_scroll = ttk.Scrollbar(profiles_frame, orient="horizontal", command=profiles_box.xview)
+    profiles_box.configure(xscrollcommand=profile_scroll.set)
     for column, label, width in (
         ("terminal", "Terminal / broker", 185), ("profile_id", "Profile ID", 145), ("terminal_process", "MT5 process", 80), ("connector", "Connector", 75), ("account", "Account / server", 165),
-        ("gateway", "Gateway", 100), ("sync", "Dashboard identity", 250),
+        ("gateway", "Gateway", 100), ("sync", "Dashboard identity", 180), ("copy", "Local copier", 250),
     ):
         profiles_box.heading(column, text=label)
         profiles_box.column(column, width=width, anchor="w")
-    profiles_box.pack(fill="both", expand=True, padx=18, pady=12)
+    profiles_box.pack(fill="both", expand=True)
+    profile_scroll.pack(fill="x")
     note = ttk.Label(root, text="Dashboard identity sync is verified in Mkety. The manager never marks sync complete locally.", wraplength=850)
     note.pack(anchor="w", padx=18, pady=(0, 8))
     copy_bar = ttk.Frame(root)
     copy_bar.pack(anchor="w", padx=18, pady=(0, 8))
 
     def refresh_profiles():
+        selected = profiles_box.selection()
         for item in profiles_box.get_children():
             profiles_box.delete(item)
         for row in model.profile_rows():
             profiles_box.insert("", "end", iid=row["profile_id"], values=(
                 f"{row['label']}\n{row['terminal_path']}", row["profile_id"], row["terminal_process"], row["connector_process"],
-                f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"],
+                f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"], row["copy"],
             ))
+        for profile_id in selected:
+            if profile_id in profiles_box.get_children():
+                profiles_box.selection_set(profile_id)
+                profiles_box.focus(profile_id)
         root.after(3000, refresh_status_only)
 
     def select_saved_profile(profile_id):
@@ -410,7 +466,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             if row is not None:
                 profiles_box.item(profile_id, values=(
                     f"{row['label']}\n{row['terminal_path']}", row["profile_id"], row["terminal_process"], row["connector_process"],
-                    f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"],
+                    f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"], row["copy"],
                 ))
         root.after(3000, refresh_status_only)
 
@@ -573,6 +629,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
                 ):
                     return
                 identity = probe_terminal_identity(profile.terminal_path)
+                model._identity_cache[profile_id] = identity
                 prompt = (f"Account: {identity['accountNumber']}\nServer: {identity['serverName']}\n"
                           f"Environment: {identity['environment'].upper()}\n\nIs this the account you intended to pair?")
                 if not messagebox.askyesno("Confirm MT5 account", prompt, parent=root):
@@ -638,10 +695,25 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         try:
             model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot)
             sizing = f"fixed {fixed_lot:g} lots" if fixed_lot is not None else f"{multiplier:g}× multiplier"
-            flow_text.set(f"Local MT5 follower saved with {sizing}. Start it explicitly when both terminals are ready.")
             refresh_profiles()
+            select_saved_profile(profile_id)
+            parent = model._profile(parent_id)
+            flow_text.set(f"{model._profile(profile_id).label} is now a local follower of {parent.label} at {sizing}. Select this follower row and click Start local copy.")
         except Exception as exc:
             messagebox.showerror("Could not enable local copy", str(exc), parent=root)
+
+    def inspect_selected_account():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            messagebox.showinfo("Select a saved profile", "Select an account row in the lower saved profiles table first.", parent=root)
+            return
+        try:
+            identity = model.observe_account(profile_id)
+            refresh_profiles()
+            select_saved_profile(profile_id)
+            flow_text.set(f"Read-only MT5 identity: {identity['accountNumber']} — {identity['serverName']} — {identity['environment'].upper()}. No Mkety token or pairing was used.")
+        except Exception as exc:
+            messagebox.showerror("Could not read MT5 account", str(exc), parent=root)
 
     def disable_selected_follower():
         profile_id = selected_profile_id()
@@ -657,6 +729,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     def start_selected_copy():
         profile_id = selected_profile_id()
         if not profile_id:
+            messagebox.showinfo("Select follower profile", "Select the configured follower row in the lower saved profiles table first.", parent=root)
             return
         try:
             if not messagebox.askyesno(
@@ -710,7 +783,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         (("Refresh terminals", discover), ("Add another terminal", add_selected), ("Browse terminal…", browse_terminal),
          ("Search a folder…", add_from_folder_search), ("Install MT5…", install_terminal)),
         (("Official MT5 download", lambda: webbrowser.open(OFFICIAL_MT5_DOWNLOAD_URL)),
-         ("Open selected MT5", open_selected_terminal), ("Pair / start selected", pair_or_start), ("Stop selected connector", stop_selected),
+         ("Open selected MT5", open_selected_terminal), ("Read selected account", inspect_selected_account), ("Pair / start selected", pair_or_start), ("Stop selected connector", stop_selected),
          ("Sync this account in Mkety", open_mkety)),
     )
     for row_actions in action_rows:
