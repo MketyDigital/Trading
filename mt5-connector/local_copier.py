@@ -39,7 +39,7 @@ def _closable_volume(value, minimum, step):
     return round(amount, 8)
 
 
-def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot_multiplier=1, fixed_lot=None):
+def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot_multiplier=1, fixed_lot=None, symbol_map=None):
     if not isinstance(parent_snapshot, dict) or parent_snapshot.get("complete") is not True:
         return []
     multiplier = _positive(lot_multiplier)
@@ -51,6 +51,22 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
     if not isinstance(parent_positions, list) or not isinstance(follower_positions, list):
         return []
     parent_by_ticket = {_source_ticket(row): row for row in parent_positions if _source_ticket(row)}
+    mapped_symbols = {str(key).strip().casefold(): str(value).strip() for key, value in (symbol_map or {}).items()}
+    target_symbol_by_ticket = {
+        ticket: mapped_symbols.get(str(row.get("symbol") or "").strip().casefold(), str(row.get("symbol") or "").strip())
+        for ticket, row in parent_by_ticket.items()
+    }
+    blocked_netting_symbols = set()
+    account_mode = str((follower_snapshot or {}).get("account_mode") or "").upper()
+    if account_mode in {"NETTING", "EXCHANGE_NETTING"}:
+        counts = {}
+        for target_symbol in target_symbol_by_ticket.values():
+            counts[target_symbol] = counts.get(target_symbol, 0) + 1
+        blocked_netting_symbols.update(symbol for symbol, count in counts.items() if count > 1)
+        for row in follower_positions:
+            symbol = str(row.get("symbol") or "").strip()
+            if symbol and not str(row.get("source_ticket") or "").strip():
+                blocked_netting_symbols.add(symbol)
     # Only touch follower positions that the copy journal explicitly links to a
     # parent ticket. Unlinked/manual positions belong to the follower owner.
     follower_by_ticket = {
@@ -60,7 +76,10 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
     }
     actions = []
     for source_ticket, parent in sorted(parent_by_ticket.items()):
-        symbol = str(parent.get("symbol") or "").strip()
+        source_symbol = str(parent.get("symbol") or "").strip()
+        symbol = target_symbol_by_ticket.get(source_ticket, source_symbol)
+        if symbol in blocked_netting_symbols:
+            continue
         side = str(parent.get("side") or "").strip().upper()
         lots = _positive(parent.get("volume") or parent.get("lots"))
         if not symbol or side not in {"BUY", "SELL"} or lots is None:
@@ -102,11 +121,13 @@ class LocalCopyEngine:
     fixed_lot: float | None = None
     enabled: bool = False
     execute: Callable | None = None
+    symbol_map: dict | None = None
 
     def plan(self, parent_snapshot, follower_snapshot):
         if not self.enabled:
             return []
-        return plan_snapshot_actions(parent_snapshot, follower_snapshot, lot_multiplier=self.lot_multiplier, fixed_lot=self.fixed_lot)
+        return plan_snapshot_actions(parent_snapshot, follower_snapshot, lot_multiplier=self.lot_multiplier, fixed_lot=self.fixed_lot,
+                                     symbol_map=self.symbol_map)
 
     def apply(self, parent_snapshot, follower_snapshot):
         actions = self.plan(parent_snapshot, follower_snapshot)

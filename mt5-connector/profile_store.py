@@ -6,7 +6,7 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -35,6 +35,7 @@ class TerminalProfile:
     copy_enabled: bool = False
     copy_lot_multiplier: float = 1.0
     copy_fixed_lot: float | None = None
+    copy_symbol_map: dict[str, str] = field(default_factory=dict)
 
 
 def _validate_profile_id(profile_id: str) -> str:
@@ -102,6 +103,7 @@ def _manifest_profiles(manifest_path: Path) -> list[TerminalProfile]:
             copy_enabled=bool(row.get('copy_enabled', False)),
             copy_lot_multiplier=float(row.get('copy_lot_multiplier') or 1.0),
             copy_fixed_lot=float(row['copy_fixed_lot']) if row.get('copy_fixed_lot') not in (None, '') else None,
+            copy_symbol_map=validate_symbol_map(row.get('copy_symbol_map', {})),
         ))
     return result
 
@@ -142,6 +144,7 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
         copy_enabled=profile.copy_enabled,
         copy_lot_multiplier=profile.copy_lot_multiplier,
         copy_fixed_lot=profile.copy_fixed_lot,
+        copy_symbol_map=profile.copy_symbol_map,
     ))
     existing_document = _read_manifest(manifest_path)
     document = {'version': 1, 'profiles': [
@@ -154,6 +157,7 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
             'copy_enabled': item.copy_enabled,
             'copy_lot_multiplier': item.copy_lot_multiplier,
             'copy_fixed_lot': item.copy_fixed_lot,
+            'copy_symbol_map': item.copy_symbol_map,
         }
         for item in profiles
     ]}
@@ -163,7 +167,36 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
     _write_manifest(manifest_path, document)
 
 
-def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='none', parent_profile_id=None, enabled=False, lot_multiplier=1.0, fixed_lot=None) -> TerminalProfile:
+def validate_symbol_map(value) -> dict[str, str]:
+    if value is None or value == '':
+        return {}
+    if isinstance(value, str):
+        parsed = {}
+        for line in value.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' not in line:
+                raise ValueError('symbol mappings must use ParentSymbol = FollowerSymbol, one per line')
+            source, target = line.split('=', 1)
+            parsed[source.strip()] = target.strip()
+        value = parsed
+    if not isinstance(value, dict):
+        raise ValueError('symbol mapping must be a mapping of parent symbols to follower symbols')
+    result, seen = {}, set()
+    for source, target in value.items():
+        source, target = str(source or '').strip(), str(target or '').strip()
+        if not source or not target:
+            raise ValueError('symbol mapping names cannot be empty')
+        key = source.casefold()
+        if key in seen:
+            raise ValueError(f'duplicate parent symbol mapping: {source}')
+        seen.add(key)
+        result[source] = target
+    return result
+
+
+def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='none', parent_profile_id=None, enabled=False, lot_multiplier=1.0, fixed_lot=None, symbol_map=None) -> TerminalProfile:
     role = str(role or 'none').strip().lower()
     if role not in {'none', 'parent', 'follower'}:
         raise ValueError('copy role must be none, parent, or follower')
@@ -182,7 +215,8 @@ def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='
     fixed = None if fixed_lot in (None, '') else float(fixed_lot)
     if fixed is not None and fixed <= 0:
         raise ValueError('copy fixed lot must be positive')
-    updated = TerminalProfile(profile.profile_id, profile.label, profile.terminal_path, profile.legacy, role, parent, bool(enabled), multiplier, fixed)
+    updated = TerminalProfile(profile.profile_id, profile.label, profile.terminal_path, profile.legacy, role, parent, bool(enabled), multiplier, fixed,
+                              validate_symbol_map(symbol_map if symbol_map is not None else profile.copy_symbol_map))
     save_profile(updated, app_data_dir)
     return updated
 
