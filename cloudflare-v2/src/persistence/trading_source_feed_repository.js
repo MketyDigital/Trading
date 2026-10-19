@@ -5,7 +5,7 @@ import { appendPostgresReplicationEventInTransaction } from './postgres_replicat
 const FIELDS=new Set(['workspace_id','source_connection_id','provider_feed_id','display_name','feed_type','is_active','metadata','created_at','updated_at']);
 const SELECT='id,workspace_id,source_connection_id,provider_feed_id,display_name,feed_type,is_active,metadata,created_at,updated_at';
 function encode(row,d1){return Object.fromEntries(Object.entries(row).map(([k,v])=>[k,k==='metadata'&&v!=null?JSON.stringify(v):typeof v==='boolean'&&d1?Number(v):v]));}
-function decode(row){if(!row)return row;const out={...row};if(typeof out.metadata==='string'){try{out.metadata=JSON.parse(out.metadata);}catch{out.metadata={};}}return out;}
+function decode(row){if(!row)return row;const out={...row};if(typeof out.metadata==='string'){try{out.metadata=JSON.parse(out.metadata);}catch{out.metadata={};}}if('is_active'in out)out.is_active=out.is_active===true||out.is_active===1||out.is_active==='1';return out;}
 function validate(input){const row={};for(const[k,v]of Object.entries(input||{})){if(!FIELDS.has(k))throw new Error(`Unsupported source feed field: ${k}`);row[k]=v;}if(!row.workspace_id||!row.source_connection_id||!row.provider_feed_id)throw new Error('Source feed workspace, connection, and provider id are required');if(row.metadata==null)row.metadata={};return row;}
 
 export function createTradingSourceFeedRepository({authority,postgresDatabase,idFactory=()=>globalThis.crypto.randomUUID(),now=()=>new Date().toISOString()}={}){

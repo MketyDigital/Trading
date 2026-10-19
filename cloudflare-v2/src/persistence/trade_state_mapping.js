@@ -1,4 +1,5 @@
 function text(value) { return value == null ? null : String(value); }
+function booleanValue(value) { return value === true || value === 1 || value === '1'; }
 function nonEmpty(value) { const v = text(value)?.trim(); return v || null; }
 function isUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '')); }
 
@@ -98,7 +99,7 @@ export function groupToPersistenceRows(group = {}) {
       failure_code: nonEmpty(leg.failureCode),
       parent_leg_id: nonEmpty(leg.parentLegId),
       lifecycle_role: nonEmpty(leg.lifecycleRole),
-      lifecycle_tracking_enabled: leg.lifecycleTrackingEnabled === true,
+      lifecycle_tracking_enabled: booleanValue(leg.lifecycleTrackingEnabled),
       originating_order_id: nonEmpty(leg.originatingOrderId),
       logical_target_index: nullableFiniteNumber(leg.logicalTargetIndex),
       ...(lastBrokerObservedAt ? {
@@ -167,7 +168,7 @@ export function persistenceRowsToGroup(row = {}) {
       failureCode: leg.failure_code,
       parentLegId: leg.parent_leg_id,
       lifecycleRole: leg.lifecycle_role,
-      lifecycleTrackingEnabled: leg.lifecycle_tracking_enabled === true,
+      lifecycleTrackingEnabled: booleanValue(leg.lifecycle_tracking_enabled),
       originatingOrderId: leg.originating_order_id,
       logicalTargetIndex: leg.logical_target_index != null && Number.isFinite(Number(leg.logical_target_index))
         ? Number(leg.logical_target_index) : undefined,

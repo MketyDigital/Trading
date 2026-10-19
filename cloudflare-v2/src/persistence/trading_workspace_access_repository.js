@@ -6,7 +6,7 @@ const WORKSPACE_FIELDS=new Set(['display_name','owner_email','zitadel_org_id','t
 const MEMBER_FIELDS=new Set(['workspace_id','zitadel_subject','trading_role','membership_enabled','metadata','created_at','updated_at']);
 const JSON_FIELDS=new Set(['metadata']);
 function encode(row,d1){return Object.fromEntries(Object.entries(row).map(([k,v])=>[k,JSON_FIELDS.has(k)&&v!=null?JSON.stringify(v):typeof v==='boolean'&&d1?Number(v):v]));}
-function decode(row){if(!row)return null;const value={...row};if(typeof value.metadata==='string'){try{value.metadata=JSON.parse(value.metadata);}catch{value.metadata={};}}return value;}
+function decode(row){if(!row)return null;const value={...row};if(typeof value.metadata==='string'){try{value.metadata=JSON.parse(value.metadata);}catch{value.metadata={};}}for(const key of ['trading_access_enabled','membership_enabled'])if(key in value)value[key]=value[key]===true||value[key]===1||value[key]==='1';return value;}
 function validateMetadata(value,label){if(value==null)return{};if(typeof value!=='object'||Array.isArray(value))throw new Error(`${label} metadata must be an object`);const visit=object=>{for(const[k,v]of Object.entries(object)){if(/secret|cipher|session|token|password|api[_-]?hash|api[_-]?key|access[_-]?key|refresh[_-]?key|credential|authorization|private[_-]?key/i.test(k))throw new Error(`Sensitive field is not allowed in ${label} metadata`);if(v&&typeof v==='object')visit(v);}};visit(value);return value;}
 function validateFields(row,allowed,label){for(const k of Object.keys(row))if(!allowed.has(k))throw new Error(`Unsupported ${label} field: ${k}`);}
 

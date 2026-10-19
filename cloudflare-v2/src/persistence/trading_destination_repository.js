@@ -13,7 +13,7 @@ const SELECTS={
  trading_destination_templates:'id,workspace_id,template_name,formatting_mode,parse_mode,brand_name,header,footer,disclaimer,emoji_style,cleanup_rules,layout,is_default,created_at,updated_at',
 };
 function encode(table,row,d1){const json= META[table].json;return Object.fromEntries(Object.entries(row).map(([k,v])=>[k,json.has(k)&&v!=null?JSON.stringify(v):typeof v==='boolean'&&d1?Number(v):v]));}
-function decode(table,row){if(!row)return row;const out={...row};for(const key of META[table].json)if(typeof out[key]==='string'){try{out[key]=JSON.parse(out[key]);}catch{out[key]={};}}return out;}
+function decode(table,row){if(!row)return row;const out={...row};for(const key of META[table].json)if(typeof out[key]==='string'){try{out[key]=JSON.parse(out[key]);}catch{out[key]={};}}const booleanFields=table==='trading_destinations'||table==='trading_destination_connections'?['is_active']:table==='trading_destination_templates'?['is_default']:[];for(const key of booleanFields)if(key in out)out[key]=out[key]===true||out[key]===1||out[key]==='1';return out;}
 
 /** Workspace-scoped destination, shared-credential, and template persistence. Ciphertext is copied as ciphertext. */
 export function createTradingDestinationRepository({authority,postgresDatabase,idFactory=()=>globalThis.crypto.randomUUID(),now=()=>new Date().toISOString()}={}){
