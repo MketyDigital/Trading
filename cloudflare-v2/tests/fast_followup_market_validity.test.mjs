@@ -246,3 +246,93 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
   assert.equal(saved[0].legs[0].takeProfit, null);
   assert.deepEqual(saved[0].riskPlan.logicalTakeProfits, [4361, 4355, 4335]);
 });
+
+test('fast completion retries an unbound failed first leg instead of losing the full signal', async () => {
+  const existing = {
+    id: 'failed-fast', workspaceId: 'ws', tradeAccountId: 'acct', sourceInstanceId: 'src',
+    sourceEventIds: ['telegram:-1001:940'], symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
+    entry: { kind: 'MARKET', executedPrice: 2500 }, entryPrice: 2500, stopLoss: null,
+    incomplete: true, status: 'FAILED', createdAt: 1000, updatedAt: 1000,
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.1, status: 'FAILED', brokerPositionId: null, brokerOrderId: null, stopLoss: null, takeProfit: null }],
+  };
+  const saved = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { external_event_id: 'telegram:-1001:941', workspace_hint: 'ws', source: { instance_id: 'src' }, thread: {} },
+    eventId: 'evt-full-retry', nowMs: 2000,
+    interpretation: { status: 'READY', intent: {
+      symbol: { canonical: 'XAUUSD' }, side: 'BUY', orderType: 'MARKET', entry: { kind: 'MARKET' },
+      stopLoss: 2490, takeProfits: [2510, 2520], fastEntry: false, incomplete: false,
+    } },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'failed-fast' }) },
+    stateStore: { getGroup: async () => structuredClone(existing), putGroup: async (group) => saved.push(structuredClone(group)) },
+    accountProvider: async () => [{ id: 'acct', workspace_id: 'ws', execution_enabled: true, sizingMode: 'FIXED_LOTS', fixedLots: 0.1,
+      safety_policy: { enabled: true, killSwitch: false, autoTpProtection: true }, entry_zone_policy: { mode: 'market_only' } }],
+    instrumentProvider: async () => ({ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => [action.type, action.targetIndex]), [
+    ['OPEN_POSITION', 1], ['OPEN_POSITION', 2],
+  ]);
+  assert.equal(result.accounts[0].actions.every((action) => action.stopLoss === 2490), true);
+  assert.equal(saved[0].legs[0].status, 'PLANNED');
+});
+
+test('invalid stop does not block a valid TP update on the existing fast leg', async () => {
+  const existing = {
+    id: 'invalid-stop-fast', workspaceId: 'ws', tradeAccountId: 'acct', sourceInstanceId: 'src',
+    sourceEventIds: ['telegram:-1001:950'], symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
+    entry: { kind: 'MARKET', executedPrice: 2500 }, entryPrice: 2500, stopLoss: null, incomplete: true, status: 'OPEN',
+    createdAt: 1000, updatedAt: 1000,
+    legs: [{ legId: 'leg-1', targetIndex: 1, lots: 0.1, status: 'OPEN', brokerPositionId: 'p1', stopLoss: null, takeProfit: null }],
+  };
+  const saved = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { external_event_id: 'telegram:-1001:951', workspace_hint: 'ws', source: { instance_id: 'src' }, thread: {} },
+    eventId: 'evt-invalid-stop', nowMs: 2000,
+    interpretation: { status: 'READY', intent: {
+      symbol: { canonical: 'XAUUSD' }, side: 'BUY', orderType: 'MARKET', entry: { kind: 'MARKET' },
+      stopLoss: 2510, takeProfits: [2515], fastEntry: false, incomplete: false,
+    } },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'invalid-stop-fast' }) },
+    stateStore: { getGroup: async () => structuredClone(existing), putGroup: async (group) => saved.push(structuredClone(group)) },
+    accountProvider: async () => [{ id: 'acct', workspace_id: 'ws', execution_enabled: true, sizingMode: 'FIXED_LOTS', fixedLots: 0.1,
+      safety_policy: { enabled: true, killSwitch: false, autoTpProtection: true }, entry_zone_policy: { mode: 'market_only' } }],
+    instrumentProvider: async () => ({ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => [action.type, action.takeProfit, Object.hasOwn(action, 'stopLoss')]), [
+    ['MODIFY_POSITION', 2515, false],
+  ]);
+  assert.equal(saved[0].legs[0].takeProfit, 2515);
+  assert.equal(saved[0].legs[0].stopLoss, null);
+});
+
+test('complete signal executes as a new group when its fast predecessor disappeared', async () => {
+  const saved = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { external_event_id: 'telegram:-1001:960', workspace_hint: 'ws', source: { instance_id: 'src' }, thread: { reply_to_event_id: 'telegram:-1001:959' } },
+    eventId: 'evt-missing-fast', nowMs: 2000,
+    interpretation: { status: 'READY', intent: {
+      symbol: { canonical: 'EURUSD' }, side: 'SELL', orderType: 'MARKET', entry: { kind: 'MARKET' },
+      stopLoss: 1.105, takeProfits: [1.095, 1.09], fastEntry: false, incomplete: false,
+    } },
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'gone-fast' }) },
+    stateStore: { getGroup: async () => null, putGroup: async (group) => saved.push(structuredClone(group)) },
+    accountProvider: async () => [{ id: 'acct', workspace_id: 'ws', execution_enabled: true, sizingMode: 'FIXED_LOTS', fixedLots: 0.1,
+      safety_policy: { enabled: true, killSwitch: false, autoTpProtection: true }, entry_zone_policy: { mode: 'market_only' } }],
+    instrumentProvider: async () => ({ canonical: 'EURUSD', platformSymbol: 'EURUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }),
+    marketPriceProvider: async () => 1.1,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.notEqual(result.accounts[0].groupId, 'gone-fast');
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].incomplete, false);
+});

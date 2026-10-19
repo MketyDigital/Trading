@@ -257,6 +257,28 @@ test('one account dispatch failure cannot block a successful sibling account', a
   assert.equal(successBinding.brokerPositionId, 'position-b');
 });
 
+test('successful MODIFY_POSITION binds requested SL/TP even when broker returns no new identifiers', async () => {
+  const bound = [];
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-modify', brokerExecutionEnabled: true,
+    accountPlans: [plan({ actions: [{
+      type: 'MODIFY_POSITION', symbol: 'XAUUSD', brokerPositionId: 'position-1', legId: 'leg-1',
+      stopLoss: 2495, takeProfit: 2515, idempotencyKey: 'evt-modify:acct-a:leg:1:modify',
+    }] })],
+  }, {
+    accountLoader: async () => account(),
+    dispatchAction: async () => ({ ok: true }),
+    stateBinder: async (binding) => { bound.push(binding); },
+  });
+
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+  assert.equal(bound.length, 1);
+  assert.equal(bound[0].actionType, 'MODIFY_POSITION');
+  assert.equal(bound[0].brokerPositionId, null);
+  assert.equal(bound[0].stopLoss, 2495);
+  assert.equal(bound[0].takeProfit, 2515);
+});
+
 test('final durable authority is reloaded before every action so revocation after action one blocks action two', async () => {
   let authorityCalls = 0;
   let dispatchCalls = 0;

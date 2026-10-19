@@ -124,6 +124,28 @@ test('when enabled TP2 hit moves only later remaining legs to TP1 price', async 
   assert.equal(persisted.legs[2].status, 'OPEN');
 });
 
+test('when enabled TP3 hit moves any later remaining leg to TP2 price', async () => {
+  const fourLegGroup = group();
+  fourLegGroup.legs.push({ legId: 'leg-4', targetIndex: 4, lots: 0.03, stopLoss: 2490, takeProfit: 2540, status: 'OPEN', brokerPositionId: 'pos-4' });
+  let persisted;
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, external_event_id: 'tp-hit-3' },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 3 } },
+    nowMs: 2000,
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'MATCHED', reason: 'ONLY_ACTIVE_GROUP', groupId: 'group-1' }) },
+    stateStore: { getGroup: async () => structuredClone(fourLegGroup), putGroup: async (value) => { persisted = structuredClone(value); return value; } },
+    accountProvider: async () => [account(true)],
+    instrumentProvider: async () => { throw new Error('target-hit protection must not require market metadata'); },
+  });
+
+  assert.deepEqual(result.accounts[0].actions.map((action) => [action.brokerPositionId, action.stopLoss, action.takeProfit]), [
+    ['pos-4', 2520, 2540],
+  ]);
+  assert.equal(persisted.legs[2].status, 'CLOSED');
+  assert.equal(persisted.legs[3].status, 'OPEN');
+});
+
 test('redundant explicit BE command does not resend unchanged stop losses', async () => {
   const alreadyProtected = group();
   alreadyProtected.legs[0].status = 'CLOSED';

@@ -389,6 +389,27 @@ test('complete READY reply opens a new group when its reply target is absent and
   assert.deepEqual(result, { status: 'NEW_GROUP' });
 });
 
+test('complete READY reply opens independently when the replied fast group is incompatible', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:507',
+      thread: { reply_to_event_id: 'telegram:-1001:506' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'GBPAUD' }, side: 'SELL', orderType: 'MARKET',
+        entry: { kind: 'PRICE', value: 1.90235 }, stopLoss: 1.90499,
+        takeProfits: [1.89982, 1.89869], fastEntry: false, incomplete: false,
+      },
+    },
+    activeGroups: [group({ sourceEventIds: ['telegram:-1001:506'], symbol: 'XAUUSD', side: 'BUY', incomplete: true })],
+    nowMs: now,
+  });
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
 test('complete edited reply within the fast follow-up window opens when its fast order never created a group', () => {
   const result = correlateTradingEvent({
     event: {

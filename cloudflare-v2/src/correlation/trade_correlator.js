@@ -452,7 +452,13 @@ export function correlateTradingEvent({
       }
       const supersession = correlateFastSupersession(replyMatches, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
       if (supersession) return supersession;
-      if (replyMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+      if (replyMatches.length > 0) {
+        // A complete, self-contained signal is executable on its own. A stale,
+        // failed, or incompatible fast reply must not turn that full signal
+        // into a dead letter merely because the referenced predecessor exists.
+        if (hasCompleteSelfContainedTradeIntent(interpretation.intent)) return { status: 'NEW_GROUP' };
+        return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+      }
     }
     if (replyMatches.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
       const supersession = correlateFastSupersession(scoped, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
@@ -493,7 +499,10 @@ export function correlateTradingEvent({
       }
       const supersession = correlateFastSupersession(threadMatches, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);
       if (supersession) return supersession;
-      if (threadMatches.length > 0) return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+      if (threadMatches.length > 0) {
+        if (hasCompleteSelfContainedTradeIntent(interpretation.intent)) return { status: 'NEW_GROUP' };
+        return { status: 'NEEDS_REVIEW', reason: 'FAST_ENTRY_COMPLETION_MISMATCH' };
+      }
     }
     if (threadMatches.length === 0 && interpretation.status === 'READY' && interpretation.intent) {
       const supersession = correlateFastSupersession(scoped, interpretation.intent, correlationNowMs, fastSupersessionWindowMs);

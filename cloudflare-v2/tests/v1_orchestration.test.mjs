@@ -173,7 +173,7 @@ test('fast-entry completion reuses existing group, promotes first leg to TP1 and
   assert.equal(result.accounts[0].status, 'READY');
   assert.equal(result.accounts[0].groupId, 'existing-group');
   assert.deepEqual(result.accounts[0].actions.map((action) => action.type), [
-    'MODIFY_POSITION',
+    'OPEN_POSITION',
     'OPEN_POSITION',
     'OPEN_POSITION',
   ]);
