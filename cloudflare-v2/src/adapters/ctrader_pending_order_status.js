@@ -187,3 +187,46 @@ export async function readCTraderPositionCloseStatus(context = {}) {
     return unresolved(context, 'BROKER_POSITION_HISTORY_UNAVAILABLE');
   }
 }
+
+/** Read-only current-position protection snapshot. Reconcile is account-bound
+ * and the exact position id/symbol/side are checked before returning values. */
+export async function readCTraderPositionStatus(context = {}) {
+  if (!context.session?.request) throw new TypeError('authenticated cTrader session required');
+  const positionId = String(context.brokerPositionId ?? '').trim();
+  const accountId = String(context.accountId ?? '').trim();
+  if (!/^\d+$/.test(positionId) || !/^\d+$/.test(accountId)) return unresolved(context, 'POSITION_STATUS_REQUEST_INVALID');
+  try {
+    const response = await context.session.request(buildReconcileMessage({
+      clientMsgId: `position-status-${positionId}`.slice(0, 64), accountId: Number(accountId), returnProtectionOrders: false,
+    }), { successPayloadTypes: [2125] });
+    if (Number(response?.payloadType) !== 2125 || String(response?.payload?.ctidTraderAccountId ?? '') !== accountId
+      || !Array.isArray(response?.payload?.position)) return unresolved(context, 'POSITION_STATUS_UNRESOLVED');
+    const matches = response.payload.position.filter((row) => String(row?.positionId ?? '') === positionId);
+    if (matches.length === 0) return { ...context, snapshot: { accountId, positionId, isOpen: false, observedAt: Number(context.nowMs ?? Date.now()) } };
+    if (matches.length !== 1) return unresolved(context, 'POSITION_STATUS_IDENTITY_AMBIGUOUS');
+    const row = matches[0];
+    const tradeData = row.tradeData || {};
+    const symbolId = Number(tradeData.symbolId ?? row.symbolId);
+    if (context.expectedPlatformSymbolId != null && String(symbolId) !== String(context.expectedPlatformSymbolId)) return unresolved(context, 'POSITION_STATUS_SYMBOL_MISMATCH');
+    const tradeSide = Number(tradeData.tradeSide ?? row.tradeSide);
+    const side = tradeSide === 1 ? 'BUY' : tradeSide === 2 ? 'SELL' : null;
+    if (!side) return unresolved(context, 'POSITION_STATUS_SIDE_UNCERTAIN');
+    const protocolLotSize = Number(context.protocolLotSize);
+    const volume = Number(tradeData.volume ?? row.volume);
+    if (!(protocolLotSize > 0) || !(volume > 0)) return unresolved(context, 'POSITION_STATUS_VOLUME_UNCERTAIN');
+    const finiteProtection = (value) => {
+      if (value == null || Number(value) === 0) return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+    };
+    const stopLoss = finiteProtection(row.stopLoss);
+    const takeProfit = finiteProtection(row.takeProfit);
+    return { ...context, snapshot: {
+      accountId, positionId, isOpen: true, symbolId, side, volume: volume / protocolLotSize,
+      ...(stopLoss !== undefined ? { stopLoss } : {}), ...(takeProfit !== undefined ? { takeProfit } : {}),
+      openedAt: Number(row.openTimestamp ?? row.utcLastUpdateTimestamp ?? 0), observedAt: Number(context.nowMs ?? Date.now()),
+    } };
+  } catch {
+    return unresolved(context, 'BROKER_POSITION_STATUS_UNAVAILABLE');
+  }
+}

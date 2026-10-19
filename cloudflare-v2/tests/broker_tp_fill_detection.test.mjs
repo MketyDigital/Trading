@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyBrokerTpFill } from '../src/execution/broker_tp_fill_detection.js';
+import { classifyBrokerTpFill, classifyBrokerProtectionChange } from '../src/execution/broker_tp_fill_detection.js';
 
 const leg = { brokerPositionId: 'p-1', lots: 1, takeProfit: 1.12, stopLoss: 1.1, targetIndex: 1 };
 
@@ -66,4 +66,25 @@ test('cTrader refuses SL, manual close, partial fill, missing close order, and a
     { ...base, closingOrders: [{ ...base.closingOrders[0], closingOrder: false }] },
     { ...base, closingOrders: [{ ...base.closingOrders[0], takeProfit: 1.13 }] },
   ]) assert.equal(classifyBrokerTpFill({ platform: 'ctrader', leg, snapshot }).status, 'UNRESOLVED');
+});
+
+test('open-position protection changes produce exact, idempotent management intents', () => {
+  const unchanged = classifyBrokerProtectionChange({ platform: 'mt5', leg,
+    snapshot: { positionId: 'p-1', isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.1, takeProfit: 1.12 } });
+  assert.equal(unchanged.status, 'NO_CHANGE');
+  const changed = classifyBrokerProtectionChange({ platform: 'mt5', leg,
+    snapshot: { positionId: 'p-1', isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 } });
+  assert.equal(changed.status, 'PROTECTION_CHANGED');
+  assert.deepEqual(changed.actions, [
+    { type: 'MOVE_SL', stopLoss: 1.105, targetIndex: 1 },
+    { type: 'CHANGE_TP', takeProfit: 1.125, targetIndex: 1 },
+  ]);
+  assert.equal(classifyBrokerProtectionChange({ platform: 'mt5', leg,
+    snapshot: { positionId: 'other', isOpen: true, stopLoss: 1.105, takeProfit: 1.125 } }).status, 'UNRESOLVED');
+  const otherSided = classifyBrokerProtectionChange({ platform: 'mt5', leg,
+    snapshot: { positionId: 'p-1', isOpen: true, stopLoss: -1, takeProfit: 1.125 } });
+  assert.deepEqual(otherSided.actions, [{ type: 'CHANGE_TP', takeProfit: 1.125, targetIndex: 1 }]);
+  const oneSided = classifyBrokerProtectionChange({ platform: 'mt5', leg,
+    snapshot: { positionId: 'p-1', isOpen: true, stopLoss: 1.105, takeProfit: Number.NaN } });
+  assert.deepEqual(oneSided.actions, [{ type: 'MOVE_SL', stopLoss: 1.105, targetIndex: 1 }]);
 });

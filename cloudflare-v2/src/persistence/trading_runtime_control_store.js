@@ -106,7 +106,26 @@ export function createTradingRuntimeControlStore({ authority, postgresDatabase, 
     return publicControl(row);
   }
 
+  async function getExecutionControls() {
+    try {
+      await verifyTradingStorageAuthority(authority, { postgresDatabase });
+      const keys = Object.values(CONTROL_KEYS);
+      const rows = authority.kind === 'd1'
+        ? (await authority.binding.prepare(`SELECT control_key AS controlKey, enabled, updated_at AS updatedAt, updated_by AS updatedBy FROM trading_runtime_controls WHERE control_key IN (${keys.map(() => '?').join(',')})`).bind(...keys).all()).results || []
+        : (await postgresDatabase.query(`SELECT control_key AS "controlKey", enabled, updated_at AS "updatedAt", updated_by AS "updatedBy" FROM trading_storage.runtime_controls WHERE control_key = ANY($1::text[])`, [keys])).rows || [];
+      const byKey = new Map(rows.map((row) => [String(row.controlKey || row.control_key), publicControl(row)]));
+      return {
+        tradingAccess: byKey.get(CONTROL_KEYS.tradingAccess) || unavailable(),
+        brokerExecution: byKey.get(CONTROL_KEYS.brokerExecution) || unavailable(),
+        liveBrokerExecution: byKey.get(CONTROL_KEYS.liveBrokerExecution) || unavailable(),
+      };
+    } catch {
+      return { tradingAccess: unavailable(), brokerExecution: unavailable(), liveBrokerExecution: unavailable() };
+    }
+  }
+
   return {
+    getExecutionControls,
     getTradingAccessEnabled: () => getControl(CONTROL_KEYS.tradingAccess),
     setTradingAccessEnabled: (enabled, options) => setControl(CONTROL_KEYS.tradingAccess, enabled, options),
     getBrokerExecutionEnabled: () => getControl(CONTROL_KEYS.brokerExecution),

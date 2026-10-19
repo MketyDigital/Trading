@@ -83,6 +83,42 @@ test('D1 trade state saves group, legs and passive outbox atomically, then hydra
   setup.sqlite.close();
 });
 
+test('broker candidate scan keeps an open fast leg whose TP is still missing', async () => {
+  const setup = testStore();
+  let sequence = 0;
+  const store = createTradingTradeStatePersistence({ authority: setup.authority, idFactory: () => `aaaaaaaa-aaaa-4aaa-8aaa-${String(++sequence).padStart(12, '0')}` });
+  await store.saveGroup({ ...group, legs: [
+    { ...group.legs[0], takeProfit: null, stopLoss: null, targetIndex: 1, logicalTargetIndex: 1, brokerPositionId: 'fast-position' },
+    { ...group.legs[0], legId: 'signal-1:leg-2', takeProfit: 161.1, targetIndex: 2, logicalTargetIndex: 2, brokerPositionId: 'tp-position' },
+  ] });
+  const candidates = await store.listBrokerTpProtectionCandidates({ pageSize: 10 });
+  assert.equal(candidates[0].brokerPositionId, 'fast-position');
+  assert.equal(candidates[0].takeProfit, null);
+  setup.sqlite.close();
+});
+
+test('broker observation fast path updates one leg and journals it without rewriting the whole group', async () => {
+  const setup = testStore();
+  const store = createTradingTradeStatePersistence({ authority: setup.authority, idFactory: () => 'abababab-abab-4bab-8bab-abababababab' });
+  await store.saveGroup(group);
+  const applied = await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
+    observedAt: 1_770_000_000_000, status: 'NO_CHANGE', sourceVersion: 'broker-v3', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
+  });
+  assert.deepEqual(applied, { outcome: 'APPLIED' });
+  const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status, last_broker_source_version, last_broker_snapshot_fingerprint FROM position_legs`).get();
+  assert.equal(row.last_broker_status, 'NO_CHANGE');
+  assert.equal(row.last_broker_source_version, 'broker-v3');
+  assert.equal(row.last_broker_snapshot_fingerprint, 'p1|1.1|1.2');
+  const journalCount = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
+  assert.equal(journalCount, 2);
+  const stale = await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
+    observedAt: 1_769_999_999_000, status: 'FAILED', sourceVersion: 'older', snapshotFingerprint: 'old', dealIds: [],
+  });
+  assert.deepEqual(stale, { outcome: 'STALE' });
+  assert.equal(setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n, 2);
+  setup.sqlite.close();
+});
+
 test('D1 trade state rolls back group and legs if outbox append fails', async () => {
   const setup = testStore({ failJournal: true });
   const store = createTradingTradeStatePersistence({ authority: setup.authority, idFactory: () => 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });

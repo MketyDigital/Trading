@@ -10,6 +10,67 @@ function approx(left, right, tolerance = 1e-8) {
 }
 function unresolved(reason = 'BROKER_CLOSE_UNRESOLVED') { return { status: 'UNRESOLVED', reason }; }
 
+function normalizedProtection(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '' || Number(value) === 0) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function protectionEqual(left, right) {
+  const a = normalizedProtection(left); const b = normalizedProtection(right);
+  if (a === undefined || b === undefined) return false;
+  return a === null && b === null
+    ? true
+    : a != null && b != null && Math.abs(a - b) <= Math.max(1e-9, Math.abs(a) * 1e-10, Math.abs(b) * 1e-10);
+}
+
+/**
+ * Compare an exact open-position snapshot with the authoritative leg state.
+ * This is deliberately read-only: it produces a management intent for the
+ * existing orchestration path and never treats a missing/invalid field as a
+ * request to remove protection.
+ */
+export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {}) {
+  if (!snapshot || typeof snapshot !== 'object' || snapshot.isOpen !== true) return unresolved('BROKER_POSITION_NOT_OPEN');
+  const positionId = text(leg?.brokerPositionId);
+  if (!positionId || text(snapshot.positionId) !== positionId) return unresolved('BROKER_POSITION_IDENTITY_MISMATCH');
+  if (snapshot.symbol != null && text(snapshot.symbol) && leg?.symbol != null
+    && text(snapshot.symbol).toUpperCase() !== text(leg.symbol).toUpperCase()) return unresolved('BROKER_SYMBOL_IDENTITY_MISMATCH');
+  if (snapshot.side != null && text(snapshot.side) && leg?.side != null
+    && text(snapshot.side).toUpperCase() !== text(leg.side).toUpperCase()) return unresolved('BROKER_SIDE_IDENTITY_MISMATCH');
+
+  const brokerStop = normalizedProtection(snapshot.stopLoss !== undefined ? snapshot.stopLoss : snapshot.sl);
+  const brokerTarget = normalizedProtection(snapshot.takeProfit !== undefined ? snapshot.takeProfit : snapshot.tp);
+  const expectedStop = normalizedProtection(leg?.stopLoss);
+  const expectedTarget = normalizedProtection(leg?.takeProfit);
+  // Invalid/missing one-sided protection is not evidence of a manual edit.
+  // The other valid side can still be mirrored independently; this prevents
+  // a malformed TP from blocking a confirmed SL update (and vice versa).
+  const slComparable = brokerStop !== undefined && expectedStop !== undefined;
+  const tpComparable = brokerTarget !== undefined && expectedTarget !== undefined;
+  if (!slComparable && !tpComparable) return unresolved('BROKER_PROTECTION_VALUE_INVALID');
+  const slChanged = slComparable && !protectionEqual(brokerStop, expectedStop);
+  const tpChanged = tpComparable && !protectionEqual(brokerTarget, expectedTarget);
+  if (!slChanged && !tpChanged) return (slComparable && tpComparable)
+    ? { status: 'NO_CHANGE', positionId }
+    : unresolved('BROKER_PROTECTION_VALUE_PARTIAL');
+
+  const actions = [];
+  const targetIndex = Number.isInteger(Number(leg?.targetIndex)) ? Number(leg.targetIndex) : undefined;
+  if (slChanged) actions.push(brokerStop == null
+    ? { type: 'REMOVE_SL', ...(targetIndex ? { targetIndex } : {}) }
+    : { type: 'MOVE_SL', stopLoss: brokerStop, ...(targetIndex ? { targetIndex } : {}) });
+  if (tpChanged) actions.push(brokerTarget == null
+    ? { type: 'REMOVE_TP', ...(targetIndex ? { targetIndex } : {}) }
+    : { type: 'CHANGE_TP', takeProfit: brokerTarget, ...(targetIndex ? { targetIndex } : {}) });
+  return {
+    status: 'PROTECTION_CHANGED', positionId, platform: text(platform).toLowerCase(),
+    stopLoss: brokerStop, takeProfit: brokerTarget, actions,
+    fingerprint: [positionId, brokerStop ?? 'none', brokerTarget ?? 'none'].join('|'),
+  };
+}
+
 function fullClose(snapshot, deals) {
   const expectedLots = number(snapshot?.initialLots);
   const closedLots = number(snapshot?.closedLots);
@@ -24,6 +85,38 @@ function confirmed(snapshot, deals) {
   const ids = deals.map((deal) => text(deal?.dealId)).filter(Boolean);
   if (ids.length !== deals.length || new Set(ids).size !== ids.length) return null;
   return { status: 'TP_CONFIRMED', positionId: text(snapshot.positionId), dealIds: ids.sort() };
+}
+
+function activityKind(deals = []) {
+  const reasons = new Set(deals.map((deal) => text(deal?.reason).toUpperCase()).filter(Boolean));
+  if (reasons.size > 0 && [...reasons].every((reason) => ['TP', 'TAKE_PROFIT', '5'].includes(reason))) return 'TAKE_PROFIT';
+  if (reasons.size > 0 && [...reasons].every((reason) => ['SL', 'STOP_LOSS', '4'].includes(reason))) return 'STOP_LOSS';
+  return 'MANUAL';
+}
+
+/** Classify exact broker close history for follower/manual lifecycle observation. */
+export function classifyBrokerPositionActivity({ platform, leg, snapshot } = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return unresolved('BROKER_SNAPSHOT_UNAVAILABLE');
+  const positionId = text(leg?.brokerPositionId);
+  if (!positionId || text(snapshot.positionId) !== positionId || !Array.isArray(snapshot.deals) || !snapshot.deals.length) return unresolved('BROKER_POSITION_IDENTITY_MISMATCH');
+  const deals = snapshot.deals.filter((deal) => text(deal?.positionId) === positionId);
+  if (deals.length !== snapshot.deals.length) return unresolved('BROKER_DEAL_IDENTITY_MISMATCH');
+  const ids = deals.map((deal) => text(deal?.dealId)).filter(Boolean);
+  if (ids.length !== deals.length || new Set(ids).size !== ids.length) return unresolved('BROKER_DEAL_IDENTITY_UNCERTAIN');
+  const closedLots = number(snapshot.closedLots) ?? deals.reduce((sum, deal) => sum + (number(deal?.lots) ?? 0), 0);
+  if (!(closedLots > 0)) return unresolved('BROKER_CLOSE_NOT_OBSERVED');
+  const initialLots = number(snapshot.initialLots);
+  const complete = snapshot.isOpen === false && initialLots != null && approx(closedLots, initialLots);
+  const kind = activityKind(deals);
+  return {
+    status: 'ACTIVITY_CONFIRMED',
+    positionId,
+    dealIds: ids.sort(),
+    kind: complete ? kind : `PARTIAL_${kind}`,
+    closedLots,
+    initialLots,
+    platform: text(platform).toLowerCase(),
+  };
 }
 
 function classifyMt5(leg, snapshot) {

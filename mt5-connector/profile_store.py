@@ -30,6 +30,11 @@ class TerminalProfile:
     label: str
     terminal_path: Path | None = None
     legacy: bool = False
+    copy_role: str = 'none'
+    copy_parent_profile_id: str | None = None
+    copy_enabled: bool = False
+    copy_lot_multiplier: float = 1.0
+    copy_fixed_lot: float | None = None
 
 
 def _validate_profile_id(profile_id: str) -> str:
@@ -92,6 +97,11 @@ def _manifest_profiles(manifest_path: Path) -> list[TerminalProfile]:
             label=str(row.get('label') or profile_id).strip()[:80],
             terminal_path=Path(terminal_text) if terminal_text else None,
             legacy=False,
+            copy_role=str(row.get('copy_role') or 'none').strip().lower() if str(row.get('copy_role') or 'none').strip().lower() in {'none', 'parent', 'follower'} else 'none',
+            copy_parent_profile_id=str(row.get('copy_parent_profile_id') or '').strip() or None,
+            copy_enabled=bool(row.get('copy_enabled', False)),
+            copy_lot_multiplier=float(row.get('copy_lot_multiplier') or 1.0),
+            copy_fixed_lot=float(row['copy_fixed_lot']) if row.get('copy_fixed_lot') not in (None, '') else None,
         ))
     return result
 
@@ -127,6 +137,11 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
         label=str(profile.label or profile_id).strip()[:80],
         terminal_path=Path(profile.terminal_path) if profile.terminal_path else None,
         legacy=False,
+        copy_role=profile.copy_role,
+        copy_parent_profile_id=profile.copy_parent_profile_id,
+        copy_enabled=profile.copy_enabled,
+        copy_lot_multiplier=profile.copy_lot_multiplier,
+        copy_fixed_lot=profile.copy_fixed_lot,
     ))
     existing_document = _read_manifest(manifest_path)
     document = {'version': 1, 'profiles': [
@@ -134,6 +149,11 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
             'profile_id': item.profile_id,
             'label': item.label,
             'terminal_path': str(item.terminal_path) if item.terminal_path else None,
+            'copy_role': item.copy_role,
+            'copy_parent_profile_id': item.copy_parent_profile_id,
+            'copy_enabled': item.copy_enabled,
+            'copy_lot_multiplier': item.copy_lot_multiplier,
+            'copy_fixed_lot': item.copy_fixed_lot,
         }
         for item in profiles
     ]}
@@ -141,6 +161,30 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
     if legacy_terminal:
         document['legacy_terminal_path'] = legacy_terminal
     _write_manifest(manifest_path, document)
+
+
+def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='none', parent_profile_id=None, enabled=False, lot_multiplier=1.0, fixed_lot=None) -> TerminalProfile:
+    role = str(role or 'none').strip().lower()
+    if role not in {'none', 'parent', 'follower'}:
+        raise ValueError('copy role must be none, parent, or follower')
+    parent = str(parent_profile_id or '').strip() or None
+    if role == 'follower' and (not parent or parent == profile.profile_id):
+        raise ValueError('follower copy requires a different parent profile')
+    if role != 'follower':
+        parent = None
+        enabled = False
+    try:
+        multiplier = float(lot_multiplier)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('copy lot multiplier must be positive') from exc
+    if multiplier <= 0:
+        raise ValueError('copy lot multiplier must be positive')
+    fixed = None if fixed_lot in (None, '') else float(fixed_lot)
+    if fixed is not None and fixed <= 0:
+        raise ValueError('copy fixed lot must be positive')
+    updated = TerminalProfile(profile.profile_id, profile.label, profile.terminal_path, profile.legacy, role, parent, bool(enabled), multiplier, fixed)
+    save_profile(updated, app_data_dir)
+    return updated
 
 
 def bind_legacy_terminal(terminal_path: Path, app_data_dir: Path) -> None:

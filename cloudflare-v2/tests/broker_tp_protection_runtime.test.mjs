@@ -33,6 +33,21 @@ test('confirmed TP is handed to the existing management orchestrator with a stab
   assert.deepEqual(calls, { reads: 1, records: 1, applies: 1 });
 });
 
+test('manual open-position SL/TP edits are emitted once through the existing management path', async () => {
+  let records = 0; let applies = 0; let snapshots = 0;
+  const { run } = runtime({
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => { snapshots++; return { accountId: '123', positionId: 'p1', environment: 'live', isLive: true, isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 }; },
+    recordProtectionEvent: async ({ protection }) => { records++; assert.equal(protection.status, 'PROTECTION_CHANGED'); return { eventId: 'protection-1' }; },
+    applyProtectionChange: async ({ protection }) => { applies++; assert.deepEqual(protection.actions, [{ type: 'MOVE_SL', stopLoss: 1.105, targetIndex: 1 }, { type: 'CHANGE_TP', takeProfit: 1.125, targetIndex: 1 }]); return { simulation: { status: 'SIMULATED' } }; },
+  });
+  const result = await run({});
+  assert.equal(result.protections, 1);
+  assert.equal(snapshots, 1);
+  assert.equal(records, 1);
+  assert.equal(applies, 1);
+});
+
 test('does not poll or act when the runtime is explicitly disabled', async () => {
   const { run, calls } = runtime();
   assert.deepEqual(await run({ BROKER_TP_PROTECTION_ENABLED: 'false' }),
@@ -90,7 +105,7 @@ test('detected TP1 and TP2 fills reach the existing stop progression planner', a
   assert.equal(group.legs[1].status, 'CLOSED');
 });
 
-test('polls only the next open target in a group so stale later legs cannot exhaust the scan', async () => {
+test('polls every due open leg in a group so fast and completed legs both receive snapshots', async () => {
   const reads = [];
   const { run } = runtime({
     loadCandidates: async () => [
@@ -105,9 +120,9 @@ test('polls only the next open target in a group so stale later legs cannot exha
   });
 
   const result = await run({});
-  assert.deepEqual(reads, ['l1']);
-  assert.equal(result.scanned, 1);
-  assert.equal(result.skipped, 1);
+  assert.deepEqual(reads, ['l1', 'l2', 'l3']);
+  assert.equal(result.scanned, 3);
+  assert.equal(result.skipped, 3);
 });
 
 test('reports the broker classification for every observed next target without blocking protection', async () => {
@@ -155,5 +170,15 @@ test('passes the current minute as the database page seed so rotation happens be
   });
 
   await run({});
-  assert.deepEqual(options, { limit: 50, pageSeed: 4 });
+  assert.deepEqual(options, { limit: 50, pageSeed: 4, observationDueBefore: '1970-01-01T00:03:00.000Z' });
+});
+
+test('enforces a hard sixty-second minimum snapshot interval', async () => {
+  let options;
+  const { run } = runtime({
+    loadCandidates: async (input) => { options = input; return []; },
+    clock: () => 120_000,
+  });
+  await run({ BROKER_POSITION_SNAPSHOT_INTERVAL_MS: '1000' });
+  assert.equal(options.observationDueBefore, '1970-01-01T00:01:00.000Z');
 });

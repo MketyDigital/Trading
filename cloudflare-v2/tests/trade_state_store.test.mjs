@@ -44,6 +44,15 @@ test('persists and reloads active position groups from durable storage', async (
   assert.deepEqual((await store.listActive()).map((g) => g.id), ['g1']);
 });
 
+test('does not persist an unchanged group twice in one durable-object lifetime', async () => {
+  const persistence = new MemoryPersistence();
+  const store = new TradeStateStore(new MemoryStorage(), { persistence });
+  const group = fastGroup();
+  await store.putGroup(group);
+  await store.putGroup(structuredClone(group));
+  assert.equal(persistence.saved.length, 1);
+});
+
 test('writes every state mutation through to durable relational persistence', async () => {
   const persistence = new MemoryPersistence();
   const store = new TradeStateStore(new MemoryStorage(), { persistence });

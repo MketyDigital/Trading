@@ -46,7 +46,77 @@ function decorate(account = {}, row = {}) {
     killSwitch,
     tradingEnabled: executionEnabled && !killSwitch,
     liveExecutionEnabled: Boolean(row.live_execution_enabled ?? account.liveExecutionEnabled),
+    ...(row.followerLink || account.followerLink ? { follower: row.followerLink || account.followerLink } : {}),
   };
+}
+
+async function handleFollowerUpdate(request, env, dependencies, followerAccountId, body) {
+  let supabase = null;
+  if (!dependencies.persistenceRuntime) {
+    try { supabase = await (dependencies.supabaseFactory || defaultSupabase)(env); } catch { return json({ ok: false, reason: 'ADMIN_DATABASE_UNAVAILABLE' }, 503); }
+  }
+  const authorization = await authorize(request, env, dependencies, supabase);
+  if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
+  if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  const workspaceId = String(authorization.workspace.id);
+  const enabled = body.enabled === true;
+  if (typeof body.enabled !== 'boolean') return json({ ok: false, reason: 'FOLLOWER_CONFIGURATION_INVALID' }, 400);
+  try {
+    let link;
+    if (dependencies.persistenceRuntime) {
+      if (enabled) {
+        const parentAccountId = requiredText(body.parentAccountId, 'FOLLOWER_PARENT_REQUIRED');
+        link = await dependencies.persistenceRuntime.accountFollowers.upsertLink(workspaceId, {
+          followerAccountId: followerAccountId,
+          parentAccountId,
+          enabled: true,
+          lotMultiplier: body.lotMultiplier,
+          fixedLot: body.fixedLot,
+        });
+      } else {
+        link = await dependencies.persistenceRuntime.accountFollowers.setEnabled(workspaceId, followerAccountId, false);
+      }
+    } else {
+      if (enabled) {
+        const parentAccountId = requiredText(body.parentAccountId, 'FOLLOWER_PARENT_REQUIRED');
+        const { data: accountRows, error: accountError } = await supabase.from('trade_accounts').select('id,is_active').eq('workspace_id', workspaceId).in('id', [followerAccountId, parentAccountId]);
+        if (accountError || !Array.isArray(accountRows) || accountRows.length !== 2 || accountRows.some((row) => row.is_active !== true)) throw new Error('FOLLOWER_LINK_ACCOUNT_NOT_FOUND');
+        const { data: nestedRows, error: nestedError } = await supabase.from('trading_account_followers').select('id').eq('workspace_id', workspaceId).eq('follower_account_id', parentAccountId).eq('enabled', true).limit(1);
+        if (nestedError) throw new Error('FOLLOWER_UPDATE_FAILED');
+        if (nestedRows?.length) throw new Error('FOLLOWER_LINK_PARENT_IS_FOLLOWER');
+        const lotMultiplier = body.lotMultiplier == null ? 1 : Number(body.lotMultiplier);
+        const fixedLot = body.fixedLot == null ? null : Number(body.fixedLot);
+        if (!(lotMultiplier > 0) || (fixedLot != null && !(fixedLot > 0))) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
+        const payload = { workspace_id: workspaceId, follower_account_id: followerAccountId, parent_account_id: parentAccountId, enabled: true,
+          lot_multiplier: lotMultiplier, fixed_lot: fixedLot };
+        const { data, error } = await supabase.from('trading_account_followers').upsert(payload, { onConflict: 'workspace_id,follower_account_id' }).select('*').maybeSingle();
+        if (error) throw new Error('FOLLOWER_UPDATE_FAILED');
+        link = data;
+      } else {
+        const { data, error } = await supabase.from('trading_account_followers').update({ enabled: false, updated_at: new Date().toISOString() }).eq('workspace_id', workspaceId).eq('follower_account_id', followerAccountId).select('*').maybeSingle();
+        if (error) throw new Error('FOLLOWER_UPDATE_FAILED');
+        link = data;
+      }
+    }
+    if (!link) return json({ ok: false, reason: 'FOLLOWER_ACCOUNT_NOT_FOUND' }, 404);
+    return json({ ok: true, follower: link });
+  } catch (error) {
+    const reason = /^[A-Z0-9_]{1,80}$/.test(String(error?.message || '')) ? String(error.message) : 'FOLLOWER_UPDATE_FAILED';
+    return json({ ok: false, reason }, reason === 'FOLLOWER_PARENT_REQUIRED' || reason === 'FOLLOWER_CONFIGURATION_INVALID' ? 400 : 409);
+  }
+}
+
+async function attachFollowerLinks(accounts, workspaceId, dependencies, supabase, portalFollowerEnabled = false) {
+  const rows = Array.isArray(accounts) ? accounts : [];
+  const ids = rows.map((account) => String(account?.id || '')).filter(Boolean);
+  if (!ids.length) return rows;
+  try {
+    let links = [];
+    if (dependencies.persistenceRuntime?.accountFollowers?.listEnabledByFollowers) links = await dependencies.persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
+    else if (supabase?.from && portalFollowerEnabled) { const { data, error } = await supabase.from('trading_account_followers').select('*').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids); if (!error) links = data || []; }
+    const byId = new Map(links.map((row) => [String(row.follower_account_id), row]));
+    return rows.map((account) => decorate(account, { ...account, followerLink: byId.get(String(account.id)) || null }));
+  } catch { return rows; }
 }
 
 export function buildCompleteCTraderCredentials(existing = {}, env = {}) {
@@ -207,8 +277,11 @@ async function enrichReadResponse(response, request, env, dependencies, accountI
 
   try {
     if (dependencies.persistenceRuntime) {
+      const authorization = await authorize(request, env, dependencies, null);
+      const workspaceId = String(authorization?.workspace?.id || '');
       if (payload.account) payload.account = decorate(payload.account, payload.account);
-      if (Array.isArray(payload.accounts)) payload.accounts = payload.accounts.map((account) => decorate(account, account));
+      if (payload.account && workspaceId) payload.account = (await attachFollowerLinks([payload.account], workspaceId, dependencies, null, true))[0];
+      if (Array.isArray(payload.accounts) && workspaceId) payload.accounts = await attachFollowerLinks(payload.accounts.map((account) => decorate(account, account)), workspaceId, dependencies, null, true);
       return json(payload, response.status);
     }
     const factory = dependencies.supabaseFactory || defaultSupabase;
@@ -237,6 +310,8 @@ async function enrichReadResponse(response, request, env, dependencies, accountI
         return row ? decorate(account, row) : account;
       });
     }
+    if (payload.account) payload.account = (await attachFollowerLinks([payload.account], authorization.workspace.id, dependencies, supabase, env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true'))[0];
+    if (Array.isArray(payload.accounts)) payload.accounts = await attachFollowerLinks(payload.accounts, authorization.workspace.id, dependencies, supabase, env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true');
     return json(payload, response.status);
   } catch {
     return response;
@@ -294,6 +369,15 @@ export async function finalizeCTraderOAuthResponse(response, request, env, depen
 export async function handleV1AdminConnectionsRequest(request, env = {}, dependencies = {}) {
   const url = new URL(request.url);
   const accountMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/accounts\/([^/]+)$/);
+  const followerMatch = url.pathname.match(/^\/api\/v1\/admin\/connections\/accounts\/([^/]+)\/follower$/);
+
+  if (request.method === 'PUT' && followerMatch) {
+    let accountId;
+    try { accountId = decodeURIComponent(followerMatch[1]); } catch { return json({ ok: false, reason: 'ACCOUNT_ID_INVALID' }, 400); }
+    const body = await readJson(request);
+    if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+    return handleFollowerUpdate(request, env, dependencies, accountId, body);
+  }
 
   if (request.method === 'PUT' && accountMatch) {
     let accountId;

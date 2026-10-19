@@ -18,7 +18,9 @@ from profile_store import (
     load_profiles,
     profile_paths,
     save_profile,
+    update_copy_settings,
 )
+from copy_supervisor import CopyPairSpec, LocalCopySupervisor
 from terminal_catalog import (
     OFFICIAL_MT5_DOWNLOAD_URL,
     TerminalCatalog,
@@ -48,10 +50,11 @@ def onboarding_options(terminals):
 class ManagerViewModel:
     """Testable state/actions behind the Tk screens; contains no trading calls."""
 
-    def __init__(self, app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: TerminalCatalog):
+    def __init__(self, app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: TerminalCatalog, copy_supervisor=None):
         self.app_data_dir = Path(app_data_dir)
         self.supervisor = supervisor
         self.catalog = catalog
+        self.copy_supervisor = copy_supervisor or LocalCopySupervisor()
 
     def profiles(self) -> list[TerminalProfile]:
         return load_profiles(self.app_data_dir)
@@ -167,6 +170,29 @@ class ManagerViewModel:
     def stop_all(self) -> None:
         for profile in self.profiles():
             self.supervisor.stop(profile.profile_id)
+
+    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None) -> TerminalProfile:
+        follower = self._profile(follower_profile_id)
+        parent = self._profile(parent_profile_id)
+        if follower.profile_id == parent.profile_id:
+            raise ValueError('a profile cannot follow itself')
+        if not follower.terminal_path or not parent.terminal_path:
+            raise ValueError('both MT5 terminals must be selected before enabling local copy')
+        return update_copy_settings(follower, self.app_data_dir, role='follower', parent_profile_id=parent.profile_id,
+                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot)
+
+    def disable_copy(self, profile_id: str) -> TerminalProfile:
+        return update_copy_settings(self._profile(profile_id), self.app_data_dir, role='none', enabled=False)
+
+    def start_copy(self, follower_profile_id: str) -> int:
+        follower = self._profile(follower_profile_id)
+        if follower.copy_role != 'follower' or not follower.copy_enabled or not follower.copy_parent_profile_id:
+            raise ValueError('local copy is not enabled for this follower profile')
+        parent = self._profile(follower.copy_parent_profile_id)
+        follower_paths = profile_paths(follower, self.app_data_dir)
+        journal_path = follower_paths.ledger_path.with_name('local-copy-ledger.sqlite')
+        return self.copy_supervisor.start(CopyPairSpec(parent.profile_id, follower.profile_id, parent.terminal_path, follower.terminal_path,
+                                                        follower.copy_lot_multiplier, follower.copy_fixed_lot, journal_path=journal_path))
 
     def profile_rows(self) -> list[dict]:
         rows = []
@@ -333,6 +359,8 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     profiles_box.pack(fill="both", expand=True, padx=18, pady=12)
     note = ttk.Label(root, text="Dashboard identity sync is verified in Mkety. The manager never marks sync complete locally.", wraplength=850)
     note.pack(anchor="w", padx=18, pady=(0, 8))
+    copy_bar = ttk.Frame(root)
+    copy_bar.pack(anchor="w", padx=18, pady=(0, 8))
 
     def refresh_profiles():
         for item in profiles_box.get_children():
@@ -543,6 +571,49 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             refresh_profiles()
         except Exception as exc:
             messagebox.showerror("Could not stop connector", str(exc), parent=root)
+
+    def mark_selected_follower():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            messagebox.showinfo("Select follower", "Select the MT5 profile that should follow another terminal.", parent=root)
+            return
+        parent_id = simpledialog.askstring("Main MT5 profile", "Enter the saved parent profile ID:", parent=root)
+        if not parent_id:
+            return
+        multiplier = simpledialog.askfloat("Follower lot multiplier", "1 = same planned lot", initialvalue=1.0, minvalue=0.000001, parent=root)
+        if multiplier is None:
+            return
+        try:
+            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier)
+            flow_text.set("Local MT5 follower saved. Start it explicitly when both terminals are ready.")
+            refresh_profiles()
+        except Exception as exc:
+            messagebox.showerror("Could not enable local copy", str(exc), parent=root)
+
+    def disable_selected_follower():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            return
+        try:
+            model.disable_copy(profile_id)
+            flow_text.set("Local MT5 copying disabled for the selected profile.")
+            refresh_profiles()
+        except Exception as exc:
+            messagebox.showerror("Could not disable local copy", str(exc), parent=root)
+
+    def start_selected_copy():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            return
+        try:
+            model.start_copy(profile_id)
+            flow_text.set("Local MT5 copier started in its own process.")
+        except Exception as exc:
+            messagebox.showerror("Could not start local copier", str(exc), parent=root)
+
+    ttk.Button(copy_bar, text="Mark selected as local follower", command=mark_selected_follower).pack(side="left", padx=(0, 8))
+    ttk.Button(copy_bar, text="Start local copy", command=start_selected_copy).pack(side="left", padx=(0, 8))
+    ttk.Button(copy_bar, text="Disable local copy", command=disable_selected_follower).pack(side="left")
 
     def open_selected_terminal():
         path = selected_terminal_path()

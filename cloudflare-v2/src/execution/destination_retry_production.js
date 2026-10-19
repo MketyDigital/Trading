@@ -161,8 +161,12 @@ export function createProductionDestinationRetryRuntime({
 
   return async function runProductionDestinationRetry(env = {}, options = {}) {
     const persistenceRuntime = options.persistenceRuntime || null;
+    let executionControls = null;
     if (persistenceRuntime) {
-      const access = await tradingAccessControlResolver({ env, supabase: null, runtimeControls: persistenceRuntime.runtimeControls });
+      executionControls = typeof persistenceRuntime.runtimeControls?.getExecutionControls === 'function'
+        ? await persistenceRuntime.runtimeControls.getExecutionControls()
+        : null;
+      const access = executionControls?.tradingAccess || await tradingAccessControlResolver({ env, supabase: null, runtimeControls: persistenceRuntime.runtimeControls });
       if (access?.ok !== true || access.enabled !== true) return { ...accessDisabledSummary(), status: access?.ok ? 'TRADING_ACCESS_DISABLED' : 'TRADING_RUNTIME_CONTROL_UNAVAILABLE' };
     } else if (!enabled(env.TRADING_ACCESS_ENABLED)) return accessDisabledSummary();
 
@@ -171,7 +175,9 @@ export function createProductionDestinationRetryRuntime({
 
     const runtime = createDestinationRetryRuntime({
       supabaseFactory,
-      brokerExecutionControlResolver,
+      brokerExecutionControlResolver: executionControls
+        ? async () => executionControls.brokerExecution
+        : brokerExecutionControlResolver,
       batchLimit,
       leaseMs,
       listDueFn: ({ supabase, now, limit, persistenceRuntime }) => persistenceRuntime
@@ -252,7 +258,8 @@ export function createProductionDestinationRetryRuntime({
 
           let liveControl;
           try {
-            liveControl = await liveBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls });
+            liveControl = executionControls?.liveBrokerExecution
+              || await liveBrokerExecutionControlResolver({ env, supabase, runtimeControls: persistenceRuntime?.runtimeControls });
           } catch {
             liveControl = { ok: false, enabled: false };
           }

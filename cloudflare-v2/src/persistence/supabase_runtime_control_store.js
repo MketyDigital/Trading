@@ -47,7 +47,27 @@ export function createTradingRuntimeControlStore(supabase) {
     return publicControl(data);
   }
 
+  async function getExecutionControls() {
+    try {
+      const keys = Object.values(CONTROL_KEYS);
+      const { data, error } = await supabase
+        .from('trading_runtime_controls')
+        .select('control_key,enabled,updated_at,updated_by')
+        .in('control_key', keys);
+      if (error) throw error;
+      const byKey = new Map((data || []).map((row) => [String(row.control_key), publicControl(row)]));
+      return {
+        tradingAccess: byKey.get(CONTROL_KEYS.tradingAccess) || unavailable(),
+        brokerExecution: byKey.get(CONTROL_KEYS.brokerExecution) || unavailable(),
+        liveBrokerExecution: byKey.get(CONTROL_KEYS.liveBrokerExecution) || unavailable(),
+      };
+    } catch {
+      return { tradingAccess: unavailable(), brokerExecution: unavailable(), liveBrokerExecution: unavailable() };
+    }
+  }
+
   return {
+    getExecutionControls,
     getTradingAccessEnabled() {
       return getControl(CONTROL_KEYS.tradingAccess);
     },

@@ -48,6 +48,13 @@ function lazyPersistence(promise, env = {}) {
       const persistence = await promise;
       return persistence ? persistence.loadActive(workspaceId) : [];
     },
+    async recordBrokerObservation(workspaceId, groupId, legId, observation) {
+      if (storageRuntimeEnabled(env)) return withTradingPersistence(env, 'recordBrokerObservation', workspaceId, groupId, legId, observation);
+      const persistence = await promise;
+      return persistence?.recordBrokerObservation
+        ? persistence.recordBrokerObservation(workspaceId, groupId, legId, observation)
+        : null;
+    },
   };
 }
 

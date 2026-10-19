@@ -5,6 +5,12 @@ const ACTIVE_STATUSES = new Set(['OPEN', 'PLANNED', 'PENDING']);
 
 function groupKey(groupId) { return `${GROUP_PREFIX}${groupId}`; }
 
+function persistenceFingerprint(group = {}) {
+  // Keep this limited to durable state. Runtime-only object identity or key
+  // ordering must not turn an unchanged lifecycle binding into a D1 write.
+  return JSON.stringify(group);
+}
+
 function actionTypeOf(execution = {}) {
   return String(execution?.actionType || '').trim().toUpperCase();
 }
@@ -99,6 +105,7 @@ export class TradeStateStore {
     this.persistence = persistence;
     this.workspaceId = workspaceId == null ? null : String(workspaceId);
     this.hydrated = false;
+    this.persistedFingerprints = new Map();
   }
 
   async hydrateActive() {
@@ -128,7 +135,11 @@ export class TradeStateStore {
       sourceEventIds: [...new Set((group.sourceEventIds || []).map(String))],
       legs: Array.isArray(group.legs) ? group.legs.map((leg) => ({ ...leg })) : [],
     };
-    if (this.persistence) await this.persistence.saveGroup(value);
+    const fingerprint = persistenceFingerprint(value);
+    if (this.persistence && this.persistedFingerprints.get(String(value.id)) !== fingerprint) {
+      await this.persistence.saveGroup(value);
+      this.persistedFingerprints.set(String(value.id), fingerprint);
+    }
     await this.storage.put(groupKey(group.id), value);
     return value;
   }
@@ -428,12 +439,14 @@ export class TradeStateStore {
       return { outcome: 'STALE', group };
     }
     const sourceVersion = observation.sourceVersion == null ? null : String(observation.sourceVersion).slice(0, 200);
+    const snapshotFingerprint = observation.snapshotFingerprint == null ? null : String(observation.snapshotFingerprint).slice(0, 200);
     const dealIds = Array.isArray(observation.dealIds)
       ? [...new Set(observation.dealIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 100)
       : [];
     if (Number.isFinite(priorObservedAt) && observedAt === priorObservedAt) {
       const same = String(current.lastBrokerStatus || '').toUpperCase() === status
         && (current.lastBrokerSourceVersion ?? null) === sourceVersion
+        && (current.lastBrokerSnapshotFingerprint ?? null) === snapshotFingerprint
         && JSON.stringify(current.brokerDealIds || []) === JSON.stringify(dealIds.length ? dealIds : (current.brokerDealIds || []));
       return { outcome: same ? 'UNCHANGED' : 'STALE', group };
     }
@@ -442,9 +455,22 @@ export class TradeStateStore {
       lastBrokerObservedAt: observedAt,
       lastBrokerStatus: status,
       lastBrokerSourceVersion: sourceVersion,
+      lastBrokerSnapshotFingerprint: snapshotFingerprint,
       ...(dealIds.length ? { brokerDealIds: dealIds } : {}),
     };
     group.legs = group.legs.map((leg, legIndex) => legIndex === index ? nextLeg : { ...leg });
+    // Broker observations update one leg's evidence fields only. Use the
+    // persistence fast path when the authoritative repository provides it so
+    // a snapshot does not rewrite the whole position group, every sibling leg,
+    // and the full trade-state payload on every scan.
+    if (this.persistence && this.workspaceId && typeof this.persistence.recordBrokerObservation === 'function') {
+      const result = await this.persistence.recordBrokerObservation(this.workspaceId, group.id, legId, {
+        observedAt, sourceVersion, status, snapshotFingerprint, dealIds,
+      });
+      if (result?.outcome === 'STALE') return { outcome: 'STALE', group };
+      await this.storage.put(groupKey(group.id), group);
+      return { outcome: 'APPLIED', group };
+    }
     return { outcome: 'APPLIED', group: await this.putGroup(group) };
   }
 }

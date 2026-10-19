@@ -267,11 +267,16 @@ function ensureLeg(group, leg) {
 
 async function controlsAllowLive(env, supabase, persistenceRuntime = null) {
   const controlOptions = { env, supabase, runtimeControls: persistenceRuntime?.runtimeControls };
-  const [trading, broker, live] = await Promise.all([
-    resolveTradingAccessRuntimeControl(controlOptions),
-    resolveBrokerExecutionRuntimeControl(controlOptions),
-    resolveLiveBrokerExecutionRuntimeControl(controlOptions),
-  ]);
+  const combined = typeof persistenceRuntime?.runtimeControls?.getExecutionControls === 'function'
+    ? await persistenceRuntime.runtimeControls.getExecutionControls()
+    : null;
+  const [trading, broker, live] = combined
+    ? [combined.tradingAccess, combined.brokerExecution, combined.liveBrokerExecution]
+    : await Promise.all([
+        resolveTradingAccessRuntimeControl(controlOptions),
+        resolveBrokerExecutionRuntimeControl(controlOptions),
+        resolveLiveBrokerExecutionRuntimeControl(controlOptions),
+      ]);
   return trading?.ok === true && trading.enabled === true
     && broker?.ok === true && broker.enabled === true
     && live?.ok === true && live.enabled === true;

@@ -2,6 +2,7 @@ import { buildExecutionPlan } from '../execution/execution_plan.js';
 import { evaluateAccountPolicy } from '../execution/account_policy.js';
 import { buildManagementActions } from '../execution/position_group.js';
 import { buildEditedSignalManagement } from '../execution/source_edit_management.js';
+import { scaleFollowerAction } from '../followers/account_follower_fanout.js';
 
 function normalizeAccount(account = {}) {
   const sizingMode = account.sizingMode || (() => {
@@ -26,6 +27,24 @@ function normalizeAccount(account = {}) {
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
     fastEntryPolicy: { enabled: true, mode: 'execute_immediately', locked: true },
   };
+}
+
+function applyFollowerLotPolicy(plan, account) {
+  const link = account?.followerLink;
+  const followerId = String(account?.id ?? '').trim();
+  if (!link || !followerId || !Array.isArray(plan?.actions)) return plan;
+  const actions = plan.actions.map((action) => scaleFollowerAction(action, {
+    ...link,
+    followerAccountId: followerId,
+  }));
+  const legs = Array.isArray(plan.group?.legs)
+    ? plan.group.legs.map((leg) => {
+      if (leg?.lots == null) return { ...leg };
+      const scaled = scaleFollowerAction({ type: 'OPEN_POSITION', lots: leg.lots }, { ...link, followerAccountId: followerId });
+      return { ...leg, lots: scaled.lots };
+    })
+    : plan.group?.legs;
+  return { ...plan, actions, group: plan.group ? { ...plan.group, legs } : plan.group };
 }
 
 function simulationActions(actions = []) {
@@ -871,6 +890,7 @@ export async function orchestrateTradingEventSimulation({
         groupId,
         exposure,
       });
+      plan = applyFollowerLotPolicy(plan, account);
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'EXECUTION_PLAN_INVALID', error: error.message, actions: [] });
       continue;

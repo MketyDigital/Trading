@@ -314,8 +314,17 @@ export async function executeProductionPlan({ workspaceId, eventId = null, accou
   if (brokerExecutionEnabled !== true) return summarize(accountPlans.map((plan) => blockedAccount(plan?.accountId, 'BROKER_EXECUTION_DISABLED')), false);
   if (typeof accountLoader !== 'function') throw new TypeError('accountLoader is required');
   if (typeof dispatchAction !== 'function') throw new TypeError('dispatchAction is required');
+  // One execution event can fan out into several actions and follower plans
+  // for the same account. Reuse the immutable account configuration for this
+  // batch while the per-action authority loader still revalidates safety.
+  const accountCache = new Map();
+  const memoizedAccountLoader = async (requestedWorkspaceId, accountId) => {
+    const key = `${text(requestedWorkspaceId)}:${text(accountId)}`;
+    if (!accountCache.has(key)) accountCache.set(key, Promise.resolve().then(() => accountLoader(requestedWorkspaceId, accountId)));
+    return accountCache.get(key);
+  };
   try {
-    const accounts = await Promise.all(accountPlans.map((plan) => runAccountPlan({ workspaceId: trustedWorkspaceId, eventId, plan, accountLoader, authorityLoader, snapshotLoader, riskMaterializer, dispatchAction, stateBinder, bindingRepairRecorder, latencyTrace, liveBrokerExecutionEnabled, liveBrokerExecutionControlAvailable })));
+    const accounts = await Promise.all(accountPlans.map((plan) => runAccountPlan({ workspaceId: trustedWorkspaceId, eventId, plan, accountLoader: memoizedAccountLoader, authorityLoader, snapshotLoader, riskMaterializer, dispatchAction, stateBinder, bindingRepairRecorder, latencyTrace, liveBrokerExecutionEnabled, liveBrokerExecutionControlAvailable })));
     return summarize(accounts, true);
   } finally {
     if (typeof finalizeExecutionBatch === 'function') { try { await finalizeExecutionBatch(); } catch {} }

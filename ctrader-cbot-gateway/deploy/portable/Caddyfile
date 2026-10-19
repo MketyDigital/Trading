@@ -8,7 +8,7 @@
     dns cloudflare {$CLOUDFLARE_DNS_API_TOKEN}
   }
 
-  @mt5control path /v1/mt5-connections/* /v1/mt5-commands/* /v1/mt5-context/* /v1/mt5-order-status/* /v1/mt5-position-close/*
+  @mt5control path /v1/mt5-connections/* /v1/mt5-commands/* /v1/mt5-context/* /v1/mt5-order-status/* /v1/mt5-position-close/* /v1/mt5-position-status/*
   handle @mt5control {
     reverse_proxy gateway:8791
   }
@@ -18,7 +18,7 @@
     reverse_proxy gateway:25347
   }
 
-  @control path /health /v1/connections/* /v1/commands/* /v1/order-lifecycle/*
+  @control path /health /v1/connections/* /v1/commands/* /v1/order-lifecycle/* /v1/position-status/*
   handle @control {
     reverse_proxy gateway:8790
   }

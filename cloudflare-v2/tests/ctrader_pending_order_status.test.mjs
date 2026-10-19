@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readCTraderPendingOrderStatus, readCTraderPositionCloseStatus } from '../src/adapters/ctrader_pending_order_status.js';
+import { readCTraderPendingOrderStatus, readCTraderPositionCloseStatus, readCTraderPositionStatus } from '../src/adapters/ctrader_pending_order_status.js';
 
 const context = {
   accountRowId: 'account-row-1', accountId: 12345, brokerAccountNumber: '12345',
@@ -139,4 +139,15 @@ test('cTrader position history rejects response identity mismatches and truncate
       brokerPositionId: '501', side: 'BUY', tickSize: 0.00001 });
     assert.equal(result.snapshot.status, 'UNRESOLVED');
   }
+});
+
+test('cTrader reconcile returns exact current protection for an open position', async () => {
+  const result = await readCTraderPositionStatus({ ...context, session: session([{ payloadType: 2125, payload: { ctidTraderAccountId: 12345, position: [{
+    positionId: 501, tradeData: { symbolId: 10, tradeSide: 1, volume: 10000 }, stopLoss: 1.1, takeProfit: 1.12, openTimestamp: 1800,
+  }] } }]), brokerPositionId: '501', expectedPlatformSymbolId: 10 });
+  assert.equal(result.snapshot.positionId, '501');
+  assert.equal(result.snapshot.isOpen, true);
+  assert.equal(result.snapshot.side, 'BUY');
+  assert.equal(result.snapshot.stopLoss, 1.1);
+  assert.equal(result.snapshot.takeProfit, 1.12);
 });

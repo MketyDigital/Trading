@@ -174,17 +174,16 @@ test('round trips lifecycle child identity and broker observation metadata while
   assert.equal(hydratedLegacy.lifecycleTrackingEnabled, false);
 });
 
-test('broker TP candidate scan rotates its bounded page in the database and expands selected groups to their first target', async () => {
+test('broker candidate scan uses one oldest-due bounded query without a count or expansion pass', async () => {
   const calls = [];
   const rawRows = [
     { workspace_id: 'w1', position_group_id: 'db-g2', runtime_leg_id: 'g2-l2', logical_target_index: 2, broker_position_id: 'p22', take_profit: 1.2,
       position_groups: { runtime_group_id: 'g2', trade_account_id: 'a1', source_event_id: 'e2', canonical_symbol: 'EURUSD', side: 'BUY', order_type: 'MARKET', status: 'OPEN' } },
   ];
-  const expandedRows = [
+  const dueRows = [
     { ...rawRows[0], runtime_leg_id: 'g2-l1', logical_target_index: 1, broker_position_id: 'p21', take_profit: 1.1 },
     rawRows[0],
   ];
-  let awaited = 0;
   const supabase = { from(table) {
     assert.equal(table, 'position_legs');
     const builder = {
@@ -193,14 +192,9 @@ test('broker TP candidate scan rotates its bounded page in the database and expa
       not(...args) { calls.push(['not', ...args]); return this; },
       in(...args) { calls.push(['in', ...args]); return this; },
       order(...args) { calls.push(['order', ...args]); return this; },
-      range(...args) { calls.push(['range', ...args]); return this; },
+      limit(...args) { calls.push(['limit', ...args]); return this; },
       then(resolve) {
-        awaited += 1;
-        const result = awaited === 1
-          ? { data: null, count: 6, error: null }
-          : awaited === 2
-            ? { data: rawRows, error: null }
-            : { data: expandedRows, error: null };
+        const result = { data: dueRows, error: null };
         return Promise.resolve(result).then(resolve);
       },
     };
@@ -210,8 +204,8 @@ test('broker TP candidate scan rotates its bounded page in the database and expa
 
   const candidates = await persistence.listBrokerTpProtectionCandidates({ pageSize: 2, pageSeed: 4 });
 
-  assert.ok(calls.some((call) => call[0] === 'select' && call[2]?.count === 'exact' && call[2]?.head === true));
-  assert.ok(calls.some((call) => call[0] === 'range' && call[1] === 2 && call[2] === 3));
-  assert.ok(calls.some((call) => call[0] === 'in' && call[1] === 'position_group_id' && call[2][0] === 'db-g2'));
+  assert.equal(calls.filter((call) => call[0] === 'select').length, 1);
+  assert.ok(calls.some((call) => call[0] === 'limit' && call[1] === 2));
+  assert.ok(calls.some((call) => call[0] === 'order' && call[1] === 'last_broker_observed_at'));
   assert.deepEqual(candidates.map((row) => row.legId), ['g2-l1', 'g2-l2']);
 });
