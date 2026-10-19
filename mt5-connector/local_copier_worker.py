@@ -53,6 +53,18 @@ class CopyJournal:
         self.db.execute('CREATE TABLE IF NOT EXISTS copy_state(source_ticket TEXT PRIMARY KEY, follower_position_id TEXT, fingerprint TEXT NOT NULL)')
         self.db.commit()
 
+    def close(self):
+        """Close the SQLite handle so temporary/profile directories are removable on Windows."""
+        db, self.db = self.db, None
+        if db is not None:
+            db.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
     def follower_rows(self):
         return {str(row[0]): {'source_ticket': str(row[0]), 'ticket': row[1]} for row in self.db.execute('SELECT source_ticket,follower_position_id FROM copy_state')}
 
@@ -68,45 +80,48 @@ class CopyJournal:
 def run(args):
     mt5 = _load_mt5()
     journal = CopyJournal(Path(args.journal))
-    while True:
-        parent = _snapshot(mt5, args.parent_terminal)
-        if not parent.get('complete'):
-            time.sleep(args.poll_seconds)
-            continue
-        follower = _snapshot(mt5, args.follower_terminal)
-        if not follower.get('complete'):
-            time.sleep(args.poll_seconds)
-            continue
-        source_by_follower = {str(row.get('ticket')): source for source, row in journal.follower_rows().items() if row.get('ticket')}
-        follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), '')} for row in follower.get('positions', [])]
-        engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot, True)
-        actions = engine.plan(parent, follower)
-        if actions and mt5.initialize(path=str(args.follower_terminal)):
-            try:
-                broker = _load_engine(mt5)
-                for index, action in enumerate(actions, 1):
-                    source_ticket = action.get('source_ticket')
-                    command_id = f'local-copy:{args.parent_profile}:{args.follower_profile}:{source_ticket}:{index}'
-                    action_type = action.get('type')
-                    if action_type == 'OPEN_POSITION':
-                        command = {'action': 'OPEN_POSITION', 'symbol': action['symbol'], 'side': action['side'], 'volume': action['lots'],
-                                   'orderType': 'MARKET', 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
-                    elif action_type == 'MODIFY_POSITION':
-                        command = {'action': 'MODIFY_POSITION', 'positionId': action.get('position_id'), 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
-                    elif action_type == 'CLOSE_POSITION':
-                        command = {'action': 'CLOSE_POSITION', 'positionId': action.get('position_id')}
-                    else:
-                        continue
-                    result = broker.execute_reconciled(command, command_id)
-                    if result.get('ok'):
-                        if action_type == 'CLOSE_POSITION':
-                            # A closed source must not be re-emitted on every poll.
-                            journal.remove(source_ticket)
+    try:
+        while True:
+            parent = _snapshot(mt5, args.parent_terminal)
+            if not parent.get('complete'):
+                time.sleep(args.poll_seconds)
+                continue
+            follower = _snapshot(mt5, args.follower_terminal)
+            if not follower.get('complete'):
+                time.sleep(args.poll_seconds)
+                continue
+            source_by_follower = {str(row.get('ticket')): source for source, row in journal.follower_rows().items() if row.get('ticket')}
+            follower['positions'] = [{**row, 'source_ticket': source_by_follower.get(str(row.get('ticket')), '')} for row in follower.get('positions', [])]
+            engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot, True)
+            actions = engine.plan(parent, follower)
+            if actions and mt5.initialize(path=str(args.follower_terminal)):
+                try:
+                    broker = _load_engine(mt5)
+                    for index, action in enumerate(actions, 1):
+                        source_ticket = action.get('source_ticket')
+                        command_id = f'local-copy:{args.parent_profile}:{args.follower_profile}:{source_ticket}:{index}'
+                        action_type = action.get('type')
+                        if action_type == 'OPEN_POSITION':
+                            command = {'action': 'OPEN_POSITION', 'symbol': action['symbol'], 'side': action['side'], 'volume': action['lots'],
+                                       'orderType': 'MARKET', 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
+                        elif action_type == 'MODIFY_POSITION':
+                            command = {'action': 'MODIFY_POSITION', 'positionId': action.get('position_id'), 'stopLoss': action.get('stop_loss'), 'takeProfit': action.get('take_profit')}
+                        elif action_type == 'CLOSE_POSITION':
+                            command = {'action': 'CLOSE_POSITION', 'positionId': action.get('position_id')}
                         else:
-                            journal.record(source_ticket, result.get('position_id') or result.get('ticket') or action.get('position_id'), _fingerprint(parent))
-            finally:
-                mt5.shutdown()
-        time.sleep(args.poll_seconds)
+                            continue
+                        result = broker.execute_reconciled(command, command_id)
+                        if result.get('ok'):
+                            if action_type == 'CLOSE_POSITION':
+                                # A closed source must not be re-emitted on every poll.
+                                journal.remove(source_ticket)
+                            else:
+                                journal.record(source_ticket, result.get('position_id') or result.get('ticket') or action.get('position_id'), _fingerprint(parent))
+                finally:
+                    mt5.shutdown()
+            time.sleep(args.poll_seconds)
+    finally:
+        journal.close()
 
 
 def main(argv=None):

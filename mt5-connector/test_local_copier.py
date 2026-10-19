@@ -29,11 +29,11 @@ class LocalCopierTests(unittest.TestCase):
     def test_closed_source_is_not_replayed_by_journal(self):
         from local_copier_worker import CopyJournal
         with tempfile.TemporaryDirectory() as folder:
-            journal = CopyJournal(Path(folder) / 'copy.sqlite')
-            journal.record('10', '20', 'fingerprint')
-            self.assertIn('10', journal.follower_rows())
-            journal.remove('10')
-            self.assertNotIn('10', journal.follower_rows())
+            with CopyJournal(Path(folder) / 'copy.sqlite') as journal:
+                journal.record('10', '20', 'fingerprint')
+                self.assertIn('10', journal.follower_rows())
+                journal.remove('10')
+                self.assertNotIn('10', journal.follower_rows())
 
     def test_profile_copy_settings_round_trip_without_changing_pairing_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
