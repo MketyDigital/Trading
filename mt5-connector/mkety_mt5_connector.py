@@ -706,6 +706,9 @@ def resolve_startup_config(args, input_fn=input):
 
 
 def main(argv=None):
+    if argv is None and len(sys.argv) > 1 and sys.argv[1] == '--local-copy-worker':
+        from local_copier_worker import main as local_copy_main
+        return local_copy_main(sys.argv[2:])
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
         from manager_ui import run_manager
         from process_supervisor import ConnectorSupervisor

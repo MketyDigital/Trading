@@ -31,6 +31,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("--verify-tag", self.workflow)
         self.assertNotIn("--clobber", self.workflow)
 
+    def test_windows_package_includes_and_smoke_tests_local_copier_worker(self):
+        self.assertIn('--hidden-import local_copier_worker', self.workflow)
+        self.assertIn("@('--local-copy-worker','--help')", self.workflow)
+        self.assertIn('Packaged local copier worker entrypoint failed', self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

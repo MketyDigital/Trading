@@ -182,17 +182,40 @@ class ManagerViewModel:
                                     enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot)
 
     def disable_copy(self, profile_id: str) -> TerminalProfile:
-        return update_copy_settings(self._profile(profile_id), self.app_data_dir, role='none', enabled=False)
+        follower = self._profile(profile_id)
+        if follower.copy_parent_profile_id:
+            self.copy_supervisor.stop(follower.copy_parent_profile_id, follower.profile_id,
+                                      stop_file=self._copy_stop_file(follower))
+        return update_copy_settings(follower, self.app_data_dir, role='none', enabled=False)
+
+    def _copy_stop_file(self, follower: TerminalProfile) -> Path:
+        return profile_paths(follower, self.app_data_dir).ledger_path.with_name('local-copy-stop.signal')
+
+    def stop_copy(self, follower_profile_id: str) -> None:
+        follower = self._profile(follower_profile_id)
+        if not follower.copy_parent_profile_id:
+            raise ValueError('the selected profile is not linked to a local MT5 parent')
+        self.copy_supervisor.stop(follower.copy_parent_profile_id, follower.profile_id,
+                                  stop_file=self._copy_stop_file(follower))
+
+    def stop_all_copy(self) -> None:
+        for follower in self.profiles():
+            if follower.copy_role == 'follower' and follower.copy_parent_profile_id:
+                self.stop_copy(follower.profile_id)
+        self.copy_supervisor.stop_all()
 
     def start_copy(self, follower_profile_id: str) -> int:
         follower = self._profile(follower_profile_id)
         if follower.copy_role != 'follower' or not follower.copy_enabled or not follower.copy_parent_profile_id:
             raise ValueError('local copy is not enabled for this follower profile')
         parent = self._profile(follower.copy_parent_profile_id)
+        if not parent.terminal_path or not follower.terminal_path:
+            raise ValueError('both parent and follower profiles need an MT5 terminal selected')
         follower_paths = profile_paths(follower, self.app_data_dir)
         journal_path = follower_paths.ledger_path.with_name('local-copy-ledger.sqlite')
         return self.copy_supervisor.start(CopyPairSpec(parent.profile_id, follower.profile_id, parent.terminal_path, follower.terminal_path,
-                                                        follower.copy_lot_multiplier, follower.copy_fixed_lot, journal_path=journal_path))
+                                                        follower.copy_lot_multiplier, follower.copy_fixed_lot, journal_path=journal_path,
+                                                        stop_file=self._copy_stop_file(follower)))
 
     def profile_rows(self) -> list[dict]:
         rows = []
@@ -226,7 +249,10 @@ class ManagerViewModel:
 
     def close_action(self, action: str) -> bool:
         if action == "stop_and_exit":
-            self.stop_all()
+            try:
+                self.stop_all()
+            finally:
+                self.stop_all_copy()
             return True
         # Minimize and cancel leave the manager and its workers in control.
         return False
@@ -331,8 +357,8 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     model = ManagerViewModel(app_data_dir, supervisor, catalog)
     root = tk.Tk()
     root.title(WINDOW_TITLE)
-    root.geometry("900x620")
-    root.minsize(780, 520)
+    root.geometry("1120x660")
+    root.minsize(980, 560)
 
     heading = ttk.Label(root, text="Mkety MT5 Connector", font=("Segoe UI", 18, "bold"))
     heading.pack(anchor="w", padx=18, pady=(16, 4))
@@ -349,9 +375,9 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     terminal_list.pack(fill="x", padx=18)
     discovered = []
 
-    profiles_box = ttk.Treeview(root, columns=("terminal", "terminal_process", "connector", "account", "gateway", "sync"), show="headings", height=10)
+    profiles_box = ttk.Treeview(root, columns=("terminal", "profile_id", "terminal_process", "connector", "account", "gateway", "sync"), show="headings", height=10)
     for column, label, width in (
-        ("terminal", "Terminal / broker", 205), ("terminal_process", "MT5 process", 80), ("connector", "Connector", 75), ("account", "Account / server", 165),
+        ("terminal", "Terminal / broker", 185), ("profile_id", "Profile ID", 145), ("terminal_process", "MT5 process", 80), ("connector", "Connector", 75), ("account", "Account / server", 165),
         ("gateway", "Gateway", 100), ("sync", "Dashboard identity", 250),
     ):
         profiles_box.heading(column, text=label)
@@ -367,7 +393,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             profiles_box.delete(item)
         for row in model.profile_rows():
             profiles_box.insert("", "end", iid=row["profile_id"], values=(
-                f"{row['label']}\n{row['terminal_path']}", row["terminal_process"], row["connector_process"],
+                f"{row['label']}\n{row['terminal_path']}", row["profile_id"], row["terminal_process"], row["connector_process"],
                 f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"],
             ))
         root.after(3000, refresh_status_only)
@@ -383,7 +409,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             row = next((row for row in model.profile_rows() if row["profile_id"] == profile_id), None)
             if row is not None:
                 profiles_box.item(profile_id, values=(
-                    f"{row['label']}\n{row['terminal_path']}", row["terminal_process"], row["connector_process"],
+                    f"{row['label']}\n{row['terminal_path']}", row["profile_id"], row["terminal_process"], row["connector_process"],
                     f"{row['account']} {row['server']} {row['environment']}", row["gateway"], row["dashboard_sync"],
                 ))
         root.after(3000, refresh_status_only)
@@ -577,7 +603,9 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         if not profile_id:
             messagebox.showinfo("Select follower", "Select the MT5 profile that should follow another terminal.", parent=root)
             return
-        parent_id = simpledialog.askstring("Main MT5 profile", "Enter the saved parent profile ID:", parent=root)
+        choices = [row for row in model.profile_rows() if row["profile_id"] != profile_id]
+        options = "\n".join(f"{row['profile_id']} — {row['label']} ({row['account']})" for row in choices)
+        parent_id = simpledialog.askstring("Main MT5 profile", "Enter the Profile ID of the main account from the table:\n\n" + (options or "Add the main terminal first."), parent=root)
         if not parent_id:
             return
         multiplier = simpledialog.askfloat("Follower lot multiplier", "1 = same planned lot", initialvalue=1.0, minvalue=0.000001, parent=root)
@@ -596,7 +624,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             return
         try:
             model.disable_copy(profile_id)
-            flow_text.set("Local MT5 copying disabled for the selected profile.")
+            flow_text.set("Local MT5 copy stopped and disabled for the selected profile.")
             refresh_profiles()
         except Exception as exc:
             messagebox.showerror("Could not disable local copy", str(exc), parent=root)
@@ -606,6 +634,12 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         if not profile_id:
             return
         try:
+            if not messagebox.askyesno(
+                "Start local MT5 copying?",
+                "This starts broker orders on the follower account. Positions already open on the main account may copy immediately. Test on demo accounts first.",
+                parent=root,
+            ):
+                return
             model.start_copy(profile_id)
             flow_text.set("Local MT5 copier started in its own process.")
         except Exception as exc:
@@ -613,6 +647,17 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
 
     ttk.Button(copy_bar, text="Mark selected as local follower", command=mark_selected_follower).pack(side="left", padx=(0, 8))
     ttk.Button(copy_bar, text="Start local copy", command=start_selected_copy).pack(side="left", padx=(0, 8))
+    def stop_selected_copy():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            return
+        try:
+            model.stop_copy(profile_id)
+            flow_text.set("Local MT5 copier stopped for the selected follower.")
+        except Exception as exc:
+            messagebox.showerror("Could not stop local copy", str(exc), parent=root)
+
+    ttk.Button(copy_bar, text="Stop local copy", command=stop_selected_copy).pack(side="left", padx=(0, 8))
     ttk.Button(copy_bar, text="Disable local copy", command=disable_selected_follower).pack(side="left")
 
     def open_selected_terminal():
@@ -653,7 +698,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         if not model.profiles():
             root.destroy()
             return
-        if messagebox.askyesno("Close Mkety MT5 Connector", "Stop all Mkety connector workers and exit? Choose No to keep this manager open.", parent=root):
+        if messagebox.askyesno("Close Mkety MT5 Connector", "Stop all connector and local copier workers, then exit? Choose No to keep this manager open.", parent=root):
             try:
                 model.close_action("stop_and_exit")
                 root.destroy()

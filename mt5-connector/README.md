@@ -56,6 +56,18 @@ The profile list shows saved terminal profiles, the MT5 terminal process, connec
 
 Minimizing the manager keeps it and its connector workers running. While a worker remains running, it automatically retries a lost gateway connection every three seconds. Closing asks whether to stop the managed connector workers and exit; choosing No leaves the manager open. If the manager exits unexpectedly, a worker that is still running can continue reconnecting, and the manager can recover its status when reopened. A stopped or crashed worker is not automatically restarted; select its saved profile and click **Pair / start selected**. The manager does not automatically start profiles at Windows login. Stopping a worker leaves its MT5 terminal, open positions and pending orders alone.
 
+## Local MT5 copier
+
+The local copier is an optional MT5-to-MT5 feature inside the same Windows manager. It runs on this computer and copies broker positions directly between two MT5 terminal installations; it does not use portal routes. The copier and portal follower features are separate. For portal-managed trading, connect and sync both accounts in Mkety and configure the portal follower there.
+
+1. Install or add two separate MT5 terminal installations on the same Windows PC/VPS. Sign in to the main account in one terminal and the follower account in the other. Keep both terminals open and connected to their brokers.
+2. Open `MketyMT5Connector.exe`, click **Refresh terminals**, select the main terminal and click **Add another terminal**. Repeat for the follower terminal. The manager lists each saved profile and its **Profile ID**.
+3. Select the follower row and click **Mark selected as local follower**. Enter the main account's **Profile ID** from the table. Enter a lot multiplier: `1` copies the same volume, `0.5` copies half, and `2` copies double. The released manager currently offers multiplier sizing, not fixed-lot sizing.
+4. Select the follower profile and click **Start local copy**. Confirm the warning. Start with demo accounts. Any positions already open on the main account can be copied as soon as the copier starts.
+5. Click **Stop local copy** to stop that pair. **Disable local copy** stops it and removes the follower link. On manager close, choosing **Yes** stops connector and copier workers; choosing **No** leaves them running. Keep the manager open while managing pairs.
+
+The local copier checks open positions about every two seconds. It mirrors market-position opens, SL/TP changes (including manual edits observed in the main MT5 terminal), and full closes. It does not copy pending orders or partial volume closes. A running copier can place real broker orders on the follower account; test its symbol availability, lot sizing, SL/TP and stop behavior on demo accounts before using live accounts.
+
 The installer path is available for a downloaded MetaQuotes or broker-specific setup file. Copying an existing terminal directory is intentionally unavailable until its layout can be validated to exclude terminal data and credentials.
 
 One running MT5 terminal instance can hold one active logged-in trading account identity at a time. Switching the login inside that terminal changes the account controlled by that terminal; it does not keep multiple broker accounts simultaneously connected.
