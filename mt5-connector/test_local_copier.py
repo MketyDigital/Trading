@@ -65,6 +65,15 @@ class LocalCopierTests(unittest.TestCase):
                 journal.remove('10')
                 self.assertNotIn('10', journal.follower_rows())
 
+    def test_copy_journal_creates_missing_profile_directory(self):
+        from local_copier_worker import CopyJournal
+        with tempfile.TemporaryDirectory() as folder:
+            journal_path = Path(folder) / 'terminals' / 'follower-01' / 'local-copy-ledger.sqlite'
+            with CopyJournal(journal_path) as journal:
+                journal.record('10', '20', 'fingerprint')
+                self.assertIn('10', journal.follower_rows())
+            self.assertTrue(journal_path.is_file())
+
     def test_profile_copy_settings_round_trip_without_changing_pairing_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

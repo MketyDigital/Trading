@@ -49,7 +49,12 @@ def _fingerprint(snapshot):
 
 class CopyJournal:
     def __init__(self, path):
-        self.db = sqlite3.connect(str(path))
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.db = sqlite3.connect(str(self.path))
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(f'could not open local copier journal at {self.path}: {exc}') from exc
         self.db.execute('CREATE TABLE IF NOT EXISTS copy_state(source_ticket TEXT PRIMARY KEY, follower_position_id TEXT, fingerprint TEXT NOT NULL)')
         self.db.commit()
 
