@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL, utcCalendarWindowStart } from '../scripts/cloudflare_resource_audit.mjs';
+import { redactSql, normalizeWindowDays, parseWranglerResources, isReadOnlyGraphQL, utcCalendarWindowStart, queryD1Metrics } from '../scripts/cloudflare_resource_audit.mjs';
 
 test('redacts SQL literals and bounds long statements before reporting', () => {
   const sql = `UPDATE sessions SET token='private-token', n=123 WHERE user_id="secret-user"`;
@@ -23,6 +23,14 @@ test('calendar analytics window includes exactly the selected number of UTC date
 test('fails closed unless Cloudflare GraphQL document is a read-only query', () => {
   assert.equal(isReadOnlyGraphQL('query Audit { viewer { accounts { d1AnalyticsAdaptiveGroups(limit: 1, filter: {}) { count } } } }'), true);
   assert.equal(isReadOnlyGraphQL('mutation Audit { deleteThing }'), false);
+});
+
+test('D1 analytics query ranks the heaviest query signatures by both rows read and written', () => {
+  const query = queryD1Metrics();
+  assert.match(query, /d1TopQuerySignaturesByRowsRead: d1QueriesAdaptiveGroups/);
+  assert.match(query, /d1TopQuerySignaturesByRowsWritten: d1QueriesAdaptiveGroups/);
+  assert.match(query, /sum_rowsRead_DESC/);
+  assert.match(query, /sum_rowsWritten_DESC/);
 });
 
 test('reads only resource identifiers and bounded runtime settings from Wrangler config', () => {
