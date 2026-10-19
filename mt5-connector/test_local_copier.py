@@ -109,6 +109,61 @@ class LocalCopierTests(unittest.TestCase):
             model.start_copy(follower.profile_id)
             self.assertEqual(calls[0].follower_fixed_lot, 0.01)
 
+    def test_fixed_one_lot_is_saved_as_a_follower_and_starts_copying(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path = root / 'parent' / 'terminal64.exe'
+            follower_path = root / 'follower' / 'terminal64.exe'
+            parent_path.parent.mkdir(); parent_path.write_bytes(b'parent')
+            follower_path.parent.mkdir(); follower_path.write_bytes(b'follower')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            calls = []
+            class Copies:
+                def start(self, spec):
+                    calls.append(spec)
+                    return 123
+                def stop(self, *_args, **_kwargs): pass
+                def stop_all(self): pass
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+                copy_supervisor=Copies(),
+            )
+            parent = model.add_terminal(parent_path, 'Octa Demo Main')
+            follower = model.add_terminal(follower_path, 'Follower Demo')
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=1.0)
+
+            rows = {row['profile_id']: row for row in model.profile_rows()}
+            self.assertEqual(rows[follower.profile_id]['copy'], "Follower of Octa Demo Main — fixed 1 lot (enabled)")
+            model.start_copy(follower.profile_id)
+            self.assertEqual(calls[0].follower_profile_id, follower.profile_id)
+            self.assertEqual(calls[0].follower_fixed_lot, 1.0)
+
+    def test_stopped_unpaired_profile_can_display_read_only_observed_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            terminal_path = root / 'follower' / 'terminal64.exe'
+            terminal_path.parent.mkdir(); terminal_path.write_bytes(b'follower')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+            )
+            profile = model.add_terminal(terminal_path, 'Follower Demo')
+            identity = {'accountNumber': '123456', 'serverName': 'Octa-Demo', 'environment': 'demo'}
+            observed = model.observe_account(profile.profile_id, probe=lambda _path: identity)
+
+            self.assertEqual(observed, identity)
+            row = model.profile_rows()[0]
+            self.assertEqual((row['account'], row['server'], row['environment']), ('123456', 'Octa-Demo', 'DEMO'))
+            self.assertFalse(row['paired'])
+
     def test_copy_supervisor_is_separate_process_and_keeps_existing_workers_untouched(self):
         calls = []
         class Process:
