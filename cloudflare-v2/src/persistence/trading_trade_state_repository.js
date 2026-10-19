@@ -217,7 +217,19 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
     const seed = Math.max(0, Math.trunc(Number(pageSeed)) || 0);
     await verifyTradingStorageAuthority(authority, { postgresDatabase });
     const schema = authority.kind === 'd1' ? '' : 'trading_storage.';
-    const countSql = `SELECT COUNT(*) AS total FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id = l.position_group_id WHERE l.status = 'OPEN' AND g.status = 'OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL`;
+    // The runtime only polls the next open target in each group. Counting and
+    // selecting every open leg inflated D1 reads (and then the runtime threw
+    // the later targets away). Select one candidate per group at the SQL
+    // boundary so the bounded page reflects actual broker polls.
+    const nextTargetPredicate = `(COALESCE(l.logical_target_index, l.target_index) = (
+      SELECT MIN(COALESCE(l2.logical_target_index, l2.target_index))
+      FROM ${schema}position_legs l2
+      WHERE l2.position_group_id = l.position_group_id
+        AND l2.status = 'OPEN'
+        AND l2.broker_position_id IS NOT NULL
+        AND l2.take_profit IS NOT NULL
+    ))`;
+    const countSql = `SELECT COUNT(DISTINCT l.position_group_id) AS total FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id = l.position_group_id WHERE l.status = 'OPEN' AND g.status = 'OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate}`;
     const countRow = authority.kind === 'd1'
       ? await authority.binding.prepare(countSql).first()
       : (await postgresDatabase.query(countSql)).rows?.[0];
@@ -225,14 +237,14 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
     if (!total) return [];
     const pages = Math.max(1, Math.ceil(total / limit));
     const offset = (seed % pages) * limit;
-    const selectedSql = `SELECT l.position_group_id FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL ORDER BY l.created_at ASC, l.id ASC LIMIT ${limit} OFFSET ${offset}`;
+    const selectedSql = `SELECT l.position_group_id FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate} ORDER BY l.created_at ASC, l.id ASC LIMIT ${limit} OFFSET ${offset}`;
     const selected = authority.kind === 'd1' ? (await authority.binding.prepare(selectedSql).all()).results || [] : (await postgresDatabase.query(selectedSql)).rows || [];
     const groupIds = [...new Set(selected.map(row => String(row.position_group_id || '')).filter(Boolean))];
     if (!groupIds.length) return [];
     const parameters = groupIds.map((_, index) => authority.kind === 'd1' ? '?' : `$${index + 1}`);
     const rowsSql = `SELECT l.workspace_id, l.position_group_id, l.runtime_leg_id, l.target_index, l.logical_target_index, l.lots, l.executed_lots, l.broker_position_id, l.stop_loss, l.take_profit, l.created_at,
       g.runtime_group_id, g.trade_account_id, g.source_event_id, g.source_instance_id, g.source_event_ids, g.thread_id, g.canonical_symbol, g.side, g.order_type, g.entry, g.stop_loss AS group_stop_loss, g.status AS group_status, g.created_at AS group_created_at, g.updated_at AS group_updated_at
-      FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND l.position_group_id IN (${parameters.join(',')}) ORDER BY l.position_group_id, l.logical_target_index`;
+      FROM ${schema}position_legs l JOIN ${schema}position_groups g ON g.id=l.position_group_id WHERE l.status='OPEN' AND g.status='OPEN' AND l.broker_position_id IS NOT NULL AND l.take_profit IS NOT NULL AND ${nextTargetPredicate} AND l.position_group_id IN (${parameters.join(',')}) ORDER BY l.position_group_id, l.logical_target_index`;
     let rows;
     if (authority.kind === 'd1') rows = (await authority.binding.prepare(rowsSql).bind(...groupIds).all()).results || [];
     else rows = (await postgresDatabase.query(rowsSql, groupIds)).rows || [];
