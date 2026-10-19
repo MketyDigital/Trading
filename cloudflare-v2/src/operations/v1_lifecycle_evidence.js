@@ -39,6 +39,18 @@ function statusForDestination(destinations = {}) {
 function statusForSimulation(simulation = {}) {
   const status = String(simulation?.status ?? '').toUpperCase();
   if (['READY', 'PLANNED', 'SUCCEEDED'].includes(status)) return 'SUCCEEDED';
+  if (status === 'SIMULATED') {
+    const accounts = simulationAccounts(simulation);
+    const hasReadyPlan = accounts.some((account) =>
+      String(account?.status ?? '').toUpperCase() === 'READY'
+      && Array.isArray(account?.actions)
+      && account.actions.length > 0,
+    );
+    const hasBlockedPlan = accounts.some((account) => String(account?.status ?? '').toUpperCase() === 'BLOCKED');
+    if (hasReadyPlan && !hasBlockedPlan) return 'SUCCEEDED';
+    if (hasBlockedPlan && !hasReadyPlan) return 'BLOCKED';
+    return 'INFO';
+  }
   if (status === 'BLOCKED') return 'BLOCKED';
   if (status === 'FAILED') return 'FAILED';
   if (['NO_ACTION', 'SKIPPED'].includes(status)) return 'SKIPPED';
@@ -49,7 +61,7 @@ function statusForExecution(execution = {}) {
   const status = String(execution?.status ?? '').toUpperCase();
   if (['EXECUTED', 'SUCCEEDED', 'PARTIAL_SUCCESS'].includes(status)) return 'SUCCEEDED';
   if (status === 'PARTIAL' || status === 'PARTIAL_FAILURE') return status === 'PARTIAL_FAILURE' ? 'FAILED' : 'INFO';
-  if (status.includes('DISABLED') || status === 'BLOCKED') return 'BLOCKED';
+  if (status.includes('DISABLED') || status === 'BLOCKED' || status === 'NOT_EXECUTABLE') return 'BLOCKED';
   if (status.includes('RETRY') || status.includes('UNCERTAIN')) return 'RETRYABLE';
   if (status === 'FAILED') return 'FAILED';
   if (status.includes('SKIPPED') || !status) return 'SKIPPED';
