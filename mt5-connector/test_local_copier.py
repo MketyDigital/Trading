@@ -22,6 +22,17 @@ class LocalCopierTests(unittest.TestCase):
         actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
         self.assertEqual(actions, [{'type': 'OPEN_POSITION', 'source_ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'lots': 0.1, 'stop_loss': 2300, 'take_profit': 2400}])
 
+    def test_fixed_lot_size_uses_the_requested_follower_volume(self):
+        parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.2}]}
+        follower = {'positions': []}
+        actions = plan_snapshot_actions(parent, follower, lot_multiplier=1, fixed_lot=0.01)
+        self.assertEqual(actions[0]['lots'], 0.01)
+
+    def test_fixed_lot_size_takes_precedence_over_multiplier(self):
+        parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.2}]}
+        actions = plan_snapshot_actions(parent, {'positions': []}, lot_multiplier=2, fixed_lot=0.1)
+        self.assertEqual(actions[0]['lots'], 0.1)
+
     def test_uncertain_parent_snapshot_never_closes_follower(self):
         parent = {'complete': False, 'positions': []}
         follower = {'positions': [{'source_ticket': '10', 'symbol': 'XAUUSD'}]}
@@ -66,6 +77,37 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(loaded['p2'].copy_parent_profile_id, 'p1')
             self.assertTrue(loaded['p2'].copy_enabled)
             self.assertEqual(loaded['p2'].copy_lot_multiplier, 0.5)
+
+    def test_fixed_lot_mode_round_trips_and_is_passed_to_copy_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path = root / 'parent' / 'terminal64.exe'
+            follower_path = root / 'follower' / 'terminal64.exe'
+            parent_path.parent.mkdir(); parent_path.write_bytes(b'parent')
+            follower_path.parent.mkdir(); follower_path.write_bytes(b'follower')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            calls = []
+            class Copies:
+                def start(self, spec):
+                    calls.append(spec)
+                    return 123
+                def stop(self, *_args, **_kwargs): pass
+                def stop_all(self): pass
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+                copy_supervisor=Copies(),
+            )
+            parent = model.add_terminal(parent_path, 'Main')
+            follower = model.add_terminal(follower_path, 'Follower')
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.01)
+            loaded = {row.profile_id: row for row in load_profiles(root / 'appdata')}
+            self.assertEqual(loaded[follower.profile_id].copy_fixed_lot, 0.01)
+            model.start_copy(follower.profile_id)
+            self.assertEqual(calls[0].follower_fixed_lot, 0.01)
 
     def test_copy_supervisor_is_separate_process_and_keeps_existing_workers_untouched(self):
         calls = []

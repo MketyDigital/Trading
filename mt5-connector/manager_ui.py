@@ -608,12 +608,37 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         parent_id = simpledialog.askstring("Main MT5 profile", "Enter the Profile ID of the main account from the table:\n\n" + (options or "Add the main terminal first."), parent=root)
         if not parent_id:
             return
-        multiplier = simpledialog.askfloat("Follower lot multiplier", "1 = same planned lot", initialvalue=1.0, minvalue=0.000001, parent=root)
-        if multiplier is None:
-            return
+        use_fixed_lots = messagebox.askyesno(
+            "Follower lot sizing",
+            "Choose Yes for a fixed lot size, or No to scale the main account's lot size with a multiplier.",
+            parent=root,
+        )
+        if use_fixed_lots:
+            fixed_lot = simpledialog.askfloat(
+                "Follower fixed lot size",
+                "Enter the follower volume in lots (for example, 0.01, 0.1, or 1.0).",
+                initialvalue=0.01,
+                minvalue=0.000001,
+                parent=root,
+            )
+            if fixed_lot is None:
+                return
+            multiplier = 1.0
+        else:
+            multiplier = simpledialog.askfloat(
+                "Follower lot multiplier",
+                "1 = same as the main lot, 0.5 = half, 2 = double.",
+                initialvalue=1.0,
+                minvalue=0.000001,
+                parent=root,
+            )
+            if multiplier is None:
+                return
+            fixed_lot = None
         try:
-            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier)
-            flow_text.set("Local MT5 follower saved. Start it explicitly when both terminals are ready.")
+            model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=multiplier, fixed_lot=fixed_lot)
+            sizing = f"fixed {fixed_lot:g} lots" if fixed_lot is not None else f"{multiplier:g}× multiplier"
+            flow_text.set(f"Local MT5 follower saved with {sizing}. Start it explicitly when both terminals are ready.")
             refresh_profiles()
         except Exception as exc:
             messagebox.showerror("Could not enable local copy", str(exc), parent=root)
