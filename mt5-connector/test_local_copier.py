@@ -142,6 +142,23 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(calls[0].follower_profile_id, follower.profile_id)
             self.assertEqual(calls[0].follower_fixed_lot, 1.0)
 
+    def test_starting_main_profile_explains_that_it_must_be_configured_as_follower(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            terminal_path = root / 'main' / 'terminal64.exe'
+            terminal_path.parent.mkdir(); terminal_path.write_bytes(b'main')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+            )
+            main = model.add_terminal(terminal_path, 'Octa Main')
+            with self.assertRaisesRegex(ValueError, 'Octa Main.*not configured as a local follower'):
+                model.start_copy(main.profile_id)
+
     def test_stopped_unpaired_profile_can_display_read_only_observed_identity(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
