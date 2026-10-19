@@ -11,6 +11,11 @@ export function normalizeWindowDays(value) {
   return days;
 }
 
+export function utcCalendarWindowStart(now, days) {
+  const date = new Date(now);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - (normalizeWindowDays(days) - 1)));
+}
+
 export function isReadOnlyGraphQL(document) {
   return /^\s*query\b/i.test(String(document || ''));
 }
@@ -272,7 +277,7 @@ function queryContainerMetrics() {
   }`;
 }
 
-function buildReport({ windowDays, generatedAt, inventory, metrics }) {
+function buildReport({ windowDays, generatedAt, windowStart, windowEnd, inventory, metrics }) {
   const queryInsight = metrics.d1?.data?.d1QueriesAdaptiveGroups;
   if (Array.isArray(queryInsight)) {
     for (const item of queryInsight) {
@@ -282,6 +287,8 @@ function buildReport({ windowDays, generatedAt, inventory, metrics }) {
   return {
     generatedAt,
     windowDays,
+    windowStart,
+    windowEnd,
     readOnly: true,
     scope: 'Cloudflare account resource inventory and aggregated usage; no application rows or message bodies queried',
     configuration: inventory,
@@ -309,7 +316,7 @@ export async function runAudit({ token, account, days, configPath = '../wrangler
   const config = fs.readFileSync(new URL(configPath, import.meta.url), 'utf8');
   const inventory = parseWranglerResources(config);
   const startDate = new Date(now.getTime() - windowDays * 86400000);
-  const start = dayString(startDate);
+  const start = dayString(utcCalendarWindowStart(now, windowDays));
   const end = dayString(now);
   const startTime = startDate.toISOString();
   const endTime = now.toISOString();
@@ -328,7 +335,7 @@ export async function runAudit({ token, account, days, configPath = '../wrangler
   ]);
   const resources = { d1, queues, workers, durableObjectNamespaces: namespaces, containers };
   const metrics = { resources, d1: d1Metrics, worker: workerMetrics, queues: queueMetrics, durableObjects: doMetrics, containers: containerMetrics };
-  const report = buildReport({ windowDays, generatedAt: now.toISOString(), inventory, metrics });
+  const report = buildReport({ windowDays, generatedAt: now.toISOString(), windowStart: startTime, windowEnd: endTime, inventory, metrics });
   return report;
 }
 
