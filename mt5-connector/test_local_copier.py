@@ -34,6 +34,21 @@ class LocalCopierTests(unittest.TestCase):
         self.assertFalse(profile.copy_enabled)
         self.assertIsNone(profile.copy_parent_profile_id)
 
+    def test_normal_follower_setup_does_not_require_aliases_and_preserves_saved_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent = TerminalProfile('p1', 'Primary', Path('C:/primary/terminal64.exe'))
+            follower = TerminalProfile('p2', 'Follower', Path('C:/follower/terminal64.exe'))
+            save_profile(parent, root)
+            save_profile(follower, root)
+            update_copy_settings(follower, root, role='follower', parent_profile_id='p1', enabled=True,
+                                 symbol_map={'XAUUSD': 'GOLD'})
+            current = {row.profile_id: row for row in load_profiles(root)}['p2']
+            update_copy_settings(current, root, role='follower', parent_profile_id='p1', enabled=True)
+            reloaded = {row.profile_id: row for row in load_profiles(root)}['p2']
+            self.assertTrue(reloaded.copy_enabled)
+            self.assertEqual(reloaded.copy_symbol_map, {'XAUUSD': 'GOLD'})
+
     def test_complete_parent_snapshot_opens_follower_with_scaled_lot(self):
         parent = {'complete': True, 'positions': [{'ticket': '10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.2, 'sl': 2300, 'tp': 2400}]}
         follower = {'positions': []}

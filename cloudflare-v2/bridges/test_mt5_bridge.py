@@ -133,6 +133,18 @@ class MT5BridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'symbol resolution ambiguous'):
             MT5Engine(CatalogMT5(['EURUSD.a', 'EURUSD.pro']))._symbol('EURUSD')
 
+    def test_unique_shorter_broker_symbol_is_resolved_in_reverse_copy_direction(self):
+        class CatalogMT5(FakeMT5):
+            def __init__(self, names):
+                super().__init__()
+                self.names = names
+            def symbol_info(self, symbol):
+                return next((SimpleNamespace(name=name, visible=True) for name in self.names if name == symbol), None)
+            def symbols_get(self):
+                return tuple(SimpleNamespace(name=name) for name in self.names)
+
+        self.assertEqual(MT5Engine(CatalogMT5(['EURUSD']))._symbol('EURUSD.a').name, 'EURUSD')
+
     def test_market_open_uses_ask_for_buy_and_checks_before_send(self):
         mt5 = FakeMT5()
         engine = MT5Engine(mt5)
