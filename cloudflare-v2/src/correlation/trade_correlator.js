@@ -354,6 +354,21 @@ export function correlateTradingEvent({
   const editedEventId = event?.thread?.edited_event_id != null ? String(event.thread.edited_event_id) : null;
   if (editedEventId) {
     const editMatches = scoped.filter((group) => (group.sourceEventIds || []).map(String).includes(editedEventId));
+    // A fast-entry message may be edited in place to add its full SL/TP plan.
+    // Resolve that as a completion before the generic edit path, whose
+    // structure guard correctly rejects adding legs to an already-complete
+    // trade but would otherwise strand this intended fast-entry promotion.
+    if (interpretation.status === 'READY' && interpretation.intent && isFastCompletionSignal(interpretation)) {
+      const symbol = String(interpretation.intent.symbol?.canonical ?? '').trim().toUpperCase();
+      const side = String(interpretation.intent.side ?? '').trim().toUpperCase();
+      const compatibleFastGroups = editMatches.filter((group) =>
+        group.incomplete === true
+        && String(group.symbol ?? '').trim().toUpperCase() === symbol
+        && String(group.side ?? '').trim().toUpperCase() === side
+      );
+      const completion = correlateFastCompletion(compatibleFastGroups);
+      if (completion) return completion;
+    }
     const target = matchedManagementTarget(editMatches, 'EDIT_TARGET', 'AMBIGUOUS_EDIT_TARGET');
     if (target) return target;
 

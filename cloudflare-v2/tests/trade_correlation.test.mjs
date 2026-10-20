@@ -297,6 +297,43 @@ test('fresh self-edited full signal still promotes a compatible active fast trad
   assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'euraud-fast' });
 });
 
+test('self-edit of the fast-entry source completes the fast trade instead of treating added targets as unsupported edit structure', () => {
+  const fastEventId = 'telegram:-1001888176046:10185';
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'main signal2' },
+      external_event_id: fastEventId,
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { edited_event_id: fastEventId },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'EURAUD' },
+        side: 'SELL',
+        orderType: 'MARKET',
+        entry: { kind: 'MARKET' },
+        stopLoss: 1.61523,
+        takeProfits: [1.61048, 1.60764, 1.605],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group({
+      id: 'euraud-fast',
+      sourceInstanceId: 'main signal2',
+      sourceEventIds: [fastEventId],
+      symbol: 'EURAUD',
+      side: 'SELL',
+      orderType: 'MARKET',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'euraud-fast' });
+});
+
 test('stale unmatched actionable edit remains fail-closed', () => {
   const result = correlateTradingEvent({
     event: {
@@ -387,6 +424,59 @@ test('complete READY reply opens a new group when its reply target is absent and
     nowMs: now,
   });
   assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('complete READY reply opens independently when its fast-entry predecessor failed', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:503',
+      occurred_at: new Date(now - 1000).toISOString(),
+      thread: { reply_to_event_id: 'telegram:-1001:502' },
+    },
+    interpretation: {
+      status: 'READY',
+      intent: {
+        symbol: { canonical: 'VOLATILITY_75' },
+        side: 'BUY',
+        orderType: 'MARKET',
+        entry: { kind: 'MARKET' },
+        stopLoss: 1234,
+        takeProfits: [1300, 1400, 1500],
+        fastEntry: false,
+        incomplete: false,
+      },
+    },
+    activeGroups: [group({
+      id: 'failed-fast',
+      sourceEventIds: ['telegram:-1001:502'],
+      symbol: 'VOLATILITY_75',
+      side: 'BUY',
+      status: 'FAILED',
+      incomplete: true,
+    })],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'NEW_GROUP' });
+});
+
+test('management reply to a failed fast-entry predecessor stays fail-closed instead of targeting another trade', () => {
+  const result = correlateTradingEvent({
+    event: {
+      source: { instance_id: 'listener-1' },
+      external_event_id: 'telegram:-1001:503',
+      thread: { reply_to_event_id: 'telegram:-1001:502' },
+    },
+    interpretation: { status: 'MANAGEMENT', management: { type: 'MOVE_SL_TO_BE' } },
+    activeGroups: [
+      group({ id: 'failed-fast', sourceEventIds: ['telegram:-1001:502'], status: 'FAILED' }),
+      group({ id: 'other-active-trade', sourceEventIds: ['telegram:-1001:400'] }),
+    ],
+    nowMs: now,
+  });
+
+  assert.deepEqual(result, { status: 'NEEDS_REVIEW', reason: 'NO_REPLY_TARGET' });
 });
 
 test('complete READY reply opens independently when the replied fast group is incompatible', () => {
