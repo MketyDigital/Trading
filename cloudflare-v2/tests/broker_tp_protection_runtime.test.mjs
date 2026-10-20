@@ -48,6 +48,39 @@ test('manual open-position SL/TP edits are emitted once through the existing man
   assert.equal(applies, 1);
 });
 
+test('an unchanged broker protection fingerprint is not re-applied on later snapshots', async () => {
+  let records = 0; let applies = 0;
+  const fingerprint = 'p1|1.105|1.125';
+  const { run } = runtime({
+    loadCandidates: async () => [{ ...candidate, lastBrokerSnapshotFingerprint: fingerprint }],
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
+      isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 }),
+    recordProtectionEvent: async () => { records++; return { eventId: 'duplicate-protection' }; },
+    applyProtectionChange: async () => { applies++; return { execution: { status: 'SUCCEEDED' } }; },
+  });
+  const result = await run({});
+  assert.equal(result.protections || 0, 0);
+  assert.equal(records, 0);
+  assert.equal(applies, 0);
+});
+
+test('a one-sided protection edit persists only the changed valid protection value', async () => {
+  const observations = [];
+  const { run } = runtime({
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
+      isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: Number.NaN }),
+    recordObservation: async (value) => observations.push(value),
+    recordProtectionEvent: async () => ({ eventId: 'protection-one-sided' }),
+    applyProtectionChange: async () => ({ execution: { status: 'SUCCEEDED' } }),
+  });
+  await run({});
+  const protectionObservation = observations.find((value) => value.status === 'PROTECTION_CHANGED');
+  assert.equal(protectionObservation.stopLoss, 1.105);
+  assert.equal(Object.hasOwn(protectionObservation, 'takeProfit'), false);
+});
+
 test('does not poll or act when the runtime is explicitly disabled', async () => {
   const { run, calls } = runtime();
   assert.deepEqual(await run({ BROKER_TP_PROTECTION_ENABLED: 'false' }),

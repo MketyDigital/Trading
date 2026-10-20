@@ -96,6 +96,23 @@ test('broker observations update authoritative state monotonically and cannot ro
   assert.deepEqual(leg.brokerDealIds, ['deal-2']);
 });
 
+test('broker protection observations update only the supplied leg protection fields', async () => {
+  const store = new TradeStateStore(new MemoryStorage());
+  const group = fastGroup();
+  group.legs[0].stopLoss = 1.09;
+  group.legs[0].takeProfit = 1.12;
+  await store.putGroup(group);
+  await store.recordBrokerObservation('g1', 'leg-1', {
+    observedAt: now + 300,
+    status: 'PROTECTION_CHANGED',
+    snapshotFingerprint: 'p1|1.105|unknown',
+    stopLoss: 1.105,
+  });
+  const leg = (await store.getGroup('g1')).legs[0];
+  assert.equal(leg.stopLoss, 1.105);
+  assert.equal(leg.takeProfit, 1.12);
+});
+
 test('recovers an individual group from relational persistence when local durable state is missing', async () => {
   const persistence = new MemoryPersistence([fastGroup()]);
   const storage = new MemoryStorage();

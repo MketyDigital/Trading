@@ -52,9 +52,14 @@ export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {})
   if (!slComparable && !tpComparable) return unresolved('BROKER_PROTECTION_VALUE_INVALID');
   const slChanged = slComparable && !protectionEqual(brokerStop, expectedStop);
   const tpChanged = tpComparable && !protectionEqual(brokerTarget, expectedTarget);
-  if (!slChanged && !tpChanged) return (slComparable && tpComparable)
-    ? { status: 'NO_CHANGE', positionId }
-    : unresolved('BROKER_PROTECTION_VALUE_PARTIAL');
+  if (!slChanged && !tpChanged && (slComparable || tpComparable)) return {
+    status: 'NO_CHANGE', positionId,
+    fingerprint: [positionId,
+      brokerStop === undefined ? 'unknown' : brokerStop === null ? 'none' : brokerStop,
+      brokerTarget === undefined ? 'unknown' : brokerTarget === null ? 'none' : brokerTarget,
+    ].join('|'),
+  };
+  if (!slChanged && !tpChanged) return unresolved('BROKER_PROTECTION_VALUE_INVALID');
 
   const actions = [];
   const targetIndex = Number.isInteger(Number(leg?.targetIndex)) ? Number(leg.targetIndex) : undefined;
@@ -67,7 +72,10 @@ export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {})
   return {
     status: 'PROTECTION_CHANGED', positionId, platform: text(platform).toLowerCase(),
     stopLoss: brokerStop, takeProfit: brokerTarget, actions,
-    fingerprint: [positionId, brokerStop ?? 'none', brokerTarget ?? 'none'].join('|'),
+    fingerprint: [positionId,
+      brokerStop === undefined ? 'unknown' : brokerStop === null ? 'none' : brokerStop,
+      brokerTarget === undefined ? 'unknown' : brokerTarget === null ? 'none' : brokerTarget,
+    ].join('|'),
   };
 }
 

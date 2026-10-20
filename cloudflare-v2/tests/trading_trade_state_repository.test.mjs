@@ -102,13 +102,14 @@ test('broker observation fast path updates one leg and journals it without rewri
   const store = createTradingTradeStatePersistence({ authority: setup.authority, idFactory: () => 'abababab-abab-4bab-8bab-abababababab' });
   await store.saveGroup(group);
   const applied = await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
-    observedAt: 1_770_000_000_000, status: 'NO_CHANGE', sourceVersion: 'broker-v3', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
+    observedAt: 1_770_000_000_000, status: 'PROTECTION_CHANGED', sourceVersion: 'broker-v3', snapshotFingerprint: 'p1|1.105|1.2', dealIds: [], stopLoss: 1.105,
   });
   assert.deepEqual(applied, { outcome: 'APPLIED' });
-  const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status, last_broker_source_version, last_broker_snapshot_fingerprint FROM position_legs`).get();
-  assert.equal(row.last_broker_status, 'NO_CHANGE');
+  const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status, last_broker_source_version, last_broker_snapshot_fingerprint, stop_loss, take_profit FROM position_legs`).get();
+  assert.equal(row.last_broker_status, 'PROTECTION_CHANGED');
   assert.equal(row.last_broker_source_version, 'broker-v3');
-  assert.equal(row.last_broker_snapshot_fingerprint, 'p1|1.1|1.2');
+  assert.equal(row.last_broker_snapshot_fingerprint, 'p1|1.105|1.2');
+  assert.equal(Number(row.stop_loss), 1.105);
   const journalCount = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
   assert.equal(journalCount, 2);
   const stale = await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
@@ -116,6 +117,22 @@ test('broker observation fast path updates one leg and journals it without rewri
   });
   assert.deepEqual(stale, { outcome: 'STALE' });
   assert.equal(setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n, 2);
+  setup.sqlite.close();
+});
+
+test('unchanged broker snapshots advance the due cursor without replicating a no-change journal row', async () => {
+  const setup = testStore();
+  const store = createTradingTradeStatePersistence({ authority: setup.authority });
+  await store.saveGroup(group);
+  const before = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
+  await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
+    observedAt: 1_770_000_000_000, status: 'NO_CHANGE', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
+  });
+  const after = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
+  const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status FROM position_legs`).get();
+  assert.equal(after, before);
+  assert.equal(row.last_broker_status, 'NO_CHANGE');
+  assert.equal(row.last_broker_observed_at, '2026-02-02T02:40:00.000Z');
   setup.sqlite.close();
 });
 

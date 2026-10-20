@@ -22,7 +22,7 @@ async function stableProtectionEventKey(candidate, protection) {
   return `broker-protection:${candidate.tradeAccountId}:${candidate.brokerPositionId}:${hash}`;
 }
 
-async function applyBrokerObservation(env, { candidate, status, reason, dealIds, snapshotFingerprint = null, nowMs }) {
+async function applyBrokerObservation(env, { candidate, status, reason, dealIds, snapshotFingerprint = null, stopLoss, takeProfit, nowMs }) {
   const token = text(env.TRADE_STATE_INTERNAL_TOKEN);
   const namespace = env.TRADE_STATE_NAMESPACE;
   if (!token || !namespace?.idFromName || !namespace?.get) throw new Error('TRADE_STATE_UNAVAILABLE');
@@ -33,6 +33,8 @@ async function applyBrokerObservation(env, { candidate, status, reason, dealIds,
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-mkety-internal-token': token, 'x-mkety-workspace-id': candidate.workspaceId },
         body: JSON.stringify({ observedAt: Number(nowMs), status, sourceVersion: text(reason) || null, snapshotFingerprint: text(snapshotFingerprint) || null,
+        ...(stopLoss !== undefined ? { stopLoss } : {}),
+        ...(takeProfit !== undefined ? { takeProfit } : {}),
         dealIds: Array.isArray(dealIds) ? dealIds.map(String) : [] }),
     },
   );

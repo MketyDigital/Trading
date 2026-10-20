@@ -456,6 +456,8 @@ export class TradeStateStore {
       lastBrokerStatus: status,
       lastBrokerSourceVersion: sourceVersion,
       lastBrokerSnapshotFingerprint: snapshotFingerprint,
+      ...(Object.hasOwn(observation, 'stopLoss') ? { stopLoss: observation.stopLoss == null ? null : Number(observation.stopLoss) } : {}),
+      ...(Object.hasOwn(observation, 'takeProfit') ? { takeProfit: observation.takeProfit == null ? null : Number(observation.takeProfit) } : {}),
       ...(dealIds.length ? { brokerDealIds: dealIds } : {}),
     };
     group.legs = group.legs.map((leg, legIndex) => legIndex === index ? nextLeg : { ...leg });
@@ -466,6 +468,8 @@ export class TradeStateStore {
     if (this.persistence && this.workspaceId && typeof this.persistence.recordBrokerObservation === 'function') {
       const result = await this.persistence.recordBrokerObservation(this.workspaceId, group.id, legId, {
         observedAt, sourceVersion, status, snapshotFingerprint, dealIds,
+        ...(Object.hasOwn(observation, 'stopLoss') ? { stopLoss: nextLeg.stopLoss } : {}),
+        ...(Object.hasOwn(observation, 'takeProfit') ? { takeProfit: nextLeg.takeProfit } : {}),
       });
       if (result?.outcome === 'STALE') return { outcome: 'STALE', group };
       await this.storage.put(groupKey(group.id), group);

@@ -81,3 +81,19 @@ test('AI cannot turn an explicit do-not-trade instruction into an executable tra
   assert.equal(result.ok, false);
   assert.match(result.reason, /negat|blocked|do not|instruction/i);
 });
+
+test('AI signal keeps its valid direction and target when an SL and one TP are invalid', () => {
+  const result = validateCanonicalSignalIntent(intent({
+    stopLoss: 2530,
+    takeProfits: [2510, 2535, 2540],
+  }), {
+    rawText: 'BUY GOLD entry 2526 SL 2530 TP1 2510 TP2 2535 TP3 2540',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.intent.stopLoss, null);
+  assert.deepEqual(result.intent.takeProfits, [2535, 2540]);
+  assert.deepEqual(result.protectionWarnings.map((warning) => warning.code), [
+    'SL_INVALID_GEOMETRY', 'TP1_INVALID_GEOMETRY',
+  ]);
+});

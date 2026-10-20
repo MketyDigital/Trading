@@ -337,6 +337,28 @@ jobs:
       - name: Final production dry-run
         run: npx wrangler deploy --dry-run --config wrangler.production.generated.toml
 
+      - name: Snapshot persisted runtime controls before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          body_file="$RUNNER_TEMP/runtime-controls-before.json"
+          status="$(curl -sS -o "$body_file" -w '%{http_code}' -H "X-Mkety-Admin-Secret: $PRODUCTION_MKETY_TRADING_ADMIN_SECRET" https://trade.mkety.com/api/v1/mkety-admin/runtime-controls)"
+          if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
+          RUNTIME_BODY="$(cat "$body_file")" node <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(process.env.RUNTIME_BODY || '{}');
+          const keys = ['tradingAccessEnabled', 'brokerExecutionEnabled', 'liveBrokerExecutionEnabled'];
+          if (!body.ok || keys.some((key) => typeof body[key] !== 'boolean')) {
+            throw new Error('persisted runtime controls are unavailable or incomplete before deployment');
+          }
+          const snapshot = Object.fromEntries(keys.map((key) => [key, body[key]]));
+          snapshot.tradingAccessUpdatedAt = body.tradingAccessUpdatedAt ?? null;
+          snapshot.brokerExecutionUpdatedAt = body.brokerExecutionUpdatedAt ?? null;
+          snapshot.liveBrokerExecutionUpdatedAt = body.liveBrokerExecutionUpdatedAt ?? null;
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/runtime-controls-before.json`, JSON.stringify(snapshot), { mode: 0o600 });
+          console.log(`Persisted controls captured: trading=${snapshot.tradingAccessEnabled ? 'ON' : 'OFF'}, broker=${snapshot.brokerExecutionEnabled ? 'ON' : 'OFF'}, live=${snapshot.liveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
+          NODE
+
       - name: Deploy production Trading Worker with persisted owner broker switch
         run: npx wrangler deploy --config wrangler.production.generated.toml --secrets-file "$RUNNER_TEMP/mkety-trading-production-secrets.json"
 
@@ -381,26 +403,39 @@ jobs:
       - name: Verify persisted owner broker switch without changing it
         shell: bash
         run: |
+          set -euo pipefail
           body_file="$RUNNER_TEMP/runtime-control-body.json"
           status="$(curl -sS -o "$body_file" -w '%{http_code}' -H "X-Mkety-Admin-Secret: $PRODUCTION_MKETY_TRADING_ADMIN_SECRET" https://trade.mkety.com/api/v1/mkety-admin/runtime-controls)"
           if [ "$status" != "200" ]; then cat "$body_file" >&2; exit 1; fi
           RUNTIME_BODY="$(cat "$body_file")" node <<'NODE'
+          const fs = require('node:fs');
           const body = JSON.parse(process.env.RUNTIME_BODY || '{}');
+          const before = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/runtime-controls-before.json`, 'utf8'));
           if (!body.ok) throw new Error('runtime controls unavailable');
           if (body.brokerExecutionCapabilityEnabled !== true) throw new Error('deployment broker capability not enabled');
-          if (typeof body.brokerExecutionEnabled !== 'boolean') throw new Error('owner broker switch state is invalid');
+          const keys = ['tradingAccessEnabled', 'brokerExecutionEnabled', 'liveBrokerExecutionEnabled'];
+          for (const key of keys) {
+            if (typeof body[key] !== 'boolean') throw new Error(`persisted ${key} is invalid`);
+            if (body[key] !== before[key]) throw new Error(`deployment changed persisted ${key}; refusing to report a safe deployment`);
+          }
+          for (const key of ['tradingAccessUpdatedAt', 'brokerExecutionUpdatedAt', 'liveBrokerExecutionUpdatedAt']) {
+            if ((body[key] ?? null) !== before[key]) throw new Error(`persisted runtime control timestamp changed (${key}); deployment may have overlapped an admin update`);
+          }
           if (typeof body.effectiveBrokerExecutionEnabled !== 'boolean') throw new Error('effective broker execution state is invalid');
           const expectedEffective = body.brokerExecutionCapabilityEnabled && body.brokerExecutionEnabled;
           if (body.effectiveBrokerExecutionEnabled !== expectedEffective) throw new Error('effective broker execution state is inconsistent');
-          console.log(`Owner broker switch preserved: ${body.brokerExecutionEnabled ? 'ON' : 'OFF'}`);
+          const expectedLive = body.tradingAccessEnabled && body.brokerExecutionEnabled && body.liveBrokerExecutionEnabled;
+          if (body.effectiveLiveBrokerExecutionEnabled !== expectedLive) throw new Error('effective LIVE execution state is inconsistent');
+          console.log(`Persisted controls preserved: trading=${body.tradingAccessEnabled ? 'ON' : 'OFF'}, broker=${body.brokerExecutionEnabled ? 'ON' : 'OFF'}, live=${body.liveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
           console.log(`Effective broker execution: ${body.effectiveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
+          console.log(`Effective LIVE execution: ${body.effectiveLiveBrokerExecutionEnabled ? 'ON' : 'OFF'}`);
           NODE
           cat "$body_file"
 
       - name: Remove temporary production secrets file
         if: ${{ always() }}
         shell: bash
-        run: rm -f "$RUNNER_TEMP/mkety-trading-production-secrets.json"
+        run: rm -f "$RUNNER_TEMP/mkety-trading-production-secrets.json" "$RUNNER_TEMP/runtime-controls-before.json" "$RUNNER_TEMP/runtime-control-body.json"
 
       - name: Record production safety posture
         shell: bash

@@ -83,4 +83,3 @@ class LocalCopySupervisor:
         for key in tuple(self._processes):
             parent_profile_id, follower_profile_id = key.split(':', 1)
             self.stop(parent_profile_id, follower_profile_id)
-

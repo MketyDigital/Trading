@@ -272,7 +272,16 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
       last_broker_status: status,
       last_broker_snapshot_fingerprint: snapshotFingerprint,
       ...(dealIds.length ? { broker_deal_ids: dealIds } : {}),
+      ...(Object.hasOwn(observation, 'stopLoss') ? { stop_loss: observation.stopLoss == null ? null : Number(observation.stopLoss) } : {}),
+      ...(Object.hasOwn(observation, 'takeProfit') ? { take_profit: observation.takeProfit == null ? null : Number(observation.takeProfit) } : {}),
     };
+    for (const field of ['stop_loss', 'take_profit']) {
+      if (Object.hasOwn(patch, field) && patch[field] != null && !(Number.isFinite(patch[field]) && patch[field] > 0)) {
+        throw new TypeError(`broker observation ${field} must be a positive price or null`);
+      }
+    }
+    const replicateObservation = status !== 'NO_CHANGE' || dealIds.length > 0
+      || Object.hasOwn(observation, 'stopLoss') || Object.hasOwn(observation, 'takeProfit');
     const event = {
       authorityEpoch: authority.authorityEpoch,
       direction: authority.kind === 'd1' ? 'd1_to_postgres' : 'postgres_to_d1',
@@ -301,18 +310,22 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
               AND authority_epoch = ? AND writes_fenced = 0
           )
       `).bind(...columns.map((column) => encodedPatch[column]), String(workspaceId), String(groupId), String(legId), observedIso, authority.authorityEpoch);
-      const journal = prepareD1ReplicationAppendStatements(authority.binding, event, {
-        now: () => observedIso,
-        guardSql: `EXISTS (
-          SELECT 1 FROM position_legs l JOIN position_groups g ON g.id = l.position_group_id
-          WHERE g.workspace_id = ? AND g.runtime_group_id = ? AND l.runtime_leg_id = ?
-            AND l.last_broker_observed_at = ?
-        )`,
-        guardValues: [String(workspaceId), String(groupId), String(legId), observedIso],
-      });
-      const results = await authority.binding.batch([update, ...journal.statements]);
+      const statements = [update];
+      if (replicateObservation) {
+        const journal = prepareD1ReplicationAppendStatements(authority.binding, event, {
+          now: () => observedIso,
+          guardSql: `EXISTS (
+            SELECT 1 FROM position_legs l JOIN position_groups g ON g.id = l.position_group_id
+            WHERE g.workspace_id = ? AND g.runtime_group_id = ? AND l.runtime_leg_id = ?
+              AND l.last_broker_observed_at = ?
+          )`,
+          guardValues: [String(workspaceId), String(groupId), String(legId), observedIso],
+        });
+        statements.push(...journal.statements);
+      }
+      const results = await authority.binding.batch(statements);
       if (Number(results?.[0]?.meta?.changes || 0) !== 1) return { outcome: 'STALE' };
-      if (Number(results?.[2]?.meta?.changes || 0) !== 1) throw new Error('Broker observation replication journal append failed');
+      if (replicateObservation && Number(results?.[2]?.meta?.changes || 0) !== 1) throw new Error('Broker observation replication journal append failed');
       return { outcome: 'APPLIED' };
     }
 
@@ -342,7 +355,7 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
         RETURNING l.id
       `, values);
       if (!updated.rows?.[0]?.id) return { outcome: 'STALE' };
-      await appendPostgresReplicationEventInTransaction(query, event, { now: () => new Date(observedIso) });
+      if (replicateObservation) await appendPostgresReplicationEventInTransaction(query, event, { now: () => new Date(observedIso) });
       return { outcome: 'APPLIED' };
     });
   }
