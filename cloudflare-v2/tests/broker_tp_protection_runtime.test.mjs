@@ -39,7 +39,7 @@ test('manual open-position SL/TP edits are emitted once through the existing man
     readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
     readPositionStatus: async () => { snapshots++; return { accountId: '123', positionId: 'p1', environment: 'live', isLive: true, isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 }; },
     recordProtectionEvent: async ({ protection }) => { records++; assert.equal(protection.status, 'PROTECTION_CHANGED'); return { eventId: 'protection-1' }; },
-    applyProtectionChange: async ({ protection }) => { applies++; assert.deepEqual(protection.actions, [{ type: 'MOVE_SL', stopLoss: 1.105, targetIndex: 1 }, { type: 'CHANGE_TP', takeProfit: 1.125, targetIndex: 1 }]); return { simulation: { status: 'SIMULATED' } }; },
+    applyProtectionChange: async ({ protection }) => { applies++; assert.deepEqual(protection.actions, [{ type: 'MOVE_SL', stopLoss: 1.105, targetIndex: 1 }, { type: 'CHANGE_TP', takeProfit: 1.125, targetIndex: 1 }]); return { execution: { status: 'SUCCEEDED' } }; },
   });
   const result = await run({});
   assert.equal(result.protections, 1);
@@ -52,7 +52,7 @@ test('an unchanged broker protection fingerprint is not re-applied on later snap
   let records = 0; let applies = 0;
   const fingerprint = 'p1|1.105|1.125';
   const { run } = runtime({
-    loadCandidates: async () => [{ ...candidate, lastBrokerSnapshotFingerprint: fingerprint }],
+    loadCandidates: async () => [{ ...candidate, lastBrokerStatus: 'PROTECTION_SYNCED', lastBrokerSnapshotFingerprint: fingerprint }],
     readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
     readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
       isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 }),
@@ -76,9 +76,31 @@ test('a one-sided protection edit persists only the changed valid protection val
     applyProtectionChange: async () => ({ execution: { status: 'SUCCEEDED' } }),
   });
   await run({});
-  const protectionObservation = observations.find((value) => value.status === 'PROTECTION_CHANGED');
+  const protectionObservation = observations.find((value) => value.status === 'PROTECTION_SYNCED');
   assert.equal(protectionObservation.stopLoss, 1.105);
   assert.equal(Object.hasOwn(protectionObservation, 'takeProfit'), false);
+  assert.equal(observations[0].status, 'PROTECTION_PENDING');
+});
+
+test('failed follower propagation leaves the broker protection change pending for retry', async () => {
+  const observations = [];
+  let applies = 0;
+  const { run } = runtime({
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
+      isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: 1.105, takeProfit: 1.125 }),
+    recordObservation: async (value) => observations.push(value),
+    recordProtectionEvent: async () => ({ eventId: 'protection-retry' }),
+    applyProtectionChange: async () => { applies++; return { execution: { status: 'FAILED' } }; },
+  });
+  await run({});
+  assert.equal(applies, 1);
+  const saved = observations.at(-1);
+  assert.equal(saved.status, 'PROTECTION_PENDING');
+  assert.equal(saved.snapshotFingerprint ?? null, null);
+  assert.equal(Object.hasOwn(saved, 'stopLoss'), false);
+  await run({});
+  assert.equal(applies, 2);
 });
 
 test('does not poll or act when the runtime is explicitly disabled', async () => {
