@@ -280,7 +280,7 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
         throw new TypeError(`broker observation ${field} must be a positive price or null`);
       }
     }
-    const replicateObservation = status !== 'NO_CHANGE' || dealIds.length > 0
+    const replicateObservation = ['TP_CONFIRMED', 'ACTIVITY_CONFIRMED', 'PROTECTION_SYNCED'].includes(status) || dealIds.length > 0
       || Object.hasOwn(observation, 'stopLoss') || Object.hasOwn(observation, 'takeProfit');
     const event = {
       authorityEpoch: authority.authorityEpoch,

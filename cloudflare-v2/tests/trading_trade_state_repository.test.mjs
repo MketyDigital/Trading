@@ -126,12 +126,12 @@ test('unchanged broker snapshots advance the due cursor without replicating a no
   await store.saveGroup(group);
   const before = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
   await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
-    observedAt: 1_770_000_000_000, status: 'NO_CHANGE', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
+    observedAt: 1_770_000_000_000, status: 'PROTECTION_PENDING', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
   });
   const after = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
   const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status FROM position_legs`).get();
   assert.equal(after, before);
-  assert.equal(row.last_broker_status, 'NO_CHANGE');
+  assert.equal(row.last_broker_status, 'PROTECTION_PENDING');
   assert.equal(row.last_broker_observed_at, '2026-02-02T02:40:00.000Z');
   setup.sqlite.close();
 });

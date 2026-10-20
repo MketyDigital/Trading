@@ -102,25 +102,37 @@ export function createBrokerTpProtectionRuntime({
             if (identityMatches(account, candidate, positionSnapshot)) {
               const protection = classifyBrokerProtectionChange({ platform, leg: candidate, snapshot: positionSnapshot });
               const alreadyApplied = protection.status === 'PROTECTION_CHANGED'
+                && String(candidate.lastBrokerStatus || '').toUpperCase() === 'PROTECTION_SYNCED'
                 && text(candidate.lastBrokerSnapshotFingerprint) === text(protection.fingerprint);
-              await observe({ candidate, account, snapshot: positionSnapshot,
-                status: alreadyApplied ? 'NO_CHANGE' : protection.status,
-                reason: protection.reason ?? null,
-                snapshotFingerprint: protection.fingerprint ?? candidate.lastBrokerSnapshotFingerprint ?? null,
-                ...(protection.status === 'PROTECTION_CHANGED' ? {
-                  ...(protection.stopLoss !== undefined ? { stopLoss: protection.stopLoss } : {}),
-                  ...(protection.takeProfit !== undefined ? { takeProfit: protection.takeProfit } : {}),
-                } : {}),
-                nowMs: Number(clock()) });
+              if (protection.status !== 'PROTECTION_CHANGED' || alreadyApplied) {
+                await observe({ candidate, account, snapshot: positionSnapshot,
+                  status: protection.status === 'PROTECTION_CHANGED' ? 'NO_CHANGE' : protection.status,
+                  reason: protection.reason ?? null,
+                  snapshotFingerprint: protection.fingerprint ?? candidate.lastBrokerSnapshotFingerprint ?? null,
+                  nowMs: Number(clock()) });
+              } else {
+                // Leave the fingerprint and authoritative protection values
+                // untouched until management/follower propagation succeeds.
+                // That makes an interrupted delivery eligible for retry.
+                await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_PENDING',
+                  reason: protection.reason ?? null, nowMs: Number(clock()) });
+              }
               if (protection.status === 'PROTECTION_CHANGED' && !alreadyApplied
                 && typeof recordProtectionEvent === 'function' && typeof applyProtectionChange === 'function') {
                 const sourceEvent = await loadSourceEvent(candidate);
                 if (sourceEvent?.sourceId) {
                   const event = await recordProtectionEvent({ candidate, account, protection, sourceEvent, nowMs: Number(clock()) });
                   if (event?.eventId) {
-                    protections++;
                     const outcome = await applyProtectionChange({ candidate, account, protection, sourceEvent, event, nowMs: Number(clock()) });
-                    if (outcome?.execution?.status === 'SUCCEEDED' || outcome?.simulation?.status === 'SIMULATED') applied++;
+                    if (outcome?.execution?.status === 'SUCCEEDED') {
+                      protections++;
+                      applied++;
+                      await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_SYNCED',
+                        snapshotFingerprint: protection.fingerprint,
+                        ...(protection.stopLoss !== undefined ? { stopLoss: protection.stopLoss } : {}),
+                        ...(protection.takeProfit !== undefined ? { takeProfit: protection.takeProfit } : {}),
+                        nowMs: Number(clock()) });
+                    }
                   }
                 }
               }
