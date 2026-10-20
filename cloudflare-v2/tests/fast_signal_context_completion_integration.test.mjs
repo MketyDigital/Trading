@@ -12,7 +12,7 @@ class MemoryStorage {
   async list({ prefix = '' } = {}) { return new Map([...this.map].filter(([key]) => key.startsWith(prefix))); }
 }
 
-test('EURJPY full signal without a valid reply enriches the open fast leg and appends missing targets once', async () => {
+test('EURJPY self-edited fast signal enriches the open fast leg and appends missing targets once', async () => {
   const now = 1_800_000_000_000;
   const fastGroup = {
     id: 'eurjpy-fast-buy',
@@ -41,8 +41,8 @@ test('EURJPY full signal without a valid reply enriches the open fast leg and ap
   const event = {
     workspace_hint: 'ws-eurjpy',
     source: { instance_id: 'main signal2' },
-    external_event_id: 'telegram:-1001888176046:10208',
-    thread: { reply_to_event_id: 'telegram:-1001888176046:10207' },
+    external_event_id: 'telegram:-1001888176046:10206',
+    thread: { edited_event_id: 'telegram:-1001888176046:10206' },
     text: 'EURJPY BUY with SL and three TP levels',
   };
   const interpretation = {
@@ -79,7 +79,7 @@ test('EURJPY full signal without a valid reply enriches the open fast leg and ap
 
   const enriched = await stateStore.getGroup('eurjpy-fast-buy');
   assert.deepEqual(enriched.sourceEventIds, [
-    'telegram:-1001888176046:10206', 'telegram:-1001888176046:10208',
+    'telegram:-1001888176046:10206',
   ]);
   assert.equal(enriched.incomplete, false);
   assert.equal(enriched.legs.length, 3);
