@@ -16,7 +16,7 @@ const LEG_COLUMNS = new Set([
 const D1_JSON_COLUMNS = new Set(['entry', 'risk_plan', 'policy_snapshot', 'source_event_ids', 'broker_deal_ids']);
 const OBSERVATION_COLUMNS = new Set([
   'last_broker_observed_at', 'last_broker_source_version', 'last_broker_status',
-  'last_broker_snapshot_fingerprint', 'broker_deal_ids',
+  'last_broker_snapshot_fingerprint', 'broker_deal_ids', 'stop_loss', 'take_profit',
 ]);
 
 function validateEvent(event, targetKind) {

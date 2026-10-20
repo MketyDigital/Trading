@@ -187,7 +187,8 @@ export async function interpretTradingEvent(event = {}, {
     return {
       status: 'READY',
       source: 'ai',
-      intent,
+      intent: validation.intent || intent,
+      protectionWarnings: validation.protectionWarnings || [],
       validationWarnings: validation.warnings || [],
       ai: aiContext(ai),
     };

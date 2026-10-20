@@ -232,4 +232,3 @@ class LocalCopyEngine:
         for action in actions:
             results.append(self.execute(action))
         return results
-

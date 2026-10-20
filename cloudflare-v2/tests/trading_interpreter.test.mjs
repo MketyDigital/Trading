@@ -83,7 +83,7 @@ test('AI failure falls back to material source evidence instead of invalidating 
   assert.deepEqual(result.intent.takeProfits, [2530, 2535]);
 });
 
-test('rejects AI result with impossible BUY stop/target geometry instead of executing it', async () => {
+test('keeps valid BUY direction when AI SL and TP geometry are invalid', async () => {
   const result = await interpretTradingEvent({ text: 'buy gold somehow' }, {
     aiRouter: {
       processSignal: async () => ({ success: true, text: JSON.stringify({
@@ -92,8 +92,13 @@ test('rejects AI result with impossible BUY stop/target geometry instead of exec
       }) }),
     },
   });
-  assert.equal(result.status, 'NEEDS_REVIEW');
-  assert.match(result.reason, /geometry/i);
+  assert.equal(result.status, 'READY');
+  assert.equal(result.intent.stopLoss, null);
+  assert.deepEqual(result.intent.takeProfits, []);
+  assert.equal(result.intent.incomplete, true);
+  assert.deepEqual(result.protectionWarnings.map((warning) => warning.code), [
+    'SL_INVALID_GEOMETRY', 'TP1_INVALID_GEOMETRY',
+  ]);
 });
 
 test('AI numeric values without exact raw numeric matches are advisory and do not veto a coherent trade', async () => {

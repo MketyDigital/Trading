@@ -101,9 +101,19 @@ export function createBrokerTpProtectionRuntime({
             const positionSnapshot = await readPositionStatus({ account, candidate, nowMs: Number(clock()) });
             if (identityMatches(account, candidate, positionSnapshot)) {
               const protection = classifyBrokerProtectionChange({ platform, leg: candidate, snapshot: positionSnapshot });
-              await observe({ candidate, account, snapshot: positionSnapshot, status: protection.status, reason: protection.reason ?? null,
-                snapshotFingerprint: protection.fingerprint ?? null, nowMs: Number(clock()) });
-              if (protection.status === 'PROTECTION_CHANGED' && typeof recordProtectionEvent === 'function' && typeof applyProtectionChange === 'function') {
+              const alreadyApplied = protection.status === 'PROTECTION_CHANGED'
+                && text(candidate.lastBrokerSnapshotFingerprint) === text(protection.fingerprint);
+              await observe({ candidate, account, snapshot: positionSnapshot,
+                status: alreadyApplied ? 'NO_CHANGE' : protection.status,
+                reason: protection.reason ?? null,
+                snapshotFingerprint: protection.fingerprint ?? candidate.lastBrokerSnapshotFingerprint ?? null,
+                ...(protection.status === 'PROTECTION_CHANGED' ? {
+                  ...(protection.stopLoss !== undefined ? { stopLoss: protection.stopLoss } : {}),
+                  ...(protection.takeProfit !== undefined ? { takeProfit: protection.takeProfit } : {}),
+                } : {}),
+                nowMs: Number(clock()) });
+              if (protection.status === 'PROTECTION_CHANGED' && !alreadyApplied
+                && typeof recordProtectionEvent === 'function' && typeof applyProtectionChange === 'function') {
                 const sourceEvent = await loadSourceEvent(candidate);
                 if (sourceEvent?.sourceId) {
                   const event = await recordProtectionEvent({ candidate, account, protection, sourceEvent, nowMs: Number(clock()) });

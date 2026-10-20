@@ -59,17 +59,17 @@ export function applyProtectionPolicy(intent = {}, safetyPolicy = {}, context = 
     return { ok: true, intent, protectionIssues: [], protectionSkips: [] };
   }
 
-  const mode = String(safetyPolicy?.invalidProtectionPolicy || 'reject_trade').toLowerCase();
+  const mode = String(safetyPolicy?.invalidProtectionPolicy || 'skip_invalid').toLowerCase();
   if (mode !== 'skip_invalid') {
     return { ok: false, reason: 'INVALID_PROTECTION', intent, protectionIssues: classification.issues, protectionSkips: [] };
   }
 
   const stopIssues = classification.issues.filter((item) => item.field === 'stopLoss');
   const targetIssues = classification.issues.filter((item) => item.field === 'takeProfits');
-  if (stopIssues.length && safetyPolicy?.allowInvalidStopLossSkip !== true) {
+  if (stopIssues.length && safetyPolicy?.allowInvalidStopLossSkip === false) {
     return { ok: false, reason: 'INVALID_PROTECTION', intent, protectionIssues: classification.issues, protectionSkips: [] };
   }
-  if (targetIssues.length && safetyPolicy?.allowInvalidTakeProfitSkip !== true) {
+  if (targetIssues.length && safetyPolicy?.allowInvalidTakeProfitSkip === false) {
     return { ok: false, reason: 'INVALID_PROTECTION', intent, protectionIssues: classification.issues, protectionSkips: [] };
   }
 

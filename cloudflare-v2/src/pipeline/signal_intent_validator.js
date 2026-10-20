@@ -11,25 +11,40 @@ function validationReference(intent) {
   return null;
 }
 
-function validateGeometry(intent) {
+function protectionGeometryIssues(intent) {
   const reference = validationReference(intent);
-  if (reference == null || !Number.isFinite(reference)) return { ok: true };
+  if (reference == null || !Number.isFinite(reference)) return [];
+  const issues = [];
 
   if (intent.stopLoss != null) {
     const stop = Number(intent.stopLoss);
-    if (!Number.isFinite(stop)) return { ok: false, reason: 'invalid stop price' };
-    if (intent.side === 'BUY' && !(stop < reference)) return { ok: false, reason: 'invalid BUY stop geometry' };
-    if (intent.side === 'SELL' && !(stop > reference)) return { ok: false, reason: 'invalid SELL stop geometry' };
+    if (!Number.isFinite(stop)) issues.push({ field: 'stopLoss', code: 'SL_INVALID_PRICE' });
+    else if (intent.side === 'BUY' && !(stop < reference)) issues.push({ field: 'stopLoss', code: 'SL_INVALID_GEOMETRY' });
+    else if (intent.side === 'SELL' && !(stop > reference)) issues.push({ field: 'stopLoss', code: 'SL_INVALID_GEOMETRY' });
   }
 
-  for (const rawTarget of intent.takeProfits || []) {
+  for (const [index, rawTarget] of (intent.takeProfits || []).entries()) {
     const target = Number(rawTarget);
-    if (!Number.isFinite(target)) return { ok: false, reason: 'invalid target price' };
-    if (intent.side === 'BUY' && !(target > reference)) return { ok: false, reason: 'invalid BUY target geometry' };
-    if (intent.side === 'SELL' && !(target < reference)) return { ok: false, reason: 'invalid SELL target geometry' };
+    if (!Number.isFinite(target)) issues.push({ field: 'takeProfits', targetIndex: index + 1, code: `TP${index + 1}_INVALID_PRICE` });
+    else if (intent.side === 'BUY' && !(target > reference)) issues.push({ field: 'takeProfits', targetIndex: index + 1, code: `TP${index + 1}_INVALID_GEOMETRY` });
+    else if (intent.side === 'SELL' && !(target < reference)) issues.push({ field: 'takeProfits', targetIndex: index + 1, code: `TP${index + 1}_INVALID_GEOMETRY` });
   }
 
-  return { ok: true };
+  return issues;
+}
+
+function sanitizeProtection(intent, issues) {
+  const invalidTargets = new Set(issues.filter((item) => item.field === 'takeProfits').map((item) => item.targetIndex));
+  const stopInvalid = issues.some((item) => item.field === 'stopLoss');
+  const takeProfits = (Array.isArray(intent.takeProfits) ? intent.takeProfits : [])
+    .filter((_, index) => !invalidTargets.has(index + 1));
+  const sanitized = {
+    ...intent,
+    ...(stopInvalid ? { stopLoss: null } : {}),
+    takeProfits,
+    incomplete: Boolean(intent.incomplete) || (stopInvalid ? true : intent.stopLoss == null) || takeProfits.length === 0,
+  };
+  return sanitized;
 }
 
 function normalizedRawText(rawText) {
@@ -141,11 +156,10 @@ export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
     return { ok: false, reason: 'pending order requires explicit entry' };
   }
 
-  // Geometry remains a hard check because an inverted SL/TP materially changes risk.
-  // The later raw-value comparison is intentionally advisory only; small formatting,
-  // rounding, transcription, or AI normalization differences must not veto a trade.
-  const geometry = validateGeometry(intent);
-  if (!geometry.ok) return geometry;
+  // Protection values are independent. Discard only invalid SL/TP fields so a
+  // bad protection price cannot erase an otherwise coherent side/symbol signal.
+  const protectionWarnings = protectionGeometryIssues(intent);
+  const executableIntent = sanitizeProtection(intent, protectionWarnings);
 
   if (hasNegatedSideInstruction(rawText, intent.side)) {
     return { ok: false, reason: `AI executable ${intent.side} is blocked by negated raw instruction` };
@@ -168,6 +182,8 @@ export function validateCanonicalSignalIntent(intent, { rawText = '' } = {}) {
 
   return {
     ok: true,
-    warnings: advisoryRawPriceEvidence(intent, rawText),
+    intent: executableIntent,
+    protectionWarnings,
+    warnings: advisoryRawPriceEvidence(executableIntent, rawText),
   };
 }

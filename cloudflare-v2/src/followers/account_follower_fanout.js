@@ -63,4 +63,3 @@ export function expandFollowerPlans(parentPlans = [], links = []) {
   }
   return output;
 }
-
