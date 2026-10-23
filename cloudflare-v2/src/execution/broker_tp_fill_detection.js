@@ -50,6 +50,8 @@ export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {})
   const slComparable = brokerStop !== undefined && expectedStop !== undefined;
   const tpComparable = brokerTarget !== undefined && expectedTarget !== undefined;
   if (!slComparable && !tpComparable) return unresolved('BROKER_PROTECTION_VALUE_INVALID');
+  const slMissing = slComparable && brokerStop == null && expectedStop != null;
+  const tpMissing = tpComparable && brokerTarget == null && expectedTarget != null;
   const slChanged = slComparable && !protectionEqual(brokerStop, expectedStop);
   const tpChanged = tpComparable && !protectionEqual(brokerTarget, expectedTarget);
   if (!slChanged && !tpChanged && (slComparable || tpComparable)) return {
@@ -63,15 +65,25 @@ export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {})
 
   const actions = [];
   const targetIndex = Number.isInteger(Number(leg?.targetIndex)) ? Number(leg.targetIndex) : undefined;
-  if (slChanged) actions.push(brokerStop == null
+  if (slChanged) actions.push(slMissing
+    ? { type: 'MOVE_SL', stopLoss: expectedStop, ...(targetIndex ? { targetIndex } : {}) }
+    : brokerStop == null
     ? { type: 'REMOVE_SL', ...(targetIndex ? { targetIndex } : {}) }
     : { type: 'MOVE_SL', stopLoss: brokerStop, ...(targetIndex ? { targetIndex } : {}) });
-  if (tpChanged) actions.push(brokerTarget == null
+  if (tpChanged) actions.push(tpMissing
+    ? { type: 'CHANGE_TP', takeProfit: expectedTarget, ...(targetIndex ? { targetIndex } : {}) }
+    : brokerTarget == null
     ? { type: 'REMOVE_TP', ...(targetIndex ? { targetIndex } : {}) }
     : { type: 'CHANGE_TP', takeProfit: brokerTarget, ...(targetIndex ? { targetIndex } : {}) });
   return {
     status: 'PROTECTION_CHANGED', positionId, platform: text(platform).toLowerCase(),
-    stopLoss: brokerStop, takeProfit: brokerTarget, actions,
+    // A broker snapshot that has lost protection is repaired from the valid,
+    // persisted requested value. A changed non-null broker value remains the
+    // authority for manual edits and is mirrored through the management path.
+    stopLoss: slMissing ? expectedStop : brokerStop,
+    takeProfit: tpMissing ? expectedTarget : brokerTarget,
+    restoredMissingProtection: slMissing || tpMissing,
+    actions,
     fingerprint: [positionId,
       brokerStop === undefined ? 'unknown' : brokerStop === null ? 'none' : brokerStop,
       brokerTarget === undefined ? 'unknown' : brokerTarget === null ? 'none' : brokerTarget,

@@ -4,6 +4,24 @@ function text(value) { return String(value ?? '').trim(); }
 function accountPlatform(account = {}) { return text(account.platform).toLowerCase(); }
 function accountEnvironment(account = {}) { return text(account.environment).toLowerCase(); }
 function isTrue(value) { return value === true; }
+function samePrice(left, right) {
+  const a = left == null || left === '' ? null : Number(left);
+  const b = right == null || right === '' ? null : Number(right);
+  if (a == null && b == null) return true;
+  return Number.isFinite(a) && Number.isFinite(b)
+    && Math.abs(a - b) <= Math.max(1e-9, Math.abs(a) * 1e-10, Math.abs(b) * 1e-10);
+}
+function protectionRepairState(candidate, nowMs) {
+  const previousAttempt = Number(String(candidate?.lastBrokerSourceVersion || '').match(/^PROTECTION_REPAIR_ATTEMPT:(\d+)$/)?.[1] || 0);
+  const lastStatus = String(candidate?.lastBrokerStatus || '').toUpperCase();
+  if (!['PROTECTION_REPAIR_SENT', 'PROTECTION_REPAIR_FAILED'].includes(lastStatus) || previousAttempt < 1) {
+    return { due: true, attempt: 1 };
+  }
+  const delays = [60_000, 120_000, 300_000, 900_000, 1_800_000, 3_600_000];
+  const delay = delays[Math.min(previousAttempt - 1, delays.length - 1)];
+  const observedAt = candidate?.lastBrokerObservedAt == null ? NaN : Number(candidate.lastBrokerObservedAt);
+  return { due: Number.isFinite(observedAt) && Number(nowMs) - observedAt >= delay, attempt: previousAttempt + 1 };
+}
 
 function identityMatches(account, candidate, snapshot) {
   const environment = accountEnvironment(account);
@@ -101,7 +119,13 @@ export function createBrokerTpProtectionRuntime({
             const positionSnapshot = await readPositionStatus({ account, candidate, nowMs: Number(clock()) });
             if (identityMatches(account, candidate, positionSnapshot)) {
               const protection = classifyBrokerProtectionChange({ platform, leg: candidate, snapshot: positionSnapshot });
+              const repairState = protection.restoredMissingProtection === true
+                ? protectionRepairState(candidate, Number(clock())) : null;
+              if (repairState && !repairState.due) { groupSkipped++; continue; }
+              const protectionForAttempt = repairState
+                ? { ...protection, repairAttempt: repairState.attempt } : protection;
               const alreadyApplied = protection.status === 'PROTECTION_CHANGED'
+                && protection.restoredMissingProtection !== true
                 && String(candidate.lastBrokerStatus || '').toUpperCase() === 'PROTECTION_SYNCED'
                 && text(candidate.lastBrokerSnapshotFingerprint) === text(protection.fingerprint);
               if (protection.status !== 'PROTECTION_CHANGED' || alreadyApplied) {
@@ -114,24 +138,40 @@ export function createBrokerTpProtectionRuntime({
                 // Leave the fingerprint and authoritative protection values
                 // untouched until management/follower propagation succeeds.
                 // That makes an interrupted delivery eligible for retry.
-                await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_PENDING',
-                  reason: protection.reason ?? null, nowMs: Number(clock()) });
+                if (protection.restoredMissingProtection !== true) {
+                  await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_PENDING',
+                    reason: protection.reason ?? null, nowMs: Number(clock()) });
+                }
               }
               if (protection.status === 'PROTECTION_CHANGED' && !alreadyApplied
                 && typeof recordProtectionEvent === 'function' && typeof applyProtectionChange === 'function') {
                 const sourceEvent = await loadSourceEvent(candidate);
                 if (sourceEvent?.sourceId) {
-                  const event = await recordProtectionEvent({ candidate, account, protection, sourceEvent, nowMs: Number(clock()) });
+                  const event = await recordProtectionEvent({ candidate, account, protection: protectionForAttempt, sourceEvent, nowMs: Number(clock()) });
                   if (event?.eventId) {
-                    const outcome = await applyProtectionChange({ candidate, account, protection, sourceEvent, event, nowMs: Number(clock()) });
+                    const outcome = await applyProtectionChange({ candidate, account, protection: protectionForAttempt, sourceEvent, event, nowMs: Number(clock()) });
                     if (outcome?.execution?.status === 'SUCCEEDED') {
                       protections++;
                       applied++;
-                      await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_SYNCED',
-                        snapshotFingerprint: protection.fingerprint,
-                        ...(protection.stopLoss !== undefined ? { stopLoss: protection.stopLoss } : {}),
-                        ...(protection.takeProfit !== undefined ? { takeProfit: protection.takeProfit } : {}),
-                        nowMs: Number(clock()) });
+                      if (protection.restoredMissingProtection === true) {
+                        // A successful modify request is not proof that the
+                        // broker accepted it. Do not advance the snapshot
+                        // fingerprint or persist missing protection as synced;
+                        // the next due snapshot must confirm the actual state.
+                        await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_REPAIR_SENT',
+                          reason: `PROTECTION_REPAIR_ATTEMPT:${repairState.attempt}`, nowMs: Number(clock()) });
+                      } else {
+                        await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_SYNCED',
+                          snapshotFingerprint: protection.fingerprint,
+                          ...(protection.stopLoss !== undefined && !samePrice(protection.stopLoss, candidate.stopLoss)
+                            ? { stopLoss: protection.stopLoss } : {}),
+                          ...(protection.takeProfit !== undefined && !samePrice(protection.takeProfit, candidate.takeProfit)
+                            ? { takeProfit: protection.takeProfit } : {}),
+                          nowMs: Number(clock()) });
+                      }
+                    } else if (protection.restoredMissingProtection === true) {
+                      await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_REPAIR_FAILED',
+                        reason: `PROTECTION_REPAIR_ATTEMPT:${repairState.attempt}`, nowMs: Number(clock()) });
                     }
                   }
                 }

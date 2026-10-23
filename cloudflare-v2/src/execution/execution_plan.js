@@ -60,6 +60,27 @@ function resolveRiskEntry(intent, currentMarketPrice) {
   throw new Error('current market price is required for market risk sizing');
 }
 
+function logicalProtectionEntry(intent, currentMarketPrice, protectionReferencePrice) {
+  const entry = intent?.entry;
+  if (entry?.kind === 'PRICE' && Number.isFinite(Number(entry.value)) && Number(entry.value) > 0) return Number(entry.value);
+  if (entry?.kind === 'RANGE' && Number.isFinite(Number(entry.min)) && Number(entry.min) > 0
+    && Number.isFinite(Number(entry.max)) && Number(entry.max) > 0) {
+    return intent.side === 'SELL' ? Number(entry.min) : Number(entry.max);
+  }
+  for (const candidate of [protectionReferencePrice, currentMarketPrice]) {
+    const price = Number(candidate);
+    if (Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+function validLogicalTarget(side, target, entry) {
+  const level = Number(target);
+  if (!Number.isFinite(level) || level <= 0) return false;
+  if (!(Number.isFinite(Number(entry)) && Number(entry) > 0)) return true;
+  return side === 'BUY' ? level > Number(entry) : level < Number(entry);
+}
+
 function normalizeFixedLots(value, instrument) {
   const lots = Number(value);
   const step = Number(instrument?.stepLots ?? 0.01);
@@ -95,7 +116,7 @@ function normalizeAdaptiveLots(referenceLots, percent, instrument) {
 }
 
 function openActionsFromGroup(group) {
-  return group.legs.map((leg) => ({
+  return group.legs.filter((leg) => leg?.takeProfitPlaceholder !== true).map((leg) => ({
     type: 'OPEN_POSITION', legId: leg.legId, targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
     symbol: group.symbol, entry: group.entry, lots: leg.lots, stopLoss: leg.stopLoss, takeProfit: leg.takeProfit,
     idempotencyKey: `${group.id || 'group'}:leg:${leg.targetIndex}`,
@@ -199,6 +220,13 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   }
 
   const group = buildPositionGroup(executableIntent, { totalLots, volumeStep, groupId });
+  const logicalEntry = logicalProtectionEntry(intent, currentMarketPrice, protectionReferencePrice);
+  const logicalTakeProfits = Array.isArray(executableIntent.takeProfitTargetIndexes)
+    && executableIntent.takeProfitTargetIndexes.some((targetIndex, index) => Number(targetIndex) !== index + 1)
+    ? (Array.isArray(intent.takeProfits)
+      ? intent.takeProfits.map((target) => validLogicalTarget(intent.side, target, logicalEntry) ? Number(target) : null)
+      : [])
+    : null;
   return {
     status: 'READY',
     policy,
@@ -209,5 +237,6 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     protectionIssues: protection.protectionIssues,
     protectionSkips: protection.protectionSkips,
     effectiveIntent: executableIntent,
+    ...(logicalTakeProfits ? { logicalTakeProfits } : {}),
   };
 }

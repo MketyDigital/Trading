@@ -185,3 +185,41 @@ test('fast SELL completion skips a target already beyond the filled entry but ap
   assert.equal(afterTp2.legs.find((leg) => leg.targetIndex === 2).status, 'CLOSED');
   assert.equal(afterTp2.legs.find((leg) => leg.targetIndex === 3).status, 'OPEN');
 });
+
+test('fast completion drops wrong-entry TP anchors but retains crossed valid anchors', async () => {
+  async function complete({ suffix, entry, stopLoss, takeProfits, marketPrice }) {
+    const now = 1_800_000_000_000;
+    const fastGroup = {
+      id: `fast-anchor-${suffix}`, workspaceId: 'ws-anchor', tradeAccountId: 'account-anchor',
+      sourceInstanceId: 'source', sourceEventIds: [`source:${suffix}:fast`], symbol: 'EURUSD', side: 'BUY',
+      orderType: 'MARKET', entryPrice: 100, entry: { kind: 'PRICE', value: 100, executedPrice: 100 },
+      status: 'OPEN', incomplete: true, createdAt: now - 60_000, updatedAt: now - 60_000,
+      legs: [{ legId: `leg-${suffix}`, targetIndex: 1, lots: 0.05, status: 'OPEN',
+        brokerPositionId: `position-${suffix}`, stopLoss: null, takeProfit: null, fillPrice: 100 }],
+    };
+    const stateStore = new TradeStateStore(new MemoryStorage(), { workspaceId: 'ws-anchor' });
+    await stateStore.putGroup(fastGroup);
+    const stateCoordinator = new TradeStateCoordinator(stateStore, { fastCompletionWindowMs: 30 * 60 * 1000 });
+    await orchestrateTradingEventSimulation({
+      event: { workspace_hint: 'ws-anchor', source: { instance_id: 'source' }, external_event_id: `source:${suffix}:full`, text: 'EURUSD BUY full signal' },
+      interpretation: { status: 'READY', intent: { side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'EURUSD' },
+        entry: { kind: 'PRICE', value: entry }, stopLoss, takeProfits, fastEntry: false, incomplete: false } },
+      eventId: `event-${suffix}`, nowMs: now,
+    }, {
+      stateCoordinator, stateStore,
+      accountProvider: async () => [{ id: 'account-anchor', workspace_id: 'ws-anchor', execution_enabled: true,
+        sizingMode: 'FIXED_LOTS', fixedLots: 0.05, safety_policy: { killSwitch: false, autoTpProtection: true } }],
+      instrumentProvider: async () => ({ canonical: 'EURUSD', minLots: 0.01, maxLots: 10, stepLots: 0.01 }),
+      exposureProvider: async () => ({}), marketPriceProvider: async () => marketPrice,
+    });
+    return stateStore.getGroup(`fast-anchor-${suffix}`);
+  }
+
+  const wrongEntryAnchor = await complete({ suffix: 'wrong-entry', entry: 110, stopLoss: 106,
+    takeProfits: [109, 120, 130], marketPrice: 105 });
+  assert.deepEqual(wrongEntryAnchor.riskPlan.logicalTakeProfits, [null, 120, 130]);
+
+  const crossedValidAnchor = await complete({ suffix: 'crossed-valid', entry: 100, stopLoss: 95,
+    takeProfits: [104, 120, 130], marketPrice: 105 });
+  assert.deepEqual(crossedValidAnchor.riskPlan.logicalTakeProfits, [104, 120, 130]);
+});

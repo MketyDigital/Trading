@@ -152,6 +152,7 @@ export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep =
 export function buildPositionGroup(intent, { totalLots, volumeStep = 0.01, groupId = null } = {}) {
   const targets = Array.isArray(intent.takeProfits) && intent.takeProfits.length ? intent.takeProfits : [null];
   const volumes = allocateVolumeAcrossTargets(totalLots, targets.length, volumeStep);
+  const declaredIndexes = Array.isArray(intent.takeProfitTargetIndexes) ? intent.takeProfitTargetIndexes : [];
   const entryPrice = intent.entry?.kind === 'PRICE' ? intent.entry.value : null;
   return {
     id: groupId,
@@ -162,17 +163,22 @@ export function buildPositionGroup(intent, { totalLots, volumeStep = 0.01, group
     entry: intent.entry,
     stopLoss: intent.stopLoss ?? null,
     status: 'PLANNED',
-    legs: targets.map((takeProfit, index) => ({
-      legId: `leg-${index + 1}`,
-      targetIndex: index + 1,
-      lots: volumes[index],
-      stopLoss: intent.stopLoss ?? null,
-      takeProfit,
-      status: 'PLANNED',
-      ...(['LIMIT', 'STOP', 'STOP_LIMIT'].includes(String(intent.orderType || '').toUpperCase())
-        ? { lifecycleTrackingEnabled: true }
-        : {}),
-    })),
+    legs: targets.map((takeProfit, index) => {
+      const targetIndex = Number(declaredIndexes[index]) || index + 1;
+      return {
+        legId: `leg-${targetIndex}`,
+        targetIndex,
+        ...(targetIndex !== index + 1 ? { logicalTargetIndex: targetIndex } : {}),
+        lots: volumes[index],
+        stopLoss: intent.stopLoss ?? null,
+        takeProfit,
+        status: 'PLANNED',
+        ...(intent.preserveTakeProfitSlots === true && takeProfit == null ? { takeProfitPlaceholder: true } : {}),
+        ...(['LIMIT', 'STOP', 'STOP_LIMIT'].includes(String(intent.orderType || '').toUpperCase())
+          ? { lifecycleTrackingEnabled: true }
+          : {}),
+      };
+    }),
   };
 }
 
@@ -230,11 +236,16 @@ export function buildTargetProtectionActions(group, targetIndex) {
     if (finiteProtection(group.entryPrice) == null) throw new Error('entryPrice is required for TP1 protection');
     protectedStop = Number(group.entryPrice);
   } else {
-    const previousTakeProfit = takeProfitAt(index - 1);
-    if (previousTakeProfit == null) {
-      throw new Error('previous target takeProfit is unavailable');
+    // Some target levels can be deliberately skipped (already passed or
+    // invalid at entry). Use the closest earlier valid TP, or protect at
+    // break-even when there was no valid earlier target.
+    let previousTakeProfit = null;
+    for (let previousIndex = index - 1; previousIndex >= 1; previousIndex -= 1) {
+      previousTakeProfit = takeProfitAt(previousIndex);
+      if (previousTakeProfit != null) break;
     }
-    protectedStop = previousTakeProfit;
+    protectedStop = previousTakeProfit ?? finiteProtection(group.entryPrice);
+    if (protectedStop == null) throw new Error('entryPrice is required for target protection');
   }
 
   return group.legs
