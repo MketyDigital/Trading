@@ -48,6 +48,26 @@ test('manual open-position SL/TP edits are emitted once through the existing man
   assert.equal(applies, 1);
 });
 
+test('a broker-missing stop is restored from valid stored protection instead of mirrored as removal', async () => {
+  const observations = [];
+  let applied = null;
+  const { run } = runtime({
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
+      isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: null, takeProfit: 1.12 }),
+    recordObservation: async (value) => observations.push(value),
+    recordProtectionEvent: async ({ protection }) => { applied = protection; return { eventId: 'restore-missing-stop' }; },
+    applyProtectionChange: async () => ({ execution: { status: 'SUCCEEDED' } }),
+  });
+  const result = await run({});
+  assert.equal(result.protections, 1);
+  assert.deepEqual(applied.actions, [{ type: 'MOVE_SL', stopLoss: 1.1, targetIndex: 1 }]);
+  const synced = observations.at(-1);
+  assert.equal(synced.status, 'PROTECTION_SYNCED');
+  assert.equal(Object.hasOwn(synced, 'stopLoss'), false);
+  assert.equal(Object.hasOwn(synced, 'takeProfit'), false);
+});
+
 test('an unchanged broker protection fingerprint is not re-applied on later snapshots', async () => {
   let records = 0; let applies = 0;
   const fingerprint = 'p1|1.105|1.125';

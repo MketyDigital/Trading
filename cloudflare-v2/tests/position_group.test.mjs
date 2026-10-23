@@ -63,6 +63,20 @@ test('standard target progression does not modify an earlier leg that has no TP'
   assert.deepEqual(buildTargetProtectionActions(group, 3), []);
 });
 
+test('skipped TP1 retains logical TP2-to-TP3 stop progression', () => {
+  const group = {
+    symbol: 'VOLATILITY_75',
+    side: 'BUY',
+    entryPrice: 4200,
+    riskPlan: { logicalTakeProfits: [4250, 4280, 4290] },
+    legs: [
+      { legId: 'leg-2', targetIndex: 2, logicalTargetIndex: 2, brokerPositionId: 'p2', status: 'OPEN', takeProfit: 4280, stopLoss: 4200 },
+      { legId: 'leg-3', targetIndex: 3, logicalTargetIndex: 3, brokerPositionId: 'p3', status: 'OPEN', takeProfit: 4290, stopLoss: 4200 },
+    ],
+  };
+  assert.deepEqual(buildTargetProtectionActions(group, 2).map((action) => [action.brokerPositionId, action.stopLoss]), [['p3', 4250]]);
+});
+
 test('full close actions preserve each open leg volume, identity, and symbol context', () => {
   const group = {
     symbol: 'XAUUSD',

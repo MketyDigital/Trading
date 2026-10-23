@@ -1,4 +1,5 @@
 function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
@@ -40,8 +41,11 @@ export function classifyProtectionGeometry(intent = {}, { currentMarketPrice } =
     }
   }
 
+  const declaredTargetIndexes = Array.isArray(intent.takeProfitTargetIndexes)
+    ? intent.takeProfitTargetIndexes : [];
   for (const [index, raw] of (Array.isArray(intent.takeProfits) ? intent.takeProfits : []).entries()) {
-    const targetIndex = index + 1;
+    const targetIndex = Number(declaredTargetIndexes[index]) || index + 1;
+    if (raw == null && intent.preserveTakeProfitSlots === true) continue;
     const value = finiteNumber(raw);
     if (value == null) {
       issues.push({ field: 'takeProfits', targetIndex, code: `TP${targetIndex}_INVALID_PRICE`, value: raw });
@@ -74,11 +78,18 @@ export function applyProtectionPolicy(intent = {}, safetyPolicy = {}, context = 
   }
 
   const skippedTargetIndexes = new Set(targetIssues.map((item) => Number(item.targetIndex)));
+  const targetIndexes = Array.isArray(intent.takeProfitTargetIndexes)
+    ? intent.takeProfitTargetIndexes.map((value, index) => Number(value) || index + 1)
+    : (Array.isArray(intent.takeProfits) ? intent.takeProfits.map((_, index) => index + 1) : []);
+  const retained = (Array.isArray(intent.takeProfits) ? intent.takeProfits : [])
+    .map((value, index) => ({ value, targetIndex: targetIndexes[index] ?? index + 1 }))
+    .filter(({ value, targetIndex }) => (intent.preserveTakeProfitSlots === true && value == null)
+      || !skippedTargetIndexes.has(Number(targetIndex)));
   const sanitized = {
     ...intent,
     ...(stopIssues.length ? { stopLoss: null } : {}),
-    takeProfits: (Array.isArray(intent.takeProfits) ? intent.takeProfits : [])
-      .filter((_, index) => !skippedTargetIndexes.has(index + 1)),
+    takeProfits: retained.map(({ value }) => value),
+    takeProfitTargetIndexes: retained.map(({ targetIndex }) => targetIndex),
   };
   sanitized.incomplete = Boolean(sanitized.incomplete) || sanitized.stopLoss == null || sanitized.takeProfits.length === 0;
 

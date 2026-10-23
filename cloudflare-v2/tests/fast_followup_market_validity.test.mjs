@@ -235,6 +235,7 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
   const opens = actions.filter((action) => action.type === 'OPEN_POSITION');
   assert.deepEqual(opens.map((action) => action.targetIndex), [2, 3]);
   assert.deepEqual(opens.map((action) => action.takeProfit), [4355, 4335]);
+  assert.deepEqual(opens.map((action) => action.stopLoss), [4363.78, 4363.78]);
 
   assert.equal(saved.length, 1);
   assert.equal(saved[0].incomplete, false);
@@ -244,6 +245,7 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
   assert.equal(saved[0].legs[0].brokerPositionId, '138490038');
   assert.equal(saved[0].legs[0].stopLoss, 4363.78);
   assert.equal(saved[0].legs[0].takeProfit, null);
+  assert.deepEqual(saved[0].legs.filter((leg) => leg.targetIndex > 1).map((leg) => leg.stopLoss), [4363.78, 4363.78]);
   assert.deepEqual(saved[0].riskPlan.logicalTakeProfits, [4361, 4355, 4335]);
 });
 

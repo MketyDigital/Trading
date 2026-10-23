@@ -4,6 +4,13 @@ function text(value) { return String(value ?? '').trim(); }
 function accountPlatform(account = {}) { return text(account.platform).toLowerCase(); }
 function accountEnvironment(account = {}) { return text(account.environment).toLowerCase(); }
 function isTrue(value) { return value === true; }
+function samePrice(left, right) {
+  const a = left == null || left === '' ? null : Number(left);
+  const b = right == null || right === '' ? null : Number(right);
+  if (a == null && b == null) return true;
+  return Number.isFinite(a) && Number.isFinite(b)
+    && Math.abs(a - b) <= Math.max(1e-9, Math.abs(a) * 1e-10, Math.abs(b) * 1e-10);
+}
 
 function identityMatches(account, candidate, snapshot) {
   const environment = accountEnvironment(account);
@@ -129,8 +136,10 @@ export function createBrokerTpProtectionRuntime({
                       applied++;
                       await observe({ candidate, account, snapshot: positionSnapshot, status: 'PROTECTION_SYNCED',
                         snapshotFingerprint: protection.fingerprint,
-                        ...(protection.stopLoss !== undefined ? { stopLoss: protection.stopLoss } : {}),
-                        ...(protection.takeProfit !== undefined ? { takeProfit: protection.takeProfit } : {}),
+                        ...(protection.stopLoss !== undefined && !samePrice(protection.stopLoss, candidate.stopLoss)
+                          ? { stopLoss: protection.stopLoss } : {}),
+                        ...(protection.takeProfit !== undefined && !samePrice(protection.takeProfit, candidate.takeProfit)
+                          ? { takeProfit: protection.takeProfit } : {}),
                         nowMs: Number(clock()) });
                     }
                   }

@@ -95,7 +95,7 @@ function normalizeAdaptiveLots(referenceLots, percent, instrument) {
 }
 
 function openActionsFromGroup(group) {
-  return group.legs.map((leg) => ({
+  return group.legs.filter((leg) => leg?.takeProfitPlaceholder !== true).map((leg) => ({
     type: 'OPEN_POSITION', legId: leg.legId, targetIndex: leg.targetIndex, side: group.side, orderType: group.orderType,
     symbol: group.symbol, entry: group.entry, lots: leg.lots, stopLoss: leg.stopLoss, takeProfit: leg.takeProfit,
     idempotencyKey: `${group.id || 'group'}:leg:${leg.targetIndex}`,
@@ -199,6 +199,10 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   }
 
   const group = buildPositionGroup(executableIntent, { totalLots, volumeStep, groupId });
+  const logicalTakeProfits = Array.isArray(executableIntent.takeProfitTargetIndexes)
+    && executableIntent.takeProfitTargetIndexes.some((targetIndex, index) => Number(targetIndex) !== index + 1)
+    ? (Array.isArray(intent.takeProfits) ? [...intent.takeProfits] : [])
+    : null;
   return {
     status: 'READY',
     policy,
@@ -209,5 +213,6 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     protectionIssues: protection.protectionIssues,
     protectionSkips: protection.protectionSkips,
     effectiveIntent: executableIntent,
+    ...(logicalTakeProfits ? { logicalTakeProfits } : {}),
   };
 }

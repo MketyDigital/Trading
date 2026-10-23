@@ -151,6 +151,9 @@ function buildSimulationManagementActions(group, management) {
 }
 
 function plannedStateGroup(plan, { event, eventId, account, nowMs }) {
+  const riskPlan = plan?.logicalTakeProfits
+    ? { ...(plan.risk && typeof plan.risk === 'object' ? plan.risk : {}), logicalTakeProfits: [...plan.logicalTakeProfits] }
+    : plan.risk ?? null;
   return {
     ...plan.group,
     id: plan.group.id,
@@ -162,7 +165,7 @@ function plannedStateGroup(plan, { event, eventId, account, nowMs }) {
     threadId: event?.thread?.thread_id != null ? String(event.thread.thread_id) : null,
     incomplete: Boolean(plan?.group?.incomplete ?? false) || Boolean(plan?.intent?.incomplete ?? false),
     positionMode: account.positionMode || account.position_mode || 'HEDGED',
-    riskPlan: plan.risk ?? null,
+    riskPlan,
     policySnapshot: plan.policy ?? null,
     createdAt: nowMs,
     updatedAt: nowMs,
@@ -266,6 +269,7 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     intent: {
       ...intent,
       takeProfits,
+      preserveTakeProfitSlots: true,
       ...(breakEvenStop == null ? { stopLoss: stopValid ? intent.stopLoss : null } : { stopLoss: breakEvenStop }),
     },
     logicalTakeProfits: originalTakeProfits,
