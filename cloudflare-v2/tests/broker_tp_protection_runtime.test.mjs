@@ -63,9 +63,39 @@ test('a broker-missing stop is restored from valid stored protection instead of 
   assert.equal(result.protections, 1);
   assert.deepEqual(applied.actions, [{ type: 'MOVE_SL', stopLoss: 1.1, targetIndex: 1 }]);
   const synced = observations.at(-1);
-  assert.equal(synced.status, 'PROTECTION_SYNCED');
+  assert.equal(synced.status, 'PROTECTION_REPAIR_SENT');
+  assert.equal(Object.hasOwn(synced, 'snapshotFingerprint'), false);
   assert.equal(Object.hasOwn(synced, 'stopLoss'), false);
   assert.equal(Object.hasOwn(synced, 'takeProfit'), false);
+});
+
+test('missing broker protection is retried on a later scan until a snapshot confirms it', async () => {
+  const observations = [];
+  const attempts = [];
+  let now = 60_000;
+  let saved = { lastBrokerStatus: 'PROTECTION_SYNCED', lastBrokerSnapshotFingerprint: 'p1|none|1.12' };
+  const { run } = runtime({
+    clock: () => now,
+    loadCandidates: async () => [{ ...candidate, ...saved }],
+    readPositionCloseStatus: async () => ({ ...snapshot, isOpen: true, closedLots: 0, deals: [] }),
+    readPositionStatus: async () => ({ accountId: '123', positionId: 'p1', environment: 'live', isLive: true,
+      isOpen: true, symbol: 'EURUSD', side: 'BUY', stopLoss: null, takeProfit: 1.12 }),
+    recordObservation: async (value) => {
+      observations.push(value);
+      saved = { lastBrokerStatus: value.status, lastBrokerSourceVersion: value.reason,
+        lastBrokerObservedAt: value.nowMs, lastBrokerSnapshotFingerprint: value.snapshotFingerprint ?? saved.lastBrokerSnapshotFingerprint };
+    },
+    recordProtectionEvent: async ({ protection, nowMs }) => { attempts.push([nowMs, protection.repairAttempt]); return { eventId: `repair-${protection.repairAttempt}` }; },
+    applyProtectionChange: async () => ({ execution: { status: 'SUCCEEDED' } }),
+  });
+  await run({});
+  now += 30_000;
+  await run({});
+  now += 60_000;
+  await run({});
+  assert.deepEqual(attempts, [[60_000, 1], [150_000, 2]]);
+  assert.equal(observations.filter((value) => value.status === 'PROTECTION_REPAIR_SENT').length, 2);
+  assert.equal(observations.some((value) => value.status === 'PROTECTION_SYNCED'), false);
 });
 
 test('an unchanged broker protection fingerprint is not re-applied on later snapshots', async () => {

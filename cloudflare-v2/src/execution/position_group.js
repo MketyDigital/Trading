@@ -236,11 +236,16 @@ export function buildTargetProtectionActions(group, targetIndex) {
     if (finiteProtection(group.entryPrice) == null) throw new Error('entryPrice is required for TP1 protection');
     protectedStop = Number(group.entryPrice);
   } else {
-    const previousTakeProfit = takeProfitAt(index - 1);
-    if (previousTakeProfit == null) {
-      throw new Error('previous target takeProfit is unavailable');
+    // Some target levels can be deliberately skipped (already passed or
+    // invalid at entry). Use the closest earlier valid TP, or protect at
+    // break-even when there was no valid earlier target.
+    let previousTakeProfit = null;
+    for (let previousIndex = index - 1; previousIndex >= 1; previousIndex -= 1) {
+      previousTakeProfit = takeProfitAt(previousIndex);
+      if (previousTakeProfit != null) break;
     }
-    protectedStop = previousTakeProfit;
+    protectedStop = previousTakeProfit ?? finiteProtection(group.entryPrice);
+    if (protectedStop == null) throw new Error('entryPrice is required for target protection');
   }
 
   return group.legs

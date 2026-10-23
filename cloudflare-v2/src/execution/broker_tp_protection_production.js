@@ -16,7 +16,10 @@ async function stableEventKey(candidate, detection) {
 }
 
 async function stableProtectionEventKey(candidate, protection) {
-  const identity = [candidate.tradeAccountId, candidate.brokerPositionId, candidate.targetIndex, protection.fingerprint].join(':');
+  const repairAttempt = protection.restoredMissingProtection === true
+    ? Number(protection.repairAttempt) || 1 : null;
+  const identity = [candidate.tradeAccountId, candidate.brokerPositionId, candidate.targetIndex,
+    protection.fingerprint, repairAttempt].join(':');
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
   const hash = [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, '0')).join('');
   return `broker-protection:${candidate.tradeAccountId}:${candidate.brokerPositionId}:${hash}`;
@@ -175,9 +178,13 @@ export function createProductionBrokerTpProtectionRuntime({
         event_version: '1.0', source_type: sourceEvent.sourceType, source_external_id: sourceEvent.sourceExternalId || externalEventId,
         occurred_at: new Date(Number(nowMs)).toISOString(), raw_text: 'Broker open-position protection change detected',
         structured_payload: { kind: 'BROKER_PROTECTION_CHANGE', brokerPositionId: protection.positionId, targetIndex: candidate.targetIndex,
-          stopLoss: protection.stopLoss, takeProfit: protection.takeProfit, actions: protection.actions },
+          stopLoss: protection.stopLoss, takeProfit: protection.takeProfit, actions: protection.actions,
+          restoredMissingProtection: protection.restoredMissingProtection === true,
+          repairAttempt: protection.repairAttempt ?? null },
         thread: {}, metadata: { ...sourceEvent.metadata, broker_protection: { tradeAccountId: candidate.tradeAccountId,
-          brokerPositionId: protection.positionId, targetIndex: candidate.targetIndex, fingerprint: protection.fingerprint } },
+          brokerPositionId: protection.positionId, targetIndex: candidate.targetIndex, fingerprint: protection.fingerprint,
+          restoredMissingProtection: protection.restoredMissingProtection === true,
+          repairAttempt: protection.repairAttempt ?? null } },
         processing_status: 'MANAGEMENT', canonical_intent: { status: 'MANAGEMENT', management },
       };
       let eventId;

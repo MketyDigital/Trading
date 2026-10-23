@@ -82,6 +82,7 @@ export function classifyBrokerProtectionChange({ platform, leg, snapshot } = {})
     // authority for manual edits and is mirrored through the management path.
     stopLoss: slMissing ? expectedStop : brokerStop,
     takeProfit: tpMissing ? expectedTarget : brokerTarget,
+    restoredMissingProtection: slMissing || tpMissing,
     actions,
     fingerprint: [positionId,
       brokerStop === undefined ? 'unknown' : brokerStop === null ? 'none' : brokerStop,

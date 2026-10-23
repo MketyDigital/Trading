@@ -155,7 +155,7 @@ test('skipping a passed first target preserves the remaining logical TP indices'
     [2, 4280, 4200], [3, 4290, 4200],
   ]);
   assert.deepEqual(plan.group.legs.map((leg) => leg.logicalTargetIndex), [2, 3]);
-  assert.deepEqual(plan.logicalTakeProfits, [4250, 4280, 4290]);
+  assert.deepEqual(plan.logicalTakeProfits, [null, 4280, 4290]);
 });
 
 test('default protection policy skips invalid target while preserving valid targets and SL', () => {

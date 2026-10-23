@@ -260,6 +260,8 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     ?? finitePositive(existing?.entryPrice)
     ?? finitePositive(existing?.entry?.executedPrice)
     ?? finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice)
+    ?? (intent.entry?.kind === 'RANGE' ? (side === 'SELL'
+      ? finitePositive(intent.entry.min) : finitePositive(intent.entry.max)) : null)
     ?? references[0];
   const breakEvenStop = passedPrefixLength > 1
     ? finitePositive(intent.takeProfits[passedPrefixLength - 2]) ?? entryReference
@@ -272,7 +274,8 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
       preserveTakeProfitSlots: true,
       ...(breakEvenStop == null ? { stopLoss: stopValid ? intent.stopLoss : null } : { stopLoss: breakEvenStop }),
     },
-    logicalTakeProfits: originalTakeProfits,
+    logicalTakeProfits: originalTakeProfits.map((value) =>
+      protectionValueValidAtMarket(side, 'takeProfit', value, entryReference) ? finitePositive(value) : null),
   };
 }
 
