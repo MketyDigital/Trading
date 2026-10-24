@@ -1,3 +1,4 @@
+import { safeBrokerContextCode } from '../operations/broker_context_diagnostics.js';
 import { buildExecutionPlan } from '../execution/execution_plan.js';
 import { evaluateAccountPolicy } from '../execution/account_policy.js';
 import { buildManagementActions } from '../execution/position_group.js';
@@ -882,8 +883,7 @@ export async function orchestrateTradingEventSimulation({
     } catch (error) {
       // Preserve a strict allowlisted diagnostic code without serializing broker
       // credentials, raw connector responses, or provider-specific messages.
-      const brokerContextCode = ['MT5_CONNECTOR_OFFLINE', 'BROKER_MARKET_CONTEXT_UNAVAILABLE']
-        .includes(String(error?.code ?? '')) ? String(error.code) : 'UNCLASSIFIED_MARKET_CONTEXT';
+      const brokerContextCode = safeBrokerContextCode(error?.code) ?? 'UNCLASSIFIED_MARKET_CONTEXT';
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', brokerContextCode, error: error.message, actions: [] });
       continue;
     }
