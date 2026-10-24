@@ -163,11 +163,14 @@ async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn 
     });
   } catch { throw codedError('MT5_IDENTITY_REQUEST_FAILED', 'MT5 broker identity request failed'); }
   const identity = await identityResponse.json().catch(() => null);
-  if (!identityResponse.ok || identity?.online !== true) {
+  if (!identityResponse.ok || identity?.online === false) {
     throw codedError('MT5_CONNECTOR_OFFLINE', 'MT5 connector is unavailable for broker-authoritative planning');
   }
-  if (!identity || typeof identity !== 'object') {
+  if (!identity || typeof identity !== 'object' || typeof identity.online !== 'boolean') {
     throw codedError('MT5_IDENTITY_RESPONSE_INVALID', 'MT5 broker identity response is invalid');
+  }
+  if (identity.online !== true) {
+    throw codedError('MT5_CONNECTOR_OFFLINE', 'MT5 connector is unavailable for broker-authoritative planning');
   }
   if (text(identity.accountRowId) !== rowId) {
     throw codedError('MT5_ACCOUNT_ROW_MISMATCH', 'MT5 broker account row does not match');
