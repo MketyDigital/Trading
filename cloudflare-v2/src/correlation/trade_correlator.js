@@ -317,6 +317,21 @@ function isFastCompletionSignal(interpretation = {}) {
   return protection.hasStopLoss || protection.takeProfits.length > 0;
 }
 
+function recoverableUnprotectedFastStarter(group, intent) {
+  // A source edit can arrive after a previous completion attempt marked the
+  // logical group complete even though only the original unprotected fast
+  // broker leg survived. Promote that SAME group, not a new position.
+  // Never broaden edits of an already protected/complete trade.
+  const requested = Array.isArray(intent?.takeProfits) ? intent.takeProfits.length : 0;
+  const legs = Array.isArray(group?.legs) ? group.legs : [];
+  if (group?.incomplete === true) return true;
+  if (requested < 2 || legs.length !== 1) return false;
+  const starter = legs[0];
+  return Number(starter?.targetIndex) === 1
+    && Boolean(starter?.brokerPositionId || starter?.brokerOrderId)
+    && !(Number(starter?.takeProfit) > 0);
+}
+
 function recentFastDuplicateTarget(recent = [], intent = {}) {
   if (intent?.fastEntry !== true || intent?.incomplete !== true) return null;
   const symbol = String(intent?.symbol?.canonical ?? '').trim().toUpperCase();
@@ -362,7 +377,7 @@ export function correlateTradingEvent({
       const symbol = String(interpretation.intent.symbol?.canonical ?? '').trim().toUpperCase();
       const side = String(interpretation.intent.side ?? '').trim().toUpperCase();
       const compatibleFastGroups = editMatches.filter((group) =>
-        group.incomplete === true
+        recoverableUnprotectedFastStarter(group, interpretation.intent)
         && String(group.symbol ?? '').trim().toUpperCase() === symbol
         && String(group.side ?? '').trim().toUpperCase() === side
       );
