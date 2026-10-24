@@ -188,6 +188,7 @@ test('broker planning evidence preserves per-account blocked reason and nested a
         {
           accountId: 'acct-ready',
           status: 'READY',
+          brokerContextCode: 'token-secret-should-not-persist',
           actions: [
             { type: 'OPEN_POSITION', orderType: 'LIMIT' },
             { type: 'OPEN_POSITION', orderType: 'LIMIT' },
