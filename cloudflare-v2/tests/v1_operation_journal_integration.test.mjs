@@ -198,6 +198,7 @@ test('broker planning evidence preserves per-account blocked reason and nested a
           status: 'BLOCKED',
           reason: 'MARKET_CONTEXT_UNAVAILABLE',
           error: 'MT5 connector is unavailable for broker-authoritative planning',
+          brokerContextCode: 'MT5_CONNECTOR_OFFLINE',
           actions: [],
         },
       ],
@@ -214,6 +215,7 @@ test('broker planning evidence preserves per-account blocked reason and nested a
       reason: null,
       actionCount: 2,
       error: null,
+      brokerContextCode: null,
     },
     {
       accountId: 'acct-offline',
@@ -221,6 +223,7 @@ test('broker planning evidence preserves per-account blocked reason and nested a
       reason: 'MARKET_CONTEXT_UNAVAILABLE',
       actionCount: 0,
       error: 'MT5 connector is unavailable for broker-authoritative planning',
+      brokerContextCode: 'MT5_CONNECTOR_OFFLINE',
     },
   ]);
 });
