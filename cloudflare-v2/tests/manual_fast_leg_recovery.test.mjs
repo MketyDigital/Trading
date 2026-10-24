@@ -38,3 +38,22 @@ test('same target price on multiple legs never auto-binds', () => {
   assert.equal(result.proposals.length,0);
   assert.equal(result.status,'NEEDS_REVIEW');
 });
+
+test('protected completed starter may propose missing manual TP2 and TP3 safely', () => {
+  const completeButShort = { ...group, incomplete: false, legs: [
+    {targetIndex:1, brokerPositionId:'fast', takeProfit:101, stopLoss:99}
+  ]};
+  const result = run([p('two',102),p('three',103)], {group:completeButShort});
+  assert.equal(result.status,'PROPOSED');
+  assert.deepEqual(result.proposals.map(x=>x.targetIndex),[2,3]);
+});
+
+test('already managed TP2 is never proposed again for a completed trade', () => {
+  const completeWithTwo = { ...group, incomplete:false, legs:[
+    {targetIndex:1,brokerPositionId:'fast',takeProfit:101},
+    {targetIndex:2,brokerPositionId:'two',takeProfit:102}
+  ]};
+  const result = run([p('two',102),p('three',103)], {group:completeWithTwo});
+  assert.equal(result.status,'PROPOSED');
+  assert.deepEqual(result.proposals.map(x=>[x.targetIndex,x.brokerPositionId]),[[3,'three']]);
+});
