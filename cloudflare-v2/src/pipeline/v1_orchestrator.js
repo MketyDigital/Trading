@@ -396,11 +396,20 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
     const targetValidForOpen = open.takeProfit == null
       || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
-    if (!stopValidForOpen || !targetValidForOpen) continue;
-
-    nextLegs.push(desiredLeg);
+    // An invalid or already-passed TP must not discard a safely protected
+    // leg. Open with the valid SL, leave its broker TP absent, and retain the
+    // logical target for later edits/replies and progressive management.
+    // An invalid SL cannot be silently discarded for a new position.
+    if (!stopValidForOpen) continue;
+    const executableTp = targetValidForOpen ? open.takeProfit ?? null : null;
+    nextLegs.push({
+      ...desiredLeg,
+      takeProfit: executableTp,
+      ...(executableTp == null ? { takeProfitPlaceholder: true } : {}),
+    });
     actions.push({
       ...open,
+      takeProfit: executableTp,
       idempotencyKey: `${existing.id}:leg:${targetIndex}`,
     });
   }
