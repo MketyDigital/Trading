@@ -160,8 +160,11 @@ jobs:
             .replace(/\b\d{6,}\b/g, '[NUMBER]')
             .slice(0, 220);
           const escapeCell = (value) => redactCell(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
+          const windowLabel = eventTimes.length
+            ? 'exact received_at values: ' + eventTimes.join(', ')
+            : 'last ' + hours + ' hours (through ' + new Date().toISOString() + ')';
           let report = '# Focused production D1 diagnostics\n\n'
-            + '- Window: last ' + hours + ' hours (through ' + new Date().toISOString() + ')\n'
+            + '- Window: ' + windowLabel + '\n'
             + '- Source: existing production D1 binding; two SELECT-only diagnostic statements\n'
             + '- D1 reads/writes from this workflow: rows_read=' + rowsRead + ', rows_written=' + rowsWritten + ', statements=' + queries.length + '\n'
             + '- D1 database file size: ' + fileSize + ' bytes (' + databaseInfoClass + ')\n'
