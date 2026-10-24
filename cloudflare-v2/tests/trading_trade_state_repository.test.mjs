@@ -169,6 +169,9 @@ test('D1 trade state refuses writes after the persisted authority is fenced', as
   const store = createTradingTradeStatePersistence({ authority: setup.authority });
   setup.sqlite.prepare(`UPDATE trading_storage_control SET writes_fenced=1 WHERE singleton_id=1`).run();
   await assert.rejects(() => store.saveGroup(group), /write-fenced/);
+  await assert.rejects(() => store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
+    observedAt: 1_770_000_000_000, status: 'PROTECTION_PENDING', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
+  }), /write-fenced/);
   assert.equal(setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM position_groups`).get().n, 0);
   setup.sqlite.close();
 });
