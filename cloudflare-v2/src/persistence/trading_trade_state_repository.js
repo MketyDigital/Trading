@@ -290,7 +290,6 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
       operation: 'upsert',
       payload: { workspace_id: String(workspaceId), runtime_group_id: String(groupId), runtime_leg_id: String(legId), patch },
     };
-    await verifyTradingStorageAuthority(authority, { postgresDatabase });
     if (authority.kind === 'd1') {
       const encodedPatch = encodeD1Row(patch);
       const columns = Object.keys(encodedPatch);
