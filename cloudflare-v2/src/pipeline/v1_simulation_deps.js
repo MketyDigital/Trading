@@ -143,31 +143,44 @@ function cleanHttpsBase(value) {
 async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
   const masterKey = text(env.TRADING_MASTER_KEY);
   const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
-  if (!masterKey || !ciphertext) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning credentials unavailable');
-  const credentials = await decryptConnectionCredentials('mt5_connector', ciphertext, masterKey);
-  const baseUrl = cleanHttpsBase(credentials.gatewayUrl);
+  if (!masterKey || !ciphertext) throw codedError('MT5_CREDENTIALS_MISSING', 'MT5 planning credentials unavailable');
+  let credentials;
+  try { credentials = await decryptConnectionCredentials('mt5_connector', ciphertext, masterKey); }
+  catch { throw codedError('MT5_CREDENTIALS_INVALID', 'MT5 planning credentials are invalid'); }
+  let baseUrl;
+  try { baseUrl = cleanHttpsBase(credentials.gatewayUrl); }
+  catch { throw codedError('MT5_GATEWAY_CONFIG_INVALID', 'MT5 broker gateway configuration is invalid'); }
   const controlSecret = text(credentials.controlSecret);
-  if (!controlSecret) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning control credential unavailable');
+  if (!controlSecret) throw codedError('MT5_CONTROL_CREDENTIAL_MISSING', 'MT5 planning control credential unavailable');
 
   const rowId = text(account?.id);
-  const identityResponse = await fetchFn(`${baseUrl}/v1/mt5-connections/${encodeURIComponent(rowId)}`, {
-    method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
-    signal: AbortSignal.timeout(5000),
-  });
-  const identity = await identityResponse.json().catch(() => ({}));
-  if (!identityResponse.ok || identity?.online !== true || text(identity.accountRowId) !== rowId) {
+  let identityResponse;
+  try {
+    identityResponse = await fetchFn(`${baseUrl}/v1/mt5-connections/${encodeURIComponent(rowId)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch { throw codedError('MT5_IDENTITY_REQUEST_FAILED', 'MT5 broker identity request failed'); }
+  const identity = await identityResponse.json().catch(() => null);
+  if (!identityResponse.ok || identity?.online !== true) {
     throw codedError('MT5_CONNECTOR_OFFLINE', 'MT5 connector is unavailable for broker-authoritative planning');
   }
+  if (!identity || typeof identity !== 'object') {
+    throw codedError('MT5_IDENTITY_RESPONSE_INVALID', 'MT5 broker identity response is invalid');
+  }
+  if (text(identity.accountRowId) !== rowId) {
+    throw codedError('MT5_ACCOUNT_ROW_MISMATCH', 'MT5 broker account row does not match');
+  }
   if (text(identity?.identity?.accountNumber) !== text(account?.account_id ?? account?.accountId)) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker account identity mismatch');
+    throw codedError('MT5_ACCOUNT_IDENTITY_MISMATCH', 'MT5 broker account identity mismatch');
   }
   const expectedServer = text(account?.server_name ?? account?.serverName);
   if (expectedServer && text(identity?.identity?.serverName) !== expectedServer) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker server identity mismatch');
+    throw codedError('MT5_SERVER_IDENTITY_MISMATCH', 'MT5 broker server identity mismatch');
   }
   if (text(account?.environment).toLowerCase() === 'live' && identity?.identity?.isLive !== true) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker environment mismatch');
+    throw codedError('MT5_ENVIRONMENT_MISMATCH', 'MT5 broker environment mismatch');
   }
 
   const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
@@ -180,22 +193,29 @@ async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn 
     const result = resolveAccountSymbol(candidate, liveCatalog, persisted.aliases);
     if (result.ok) { resolved = result; break; }
   }
-  if (!resolved) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning symbol resolution failed');
+  if (!resolved) throw codedError('MT5_SYMBOL_UNRESOLVED', 'MT5 planning symbol resolution failed');
 
-  const contextResponse = await fetchFn(
-    `${baseUrl}/v1/mt5-context/${encodeURIComponent(rowId)}?symbol=${encodeURIComponent(resolved.platformSymbol)}`,
-    {
-      method: 'GET',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
-      signal: AbortSignal.timeout(7000),
-    },
-  );
-  const body = await contextResponse.json().catch(() => ({}));
-  if (!contextResponse.ok || body?.ok !== true || text(body.accountRowId) !== rowId) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker market context unavailable');
+  let contextResponse;
+  try {
+    contextResponse = await fetchFn(
+      `${baseUrl}/v1/mt5-context/${encodeURIComponent(rowId)}?symbol=${encodeURIComponent(resolved.platformSymbol)}`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${controlSecret}` },
+        signal: AbortSignal.timeout(7000),
+      },
+    );
+  } catch { throw codedError('MT5_CONTEXT_REQUEST_FAILED', 'MT5 broker market context request failed'); }
+  const body = await contextResponse.json().catch(() => null);
+  if (!contextResponse.ok) throw codedError('MT5_CONTEXT_REQUEST_FAILED', 'MT5 broker market context request failed');
+  if (!body || body?.ok !== true || typeof body !== 'object') {
+    throw codedError('MT5_CONTEXT_RESPONSE_INVALID', 'MT5 broker market context response is invalid');
+  }
+  if (text(body.accountRowId) !== rowId) {
+    throw codedError('MT5_CONTEXT_ACCOUNT_MISMATCH', 'MT5 broker market context account does not match');
   }
   const price = executionSidePrice(intent, body?.context?.tick || {});
-  if (!(price > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker tick unavailable');
+  if (!(price > 0)) throw codedError('MT5_TICK_UNAVAILABLE', 'MT5 broker tick unavailable');
   return price;
 }
 
@@ -211,22 +231,25 @@ export async function waitForCTraderPlanningPrice({
   const budget = Number(timeoutMs);
   if (!session?.waitForEvent || !marketData?.handleSpotEvent || !marketData?.marketPriceFor
       || !Number.isInteger(id) || !(budget > 0)) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader quote reader configuration is invalid');
+    throw codedError('CTRADER_QUOTE_READER_CONFIG_INVALID', 'cTrader quote reader configuration is invalid');
   }
 
   const deadline = Date.now() + budget;
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
-    const spot = await session.waitForEvent(
-      (message) => Number(message?.payloadType) === 2131 && Number(message?.payload?.symbolId) === id,
-      { timeoutMs: remaining },
-    );
+    let spot;
+    try {
+      spot = await session.waitForEvent(
+        (message) => Number(message?.payloadType) === 2131 && Number(message?.payload?.symbolId) === id,
+        { timeoutMs: remaining },
+      );
+    } catch { throw codedError('CTRADER_QUOTE_WAIT_FAILED', 'cTrader broker quote wait failed'); }
     marketData.handleSpotEvent(spot);
     const price = Number(marketData.marketPriceFor(platformSymbol, side));
     if (price > 0) return price;
   }
 
-  throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader broker side quote unavailable');
+  throw codedError('CTRADER_QUOTE_UNAVAILABLE', 'cTrader broker side quote unavailable');
 }
 
 async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
@@ -234,11 +257,16 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
   const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
   const accountId = Number(account?.account_id ?? account?.accountId);
   const environment = text(account?.environment).toLowerCase();
-  if (!masterKey || !ciphertext || !Number.isInteger(accountId) || !['demo', 'live'].includes(environment)) {
-    throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader planning credentials unavailable');
+  if (!masterKey || !ciphertext) {
+    throw codedError('CTRADER_CREDENTIALS_UNAVAILABLE', 'cTrader planning credentials unavailable');
+  }
+  if (!Number.isInteger(accountId) || !['demo', 'live'].includes(environment)) {
+    throw codedError('CTRADER_CREDENTIALS_UNAVAILABLE', 'cTrader account configuration is invalid');
   }
 
-  const credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey);
+  let credentials;
+  try { credentials = await decryptConnectionCredentials('ctrader', ciphertext, masterKey); }
+  catch { throw codedError('CTRADER_CREDENTIALS_INVALID', 'cTrader planning credentials are invalid'); }
   const session = new CTraderJsonSession({
     endpoint: ctraderEndpoint(environment, 'json'),
     clientId: credentials.clientId,
@@ -249,7 +277,7 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
     await session.authenticateAccount(accountId, credentials.accessToken);
     const marketData = new CTraderMarketData({ session, accountId });
     const brokerAccount = await marketData.loadAccount();
-    if (!brokerAccount?.canOpenTrades) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader account cannot open trades');
+    if (!brokerAccount?.canOpenTrades) throw codedError('CTRADER_ACCOUNT_CANNOT_OPEN', 'cTrader account cannot open trades');
     marketData.catalog = await marketData.loadCatalog();
     const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
     const candidates = [canonicalSymbol(intent), text(intent?.symbol?.source)].filter(Boolean);
@@ -259,7 +287,7 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
       if (result.ok) { resolved = result; break; }
     }
     if (!resolved || !Number.isInteger(Number(resolved.platformId))) {
-      throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'cTrader planning symbol resolution failed');
+      throw codedError('CTRADER_SYMBOL_UNRESOLVED', 'cTrader planning symbol resolution failed');
     }
     const symbolId = Number(resolved.platformId);
     await marketData.subscribeQuotes([symbolId]);
