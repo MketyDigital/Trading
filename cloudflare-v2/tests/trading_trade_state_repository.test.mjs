@@ -125,9 +125,13 @@ test('unchanged broker snapshots advance the due cursor without replicating a no
   const store = createTradingTradeStatePersistence({ authority: setup.authority });
   await store.saveGroup(group);
   const before = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
+  const preparedBeforeObservation = setup.binding.prepared.length;
   await store.recordBrokerObservation(group.workspaceId, group.id, group.legs[0].legId, {
     observedAt: 1_770_000_000_000, status: 'PROTECTION_PENDING', snapshotFingerprint: 'p1|1.1|1.2', dealIds: [],
   });
+  const observationStatements = setup.binding.prepared.slice(preparedBeforeObservation);
+  assert.ok(observationStatements.some(sql => sql.includes('EXISTS (') && sql.includes('trading_storage_control')), 'the broker observation update remains guarded by D1 authority state');
+  assert.ok(!observationStatements.some(sql => sql.includes('SELECT active_authority AS activeAuthority')), 'a successful guarded D1 update avoids a redundant standalone authority read');
   const after = setup.sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n;
   const row = setup.sqlite.prepare(`SELECT last_broker_observed_at, last_broker_status FROM position_legs`).get();
   assert.equal(after, before);
