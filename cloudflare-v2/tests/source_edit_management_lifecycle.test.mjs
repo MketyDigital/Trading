@@ -120,3 +120,31 @@ test('edit that changes side, symbol, order type, or entry fails closed instead 
     assert.deepEqual(result.actions, []);
   }
 });
+
+test('edited completion recovers a broker-open unprotected fast starter even if incomplete flag drifted false', () => {
+  const starter = group({
+    incomplete: false,
+    orderType: 'MARKET',
+    legs: [{
+      legId: 'fast', targetIndex: 1, lots: 0.01,
+      status: 'OPEN', brokerPositionId: 'position-fast',
+      stopLoss: null, takeProfit: null,
+    }],
+  });
+  const intent = editedIntent({ orderType: 'MARKET', takeProfits: [4240, 4220, 4200] });
+  const actual = correlateTradingEvent({
+    event: editedEvent('SELL XAUUSD SL 4390 TP1 4240 TP2 4220 TP3 4200'),
+    interpretation: { status: 'READY', intent },
+    activeGroups: [starter],
+  });
+  assert.deepEqual(actual, { status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: 'group-1' });
+});
+
+test('does not convert edits of protected complete trades into new TP-leg opens', () => {
+  const actual = correlateTradingEvent({
+    event: editedEvent(),
+    interpretation: { status: 'READY', intent: editedIntent({ takeProfits: [4240, 4220, 4200] }) },
+    activeGroups: [group({ incomplete: false })],
+  });
+  assert.equal(actual.reason, 'EDIT_TARGET');
+});
