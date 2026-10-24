@@ -57,3 +57,9 @@ test('already managed TP2 is never proposed again for a completed trade', () => 
   assert.equal(result.status,'PROPOSED');
   assert.deepEqual(result.proposals.map(x=>[x.targetIndex,x.brokerPositionId]),[[3,'three']]);
 });
+
+test('never proposes a manual position already claimed by another managed group', () => {
+  const result = run([p('already-owned',102),p('free',103)], { claimedBrokerPositionIds:['already-owned'] });
+  assert.equal(result.status,'NEEDS_REVIEW');
+  assert.deepEqual(result.proposals.map(x=>x.brokerPositionId),['free']);
+});
