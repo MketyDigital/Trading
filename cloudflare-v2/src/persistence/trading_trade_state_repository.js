@@ -146,7 +146,6 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
   }
 
   async function loadGroup(workspaceId, groupId) {
-    await verifyTradingStorageAuthority(authority, { postgresDatabase });
     if (authority.kind === 'd1') {
       const row = await authority.binding.prepare(`SELECT * FROM position_groups WHERE workspace_id = ? AND (runtime_group_id = ? OR id = ?) ORDER BY CASE WHEN runtime_group_id = ? THEN 0 ELSE 1 END LIMIT 1`).bind(String(workspaceId), String(groupId), String(groupId), String(groupId)).first();
       if (!row) return null;
@@ -324,11 +323,17 @@ export function createTradingTradeStatePersistence({ authority, postgresDatabase
         statements.push(...journal.statements);
       }
       const results = await authority.binding.batch(statements);
-      if (Number(results?.[0]?.meta?.changes || 0) !== 1) return { outcome: 'STALE' };
+      if (Number(results?.[0]?.meta?.changes || 0) !== 1) {
+        // The guarded UPDATE is the normal D1 authority check. Re-read the
+        // control row only on a stale/no-op result to preserve fenced-write errors.
+        await verifyTradingStorageAuthority(authority, { postgresDatabase });
+        return { outcome: 'STALE' };
+      }
       if (replicateObservation && Number(results?.[2]?.meta?.changes || 0) !== 1) throw new Error('Broker observation replication journal append failed');
       return { outcome: 'APPLIED' };
     }
 
+    await verifyTradingStorageAuthority(authority, { postgresDatabase });
     return postgresDatabase.transaction(async query => {
       const authorityResult = await query(`SELECT active_authority, authority_epoch, writes_fenced FROM trading_storage.authority_control WHERE singleton_id = 1 FOR SHARE`);
       const control = authorityResult.rows?.[0];
