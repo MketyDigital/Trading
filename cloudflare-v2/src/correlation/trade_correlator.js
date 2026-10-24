@@ -464,7 +464,7 @@ export function correlateTradingEvent({
       const symbol = String(interpretation.intent.symbol?.canonical ?? '').trim().toUpperCase();
       const side = String(interpretation.intent.side ?? '').trim().toUpperCase();
       const compatible = replyMatches.filter((group) =>
-        group.incomplete === true
+        recoverableUnprotectedFastStarter(group, interpretation.intent)
         && String(group.symbol ?? '').trim().toUpperCase() === symbol
         && String(group.side ?? '').trim().toUpperCase() === side
       );
