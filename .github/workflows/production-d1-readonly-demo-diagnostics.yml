@@ -164,19 +164,19 @@ jobs:
             }),
           });
           if (!response.ok) {
-  const errorPayload = await response.json().catch(() => null);
-  const errors = Array.isArray(errorPayload?.errors) ? errorPayload.errors : [];
-  const errorText = errors.map((item) => String(item?.message || '')).join(' ').toLowerCase();
-  let errorClass = 'D1_QUERY_REJECTED';
-  if (/syntax error|near .+:/.test(errorText)) errorClass = 'D1_SQL_SYNTAX_ERROR';
-  else if (/no such column|unknown column/.test(errorText)) errorClass = 'D1_SCHEMA_COLUMN_ERROR';
-  else if (/no such table|unknown table/.test(errorText)) errorClass = 'D1_SCHEMA_TABLE_ERROR';
-  else if (/ambiguous column/.test(errorText)) errorClass = 'D1_AMBIGUOUS_COLUMN_ERROR';
-  else if (/too many sql variables|too many parameters/.test(errorText)) errorClass = 'D1_PARAMETER_LIMIT_ERROR';
-  const codes = errors.map((item) => Number(item?.code)).filter(Number.isInteger).join(',');
-  console.error('D1_QUERY_FAILURE class=' + errorClass + ' http=' + response.status + ' codes=' + (codes || 'none'));
-  throw new Error('Cloudflare D1 query failed; inspect the safe D1_QUERY_FAILURE class above');
-}
+          const errorPayload = await response.json().catch(() => null);
+          const errors = Array.isArray(errorPayload?.errors) ? errorPayload.errors : [];
+          const errorText = errors.map((item) => String(item?.message || '')).join(' ').toLowerCase();
+          let errorClass = 'D1_QUERY_REJECTED';
+          if (/syntax error|near .+:/.test(errorText)) errorClass = 'D1_SQL_SYNTAX_ERROR';
+          else if (/no such column|unknown column/.test(errorText)) errorClass = 'D1_SCHEMA_COLUMN_ERROR';
+          else if (/no such table|unknown table/.test(errorText)) errorClass = 'D1_SCHEMA_TABLE_ERROR';
+          else if (/ambiguous column/.test(errorText)) errorClass = 'D1_AMBIGUOUS_COLUMN_ERROR';
+          else if (/too many sql variables|too many parameters/.test(errorText)) errorClass = 'D1_PARAMETER_LIMIT_ERROR';
+          const codes = errors.map((item) => Number(item?.code)).filter(Number.isInteger).join(',');
+          console.error('D1_QUERY_FAILURE class=' + errorClass + ' http=' + response.status + ' codes=' + (codes || 'none'));
+          throw new Error('Cloudflare D1 query failed; inspect the safe D1_QUERY_FAILURE class above');
+          }
           const payload = await response.json();
           if (payload.success !== true || !Array.isArray(payload.result) || payload.result.length !== queries.length) {
             throw new Error('Cloudflare D1 returned an unsuccessful or incomplete read-only query result');
