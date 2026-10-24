@@ -542,3 +542,26 @@ test('balance-percent planning delegates to broker-authoritative sizing without 
   assert.equal(instrument.balancePercentLots,0.25);
   assert.equal(instrument.brokerSizing.percent,2);
 });
+
+test('cTrader quote planning reports safe, stage-specific diagnostic codes', async () => {
+  await assert.rejects(
+    waitForCTraderPlanningPrice({}),
+    (error) => error?.code === 'CTRADER_QUOTE_READER_CONFIG_INVALID',
+  );
+
+  await assert.rejects(
+    waitForCTraderPlanningPrice({
+      session: { waitForEvent: async () => { throw new Error('private connector detail'); } },
+      marketData: {
+        handleSpotEvent() {},
+        marketPriceFor() { return null; },
+      },
+      symbolId: 75,
+      platformSymbol: 'Volatility 75 Index',
+      side: 'BUY',
+      timeoutMs: 100,
+    }),
+    (error) => error?.code === 'CTRADER_QUOTE_WAIT_FAILED'
+      && error.message === 'cTrader broker quote wait failed',
+  );
+});
