@@ -166,16 +166,26 @@ jobs:
           if (!response.ok) {
           const errorPayload = await response.json().catch(() => null);
           const errors = Array.isArray(errorPayload?.errors) ? errorPayload.errors : [];
-          const errorText = errors.map((item) => String(item?.message || '')).join(' ').toLowerCase();
+          const errorMessages = errors.map((item) => String(item?.message || item?.error || '')).filter(Boolean);
+          const errorText = errorMessages.join(' ').toLowerCase();
           let errorClass = 'D1_QUERY_REJECTED';
           if (/syntax error|near .+:/.test(errorText)) errorClass = 'D1_SQL_SYNTAX_ERROR';
           else if (/no such column|unknown column/.test(errorText)) errorClass = 'D1_SCHEMA_COLUMN_ERROR';
           else if (/no such table|unknown table/.test(errorText)) errorClass = 'D1_SCHEMA_TABLE_ERROR';
           else if (/ambiguous column/.test(errorText)) errorClass = 'D1_AMBIGUOUS_COLUMN_ERROR';
           else if (/too many sql variables|too many parameters/.test(errorText)) errorClass = 'D1_PARAMETER_LIMIT_ERROR';
+          else if (/malformed json/.test(errorText)) errorClass = 'D1_MALFORMED_JSON';
           const codes = errors.map((item) => Number(item?.code)).filter(Number.isInteger).join(',');
-          console.error('D1_QUERY_FAILURE class=' + errorClass + ' http=' + response.status + ' codes=' + (codes || 'none'));
-          throw new Error('Cloudflare D1 query failed; inspect the safe D1_QUERY_FAILURE class above');
+          const safeErrorDetail = errorMessages.join(' ')
+            .replace(/\beyJ[A-Za-z0-9._-]+/g, '[TOKEN]')
+            .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '[UUID]')
+            .replace(/(?:access[_ -]?token|authorization|password|secret|credential)[=: ]+[^ ,;]+/gi, '[SENSITIVE_FIELD_REDACTED]')
+            .replace(/https?:\/\/\S+/gi, '[URL]')
+            .replace(/\b\d{6,}\b/g, '[NUMBER]')
+            .replace(/[^A-Za-z0-9 _.,:;'()\-]/g, '?')
+            .slice(0, 240);
+          console.error('D1_QUERY_FAILURE class=' + errorClass + ' http=' + response.status + ' codes=' + (codes || 'none') + ' detail=' + (safeErrorDetail || 'NO_ERROR_MESSAGE'));          
+          throw new Error('Cloudflare D1 query failed; inspect the redacted D1_QUERY_FAILURE detail above');
           }
           const payload = await response.json();
           if (payload.success !== true || !Array.isArray(payload.result) || payload.result.length !== queries.length) {
