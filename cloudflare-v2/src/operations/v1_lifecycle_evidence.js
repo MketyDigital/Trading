@@ -1,3 +1,4 @@
+import { safeBrokerContextCode } from './broker_context_diagnostics.js';
 import { normalizeOperationEvidence } from './operation_journal.js';
 
 function text(value, fallback = null) {
@@ -207,6 +208,7 @@ export function buildV1LifecycleEvidence({
           reason: text(account?.reason),
           actionCount: Array.isArray(account?.actions) ? account.actions.length : 0,
           error: text(account?.error),
+          brokerContextCode: safeBrokerContextCode(account?.brokerContextCode),
         })),
       },
     }));
