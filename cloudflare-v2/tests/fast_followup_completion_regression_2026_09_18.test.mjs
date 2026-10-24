@@ -227,3 +227,37 @@ test('immediate next full signal selects the adjacent incomplete fast trade befo
     groupIds: ['fresh-ct', 'fresh-mt'],
   });
 });
+
+test('passed individual TP retains its SL-protected leg with null TP and later TP remains active', async () => {
+  const fast = {
+    id:'fast-null-tp', workspaceId:'ws', tradeAccountId:'acct', sourceInstanceId:'src',
+    sourceEventIds:['telegram:-1001:77'], symbol:'XAUUSD', side:'BUY',
+    orderType:'MARKET', entryPrice:100, entry:{kind:'MARKET',executedPrice:100},
+    stopLoss:null, incomplete:true, status:'OPEN', createdAt:1000, updatedAt:1000,
+    legs:[{legId:'fast-1',targetIndex:1,lots:0.03,status:'OPEN',
+      brokerPositionId:'p-77',stopLoss:null,takeProfit:null}],
+  };
+  const saved=[];
+  const result=await orchestrateTradingEventSimulation({
+    event:{external_event_id:'telegram:-1001:78',workspace_hint:'ws',
+      source:{instance_id:'src'},thread:{reply_to_event_id:'telegram:-1001:77'},text:'complete'},
+    eventId:'evt-78',nowMs:2000,
+    interpretation:{status:'READY',intent:{symbol:{canonical:'XAUUSD'},side:'BUY',
+      orderType:'MARKET',entry:{kind:'MARKET'},stopLoss:90,
+      takeProfits:[99,105,110],incomplete:false}},
+  },{
+    stateCoordinator:{correlate:async()=>({status:'MATCHED',reason:'FAST_ENTRY_COMPLETION',groupId:'fast-null-tp'})},
+    stateStore:{getGroup:async()=>fast,putGroup:async g=>saved.push(structuredClone(g))},
+    accountProvider:async()=>[{id:'acct',workspace_id:'ws',execution_enabled:true,
+      lot_sizing_type:'fixed',lot_value:0.03,safety_policy:{killSwitch:false},
+      entry_zone_policy:{mode:'market_only'}}],
+    instrumentProvider:async()=>({minLots:0.01,maxLots:10,stepLots:0.01}),
+    marketPriceProvider:async()=>101,
+  });
+  assert.equal(result.accounts[0].status,'READY');
+  const opens=result.accounts[0].actions.filter(a=>a.type==='OPEN_POSITION');
+  assert.equal(opens.length,2);
+  assert.ok(opens.every(a=>a.stopLoss != null));
+  assert.ok(saved[0].legs.some(l=>l.targetIndex===1&&l.takeProfit===null));
+  assert.ok(saved[0].legs.some(l=>l.targetIndex===3&&l.takeProfit===110));
+});
