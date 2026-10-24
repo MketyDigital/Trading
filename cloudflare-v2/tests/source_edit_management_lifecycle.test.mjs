@@ -148,3 +148,19 @@ test('does not convert edits of protected complete trades into new TP-leg opens'
   });
   assert.equal(actual.reason, 'EDIT_TARGET');
 });
+
+test('edited completed trade with TP1 and TP3 but missing TP2 fails closed for recovery', () => {
+  const trade = group({
+    incomplete: false,
+    legs: [
+      { legId: 'tp1', targetIndex: 1, status: 'OPEN', brokerPositionId: 'broker-1', stopLoss: 4380, takeProfit: 4250 },
+      { legId: 'tp3', targetIndex: 3, status: 'OPEN', brokerPositionId: 'broker-3', stopLoss: 4380, takeProfit: 4200 },
+    ],
+  });
+  const result = buildEditedSignalManagement(trade, editedIntent({
+    takeProfits: [4240, 4220, 4200],
+  }));
+  assert.equal(result.status, 'NEEDS_REVIEW');
+  assert.equal(result.reason, 'EDIT_MISSING_BROKER_TARGET_LEG');
+  assert.deepEqual(result.actions, []);
+});
