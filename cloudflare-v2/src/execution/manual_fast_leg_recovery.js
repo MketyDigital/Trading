@@ -20,9 +20,15 @@ const matchedPrice = (a, b, tick) => a != null && b != null && Math.abs(a - b) <
 export function proposeManualFastLegRecovery({
   group, positions = [], resolvedPlatformSymbol, targetPrices = [],
   tickSize, nowMs = Date.now(), maxAgeMs = 30 * 60_000,
+  claimedBrokerPositionIds = [],
 } = {}) {
   const existing = Array.isArray(group?.legs) ? group.legs : [];
-  const knownTickets = new Set(existing.map(ticket).filter(Boolean));
+  // The caller must supply already-claimed tickets from all other groups in
+  // this broker account; a symbol/TP match cannot prove exclusive ownership.
+  const knownTickets = new Set([
+    ...existing.map(ticket),
+    ...(Array.isArray(claimedBrokerPositionIds) ? claimedBrokerPositionIds.map(str) : []),
+  ].filter(Boolean));
   const target = targetPrices.map(positive);
   const tick = positive(tickSize);
   const account = str(group?.tradeAccountId);
