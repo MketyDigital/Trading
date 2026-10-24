@@ -29,7 +29,6 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       AUDIT_WINDOW_DAYS: ${{ inputs.window_days }}
-      REPORT_DIR: ${{ runner.temp }}/cloudflare-resource-audit
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@v4
@@ -38,6 +37,8 @@ jobs:
           persist-credentials: false
 
       - name: Run read-only Cloudflare resource and usage audit
+        env:
+          REPORT_DIR: ${{ runner.temp }}/cloudflare-resource-audit
         run: node cloudflare-v2/scripts/cloudflare_resource_audit.mjs
 
       - name: Add run summary
@@ -57,6 +58,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trading-cloudflare-resource-audit-${{ github.run_id }}
-          path: ${{ env.REPORT_DIR }}/cloudflare-resource-audit.json
+          path: ${{ runner.temp }}/cloudflare-resource-audit/cloudflare-resource-audit.json
           if-no-files-found: ignore
           retention-days: 14
