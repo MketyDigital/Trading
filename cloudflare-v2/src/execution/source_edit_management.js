@@ -59,6 +59,15 @@ export function buildEditedSignalManagement(group = {}, intent = {}, { rawText =
     return { status: 'NEEDS_REVIEW', reason: 'EDIT_TARGET_STRUCTURE_CHANGE_UNSUPPORTED', actions: [] };
   }
 
+  // A complete group can have holes even when its highest target index is
+  // present. Do not report a successful edit while silently losing TP2.
+  // Recovery must first prove each missing broker ticket or explicitly gate
+  // creation of the missing position.
+  const liveTargetIndexes = new Set(legs.map((leg) => Number(leg.targetIndex)));
+  if (suppliedTargets.some((_, index) => !liveTargetIndexes.has(index + 1))) {
+    return { status: 'NEEDS_REVIEW', reason: 'EDIT_MISSING_BROKER_TARGET_LEG', actions: [] };
+  }
+
   // Omission in an edited signal is not interpreted as destructive removal.
   // Removal remains an explicit management command (REMOVE SL / REMOVE TP).
   const nextStop = finiteOrNull(intent.stopLoss);
