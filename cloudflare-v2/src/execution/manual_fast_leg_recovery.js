@@ -40,7 +40,7 @@ export function proposeManualFastLegRecovery({
       || !Number.isFinite(Number(nowMs)) || maxAgeMs <= 0
       || Number(nowMs) - created > maxAgeMs || created - Number(nowMs) > 5000
       || target.length < 2 || target.some((p) => p == null)
-      || !knownTickets.size || existing.length > target.length) {
+      || !existing.some((leg) => ticket(leg)) || existing.length > target.length) {
     return { status: 'INELIGIBLE', proposals: [], reviews: [] };
   }
   const claimedTargets = new Set(existing.map((leg) => Number(leg?.targetIndex)).filter(Number.isInteger));
