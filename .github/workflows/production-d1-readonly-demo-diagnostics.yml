@@ -153,13 +153,13 @@ jobs:
           console.log('D1_DATABASE_SIZE class=' + databaseInfoClass + ' file_size_bytes=' + fileSize);
 
           const redactCell = (value) => String(value ?? '')
-            .replace(/\\beyJ[A-Za-z0-9._-]+/g, '[TOKEN]')
-            .replace(/\\b[0-9a-f]{8}-[0-9a-f-]{27,}\\b/gi, '[ID]')
+            .replace(/\beyJ[A-Za-z0-9._-]+/g, '[TOKEN]')
+            .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '[ID]')
             .replace(/(?:access[_ -]?token|authorization|password|secret|credential)[=: ]+[^ ,;]+/gi, '[SENSITIVE_FIELD_REDACTED]')
-            .replace(/https?:\\/\\/\\S+/gi, '[URL]')
-            .replace(/\\b\\d{6,}\\b/g, '[NUMBER]')
+            .replace(/https?:\/\/\S+/gi, '[URL]')
+            .replace(/\b\d{6,}\b/g, '[NUMBER]')
             .slice(0, 220);
-          const escapeCell = (value) => redactCell(value).replaceAll('|', '\\\\|').replaceAll('\\n', ' ');
+          const escapeCell = (value) => redactCell(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
           let report = '# Focused production D1 diagnostics\n\n'
             + '- Window: last ' + hours + ' hours (through ' + new Date().toISOString() + ')\n'
             + '- Source: existing production D1 binding; two SELECT-only diagnostic statements\n'
