@@ -242,16 +242,29 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
   const incomingStopLoss = finitePositive(intent?.stopLoss);
   const stopValid = incomingStopLoss == null
     || references.every((reference) => protectionValueValidAtMarket(side, 'stopLoss', incomingStopLoss, reference));
+  const completionProtectionSkips = [];
   let changed = incomingStopLoss != null && !stopValid;
+  if (incomingStopLoss != null && !stopValid) {
+    completionProtectionSkips.push({ field: 'stopLoss', code: 'SL_SKIPPED_INVALID_COMPLETION_GEOMETRY' });
+  }
   const passedIndexes = [];
   const originalTakeProfits = Array.isArray(intent?.takeProfits) ? [...intent.takeProfits] : [];
   const takeProfits = originalTakeProfits.map((value, index) => {
     if (finitePositive(value) == null || references.every((reference) => protectionValueValidAtMarket(side, 'takeProfit', value, reference))) return value;
     changed = true;
-    passedIndexes.push(index + 1);
+    const targetIndex = index + 1;
+    const currentPrice = finitePositive(currentMarketPrice);
+    const passedAtMarket = currentPrice != null
+      && !protectionValueValidAtMarket(side, 'takeProfit', value, currentPrice);
+    completionProtectionSkips.push({
+      field: 'takeProfits',
+      targetIndex,
+      code: passedAtMarket ? `TP${targetIndex}_SKIPPED_PASSED_MARKET` : `TP${targetIndex}_SKIPPED_INVALID_COMPLETION_GEOMETRY`,
+    });
+    passedIndexes.push(targetIndex);
     return null;
   });
-  if (!changed) return { intent, logicalTakeProfits: null };
+  if (!changed) return { intent, logicalTakeProfits: null, protectionSkips: [] };
 
   let passedPrefixLength = 0;
   while (passedIndexes.includes(passedPrefixLength + 1)) passedPrefixLength += 1;
@@ -276,6 +289,7 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     },
     logicalTakeProfits: originalTakeProfits.map((value) =>
       protectionValueValidAtMarket(side, 'takeProfit', value, entryReference) ? finitePositive(value) : null),
+    protectionSkips: completionProtectionSkips,
   };
 }
 
@@ -878,6 +892,7 @@ export async function orchestrateTradingEventSimulation({
     let plan;
     let completionIntent = planningIntent;
     let logicalTakeProfits = null;
+  let completionProtectionSkips = [];
     const groupId = isFastCompletion && matchedGroup
       ? matchedGroup.id
       : `${eventId || event.external_event_id || 'event'}:${account.id}`;
@@ -886,6 +901,7 @@ export async function orchestrateTradingEventSimulation({
         const prepared = prepareFastCompletionIntent(matchedGroup, planningIntent, currentMarketPrice);
         completionIntent = prepared.intent;
         logicalTakeProfits = prepared.logicalTakeProfits;
+        completionProtectionSkips = prepared.protectionSkips ?? [];
       }
       plan = buildExecutionPlan(completionIntent, {
         account,
@@ -898,6 +914,12 @@ export async function orchestrateTradingEventSimulation({
         exposure,
       });
       plan = applyFollowerLotPolicy(plan, account);
+      if (completionProtectionSkips.length) {
+        plan = {
+          ...plan,
+          protectionSkips: [...(plan.protectionSkips ?? []), ...completionProtectionSkips],
+        };
+      }
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'EXECUTION_PLAN_INVALID', error: error.message, actions: [] });
       continue;
