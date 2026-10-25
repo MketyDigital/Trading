@@ -194,6 +194,15 @@ function protectionValueValidAtMarket(side, kind, value, currentMarketPrice) {
   return false;
 }
 
+function takeProfitPassedAtMarket(side, value, currentMarketPrice) {
+  const target = finitePositive(value);
+  const market = finitePositive(currentMarketPrice);
+  if (target == null || market == null) return false;
+  if (side === 'BUY') return target <= market;
+  if (side === 'SELL') return target >= market;
+  return false;
+}
+
 function hasStandaloneCompletionIntent(intent = {}) {
   const symbol = String(intent?.symbol?.canonical ?? intent?.symbol ?? '').trim();
   const side = String(intent?.side ?? '').trim().toUpperCase();
@@ -237,25 +246,32 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice),
   ].filter((value) => value != null);
   if (references.length === 0) {
-    return { intent, logicalTakeProfits: null };
+    return { intent, logicalTakeProfits: null, passedTakeProfitIndexes: [] };
   }
   const side = String(intent.side || existing?.side || '').toUpperCase();
   const incomingStopLoss = finitePositive(intent?.stopLoss);
   const stopValid = incomingStopLoss == null
     || references.every((reference) => protectionValueValidAtMarket(side, 'stopLoss', incomingStopLoss, reference));
   let changed = incomingStopLoss != null && !stopValid;
-  const passedIndexes = [];
+  const passedTakeProfitIndexes = [];
   const originalTakeProfits = Array.isArray(intent?.takeProfits) ? [...intent.takeProfits] : [];
   const takeProfits = originalTakeProfits.map((value, index) => {
-    if (finitePositive(value) == null || references.every((reference) => protectionValueValidAtMarket(side, 'takeProfit', value, reference))) return value;
-    changed = true;
-    passedIndexes.push(index + 1);
-    return null;
+    if (takeProfitPassedAtMarket(side, value, currentMarketPrice)) {
+      changed = true;
+      passedTakeProfitIndexes.push(index + 1);
+      return null;
+    }
+    if (finitePositive(value) == null
+        || !references.every((reference) => protectionValueValidAtMarket(side, 'takeProfit', value, reference))) {
+      changed = true;
+      return null;
+    }
+    return value;
   });
-  if (!changed) return { intent, logicalTakeProfits: null };
+  if (!changed) return { intent, logicalTakeProfits: null, passedTakeProfitIndexes: [] };
 
   let passedPrefixLength = 0;
-  while (passedIndexes.includes(passedPrefixLength + 1)) passedPrefixLength += 1;
+  while (passedTakeProfitIndexes.includes(passedPrefixLength + 1)) passedPrefixLength += 1;
   const entryReference = finitePositive(intent.entry?.value)
     ?? finitePositive(intent.entry?.referencePrice)
     ?? finitePositive(existing?.entryPrice)
@@ -277,10 +293,11 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     },
     logicalTakeProfits: originalTakeProfits.map((value) =>
       protectionValueValidAtMarket(side, 'takeProfit', value, entryReference) ? finitePositive(value) : null),
+    passedTakeProfitIndexes,
   };
 }
 
-function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice }) {
+function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice, passedTakeProfitIndexes = [] }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
     eventId,
@@ -321,6 +338,7 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
 
   const currentPrice = finitePositive(currentMarketPrice);
   const side = String(desired.side || '').toUpperCase();
+  const passedTargetIndexes = new Set(passedTakeProfitIndexes.map(Number));
   const updateIdentity = String(eventId || event?.external_event_id || nowMs || 'update');
   const actions = [];
   const nextLegs = [];
@@ -329,6 +347,24 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     const targetIndex = Number(desiredLeg?.targetIndex ?? 0);
     if (!Number.isInteger(targetIndex) || targetIndex < 1) continue;
     const existingLeg = existingByTarget.get(targetIndex) || null;
+
+    if (passedTargetIndexes.has(targetIndex)) {
+      const hasBrokerBinding = Boolean(existingLeg?.brokerPositionId || existingLeg?.brokerOrderId);
+      const existingStatus = String(existingLeg?.status || '').toUpperCase();
+      if (!existingLeg || (!hasBrokerBinding && existingStatus !== 'CLOSED')) {
+        nextLegs.push({
+          ...(existingLeg || {}),
+          ...desiredLeg,
+          ...(existingLeg?.legId ? { legId: existingLeg.legId } : {}),
+          brokerPositionId: existingLeg?.brokerPositionId ?? null,
+          brokerOrderId: existingLeg?.brokerOrderId ?? null,
+          status: 'SKIPPED',
+          takeProfit: null,
+          skipReason: 'TP_ALREADY_PASSED',
+        });
+        continue;
+      }
+    }
 
     const stopValid = desiredLeg.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', desiredLeg.stopLoss, currentPrice);
@@ -401,7 +437,7 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     // leg. Open with the valid SL, leave its broker TP absent, and retain the
     // logical target for later edits/replies and progressive management.
     // An invalid SL cannot be silently discarded for a new position.
-    if (!stopValidForOpen) continue;
+    if (!stopValidForOpen || open.stopLoss == null) continue;
     const executableTp = targetValidForOpen ? open.takeProfit ?? null : null;
     nextLegs.push({
       ...desiredLeg,
@@ -891,6 +927,7 @@ export async function orchestrateTradingEventSimulation({
     let plan;
     let completionIntent = planningIntent;
     let logicalTakeProfits = null;
+    let passedTakeProfitIndexes = [];
     const groupId = isFastCompletion && matchedGroup
       ? matchedGroup.id
       : `${eventId || event.external_event_id || 'event'}:${account.id}`;
@@ -899,6 +936,7 @@ export async function orchestrateTradingEventSimulation({
         const prepared = prepareFastCompletionIntent(matchedGroup, planningIntent, currentMarketPrice);
         completionIntent = prepared.intent;
         logicalTakeProfits = prepared.logicalTakeProfits;
+        passedTakeProfitIndexes = prepared.passedTakeProfitIndexes || [];
       }
       plan = buildExecutionPlan(completionIntent, {
         account,
@@ -942,6 +980,7 @@ export async function orchestrateTradingEventSimulation({
           account,
           nowMs: Number(nowMs),
           currentMarketPrice,
+          passedTakeProfitIndexes,
         });
       } catch (error) {
         results.push({ accountId: account.id, status: 'BLOCKED', reason: 'FAST_ENTRY_RECONCILIATION_FAILED', error: error.message, actions: [] });
