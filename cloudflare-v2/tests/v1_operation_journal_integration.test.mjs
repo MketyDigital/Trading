@@ -311,3 +311,37 @@ test('journal persistence failure is observational only and cannot block or rese
   assert.equal(executionCalls, 1);
   assert.equal(JSON.stringify(body).includes('journal unavailable'), false);
 });
+
+
+test('broker execution evidence preserves action type and TP target index', () => {
+  const rows = buildV1LifecycleEvidence({
+    sourceId: 'src-1',
+    result: { ok: true, duplicate: false, eventId: 'db-event-1', event, interpretation },
+    execution: {
+      status: 'PARTIAL',
+      accounts: [{
+        accountId: 'acct-mt5',
+        status: 'PARTIAL',
+        actions: [{
+          type: 'OPEN_POSITION',
+          targetIndex: 2,
+          status: 'FAILED',
+          legId: 'leg-2',
+          reason: 'INVALID_STOPS',
+          errorCode: 'INVALID_STOPS',
+        }],
+      }],
+    },
+  });
+
+  const execution = rows.find((row) => row.stage === 'BROKER_EXECUTION');
+  assert.deepEqual(execution.details.accounts[0].actions, [{
+    type: 'OPEN_POSITION',
+    targetIndex: 2,
+    status: 'FAILED',
+    legId: 'leg-2',
+    reason: 'INVALID_STOPS',
+    errorCode: 'INVALID_STOPS',
+    reconciledClosed: false,
+  }]);
+});
