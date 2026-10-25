@@ -282,9 +282,11 @@ test('an invalid but not-passed TP may open without TP when its SL is valid', as
   assert.equal(opens.find(action => action.targetIndex === 2)?.stopLoss, 90);
 });
 
-test('TP recovery does not open a leg when no valid SL is available', async () => {
+test('invalid TP recovery requires a valid SL while valid TP siblings remain eligible', async () => {
   const { result } = await runMissingTargetCompletion({
     marketPrice: 99, takeProfits: [105, 99.5, 110], stopLoss: null, existingStopLoss: null,
   });
-  assert.deepEqual(result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION'), []);
+  const opens = result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION');
+  assert.deepEqual(opens.map(action => action.targetIndex), [3]);
+  assert.equal(opens.some(action => action.targetIndex === 2 && action.takeProfit == null), false);
 });
