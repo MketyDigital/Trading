@@ -263,7 +263,7 @@ test('passed individual TP retains its SL-protected leg with null TP and later T
 });
 
 
-async function runMissingTargetCompletion({ marketPrice, takeProfits }) {
+async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90 }) {
   const existing = {
     id: 'fast-missing-targets', workspaceId: 'ws', tradeAccountId: 'acct',
     sourceInstanceId: 'src', sourceEventIds: ['telegram:-1001:80'],
@@ -279,7 +279,7 @@ async function runMissingTargetCompletion({ marketPrice, takeProfits }) {
       source: { instance_id: 'src' }, thread: { reply_to_event_id: 'telegram:-1001:80' } },
     eventId: 'evt-81', nowMs: 2000,
     interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' },
-      side: 'BUY', orderType: 'MARKET', entry: { kind: 'MARKET' }, stopLoss: 90,
+      side: 'BUY', orderType: 'MARKET', entry: { kind: 'MARKET' }, stopLoss,
       takeProfits, incomplete: false } },
   }, {
     stateCoordinator: { correlate: async () => ({
@@ -314,4 +314,12 @@ test('an invalid but not-passed TP may open without TP when its SL is valid', as
   assert.deepEqual(opens.map(action => action.targetIndex), [2, 3]);
   assert.equal(opens.find(action => action.targetIndex === 2)?.takeProfit, null);
   assert.equal(opens.find(action => action.targetIndex === 2)?.stopLoss, 90);
+});
+
+
+test('TP recovery does not open a leg when no valid SL is available', async () => {
+  const { result } = await runMissingTargetCompletion({
+    marketPrice: 101, takeProfits: [105, 110, 115], stopLoss: null,
+  });
+  assert.deepEqual(result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION'), []);
 });
