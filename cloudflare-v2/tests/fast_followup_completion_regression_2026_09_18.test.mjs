@@ -261,3 +261,57 @@ test('passed individual TP retains its SL-protected leg with null TP and later T
   assert.ok(saved[0].legs.some(l=>l.targetIndex===1&&l.takeProfit===null));
   assert.ok(saved[0].legs.some(l=>l.targetIndex===3&&l.takeProfit===110));
 });
+
+
+async function runMissingTargetCompletion({ marketPrice, takeProfits }) {
+  const existing = {
+    id: 'fast-missing-targets', workspaceId: 'ws', tradeAccountId: 'acct',
+    sourceInstanceId: 'src', sourceEventIds: ['telegram:-1001:80'],
+    symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
+    entryPrice: 100, entry: { kind: 'MARKET', executedPrice: 100 },
+    incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000,
+    legs: [{ legId: 'starter', targetIndex: 1, lots: 0.03, status: 'OPEN',
+      brokerPositionId: 'position-80', stopLoss: 90, takeProfit: null }],
+  };
+  const saved = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { external_event_id: 'telegram:-1001:81', workspace_hint: 'ws',
+      source: { instance_id: 'src' }, thread: { reply_to_event_id: 'telegram:-1001:80' } },
+    eventId: 'evt-81', nowMs: 2000,
+    interpretation: { status: 'READY', intent: { symbol: { canonical: 'XAUUSD' },
+      side: 'BUY', orderType: 'MARKET', entry: { kind: 'MARKET' }, stopLoss: 90,
+      takeProfits, incomplete: false } },
+  }, {
+    stateCoordinator: { correlate: async () => ({
+      status: 'MATCHED', reason: 'FAST_ENTRY_COMPLETION', groupId: existing.id,
+    }) },
+    stateStore: { getGroup: async () => existing,
+      putGroup: async group => saved.push(structuredClone(group)) },
+    accountProvider: async () => [{ id: 'acct', workspace_id: 'ws', execution_enabled: true,
+      lot_sizing_type: 'fixed', lot_value: 0.03, safety_policy: { killSwitch: false },
+      entry_zone_policy: { mode: 'market_only' } }],
+    instrumentProvider: async () => ({ minLots: 0.01, maxLots: 10, stepLots: 0.01 }),
+    marketPriceProvider: async () => marketPrice,
+  });
+  return { result, saved };
+}
+
+test('a passed missing TP is skipped while later valid TP targets remain eligible', async () => {
+  const { result, saved } = await runMissingTargetCompletion({
+    marketPrice: 101, takeProfits: [105, 100.5, 110],
+  });
+  const opens = result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION');
+  assert.deepEqual(opens.map(action => action.targetIndex), [3]);
+  assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.status, 'SKIPPED');
+  assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.skipReason, 'TP_ALREADY_PASSED');
+});
+
+test('an invalid but not-passed TP may open without TP when its SL is valid', async () => {
+  const { result } = await runMissingTargetCompletion({
+    marketPrice: 99, takeProfits: [105, 99.5, 110],
+  });
+  const opens = result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION');
+  assert.deepEqual(opens.map(action => action.targetIndex), [2, 3]);
+  assert.equal(opens.find(action => action.targetIndex === 2)?.takeProfit, null);
+  assert.equal(opens.find(action => action.targetIndex === 2)?.stopLoss, 90);
+});
