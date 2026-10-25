@@ -236,7 +236,7 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     finitePositive(existing?.legs?.find((leg) => leg?.status === 'OPEN')?.fillPrice),
   ].filter((value) => value != null);
   if (references.length === 0) {
-    return { intent, logicalTakeProfits: null };
+    return { intent, logicalTakeProfits: null, passedTakeProfitIndexes: [] };
   }
   const side = String(intent.side || existing?.side || '').toUpperCase();
   const incomingStopLoss = finitePositive(intent?.stopLoss);
@@ -254,17 +254,17 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     changed = true;
     const targetIndex = index + 1;
     const currentPrice = finitePositive(currentMarketPrice);
-    const passedAtMarket = currentPrice != null
+    const passedAtMarket = finitePositive(value) != null && currentPrice != null
       && !protectionValueValidAtMarket(side, 'takeProfit', value, currentPrice);
     completionProtectionSkips.push({
       field: 'takeProfits',
       targetIndex,
       code: passedAtMarket ? `TP${targetIndex}_SKIPPED_PASSED_MARKET` : `TP${targetIndex}_SKIPPED_INVALID_COMPLETION_GEOMETRY`,
     });
-    passedIndexes.push(targetIndex);
+    if (passedAtMarket) passedIndexes.push(targetIndex);
     return null;
   });
-  if (!changed) return { intent, logicalTakeProfits: null, protectionSkips: [] };
+  if (!changed) return { intent, logicalTakeProfits: null, protectionSkips: [], passedTakeProfitIndexes: [] };
 
   let passedPrefixLength = 0;
   while (passedIndexes.includes(passedPrefixLength + 1)) passedPrefixLength += 1;
@@ -290,10 +290,11 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
     logicalTakeProfits: originalTakeProfits.map((value) =>
       protectionValueValidAtMarket(side, 'takeProfit', value, entryReference) ? finitePositive(value) : null),
     protectionSkips: completionProtectionSkips,
+    passedTakeProfitIndexes: passedIndexes,
   };
 }
 
-function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice }) {
+function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice, passedTakeProfitIndexes = [] }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
     eventId,
@@ -334,6 +335,7 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
 
   const currentPrice = finitePositive(currentMarketPrice);
   const side = String(desired.side || '').toUpperCase();
+  const passedTargetIndexes = new Set(passedTakeProfitIndexes.map(Number));
   const updateIdentity = String(eventId || event?.external_event_id || nowMs || 'update');
   const actions = [];
   const nextLegs = [];
@@ -342,6 +344,27 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     const targetIndex = Number(desiredLeg?.targetIndex ?? 0);
     if (!Number.isInteger(targetIndex) || targetIndex < 1) continue;
     const existingLeg = existingByTarget.get(targetIndex) || null;
+
+    if (passedTargetIndexes.has(targetIndex)) {
+      const hasBrokerBinding = Boolean(existingLeg?.brokerPositionId || existingLeg?.brokerOrderId);
+      const existingStatus = String(existingLeg?.status || '').toUpperCase();
+      if (existingLeg && (hasBrokerBinding || existingStatus === 'CLOSED')) {
+        // Passed targets never rewrite broker-bound or closed legs.
+        nextLegs.push({ ...existingLeg });
+      } else {
+        nextLegs.push({
+          ...(existingLeg || {}),
+          ...desiredLeg,
+          ...(existingLeg?.legId ? { legId: existingLeg.legId } : {}),
+          brokerPositionId: existingLeg?.brokerPositionId ?? null,
+          brokerOrderId: existingLeg?.brokerOrderId ?? null,
+          status: 'SKIPPED',
+          takeProfit: null,
+          skipReason: 'TP_ALREADY_PASSED',
+        });
+      }
+      continue;
+    }
 
     const stopValid = desiredLeg.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', desiredLeg.stopLoss, currentPrice);
@@ -404,13 +427,25 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       continue;
     }
 
-    const open = plannedOpenByTarget.get(targetIndex);
+    const open = plannedOpenByTarget.get(targetIndex)
+      || (desiredLeg.takeProfitPlaceholder === true ? {
+        type: 'OPEN_POSITION',
+        legId: desiredLeg.legId,
+        targetIndex,
+        side: desired.side,
+        orderType: desired.orderType,
+        symbol: desired.symbol,
+        entry: desired.entry,
+        lots: desiredLeg.lots,
+        stopLoss: desiredLeg.stopLoss,
+        takeProfit: null,
+      } : null);
     if (!open) continue;
     const stopValidForOpen = open.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
     const targetValidForOpen = open.takeProfit == null
       || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
-    if (!stopValidForOpen || !targetValidForOpen) continue;
+    if (!stopValidForOpen || !targetValidForOpen || open.stopLoss == null) continue;
 
     nextLegs.push(desiredLeg);
     actions.push({
@@ -893,6 +928,7 @@ export async function orchestrateTradingEventSimulation({
     let completionIntent = planningIntent;
     let logicalTakeProfits = null;
   let completionProtectionSkips = [];
+  let passedTakeProfitIndexes = [];
     const groupId = isFastCompletion && matchedGroup
       ? matchedGroup.id
       : `${eventId || event.external_event_id || 'event'}:${account.id}`;
@@ -902,6 +938,7 @@ export async function orchestrateTradingEventSimulation({
         completionIntent = prepared.intent;
         logicalTakeProfits = prepared.logicalTakeProfits;
         completionProtectionSkips = prepared.protectionSkips ?? [];
+        passedTakeProfitIndexes = prepared.passedTakeProfitIndexes || [];
       }
       plan = buildExecutionPlan(completionIntent, {
         account,
@@ -951,6 +988,7 @@ export async function orchestrateTradingEventSimulation({
           account,
           nowMs: Number(nowMs),
           currentMarketPrice,
+          passedTakeProfitIndexes,
         });
       } catch (error) {
         results.push({ accountId: account.id, status: 'BLOCKED', reason: 'FAST_ENTRY_RECONCILIATION_FAILED', error: error.message, actions: [] });
