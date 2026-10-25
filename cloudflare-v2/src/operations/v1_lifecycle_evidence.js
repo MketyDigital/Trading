@@ -284,9 +284,13 @@ export function buildV1LifecycleEvidence({
               reason: account?.reason ?? null,
               actions: Array.isArray(account?.actions)
                 ? account.actions.map((action) => ({
+                    ...(text(action?.type) ? { type: text(action.type) } : {}),
+                    ...(Number.isInteger(Number(action?.targetIndex)) && Number(action.targetIndex) >= 1
+                      ? { targetIndex: Number(action.targetIndex) } : {}),
                     status: action?.status ?? null,
                     legId: action?.legId ?? null,
                     reason: action?.reason ?? null,
+                    ...(text(action?.errorCode ?? action?.code) ? { errorCode: text(action.errorCode ?? action.code) } : {}),
                     reconciledClosed: action?.reconciledClosed === true,
                   }))
                 : [],

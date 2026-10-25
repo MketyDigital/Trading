@@ -80,6 +80,62 @@ jobs:
           if (eventTimes.length) {
             queries.push({ title: 'D1 query plan for timestamp selection', sql: 'EXPLAIN QUERY PLAN SELECT e.id, e.workspace_id, e.received_at FROM trading_workspace_access w CROSS JOIN trading_events e INDEXED BY idx_trading_events_workspace_received WHERE e.workspace_id=w.id AND e.received_at IN (?,?)', params: eventTimes.slice(0,2) });
           }
+          if (eventTimes.length) {
+            const placeholders = eventTimes.map(() => '?').join(',');
+            queries.push({
+              title: 'Per-target protection skips (allowlisted categories)',
+              sql: `WITH selected_events AS (
+                SELECT e.id, e.workspace_id, e.received_at
+                FROM trading_workspace_access w
+                CROSS JOIN trading_events e INDEXED BY idx_trading_events_workspace_received
+                WHERE e.workspace_id=w.id
+                  AND e.received_at IN (${placeholders})
+                  AND instr(upper(COALESCE(json_extract(e.canonical_intent,'$.symbol.canonical'),json_extract(e.canonical_intent,'$.symbol'),'')),'VOLATILITY')>0
+              ), workspace_slots AS (
+                SELECT id,ROW_NUMBER() OVER(ORDER BY id) AS workspace_slot
+                FROM trading_workspace_access
+                WHERE id IN (SELECT workspace_id FROM selected_events)
+              ), account_slots AS (
+                SELECT a.workspace_id,a.id,a.platform,a.environment,
+                  ROW_NUMBER() OVER(PARTITION BY a.workspace_id,lower(a.platform),lower(a.environment) ORDER BY a.id) AS account_slot
+                FROM trade_accounts a
+                WHERE EXISTS (
+                  SELECT 1 FROM selected_events e
+                  JOIN operation_journal p ON p.workspace_id=e.workspace_id AND p.trading_event_id=e.id
+                  JOIN json_each(COALESCE(json_extract(p.details,'$.accounts'),'[]')) planned_account
+                    ON json_extract(planned_account.value,'$.accountId')=a.id
+                  WHERE upper(COALESCE(p.stage,''))='BROKER_PLANNING'
+                )
+              )
+              SELECT e.received_at,
+                'W'||COALESCE(ws.workspace_slot,0)||'-'||
+                  CASE lower(COALESCE(a.platform,'')) WHEN 'mt5' THEN 'MT5' WHEN 'ctrader' THEN 'CTRADER' WHEN 'deriv' THEN 'DERIV' ELSE 'OTHER' END||'-'||
+                  CASE lower(COALESCE(a.environment,'')) WHEN 'demo' THEN 'DEMO' WHEN 'live' THEN 'LIVE' ELSE 'UNKNOWN' END||'-A'||COALESCE(ast.account_slot,0) AS account_slot,
+                CASE lower(COALESCE(json_extract(s.details,'$.field'),'')) WHEN 'stoploss' THEN 'STOP_LOSS' WHEN 'takeprofits' THEN 'TAKE_PROFITS' ELSE 'OTHER_FIELD' END AS field,
+                CASE
+                  WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_GEOMETRY' THEN 'SL_INVALID_GEOMETRY'
+                  WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_PRICE' THEN 'SL_INVALID_PRICE'
+                  WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_COMPLETION_GEOMETRY' THEN 'SL_INVALID_COMPLETION_GEOMETRY'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_PASSED_MARKET' THEN 'TP_PASSED_MARKET'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_COMPLETION_GEOMETRY' THEN 'TP_INVALID_COMPLETION_GEOMETRY'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_GEOMETRY' THEN 'TP_INVALID_GEOMETRY'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_PRICE' THEN 'TP_INVALID_PRICE'
+                  ELSE 'OTHER_SKIP'
+                END AS skip_cause,
+                CASE WHEN CAST(json_extract(s.details,'$.targetIndex') AS INTEGER) BETWEEN 1 AND 20
+                  THEN CAST(json_extract(s.details,'$.targetIndex') AS INTEGER) ELSE NULL END AS target_index
+              FROM selected_events e
+              JOIN operation_journal s ON s.workspace_id=e.workspace_id AND s.trading_event_id=e.id
+              LEFT JOIN trade_accounts a ON a.workspace_id=s.workspace_id AND a.id=s.trade_account_id
+              LEFT JOIN account_slots ast ON ast.workspace_id=a.workspace_id AND ast.id=a.id
+              LEFT JOIN workspace_slots ws ON ws.id=e.workspace_id
+              WHERE upper(COALESCE(s.stage,''))='BROKER_PLANNING'
+                AND lower(COALESCE(s.operation,''))='skip_invalid_protection'
+              ORDER BY datetime(e.received_at),account_slot,field,target_index
+              LIMIT 200`,
+              params: eventTimes,
+            });
+          }
 
           const headers = {
             Authorization: 'Bearer ' + process.env.CLOUDFLARE_API_TOKEN,

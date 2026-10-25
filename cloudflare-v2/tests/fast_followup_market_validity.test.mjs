@@ -226,6 +226,11 @@ test('fast completion survives crossed TP1 and keeps valid SL plus later targets
   const actions = result.accounts[0].actions;
   assert.equal(actions.filter((action) => action.type === 'OPEN_POSITION').length, 2);
   assert.equal(actions.filter((action) => action.type === 'MODIFY_POSITION').length, 1);
+  assert.deepEqual(result.accounts[0].protectionSkips, [{
+    field: 'takeProfits',
+    targetIndex: 1,
+    code: 'TP1_SKIPPED_PASSED_MARKET',
+  }]);
 
   const modify = actions.find((action) => action.type === 'MODIFY_POSITION');
   assert.equal(modify.brokerPositionId, '138490038');
