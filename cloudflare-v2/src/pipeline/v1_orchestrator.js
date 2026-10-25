@@ -294,6 +294,24 @@ function prepareFastCompletionIntent(existing, intent, currentMarketPrice) {
   };
 }
 
+function fastCompletionOpenForTarget(desired, desiredLeg, targetIndex, plannedOpenByTarget) {
+  const planned = plannedOpenByTarget.get(targetIndex);
+  if (planned) return planned;
+  if (desiredLeg.takeProfitPlaceholder !== true) return null;
+  return {
+    type: 'OPEN_POSITION',
+    legId: desiredLeg.legId,
+    targetIndex,
+    side: desired.side,
+    orderType: desired.orderType,
+    symbol: desired.symbol,
+    entry: desired.entry,
+    lots: desiredLeg.lots,
+    stopLoss: desiredLeg.stopLoss,
+    takeProfit: null,
+  };
+}
+
 function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, nowMs, currentMarketPrice, passedTakeProfitIndexes = [] }) {
   const desired = plannedStateGroup({ ...plan, intent: plan.intent }, {
     event,
@@ -382,8 +400,17 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       // complete signal can recover the missing first leg without duplicating
       // a genuinely closed broker position.
       if (!hasBrokerBinding && status !== 'CLOSED') {
-        const open = plannedOpenByTarget.get(targetIndex);
+        const open = fastCompletionOpenForTarget(desired, desiredLeg, targetIndex, plannedOpenByTarget);
         if (open) {
+          const stopValidForRetry = open.stopLoss == null
+            || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
+          const targetValidForRetry = open.takeProfit == null
+            || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
+          if (!stopValidForRetry || !targetValidForRetry
+              || (open.takeProfit == null && open.stopLoss == null)) {
+            nextLegs.push({ ...existingLeg });
+            continue;
+          }
           const retryOpen = {
             ...open,
             legId: existingLeg.legId,
@@ -430,19 +457,7 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       continue;
     }
 
-    const open = plannedOpenByTarget.get(targetIndex)
-      || (desiredLeg.takeProfitPlaceholder === true ? {
-        type: 'OPEN_POSITION',
-        legId: desiredLeg.legId,
-        targetIndex,
-        side: desired.side,
-        orderType: desired.orderType,
-        symbol: desired.symbol,
-        entry: desired.entry,
-        lots: desiredLeg.lots,
-        stopLoss: desiredLeg.stopLoss,
-        takeProfit: null,
-      } : null);
+    const open = fastCompletionOpenForTarget(desired, desiredLeg, targetIndex, plannedOpenByTarget);
     if (!open) continue;
     const stopValidForOpen = open.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
