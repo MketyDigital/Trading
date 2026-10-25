@@ -430,7 +430,19 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       continue;
     }
 
-    const open = plannedOpenByTarget.get(targetIndex);
+    const open = plannedOpenByTarget.get(targetIndex)
+      || (desiredLeg.takeProfitPlaceholder === true ? {
+        type: 'OPEN_POSITION',
+        legId: desiredLeg.legId,
+        targetIndex,
+        side: desired.side,
+        orderType: desired.orderType,
+        symbol: desired.symbol,
+        entry: desired.entry,
+        lots: desiredLeg.lots,
+        stopLoss: desiredLeg.stopLoss,
+        takeProfit: null,
+      } : null);
     if (!open) continue;
     const stopValidForOpen = open.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
