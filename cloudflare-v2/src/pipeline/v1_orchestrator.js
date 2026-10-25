@@ -363,6 +363,11 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     if (!Number.isInteger(targetIndex) || targetIndex < 1) continue;
     const existingLeg = existingByTarget.get(targetIndex) || null;
 
+    if (String(existingLeg?.status || '').toUpperCase() === 'CLOSED') {
+      nextLegs.push({ ...existingLeg });
+      continue;
+    }
+
     if (passedTargetIndexes.has(targetIndex)) {
       const hasBrokerBinding = Boolean(existingLeg?.brokerPositionId || existingLeg?.brokerOrderId);
       const existingStatus = String(existingLeg?.status || '').toUpperCase();

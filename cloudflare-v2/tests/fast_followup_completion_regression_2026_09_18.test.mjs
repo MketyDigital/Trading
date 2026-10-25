@@ -229,7 +229,7 @@ test('immediate next full signal selects the adjacent incomplete fast trade befo
 });
 
 
-async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90, existingStopLoss = 90, failedTarget = false }) {
+async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90, existingStopLoss = 90, failedTarget = false, closedTarget = false }) {
   const existing = {
     id: 'fast-missing-targets', workspaceId: 'ws', tradeAccountId: 'acct',
     sourceInstanceId: 'src', sourceEventIds: ['telegram:-1001:80'],
@@ -242,6 +242,9 @@ async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss =
       ...(failedTarget ? [{ legId: 'failed-two', targetIndex: 2, lots: 0.03,
         status: 'FAILED', brokerPositionId: null, brokerOrderId: null,
         stopLoss: null, takeProfit: null }] : []),
+      ...(closedTarget ? [{ legId: 'closed-three', targetIndex: 3, lots: 0,
+        status: 'CLOSED', brokerPositionId: 'closed-position-3', brokerOrderId: null,
+        stopLoss: 85, takeProfit: 105, closedAt: 1500 }] : []),
     ],
   };
   const saved = [];
@@ -310,4 +313,20 @@ test('an existing unbound failed TP leg retries an invalid placeholder with its 
   assert.match(retry.idempotencyKey, /:retry:/);
   assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.legId, 'failed-two');
   assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.status, 'PLANNED');
+});
+
+
+test('a closed target leg is preserved even while later recovery targets are planned', async () => {
+  const { result, saved } = await runMissingTargetCompletion({
+    marketPrice: 101, takeProfits: [105, 110, 115], closedTarget: true,
+  });
+  assert.equal(result.accounts[0].actions.some(action =>
+    action.type === 'MODIFY_POSITION' && action.legId === 'closed-three'), false);
+  assert.equal(result.accounts[0].actions.some(action =>
+    action.type === 'OPEN_POSITION' && action.targetIndex === 3), false);
+  assert.deepEqual(saved[0].legs.find(leg => leg.targetIndex === 3), {
+    legId: 'closed-three', targetIndex: 3, lots: 0, status: 'CLOSED',
+    brokerPositionId: 'closed-position-3', brokerOrderId: null,
+    stopLoss: 85, takeProfit: 105, closedAt: 1500,
+  });
 });
