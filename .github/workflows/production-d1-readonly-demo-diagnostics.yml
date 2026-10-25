@@ -115,6 +115,9 @@ jobs:
                 CASE
                   WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_GEOMETRY' THEN 'SL_INVALID_GEOMETRY'
                   WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_PRICE' THEN 'SL_INVALID_PRICE'
+                  WHEN upper(COALESCE(s.error_code,''))='SL_SKIPPED_INVALID_COMPLETION_GEOMETRY' THEN 'SL_INVALID_COMPLETION_GEOMETRY'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_PASSED_MARKET' THEN 'TP_PASSED_MARKET'
+                  WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_COMPLETION_GEOMETRY' THEN 'TP_INVALID_COMPLETION_GEOMETRY'
                   WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_GEOMETRY' THEN 'TP_INVALID_GEOMETRY'
                   WHEN upper(COALESCE(s.error_code,'')) LIKE 'TP%_SKIPPED_INVALID_PRICE' THEN 'TP_INVALID_PRICE'
                   ELSE 'OTHER_SKIP'
