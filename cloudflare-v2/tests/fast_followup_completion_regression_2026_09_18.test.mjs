@@ -229,15 +229,15 @@ test('immediate next full signal selects the adjacent incomplete fast trade befo
 });
 
 
-async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90 }) {
+async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90, existingStopLoss = 90 }) {
   const existing = {
     id: 'fast-missing-targets', workspaceId: 'ws', tradeAccountId: 'acct',
     sourceInstanceId: 'src', sourceEventIds: ['telegram:-1001:80'],
     symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
     entryPrice: 100, entry: { kind: 'MARKET', executedPrice: 100 },
-    incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000,
+    stopLoss: existingStopLoss, incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000,
     legs: [{ legId: 'starter', targetIndex: 1, lots: 0.03, status: 'OPEN',
-      brokerPositionId: 'position-80', stopLoss: 90, takeProfit: null }],
+      brokerPositionId: 'position-80', stopLoss: existingStopLoss, takeProfit: null }],
   };
   const saved = [];
   const result = await orchestrateTradingEventSimulation({
@@ -284,7 +284,7 @@ test('an invalid but not-passed TP may open without TP when its SL is valid', as
 
 test('TP recovery does not open a leg when no valid SL is available', async () => {
   const { result } = await runMissingTargetCompletion({
-    marketPrice: 99, takeProfits: [105, 99.5, 110], stopLoss: null,
+    marketPrice: 99, takeProfits: [105, 99.5, 110], stopLoss: null, existingStopLoss: null,
   });
   assert.deepEqual(result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION'), []);
 });
