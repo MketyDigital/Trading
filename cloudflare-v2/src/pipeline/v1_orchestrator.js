@@ -351,7 +351,10 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     if (passedTargetIndexes.has(targetIndex)) {
       const hasBrokerBinding = Boolean(existingLeg?.brokerPositionId || existingLeg?.brokerOrderId);
       const existingStatus = String(existingLeg?.status || '').toUpperCase();
-      if (!existingLeg || (!hasBrokerBinding && existingStatus !== 'CLOSED')) {
+      if (existingLeg && (hasBrokerBinding || existingStatus === 'CLOSED')) {
+        // A passed target must not rewrite or reopen an already-bound/closed leg.
+        nextLegs.push({ ...existingLeg });
+      } else {
         nextLegs.push({
           ...(existingLeg || {}),
           ...desiredLeg,
@@ -362,8 +365,8 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
           takeProfit: null,
           skipReason: 'TP_ALREADY_PASSED',
         });
-        continue;
       }
+      continue;
     }
 
     const stopValid = desiredLeg.stopLoss == null
