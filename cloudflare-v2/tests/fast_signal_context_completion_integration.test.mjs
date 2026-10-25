@@ -86,7 +86,7 @@ test('EURJPY self-edited fast signal enriches the open fast leg and appends miss
   assert.equal(enriched.legs[0].brokerPositionId, 'eurjpy-position-1');
 });
 
-test('fast SELL completion skips a target already beyond the filled entry but applies SL and preserves later TP indexes', async () => {
+test('fast SELL completion skips an invalid TP at the filled entry and preserves later TP indexes', async () => {
   const now = 1_800_000_000_000;
   const fastGroup = {
     id: 'gold-fast-sell', workspaceId: 'ws-gold', tradeAccountId: 'account-gold',
@@ -135,7 +135,7 @@ test('fast SELL completion skips a target already beyond the filled entry but ap
   assert.deepEqual(result.accounts[0].actions.map(({ type, targetIndex }) => [type, targetIndex]), [
     ['MODIFY_POSITION', 1], ['OPEN_POSITION', 2], ['OPEN_POSITION', 3],
   ]);
-  assert.equal(result.accounts[0].actions[0].stopLoss, 4102);
+  assert.equal(result.accounts[0].actions[0].stopLoss, 4117);
   assert.equal(Object.hasOwn(result.accounts[0].actions[0], 'takeProfit'), false);
   assert.deepEqual(result.accounts[0].actions.slice(1).map((action) => action.takeProfit), [4092, 4072]);
 
@@ -147,7 +147,7 @@ test('fast SELL completion skips a target already beyond the filled entry but ap
   assert.deepEqual(enriched.legs.map((leg) => [leg.targetIndex, leg.takeProfit]), [
     [1, null], [2, 4092], [3, 4072],
   ]);
-  assert.deepEqual(enriched.legs.map((leg) => leg.stopLoss), [4102, 4102, 4102]);
+  assert.deepEqual(enriched.legs.map((leg) => leg.stopLoss), [4117, 4117, 4117]);
 
   await stateStore.putGroup({
     ...enriched,
