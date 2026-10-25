@@ -229,15 +229,20 @@ test('immediate next full signal selects the adjacent incomplete fast trade befo
 });
 
 
-async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90, existingStopLoss = 90 }) {
+async function runMissingTargetCompletion({ marketPrice, takeProfits, stopLoss = 90, existingStopLoss = 90, failedTarget = false }) {
   const existing = {
     id: 'fast-missing-targets', workspaceId: 'ws', tradeAccountId: 'acct',
     sourceInstanceId: 'src', sourceEventIds: ['telegram:-1001:80'],
     symbol: 'XAUUSD', side: 'BUY', orderType: 'MARKET',
     entryPrice: 100, entry: { kind: 'MARKET', executedPrice: 100 },
     stopLoss: existingStopLoss, incomplete: true, status: 'OPEN', createdAt: 1000, updatedAt: 1000,
-    legs: [{ legId: 'starter', targetIndex: 1, lots: 0.03, status: 'OPEN',
-      brokerPositionId: 'position-80', stopLoss: existingStopLoss, takeProfit: null }],
+    legs: [
+      { legId: 'starter', targetIndex: 1, lots: 0.03, status: 'OPEN',
+        brokerPositionId: 'position-80', stopLoss: existingStopLoss, takeProfit: null },
+      ...(failedTarget ? [{ legId: 'failed-two', targetIndex: 2, lots: 0.03,
+        status: 'FAILED', brokerPositionId: null, brokerOrderId: null,
+        stopLoss: null, takeProfit: null }] : []),
+    ],
   };
   const saved = [];
   const result = await orchestrateTradingEventSimulation({
@@ -289,4 +294,20 @@ test('invalid TP recovery requires a valid SL while valid TP siblings remain eli
   const opens = result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION');
   assert.deepEqual(opens.map(action => action.targetIndex), [3]);
   assert.equal(opens.some(action => action.targetIndex === 2 && action.takeProfit == null), false);
+});
+
+
+test('an existing unbound failed TP leg retries an invalid placeholder with its SL', async () => {
+  const { result, saved } = await runMissingTargetCompletion({
+    marketPrice: 99, takeProfits: [105, 99.5, 110], failedTarget: true,
+  });
+  const opens = result.accounts[0].actions.filter(action => action.type === 'OPEN_POSITION');
+  assert.deepEqual(opens.map(action => action.targetIndex), [2, 3]);
+  const retry = opens.find(action => action.targetIndex === 2);
+  assert.equal(retry.legId, 'failed-two');
+  assert.equal(retry.takeProfit, null);
+  assert.equal(retry.stopLoss, 90);
+  assert.match(retry.idempotencyKey, /:retry:/);
+  assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.legId, 'failed-two');
+  assert.equal(saved[0].legs.find(leg => leg.targetIndex === 2)?.status, 'PLANNED');
 });
