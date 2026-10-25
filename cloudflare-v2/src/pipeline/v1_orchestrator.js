@@ -348,10 +348,11 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
     if (passedTargetIndexes.has(targetIndex)) {
       const hasBrokerBinding = Boolean(existingLeg?.brokerPositionId || existingLeg?.brokerOrderId);
       const existingStatus = String(existingLeg?.status || '').toUpperCase();
-      if (existingLeg && (hasBrokerBinding || existingStatus === 'CLOSED')) {
-        // Passed targets never rewrite broker-bound or closed legs.
+      if (existingStatus === 'CLOSED') {
         nextLegs.push({ ...existingLeg });
-      } else {
+        continue;
+      }
+      if (!existingLeg || !hasBrokerBinding) {
         nextLegs.push({
           ...(existingLeg || {}),
           ...desiredLeg,
@@ -362,14 +363,16 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
           takeProfit: null,
           skipReason: 'TP_ALREADY_PASSED',
         });
+        continue;
       }
-      continue;
+      // A bound, active starter can still receive its safe SL progression,
+      // while the crossed TP itself is never applied to that broker position.
     }
 
     const stopValid = desiredLeg.stopLoss == null
       || protectionValueValidAtMarket(side, 'stopLoss', desiredLeg.stopLoss, currentPrice);
-    const targetValid = desiredLeg.takeProfit == null
-      || protectionValueValidAtMarket(side, 'takeProfit', desiredLeg.takeProfit, currentPrice);
+    const targetValid = !passedTargetIndexes.has(targetIndex) && (desiredLeg.takeProfit == null
+      || protectionValueValidAtMarket(side, 'takeProfit', desiredLeg.takeProfit, currentPrice));
 
     if (existingLeg) {
       const hasBrokerBinding = Boolean(existingLeg.brokerPositionId || existingLeg.brokerOrderId);
@@ -445,7 +448,9 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
     const targetValidForOpen = open.takeProfit == null
       || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
-    if (!stopValidForOpen || !targetValidForOpen || open.stopLoss == null) continue;
+    if (!stopValidForOpen || !targetValidForOpen) continue;
+    const executableTp = targetValidForOpen ? open.takeProfit ?? null : null;
+    if (executableTp == null && open.stopLoss == null) continue;
 
     nextLegs.push(desiredLeg);
     actions.push({
