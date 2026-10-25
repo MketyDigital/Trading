@@ -1,3 +1,4 @@
+import { safeBrokerContextCode } from '../operations/broker_context_diagnostics.js';
 import { buildExecutionPlan } from '../execution/execution_plan.js';
 import { evaluateAccountPolicy } from '../execution/account_policy.js';
 import { buildManagementActions } from '../execution/position_group.js';
@@ -410,11 +411,20 @@ function reconcilePlannedFastEntry(existing, plan, { event, eventId, account, no
       || protectionValueValidAtMarket(side, 'stopLoss', open.stopLoss, currentPrice);
     const targetValidForOpen = open.takeProfit == null
       || protectionValueValidAtMarket(side, 'takeProfit', open.takeProfit, currentPrice);
-    if (!stopValidForOpen || !targetValidForOpen) continue;
-
-    nextLegs.push(desiredLeg);
+    // An invalid or already-passed TP must not discard a safely protected
+    // leg. Open with the valid SL, leave its broker TP absent, and retain the
+    // logical target for later edits/replies and progressive management.
+    // An invalid SL cannot be silently discarded for a new position.
+    if (!stopValidForOpen) continue;
+    const executableTp = targetValidForOpen ? open.takeProfit ?? null : null;
+    nextLegs.push({
+      ...desiredLeg,
+      takeProfit: executableTp,
+      ...(executableTp == null ? { takeProfitPlaceholder: true } : {}),
+    });
     actions.push({
       ...open,
+      takeProfit: executableTp,
       idempotencyKey: `${existing.id}:leg:${targetIndex}`,
     });
   }
@@ -885,7 +895,10 @@ export async function orchestrateTradingEventSimulation({
         ? await marketPriceProvider(account, planningIntent, instrument, event)
         : undefined;
     } catch (error) {
-      results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', error: error.message, actions: [] });
+      // Preserve a strict allowlisted diagnostic code without serializing broker
+      // credentials, raw connector responses, or provider-specific messages.
+      const brokerContextCode = safeBrokerContextCode(error?.code) ?? 'UNCLASSIFIED_MARKET_CONTEXT';
+      results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', brokerContextCode, error: error.message, actions: [] });
       continue;
     }
 
