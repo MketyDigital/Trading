@@ -79,7 +79,10 @@ jobs:
               upper(COALESCE(json_extract(e.canonical_intent,'$.symbol.canonical'),
                 json_extract(e.canonical_intent,'$.symbol.canonicalSymbol'),
                 json_extract(e.canonical_intent,'$.canonicalSymbol'),json_extract(e.canonical_intent,'$.symbol'),'')) AS canonical_symbol,
-              CASE WHEN json_extract(e.canonical_intent,'$.stopLoss') IS NOT NULL THEN 'FULL_SIGNAL' ELSE 'FAST_ENTRY_OR_PARTIAL' END AS event_role
+              CASE WHEN json_extract(e.canonical_intent,'$.stopLoss') IS NULL
+              AND COALESCE(json_array_length(e.canonical_intent,'$.takeProfits'),
+                CASE WHEN json_extract(e.canonical_intent,'$.takeProfit') IS NULL THEN 0 ELSE 1 END)=0
+            THEN 'FAST_ENTRY' ELSE 'FULL_SIGNAL' END AS event_role
             FROM trading_workspace_access w JOIN trading_events e INDEXED BY idx_trading_events_workspace_received
               ON e.workspace_id=w.id
             WHERE e.received_at>=? AND instr(upper(COALESCE(json_extract(e.canonical_intent,'$.symbol.canonical'),
@@ -193,6 +196,10 @@ jobs:
                       { title: 'Complete event-linked operation journal timeline (no raw payloads)', sql: String.raw`
           WITH recent_events AS (
             SELECT e.id,e.workspace_id,e.source_connection_id,e.source_type,e.received_at,e.canonical_intent,
+          CASE WHEN json_extract(e.canonical_intent,'$.stopLoss') IS NULL
+            AND COALESCE(json_array_length(e.canonical_intent,'$.takeProfits'),
+              CASE WHEN json_extract(e.canonical_intent,'$.takeProfit') IS NULL THEN 0 ELSE 1 END)=0
+          THEN 'FAST_ENTRY' ELSE 'FULL_SIGNAL' END AS event_role,
           ROW_NUMBER() OVER(PARTITION BY e.workspace_id ORDER BY datetime(e.received_at),e.id) AS event_slot
             FROM trading_workspace_access w JOIN trading_events e INDEXED BY idx_trading_events_workspace_received
               ON e.workspace_id=w.id
@@ -217,7 +224,7 @@ jobs:
             FROM trade_accounts WHERE workspace_id IN (SELECT workspace_id FROM recent_events)
           )
           SELECT 'W'||COALESCE(ws.workspace_slot,0)||'-E'||e.event_slot AS event_slot,
-            e.received_at AS event_received_at,e.source_type,'S'||COALESCE(ss.source_slot,0) AS source_slot,
+            e.received_at AS event_received_at,e.event_role,e.source_type,'S'||COALESCE(ss.source_slot,0) AS source_slot,
             COALESCE(datetime(j.observed_at),e.received_at) AS observed_at,
             COALESCE(upper(j.stage),'NO_JOURNAL_EVIDENCE') AS stage,
             CASE WHEN j.operation IS NULL THEN 'NO_OPERATION_RECORDED' ELSE substr(j.operation,1,120) END AS operation,
@@ -239,7 +246,11 @@ jobs:
           `, params: [cutoff] },
                       { title: 'Destination delivery attempts (payloads omitted)', sql: String.raw`
           WITH recent_events AS (
-            SELECT e.id,e.workspace_id,e.received_at,
+            SELECT e.id,e.workspace_id,e.received_at,e.canonical_intent,
+          CASE WHEN json_extract(e.canonical_intent,'$.stopLoss') IS NULL
+            AND COALESCE(json_array_length(e.canonical_intent,'$.takeProfits'),
+              CASE WHEN json_extract(e.canonical_intent,'$.takeProfit') IS NULL THEN 0 ELSE 1 END)=0
+          THEN 'FAST_ENTRY' ELSE 'FULL_SIGNAL' END AS event_role,
           ROW_NUMBER() OVER(PARTITION BY e.workspace_id ORDER BY datetime(e.received_at),e.id) AS event_slot
             FROM trading_workspace_access w JOIN trading_events e INDEXED BY idx_trading_events_workspace_received
               ON e.workspace_id=w.id
@@ -254,7 +265,7 @@ jobs:
             FROM trading_destinations WHERE workspace_id IN (SELECT workspace_id FROM recent_events)
           )
           SELECT 'W'||COALESCE(ws.workspace_slot,0)||'-E'||ROW_NUMBER() OVER(PARTITION BY e.workspace_id ORDER BY datetime(e.received_at),e.id) AS event_slot,
-            e.received_at,d.destination_type,CASE WHEN ds.id IS NULL THEN 'UNMAPPED_DESTINATION' ELSE 'D'||ds.destination_slot END AS destination_slot,
+            e.received_at,e.event_role,d.destination_type,CASE WHEN ds.id IS NULL THEN 'UNMAPPED_DESTINATION' ELSE 'D'||ds.destination_slot END AS destination_slot,
             upper(d.status) AS delivery_status,COALESCE(d.error_code,'') AS error_code,
             COALESCE(d.failure_class,'') AS failure_class,d.attempt_count,d.created_at,d.last_attempt_at,d.updated_at,d.next_attempt_at
           FROM recent_events e JOIN destination_deliveries d ON d.workspace_id=e.workspace_id AND d.trading_event_id=e.id
