@@ -288,8 +288,10 @@ ORDER BY datetime(j.observed_at) DESC LIMIT 300
           if (eventTimes.length) {
             const exactFilter = `e.received_at IN (${eventTimes.map(() => '?').join(',')})`;
             for (const query of queries) {
+              const hasEventCutoff = query.sql.includes('e.received_at>=?') || query.sql.includes('e.received_at >= ?');
+              if (!hasEventCutoff) continue;
               query.sql = query.sql.replaceAll('e.received_at>=?', exactFilter).replaceAll('e.received_at >= ?', exactFilter);
-              query.params = eventTimes;
+              query.params = [...eventTimes, ...query.params.slice(1)];
             }
           }
 
