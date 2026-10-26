@@ -388,6 +388,39 @@ jobs:
           const url = 'https://api.cloudflare.com/client/v4/accounts/'
             + encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)
             + '/d1/database/' + encodeURIComponent(databaseId) + '/query';
+          const schemaResponse = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ batch: [{
+              sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+              params: ['trading_account_followers'],
+            }] }),
+          });
+          const schemaPayload = await schemaResponse.json().catch(() => null);
+          const schemaResult = schemaPayload?.result?.[0];
+          if (!schemaResponse.ok || schemaPayload?.success !== true || schemaResult?.success !== true
+            || !Array.isArray(schemaResult.results)) {
+            throw new Error('Could not verify optional follower-link table availability in read-only schema preflight');
+          }
+          const followerTableAvailable = schemaResult.results.some((row) => row.name === 'trading_account_followers');
+          const schemaReadRows = Number(schemaResult.meta?.rows_read) || 0;
+          const schemaWrittenRows = Number(schemaResult.meta?.rows_written) || 0;
+          if (schemaWrittenRows !== 0) throw new Error('Read-only schema preflight reported a write');
+          if (!followerTableAvailable) {
+            const routeQuery = queries.find((query) => query.title.startsWith('Source to configured route, destination, account, and follower map'));
+            if (!routeQuery) throw new Error('Route and account diagnostic query was not found');
+            routeQuery.sql = routeQuery.sql
+              .replace(
+                "FROM trading_account_followers f WHERE f.workspace_id IN (SELECT workspace_id FROM recent_events) AND f.enabled=1",
+                "FROM (SELECT NULL AS workspace_id,NULL AS parent_account_id,NULL AS follower_account_id,0 AS enabled WHERE 0) f WHERE f.workspace_id IN (SELECT workspace_id FROM recent_events) AND f.enabled=1",
+              )
+              .replace(
+                "LEFT JOIN trading_account_followers f ON f.workspace_id=a.workspace_id AND f.parent_account_id=a.id AND f.enabled=1",
+                "LEFT JOIN (SELECT NULL AS workspace_id,NULL AS parent_account_id,NULL AS follower_account_id,NULL AS enabled,NULL AS updated_at WHERE 0) f ON f.workspace_id=a.workspace_id AND f.parent_account_id=a.id AND f.enabled=1",
+              );
+            routeQuery.title += ' (follower link table unavailable)';
+          }
+          console.log('D1_OPTIONAL_SCHEMA trading_account_followers=' + (followerTableAvailable ? 'AVAILABLE' : 'ABSENT'));
           const response = await fetch(url, {
             method: 'POST',
             headers,
@@ -428,8 +461,8 @@ jobs:
           }
 
           const meta = payload.result.map((result) => result.meta || {});
-          const rowsRead = meta.reduce((sum, item) => sum + (Number(item.rows_read) || 0), 0);
-          const rowsWritten = meta.reduce((sum, item) => sum + (Number(item.rows_written) || 0), 0);
+          const rowsRead = schemaReadRows + meta.reduce((sum, item) => sum + (Number(item.rows_read) || 0), 0);
+          const rowsWritten = schemaWrittenRows + meta.reduce((sum, item) => sum + (Number(item.rows_written) || 0), 0);
           meta.forEach((item, index) => console.log('D1_DIAGNOSTIC_STATEMENT index=' + (index + 1) + ' rows_read=' + (Number(item.rows_read) || 0) + ' rows_written=' + (Number(item.rows_written) || 0)));
           console.log('D1_DIAGNOSTICS statement_count=' + queries.length + ' rows_read=' + rowsRead + ' rows_written=' + rowsWritten);
 
@@ -464,7 +497,7 @@ jobs:
             : 'last ' + hours + ' hours (through ' + new Date().toISOString() + ')';
           let report = '# Focused production D1 diagnostics\n\n'
             + '- Window: ' + windowLabel + '\n'
-            + '- Source: existing production D1 binding; two SELECT-only diagnostic statements\n'
+            + '- Source: existing production D1 binding; ' + queries.length + ' SELECT-only diagnostic statements plus a schema availability preflight\n'
             + '- D1 reads/writes from this workflow: rows_read=' + rowsRead + ', rows_written=' + rowsWritten + ', statements=' + queries.length + '\n'
             + '- D1 database file size: ' + fileSize + ' bytes (' + databaseInfoClass + ')\n'
             + '- Privacy: no raw text, account IDs, workspace IDs, or credentials are emitted; account slots are stable pseudonymous ordinals\n';
