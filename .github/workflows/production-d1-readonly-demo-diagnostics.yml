@@ -388,27 +388,35 @@ jobs:
           const url = 'https://api.cloudflare.com/client/v4/accounts/'
             + encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)
             + '/d1/database/' + encodeURIComponent(databaseId) + '/query';
+          const schemaTables = ['source_connections','source_destination_routes','trading_destinations','trade_accounts'];
           const schemaResponse = await fetch(url, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ batch: [{
-              sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-              params: ['trading_account_followers'],
-            }] }),
+            body: JSON.stringify({ batch: [
+              { sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?", params: ['trading_account_followers'] },
+              ...schemaTables.map((table) => ({ sql: 'PRAGMA table_info(' + table + ')', params: [] })),
+            ] }),
           });
           const schemaPayload = await schemaResponse.json().catch(() => null);
-          const schemaResult = schemaPayload?.result?.[0];
-          if (!schemaResponse.ok || schemaPayload?.success !== true || schemaResult?.success !== true
-            || !Array.isArray(schemaResult.results)) {
-            throw new Error('Could not verify optional follower-link table availability in read-only schema preflight');
+          const schemaResults = schemaPayload?.result;
+          if (!schemaResponse.ok || schemaPayload?.success !== true || !Array.isArray(schemaResults)
+            || schemaResults.length !== schemaTables.length + 1
+            || schemaResults.some((result) => result?.success !== true || !Array.isArray(result.results))) {
+            throw new Error('Could not verify optional D1 schema in read-only preflight');
           }
-          const followerTableAvailable = schemaResult.results.some((row) => row.name === 'trading_account_followers');
-          const schemaReadRows = Number(schemaResult.meta?.rows_read) || 0;
-          const schemaWrittenRows = Number(schemaResult.meta?.rows_written) || 0;
+          const followerTableAvailable = schemaResults[0].results.some((row) => row.name === 'trading_account_followers');
+          const columnsByTable = Object.fromEntries(schemaTables.map((table, index) => [
+            table,
+            new Set(schemaResults[index + 1].results.map((row) => String(row.name))),
+          ]));
+          const hasColumn = (table, column) => columnsByTable[table]?.has(column) === true;
+          const schemaReadRows = schemaResults.reduce((sum, result) => sum + (Number(result.meta?.rows_read) || 0), 0);
+          const schemaWrittenRows = schemaResults.reduce((sum, result) => sum + (Number(result.meta?.rows_written) || 0), 0);
           if (schemaWrittenRows !== 0) throw new Error('Read-only schema preflight reported a write');
+          const routeQuery = queries.find((query) => query.title.startsWith('Source to configured route, destination, account, and follower map'));
+          if (!routeQuery) throw new Error('Route and account diagnostic query was not found');
+          const routeUnavailable = [];
           if (!followerTableAvailable) {
-            const routeQuery = queries.find((query) => query.title.startsWith('Source to configured route, destination, account, and follower map'));
-            if (!routeQuery) throw new Error('Route and account diagnostic query was not found');
             routeQuery.sql = routeQuery.sql
               .replace(
                 "FROM trading_account_followers f WHERE f.workspace_id IN (SELECT workspace_id FROM recent_events) AND f.enabled=1",
@@ -418,9 +426,42 @@ jobs:
                 "LEFT JOIN trading_account_followers f ON f.workspace_id=a.workspace_id AND f.parent_account_id=a.id AND f.enabled=1",
                 "LEFT JOIN (SELECT NULL AS workspace_id,NULL AS parent_account_id,NULL AS follower_account_id,NULL AS enabled,NULL AS updated_at WHERE 0) f ON f.workspace_id=a.workspace_id AND f.parent_account_id=a.id AND f.enabled=1",
               );
-            routeQuery.title += ' (follower link table unavailable)';
+            routeUnavailable.push('trading_account_followers table');
           }
-          console.log('D1_OPTIONAL_SCHEMA trading_account_followers=' + (followerTableAvailable ? 'AVAILABLE' : 'ABSENT'));
+          if (!hasColumn('source_connections','updated_at')) {
+            routeQuery.sql = routeQuery.sql
+              .replace('sc.last_error_code,sc.updated_at,','sc.last_error_code,NULL AS updated_at,')
+              .replace(
+                "CASE WHEN e.source_updated_at IS NOT NULL AND datetime(e.source_updated_at)>datetime(e.received_at) THEN 'SOURCE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_SOURCE_UPDATE' END AS source_config_timing",
+                "'SOURCE_UPDATE_TIME_UNAVAILABLE' AS source_config_timing",
+              );
+            routeUnavailable.push('source_connections.updated_at');
+          }
+          if (!hasColumn('source_destination_routes','updated_at')) {
+            routeQuery.sql = routeQuery.sql.replace(
+              "CASE WHEN r.id IS NOT NULL AND datetime(r.updated_at)>datetime(e.received_at) THEN 'ROUTE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_ROUTE_UPDATE' END AS route_config_timing",
+              "'ROUTE_UPDATE_TIME_UNAVAILABLE' AS route_config_timing",
+            );
+            routeUnavailable.push('source_destination_routes.updated_at');
+          }
+          if (!hasColumn('trading_destinations','updated_at')) {
+            routeQuery.sql = routeQuery.sql.replace(
+              "CASE WHEN d.id IS NOT NULL AND datetime(d.updated_at)>datetime(e.received_at) THEN 'DESTINATION_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_DESTINATION_UPDATE' END AS destination_config_timing",
+              "'DESTINATION_UPDATE_TIME_UNAVAILABLE' AS destination_config_timing",
+            );
+            routeUnavailable.push('trading_destinations.updated_at');
+          }
+          if (!hasColumn('trade_accounts','updated_at')) {
+            routeQuery.sql = routeQuery.sql.replace(
+              "CASE WHEN a.id IS NOT NULL AND datetime(a.updated_at)>datetime(e.received_at) THEN 'ACCOUNT_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_ACCOUNT_UPDATE' END AS account_config_timing",
+              "'ACCOUNT_UPDATE_TIME_UNAVAILABLE' AS account_config_timing",
+            );
+            routeUnavailable.push('trade_accounts.updated_at');
+          }
+          if (routeUnavailable.length) routeQuery.title += ' (schema fields unavailable: ' + routeUnavailable.join(', ') + ')';
+          console.log('D1_OPTIONAL_SCHEMA trading_account_followers=' + (followerTableAvailable ? 'AVAILABLE' : 'ABSENT')
+            + ' route_schema_unavailable=' + (routeUnavailable.join(',') || 'NONE'));
+
           const response = await fetch(url, {
             method: 'POST',
             headers,
