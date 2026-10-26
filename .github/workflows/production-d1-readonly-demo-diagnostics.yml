@@ -92,7 +92,7 @@ jobs:
             SELECT id,ROW_NUMBER() OVER(ORDER BY id) AS workspace_slot
             FROM trading_workspace_access WHERE id IN (SELECT workspace_id FROM recent_events)
           ), source_slots AS (
-            SELECT sc.workspace_id,sc.id,sc.source_type,sc.health_status,sc.is_active,sc.last_error_code,
+            SELECT sc.workspace_id,sc.id,sc.source_type,sc.health_status,sc.is_active,sc.last_error_code,sc.updated_at,
               ROW_NUMBER() OVER(PARTITION BY sc.workspace_id ORDER BY sc.id) AS source_slot
             FROM source_connections sc WHERE sc.workspace_id IN (SELECT workspace_id FROM recent_events)
           ), feed_slots AS (
@@ -115,7 +115,7 @@ jobs:
             FROM trading_account_followers f WHERE f.workspace_id IN (SELECT workspace_id FROM recent_events) AND f.enabled=1
           ), event_feed AS (
             SELECT e.*,sf.id AS source_feed_id,ws.workspace_slot,ss.source_slot,ss.health_status AS source_health,
-              ss.last_error_code AS source_last_error,
+              ss.last_error_code AS source_last_error,ss.updated_at AS source_updated_at,
               fs.feed_slot,fs.feed_type
             FROM recent_events e LEFT JOIN source_feeds sf ON sf.workspace_id=e.workspace_id
               AND sf.source_connection_id=e.source_connection_id AND sf.provider_feed_id=e.provider_feed_id AND sf.is_active=1
@@ -126,6 +126,7 @@ jobs:
           SELECT 'W'||COALESCE(e.workspace_slot,0)||'-E'||e.event_slot AS event_slot,
             e.received_at,e.event_role,e.canonical_symbol,e.processing_status AS event_status,e.error_code AS event_error,
             'S'||COALESCE(e.source_slot,0) AS source_slot,e.source_type,e.source_health,e.source_last_error,
+          CASE WHEN e.source_updated_at IS NOT NULL AND datetime(e.source_updated_at)>datetime(e.received_at) THEN 'SOURCE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_SOURCE_UPDATE' END AS source_config_timing,
             CASE WHEN e.source_feed_id IS NULL THEN 'NO_ACTIVE_FEED_MATCH' ELSE 'F'||COALESCE(e.feed_slot,0)||':'||COALESCE(e.feed_type,'UNKNOWN') END AS source_feed,
             CASE WHEN r.id IS NULL THEN 'NO_ROUTE_CONFIG' ELSE 'R'||COALESCE(rs.route_slot,0) END AS route_slot,
             CASE WHEN r.id IS NULL THEN 'NO_ROUTE_CONFIG'
@@ -179,7 +180,10 @@ jobs:
             CASE WHEN d.id IS NULL THEN 'NO_EVIDENCE'
                  ELSE COALESCE((SELECT upper(j.status) FROM operation_journal j WHERE j.trading_event_id=e.id
                    AND j.destination_id=d.id AND upper(j.stage)='DESTINATION' ORDER BY datetime(j.observed_at) DESC LIMIT 1),'NO_DESTINATION_STAGE_ROW') END AS destination_stage_result,
-            CASE WHEN r.id IS NOT NULL AND datetime(r.updated_at)>datetime(e.received_at) THEN 'ROUTE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_ROUTE_UPDATE' END AS route_config_timing
+            CASE WHEN r.id IS NOT NULL AND datetime(r.updated_at)>datetime(e.received_at) THEN 'ROUTE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_ROUTE_UPDATE' END AS route_config_timing,
+          CASE WHEN d.id IS NOT NULL AND datetime(d.updated_at)>datetime(e.received_at) THEN 'DESTINATION_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_DESTINATION_UPDATE' END AS destination_config_timing,
+          CASE WHEN a.id IS NOT NULL AND datetime(a.updated_at)>datetime(e.received_at) THEN 'ACCOUNT_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_ACCOUNT_UPDATE' END AS account_config_timing,
+          CASE WHEN f.follower_account_id IS NOT NULL AND datetime(f.updated_at)>datetime(e.received_at) THEN 'FOLLOWER_LINK_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_FOLLOWER_UPDATE' END AS follower_config_timing
           FROM event_feed e
           LEFT JOIN source_destination_routes r ON r.workspace_id=e.workspace_id AND r.source_connection_id=e.source_connection_id
           LEFT JOIN route_slots rs ON rs.workspace_id=r.workspace_id AND rs.id=r.id
@@ -274,12 +278,15 @@ jobs:
           ORDER BY datetime(e.received_at),datetime(d.created_at),destination_slot LIMIT 400
           `, params: [cutoff] },
                       { title: 'Unlinked source-stage failures in the selected lookback window (not attributable to a signal)', sql: String.raw`
-          WITH source_scope AS (
-            SELECT DISTINCT e.workspace_id,e.source_connection_id
+          WITH volatility_workspaces AS (
+            SELECT DISTINCT e.workspace_id
             FROM trading_workspace_access w JOIN trading_events e INDEXED BY idx_trading_events_workspace_received
               ON e.workspace_id=w.id
             WHERE e.received_at>=? AND instr(upper(COALESCE(json_extract(e.canonical_intent,'$.symbol.canonical'),
               json_extract(e.canonical_intent,'$.symbol'),'')),'VOLATILITY')>0
+          ), source_scope AS (
+            SELECT sc.workspace_id,sc.id AS source_connection_id
+            FROM source_connections sc WHERE sc.workspace_id IN (SELECT workspace_id FROM volatility_workspaces)
           ), source_slots AS (
             SELECT sc.workspace_id,sc.id,sc.source_type,
               ROW_NUMBER() OVER(PARTITION BY sc.workspace_id ORDER BY sc.id) AS source_slot
