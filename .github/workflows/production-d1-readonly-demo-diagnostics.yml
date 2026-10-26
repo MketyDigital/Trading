@@ -92,11 +92,11 @@ jobs:
             SELECT id,ROW_NUMBER() OVER(ORDER BY id) AS workspace_slot
             FROM trading_workspace_access WHERE id IN (SELECT workspace_id FROM recent_events)
           ), source_slots AS (
-            SELECT sc.workspace_id,sc.id,sc.source_type,sc.health_status,sc.is_active,sc.last_error_code,sc.updated_at,
+            SELECT sc.workspace_id,sc.id,sc.source_type,sc.display_name,sc.health_status,sc.is_active,sc.last_error_code,sc.updated_at,
               ROW_NUMBER() OVER(PARTITION BY sc.workspace_id ORDER BY sc.id) AS source_slot
             FROM source_connections sc WHERE sc.workspace_id IN (SELECT workspace_id FROM recent_events)
           ), feed_slots AS (
-            SELECT sf.workspace_id,sf.source_connection_id,sf.id,sf.feed_type,sf.is_active,
+            SELECT sf.workspace_id,sf.source_connection_id,sf.id,sf.feed_type,sf.display_name,sf.is_active,
               ROW_NUMBER() OVER(PARTITION BY sf.workspace_id,sf.source_connection_id ORDER BY sf.id) AS feed_slot
             FROM source_feeds sf WHERE sf.workspace_id IN (SELECT workspace_id FROM recent_events)
           ), route_slots AS (
@@ -114,9 +114,9 @@ jobs:
               ROW_NUMBER() OVER(PARTITION BY f.workspace_id,f.parent_account_id ORDER BY f.follower_account_id) AS follower_slot
             FROM trading_account_followers f WHERE f.workspace_id IN (SELECT workspace_id FROM recent_events) AND f.enabled=1
           ), event_feed AS (
-            SELECT e.*,sf.id AS source_feed_id,ws.workspace_slot,ss.source_slot,ss.health_status AS source_health,
+            SELECT e.*,sf.id AS source_feed_id,ws.workspace_slot,ss.source_slot,ss.display_name AS source_label,ss.health_status AS source_health,
               ss.last_error_code AS source_last_error,ss.updated_at AS source_updated_at,
-              fs.feed_slot,fs.feed_type
+              fs.feed_slot,fs.feed_type,fs.display_name AS feed_label
             FROM recent_events e LEFT JOIN source_feeds sf ON sf.workspace_id=e.workspace_id
               AND sf.source_connection_id=e.source_connection_id AND sf.provider_feed_id=e.provider_feed_id AND sf.is_active=1
             LEFT JOIN workspace_slots ws ON ws.id=e.workspace_id
@@ -125,10 +125,12 @@ jobs:
           )
           SELECT 'W'||COALESCE(e.workspace_slot,0)||'-E'||e.event_slot AS event_slot,
             e.received_at,e.event_role,e.canonical_symbol,e.processing_status AS event_status,e.error_code AS event_error,
-            'S'||COALESCE(e.source_slot,0) AS source_slot,e.source_type,e.source_health,e.source_last_error,
+            'S'||COALESCE(e.source_slot,0) AS source_slot,e.source_type,e.source_label,e.source_health,e.source_last_error,
           CASE WHEN e.source_updated_at IS NOT NULL AND datetime(e.source_updated_at)>datetime(e.received_at) THEN 'SOURCE_CHANGED_AFTER_EVENT' ELSE 'NO_POST_EVENT_SOURCE_UPDATE' END AS source_config_timing,
             CASE WHEN e.source_feed_id IS NULL THEN 'NO_ACTIVE_FEED_MATCH' ELSE 'F'||COALESCE(e.feed_slot,0)||':'||COALESCE(e.feed_type,'UNKNOWN') END AS source_feed,
+            COALESCE(e.feed_label,'UNNAMED_FEED') AS feed_label,
             CASE WHEN r.id IS NULL THEN 'NO_ROUTE_CONFIG' ELSE 'R'||COALESCE(rs.route_slot,0) END AS route_slot,
+            COALESCE(r.route_name,'UNNAMED_ROUTE') AS route_label,
             CASE WHEN r.id IS NULL THEN 'NO_ROUTE_CONFIG'
                  WHEN COALESCE(r.is_active,0)<>1 THEN 'INACTIVE_ROUTE'
                  WHEN EXISTS(SELECT 1 FROM source_destination_routes selective
@@ -160,16 +162,19 @@ jobs:
                  ELSE 'FILTER_ALLOWED' END AS route_filter_result,
             CASE WHEN d.id IS NULL THEN 'NO_DESTINATION'
                  ELSE 'D'||COALESCE(ds.destination_slot,0)||':'||lower(d.destination_type)||':'||upper(COALESCE(d.health_status,'UNKNOWN')) END AS destination_slot,
+            COALESCE(d.display_name,'UNNAMED_DESTINATION') AS destination_label,
             CASE WHEN d.id IS NULL THEN 'NO_ACCOUNT_MAPPING'
                  WHEN lower(d.destination_type)<>'broker_account' THEN 'NON_BROKER_DESTINATION'
                  WHEN a.id IS NULL THEN 'ACCOUNT_MAPPING_MISSING'
                  ELSE 'A'||COALESCE(asl.account_slot,0)||'-'||upper(a.platform)||'-'||upper(COALESCE(a.environment,'UNKNOWN')) END AS parent_account,
+            COALESCE(a.account_label,'UNLABELLED_ACCOUNT') AS parent_account_label,
             CASE WHEN a.id IS NULL THEN 'UNKNOWN'
                  WHEN COALESCE(a.is_active,0)<>1 THEN 'INACTIVE'
                  WHEN COALESCE(a.execution_enabled,0)<>1 THEN 'EXECUTION_DISABLED'
                  ELSE 'ACTIVE_EXECUTION_ENABLED' END AS parent_account_state,
             CASE WHEN f.follower_account_id IS NULL THEN 'NO_ENABLED_FOLLOWER'
                  ELSE 'F'||COALESCE(fsl.follower_slot,0)||'-'||upper(fa.platform)||'-'||upper(COALESCE(fa.environment,'UNKNOWN')) END AS enabled_follower,
+            COALESCE(fa.account_label,'UNLABELLED_ACCOUNT') AS follower_account_label,
             CASE WHEN f.follower_account_id IS NULL THEN 'N/A'
                  WHEN COALESCE(fa.is_active,0)<>1 THEN 'INACTIVE'
                  WHEN COALESCE(fa.execution_enabled,0)<>1 THEN 'EXECUTION_DISABLED'
