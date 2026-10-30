@@ -1,0 +1,55 @@
+name: CHFJPY Broker Failure Reasons Read-only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evidence:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Extract bounded CHFJPY broker planning and execution reason codes
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const cfg=fs.readFileSync('cloudflare-v2/wrangler.toml','utf8');
+          const bind=cfg.match(/\[\[d1_databases\]\]([\s\S]*?)(?=\n\[\[|$)/)?.[1]||'';
+          const name=bind.match(/database_name\s*=\s*"([^"]+)"/)?.[1];
+          const id=bind.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
+          if(name!=='trading-staging'||!/^[0-9a-f-]{36}$/i.test(id||''))throw Error('D1 binding mismatch');
+          const token=process.env.CLOUDFLARE_API_TOKEN,acct=process.env.CLOUDFLARE_ACCOUNT_ID;
+          if(!token||!acct)throw Error('Cloudflare credentials unavailable');
+          const eventFilter="SELECT id FROM trading_events WHERE received_at >= '2026-10-30 01:20:00' AND received_at < '2026-10-30 01:40:00' AND (instr(upper(coalesce(json_extract(canonical_intent,'$.symbol.canonical'),json_extract(canonical_intent,'$.symbol'),'')),'CHFJPY')>0 OR instr(upper(coalesce(raw_text,'')),'CHFJPY')>0 OR instr(upper(coalesce(raw_text,'')),'CHF/JPY')>0)";
+          // Never print arbitrary details, free-form errors, source content, identities, or broker IDs.
+          // Only emit allowlisted categorical fields and bounded counts.
+          const sql=`WITH matching AS (${eventFilter}), j AS (
+          SELECT j.*,ROW_NUMBER() OVER(ORDER BY j.observed_at,j.id) AS ordinal
+          FROM operation_journal j WHERE j.trading_event_id IN (SELECT id FROM matching)
+            AND j.stage IN ('BROKER_PLANNING','BROKER_EXECUTION')
+          ) SELECT j.ordinal,j.observed_at,j.stage,j.status,
+          CASE WHEN upper(coalesce(json_extract(j.details,'$.status'),'')) IN ('FAILED','BLOCKED','SIMULATED','READY','NOT_EXECUTABLE','PARTIAL','SUCCEEDED') THEN upper(json_extract(j.details,'$.status')) ELSE 'OTHER' END AS state,
+          CASE WHEN upper(coalesce(json_extract(ac.value,'$.status'),'')) IN ('FAILED','BLOCKED','READY','SUCCEEDED','SKIPPED','PARTIAL') THEN upper(json_extract(ac.value,'$.status')) ELSE 'OTHER' END AS account_status,
+          CASE WHEN upper(coalesce(json_extract(ac.value,'$.reason'),'')) IN ('MARKET_CONTEXT_UNAVAILABLE','SYMBOL_NOT_FOUND','MT5_SYMBOL_NOT_FOUND','AMBIGUOUS_SYMBOL','INVALID_PROTECTION','EXECUTION_DISABLED','ACCOUNT_EXECUTION_NOT_ENABLED','ACCOUNT_INACTIVE','ACCOUNT_NOT_FOUND','ACCOUNT_POLICY_BLOCKED','NO_ACTIONS','RISK_REJECTED','CONNECTOR_OFFLINE','BROKER_EXECUTION_FAILED') THEN upper(json_extract(ac.value,'$.reason')) WHEN json_extract(ac.value,'$.reason') IS NULL THEN 'NONE' ELSE 'OTHER_REASON' END AS account_reason,
+          CASE WHEN upper(coalesce(json_extract(ac.value,'$.brokerContextCode'),'')) IN ('MT5_SYMBOL_NOT_FOUND','MT5_CONNECTOR_OFFLINE','MT5_CREDENTIALS_MISSING','MT5_SYMBOL_UNRESOLVED','MT5_TICK_UNAVAILABLE','BROKER_MARKET_CONTEXT_UNAVAILABLE','CTRADER_SYMBOL_UNRESOLVED','CTRADER_ACCESS_TOKEN_EXPIRED') THEN upper(json_extract(ac.value,'$.brokerContextCode')) WHEN json_extract(ac.value,'$.brokerContextCode') IS NULL THEN 'NONE' ELSE 'OTHER_CONTEXT' END AS context_code,
+          coalesce(json_extract(ac.value,'$.actionCount'),0) AS planned_actions,
+          CASE WHEN json_type(ac.value,'$.actions')='array' THEN json_array_length(json_extract(ac.value,'$.actions')) ELSE 0 END AS executed_actions,
+          (SELECT group_concat(CASE WHEN upper(coalesce(json_extract(act.value,'$.status'),'')) IN ('FAILED','SUCCEEDED','BLOCKED','UNCERTAIN','SKIPPED') THEN upper(json_extract(act.value,'$.status')) ELSE 'OTHER' END,',') FROM json_each(CASE WHEN json_type(ac.value,'$.actions')='array' THEN json_extract(ac.value,'$.actions') ELSE '[]' END) act) AS action_states
+          FROM j LEFT JOIN json_each(CASE WHEN json_type(j.details,'$.accounts')='array' THEN json_extract(j.details,'$.accounts') ELSE '[]' END) ac
+          ORDER BY j.observed_at,j.ordinal LIMIT 160`;
+          const res=await fetch('https://api.cloudflare.com/client/v4/accounts/'+encodeURIComponent(acct)+'/d1/database/'+encodeURIComponent(id)+'/query',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({sql})});
+          if(!res.ok)throw Error('D1 query HTTP '+res.status);
+          const data=await res.json();
+          if(!data.success||!data.result?.[0]?.success)throw Error('D1 query unsuccessful');
+          const rows=data.result[0].results||[];
+          if(Number(data.result[0].meta?.rows_written||0)!==0)throw Error('Unexpected D1 writes');
+          const out=['# CHFJPY Broker Failure Reason Codes','SELECT only, no order submission, no account IDs or arbitrary strings.',...rows.map(x=>JSON.stringify(x)),'rows_written=0'].join('\n');
+          console.log(out);
+          if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,out+'\n');
+          NODE
