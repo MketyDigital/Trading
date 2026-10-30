@@ -1,0 +1,47 @@
+name: CHFJPY Deep Broker Reason Classification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Read and classify CHFJPY failure details without exposing raw reasons
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const c=fs.readFileSync('cloudflare-v2/wrangler.toml','utf8');
+          const block=c.match(/\[\[d1_databases\]\]([\s\S]*?)(?=\n\[\[|$)/)?.[1]||'';
+          const name=block.match(/database_name\s*=\s*"([^"]+)"/)?.[1], id=block.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
+          if(name!=='trading-staging'||!/^[0-9a-f-]{36}$/i.test(id||''))throw Error('Unexpected database');
+          const base="SELECT id FROM trading_events WHERE received_at >= '2026-10-30 01:20:00' AND received_at < '2026-10-30 01:40:00' AND (instr(upper(coalesce(json_extract(canonical_intent,'$.symbol.canonical'),json_extract(canonical_intent,'$.symbol'),'')),'CHFJPY')>0 OR instr(upper(coalesce(raw_text,'')),'CHFJPY')>0)";
+          const sql="SELECT j.observed_at,j.stage,j.status,j.details FROM operation_journal j WHERE j.trading_event_id IN ("+base+") AND j.stage IN ('BROKER_PLANNING','BROKER_EXECUTION') ORDER BY j.observed_at LIMIT 70";
+          const res=await fetch('https://api.cloudflare.com/client/v4/accounts/'+encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)+'/d1/database/'+encodeURIComponent(id)+'/query',{method:'POST',headers:{Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({sql})});
+          if(!res.ok)throw Error('D1 query HTTP '+res.status);
+          const p=await res.json();if(!p.success||!p.result?.[0]?.success)throw Error('D1 failed');
+          if(Number(p.result[0].meta?.rows_written||0)!==0)throw Error('D1 writes not allowed');
+          const rules=[['SYMBOL_NOT_FOUND',/symbol.{0,45}(not found|unresolved|unknown|missing|invalid)|MT5_SYMBOL_NOT_FOUND|SYMBOL_NOT_FOUND/i],['CONNECTOR_UNAVAILABLE',/connector.{0,45}(offline|unavailable|disconnected)|MT5_CONNECTOR_OFFLINE|connection refused/i],['MARKET_QUOTE_UNAVAILABLE',/tick.{0,40}(unavailable|missing)|quote.{0,40}(unavailable|missing)|market context|market price/i],['BROKER_ORDER_REJECTED',/reject|invalid stops|no money|market closed|trade disabled|invalid volume|retcode/i],['BROKER_TIMEOUT',/timeout|timed out|deadline exceeded/i],['AUTHENTICATION',/unauthoriz|authenticat|credential|token expired|invalid token|forbidden/i],['RISK_POLICY',/risk.{0,25}(reject|limit|block)|execution disabled|kill.switch/i],['PERSISTENCE',/database|persist|state binding|durable|D1/i],['GATEWAY',/gateway|bridge|socket|websocket|503|502/i]];
+          function classification(x){let v=String(x??'').trim();if(!v)return {class:'NONE'};const hit=rules.find(([k,re])=>re.test(v));return {class:hit?.[0]||'UNCLASSIFIED',fingerprint:createHash('sha256').update(v).digest('hex').slice(0,12),enum:/^[A-Z][A-Z0-9_]{2,70}$/.test(v)&&!/TOKEN|SECRET|PASSWORD|KEY|ACCOUNT|SESSION|CREDENTIAL/.test(v)?v:undefined};}
+          const lines=['# CHFJPY detailed reason classification','SELECT only; raw reason and account data withheld'];
+          for(const row of p.result[0].results||[]){
+            let d={};try{d=JSON.parse(row.details||'{}')}catch{}
+            const accounts=Array.isArray(d.accounts)?d.accounts:[];
+            if(!accounts.length)lines.push(JSON.stringify({at:row.observed_at,stage:row.stage,status:row.status,account_count:0,overall:classification(d.reason)}));
+            for(const a of accounts)lines.push(JSON.stringify({at:row.observed_at,stage:row.stage,status:row.status,account_status:a.status||null,account_reason:classification(a.reason),market_error:classification(a.error),broker_context:classification(a.brokerContextCode),actions:Array.isArray(a.actions)?a.actions.map(x=>({type:/^[A-Z_]{2,40}$/.test(String(x.type||''))?x.type:'UNKNOWN',status:x.status||null,reason:classification(x.reason),code:classification(x.errorCode)})):[]}));
+          }
+          lines.push('D1_ROWS_WRITTEN=0');
+          const out=lines.join('\n');console.log(out);
+          if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,out+'\n');
+          NODE
