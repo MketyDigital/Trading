@@ -1,0 +1,46 @@
+name: CHFJPY Affected MT5 Account Identification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  identify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Map CHFJPY failures to account labels and masked broker account identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const c=fs.readFileSync('cloudflare-v2/wrangler.toml','utf8');
+          const b=c.match(/\[\[d1_databases\]\]([\s\S]*?)(?=\n\[\[|$)/)?.[1]||'';
+          const name=b.match(/database_name\s*=\s*"([^"]+)"/)?.[1],id=b.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
+          if(name!=='trading-staging'||!/^[0-9a-f-]{36}$/i.test(id||''))throw Error('D1 binding mismatch');
+          const match="SELECT id FROM trading_events WHERE received_at >= '2026-10-30 01:20:00' AND received_at < '2026-10-30 01:40:00' AND (instr(upper(coalesce(json_extract(canonical_intent,'$.symbol.canonical'),json_extract(canonical_intent,'$.symbol'),'')),'CHFJPY')>0 OR instr(upper(coalesce(raw_text,'')),'CHFJPY')>0)";
+          const queries=[
+            {label:'JOURNAL_ACCOUNT_OUTCOMES',sql:"SELECT j.observed_at,j.stage,j.status,j.trade_account_id AS account_row_id, json_extract(j.details,'$.accounts[0].reason') AS first_reason, json_extract(j.details,'$.accounts[0].actions[0].reason') AS action_reason, json_extract(j.details,'$.accounts[0].accountId') AS details_account_id FROM operation_journal j WHERE j.trading_event_id IN ("+match+") AND j.stage IN ('BROKER_PLANNING','BROKER_EXECUTION') ORDER BY j.observed_at LIMIT 100"},
+            {label:'BROKER_POSITION_GROUPS',sql:"SELECT g.source_event_id AS event_id,g.trade_account_id AS account_row_id,g.status,g.side,g.canonical_symbol,COUNT(l.id) AS legs,SUM(CASE WHEN l.broker_position_id IS NOT NULL OR l.broker_order_id IS NOT NULL THEN 1 ELSE 0 END) AS bound_legs FROM position_groups g LEFT JOIN position_legs l ON l.position_group_id=g.id WHERE g.source_event_id IN ("+match+") GROUP BY g.id LIMIT 40"},
+            {label:'ACCOUNT_MAPPING',sql:"SELECT a.id AS account_row_id,a.account_label,a.platform,a.provider_mode,a.account_id,a.server_name,a.environment,a.is_active,a.execution_enabled FROM trade_accounts a WHERE a.id IN (SELECT DISTINCT trade_account_id FROM operation_journal WHERE trading_event_id IN ("+match+") AND trade_account_id IS NOT NULL UNION SELECT DISTINCT trade_account_id FROM position_groups WHERE source_event_id IN ("+match+") AND trade_account_id IS NOT NULL) OR a.id IN (SELECT DISTINCT json_extract(j.details,'$.accounts[0].accountId') FROM operation_journal j WHERE j.trading_event_id IN ("+match+")) LIMIT 40"}
+          ];
+          const api='https://api.cloudflare.com/client/v4/accounts/'+encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)+'/d1/database/'+encodeURIComponent(id)+'/query';
+          async function q(sql){const r=await fetch(api,{method:'POST',headers:{Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({sql})});if(!r.ok)throw Error('D1 HTTP '+r.status);const j=await r.json();if(!j.success||!j.result?.[0]?.success)throw Error('D1 SELECT failure');if(Number(j.result[0].meta?.rows_written||0)!==0)throw Error('Unexpected writes');return j.result[0].results||[];}
+          const data=[];for(const query of queries)data.push(await q(query.sql));
+          const accounts=new Map();for(const a of data[2])accounts.set(a.account_row_id,{label:String(a.account_label||'').slice(0,80),platform:a.platform,provider:a.provider_mode,account_suffix:String(a.account_id||'').slice(-4),server:String(a.server_name||'').slice(0,80),environment:a.environment,active:a.is_active,execution_enabled:a.execution_enabled});
+          const lines=['# CHFJPY MT5 destination identification','Account numbers masked to last four characters; no raw account row IDs, secrets or messages.', '## Mapped accounts'];
+          for(const [id,a] of accounts)lines.push(JSON.stringify({account_tag:'ACCOUNT_'+(Array.from(accounts.keys()).indexOf(id)+1),...a}));
+          const labelFor=(id)=>id&&accounts.has(id)?'ACCOUNT_'+(Array.from(accounts.keys()).indexOf(id)+1):'UNMAPPED';
+          lines.push('## Incident journal');
+          for(const x of data[0]){let key=x.account_row_id||x.details_account_id;lines.push(JSON.stringify({at:x.observed_at,stage:x.stage,status:x.status,account:labelFor(key),failure_code:/^[A-Z][A-Z0-9_]{2,60}$/.test(String(x.action_reason||''))?x.action_reason:'REDACTED_OR_NONE',planning_reason:/^[A-Z][A-Z0-9_]{2,60}$/.test(String(x.first_reason||''))?x.first_reason:'REDACTED_OR_NONE'}));}
+          lines.push('## Position groups');for(const x of data[1])lines.push(JSON.stringify({account:labelFor(x.account_row_id),side:x.side,symbol:x.canonical_symbol,status:x.status,legs:x.legs,bound_legs:x.bound_legs}));
+          lines.push('D1_ROWS_WRITTEN=0');
+          const out=lines.join('\n');console.log(out);if(process.env.GITHUB_STEP_SUMMARY)fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,out+'\n');
+          NODE
