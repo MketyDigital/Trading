@@ -873,21 +873,6 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
     def open_mkety():
         webbrowser.open(MKETY_CONNECTIONS_URL)
 
-    actions = ttk.Frame(root)
-    actions.pack(fill="x", padx=18, pady=(0, 14))
-    action_rows = (
-        (("Refresh terminals", discover), ("Add another terminal", add_selected), ("Browse terminal…", browse_terminal),
-         ("Search a folder…", add_from_folder_search), ("Install MT5…", install_terminal)),
-        (("Official MT5 download", lambda: webbrowser.open(OFFICIAL_MT5_DOWNLOAD_URL)),
-         ("Open selected MT5", open_selected_terminal), ("Read selected account", inspect_selected_account), ("Pair / start selected", pair_or_start), ("Stop selected connector", stop_selected),
-         ("Sync this account in Mkety", open_mkety), ("Remove saved profile", remove_selected_profile)),
-    )
-    for row_actions in action_rows:
-        row_frame = ttk.Frame(actions)
-        row_frame.pack(anchor="w")
-        for label, action in row_actions:
-            ttk.Button(row_frame, text=label, command=action).pack(side="left", padx=(0, 5), pady=3)
-
     def remove_selected_profile():
         profile_id = selected_profile_id()
         if not profile_id:
@@ -902,6 +887,21 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             flow_text.set("Saved profile removed from manager. MT5 files and local history preserved.")
         except Exception as exc:
             messagebox.showerror("Could not remove profile", str(exc), parent=root)
+
+    actions = ttk.Frame(root)
+    actions.pack(fill="x", padx=18, pady=(0, 14))
+    action_rows = (
+        (("Refresh terminals", discover), ("Add another terminal", add_selected), ("Browse terminal…", browse_terminal),
+         ("Search a folder…", add_from_folder_search), ("Install MT5…", install_terminal)),
+        (("Official MT5 download", lambda: webbrowser.open(OFFICIAL_MT5_DOWNLOAD_URL)),
+         ("Open selected MT5", open_selected_terminal), ("Read selected account", inspect_selected_account), ("Pair / start selected", pair_or_start), ("Stop selected connector", stop_selected),
+         ("Sync this account in Mkety", open_mkety), ("Remove saved profile", remove_selected_profile)),
+    )
+    for row_actions in action_rows:
+        row_frame = ttk.Frame(actions)
+        row_frame.pack(anchor="w")
+        for label, action in row_actions:
+            ttk.Button(row_frame, text=label, command=action).pack(side="left", padx=(0, 5), pady=3)
 
     def close_window():
         if not model.profiles():
