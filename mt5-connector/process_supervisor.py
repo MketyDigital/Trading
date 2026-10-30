@@ -339,7 +339,7 @@ class ConnectorSupervisor:
             # Only a gateway worker (or an uninspectable process) can block another gateway worker.
             conflicting = [pid for pid in unmanaged if _is_gateway_worker_command(_windows_connector_command_line(pid))]
             if conflicting:
-                raise RuntimeError("another Mkety MT5 gateway worker is already open; verify its profile before starting")
+                raise RuntimeError("another Mkety MT5 Connector session is already open; verify its gateway worker profile before starting")
         for existing_id, existing in self._specs.items():
             process = self._processes.get(existing_id)
             process_running = process is not None and process.poll() is None
