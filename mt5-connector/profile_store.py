@@ -167,6 +167,26 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
     _write_manifest(manifest_path, document)
 
 
+
+def remove_saved_profile(profile_id: str, app_data_dir: Path) -> None:
+    """Forget non-legacy profile metadata only; preserve credentials, ledgers and MT5 files."""
+    profile_id = _validate_profile_id(profile_id)
+    if profile_id == 'legacy-default':
+        raise ValueError('the existing legacy pairing cannot be removed by deleting profile metadata')
+    manifest_path = Path(app_data_dir) / MANIFEST_NAME
+    document = _read_manifest(manifest_path)
+    profiles = document.get('profiles', [])
+    if not isinstance(profiles, list):
+        raise RuntimeError('MT5 terminal profile manifest has an invalid profiles list')
+    retained = [row for row in profiles if row.get('profile_id') != profile_id]
+    if len(retained) == len(profiles):
+        raise ValueError('selected profile is not saved')
+    for row in retained:
+        if row.get('copy_parent_profile_id') == profile_id:
+            raise ValueError('profile is a local-copy parent; remove its follower relationships first')
+    document['profiles'] = retained
+    _write_manifest(manifest_path, document)
+
 def validate_symbol_map(value) -> dict[str, str]:
     if value is None or value == '':
         return {}
