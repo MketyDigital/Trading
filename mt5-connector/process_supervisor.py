@@ -101,6 +101,35 @@ def _terminate_pid(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _is_gateway_worker_command(command_line: str | None) -> bool:
+    """Conservatively classify a packaged connector; unknown command lines block starts."""
+    if command_line is None:
+        return True
+    command = str(command_line).casefold()
+    if '--local-copy-worker' in command:
+        return False
+    if '--worker' in command:
+        return True
+    # The standalone GUI and PyInstaller bootloader have no worker arguments.
+    if 'mketymt5connector.exe' in command:
+        return False
+    return True
+
+
+def _windows_connector_command_line(pid: int) -> str | None:
+    """Read only process arguments, without changing any process state."""
+    if os.name != 'nt':
+        return None
+    script = ("$p=Get-CimInstance Win32_Process -Filter 'ProcessId = " + str(int(pid)) +
+              "'; if($p){[Console]::Write($p.CommandLine)}")
+    try:
+        output = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, text=True, timeout=8, check=False)
+        return output.stdout.strip() if output.returncode == 0 and output.stdout.strip() else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def running_connector_processes() -> list[tuple[int, Path]]:
     """Find packaged Mkety connector executables so old standalone sessions are not duplicated."""
     if os.name != "nt":
@@ -306,7 +335,11 @@ class ConnectorSupervisor:
             and Path(executable).name.casefold() == "mketymt5connector.exe"
         ]
         if unmanaged:
-            raise RuntimeError("another Mkety MT5 Connector session is already open; close it before starting a managed profile")
+            # Local-copy workers and the packaged GUI share the same executable name.
+            # Only a gateway worker (or an uninspectable process) can block another gateway worker.
+            conflicting = [pid for pid in unmanaged if _is_gateway_worker_command(_windows_connector_command_line(pid))]
+            if conflicting:
+                raise RuntimeError("another Mkety MT5 gateway worker is already open; verify its profile before starting")
         for existing_id, existing in self._specs.items():
             process = self._processes.get(existing_id)
             process_running = process is not None and process.poll() is None
