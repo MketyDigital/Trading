@@ -18,6 +18,7 @@ from profile_store import (
     load_profiles,
     profile_paths,
     save_profile,
+    remove_saved_profile,
     update_copy_settings,
     validate_symbol_map,
 )
@@ -91,6 +92,21 @@ class ManagerViewModel:
         )
         save_profile(profile, self.app_data_dir)
         return profile
+
+    def remove_profile(self, profile_id: str) -> None:
+        """Forget a saved profile only when no connector or local-copy relation is active."""
+        profile = self._profile(profile_id)
+        if profile.legacy:
+            raise ValueError("legacy FBS pairing is protected; use Stop, not Remove")
+        self.supervisor.register(self._spec(profile))
+        if self.supervisor.status(profile_id).get('process_running'):
+            raise ValueError("stop the MT5 connector before removing this profile")
+        if profile.copy_role == 'follower' and profile.copy_enabled:
+            raise ValueError("disable this profile's local copy before removing it")
+        if any(other.copy_parent_profile_id == profile_id for other in self.profiles()):
+            raise ValueError("this profile is a local-copy parent; unlink its followers first")
+        remove_saved_profile(profile_id, self.app_data_dir)
+        self._identity_cache.pop(profile_id, None)
 
     def bind_legacy(self, profile_id: str, terminal_path: Path) -> TerminalProfile:
         profile = self._profile(profile_id)
@@ -286,7 +302,7 @@ class ManagerViewModel:
                 "profile_id": profile.profile_id,
                 "label": profile.label,
                 "terminal_path": str(profile.terminal_path) if profile.terminal_path else "Select MT5 terminal",
-                "terminal_process": "Running" if profile.terminal_path and str(profile.terminal_path.resolve(strict=False)).casefold() in running_paths else "Stopped",
+                "terminal_process": "Missing" if profile.terminal_path and not profile.terminal_path.is_file() else ("Running" if profile.terminal_path and str(profile.terminal_path.resolve(strict=False)).casefold() in running_paths else "Stopped"),
                 "connector_process": "Running" if status.get("process_running") else "Stopped",
                 "gateway": status.get("state", "stopped"),
                 "account": account,
@@ -864,13 +880,28 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
          ("Search a folder…", add_from_folder_search), ("Install MT5…", install_terminal)),
         (("Official MT5 download", lambda: webbrowser.open(OFFICIAL_MT5_DOWNLOAD_URL)),
          ("Open selected MT5", open_selected_terminal), ("Read selected account", inspect_selected_account), ("Pair / start selected", pair_or_start), ("Stop selected connector", stop_selected),
-         ("Sync this account in Mkety", open_mkety)),
+         ("Sync this account in Mkety", open_mkety), ("Remove saved profile", remove_selected_profile)),
     )
     for row_actions in action_rows:
         row_frame = ttk.Frame(actions)
         row_frame.pack(anchor="w")
         for label, action in row_actions:
             ttk.Button(row_frame, text=label, command=action).pack(side="left", padx=(0, 5), pady=3)
+
+    def remove_selected_profile():
+        profile_id = selected_profile_id()
+        if not profile_id:
+            messagebox.showinfo("Select profile", "Select a saved MT5 profile to remove.", parent=root)
+            return
+        try:
+            profile = model._profile(profile_id)
+            if not messagebox.askyesno("Remove saved profile", f"Forget saved profile '{profile.label}' from this manager?\\n\\nThis will NOT uninstall MT5, close trading positions, delete connector credentials, remove ledgers, or change the Mkety dashboard.\\n\\nActive connector and copy dependencies block removal.", parent=root):
+                return
+            model.remove_profile(profile_id)
+            refresh_profiles()
+            flow_text.set("Saved profile removed from manager. MT5 files and local history preserved.")
+        except Exception as exc:
+            messagebox.showerror("Could not remove profile", str(exc), parent=root)
 
     def close_window():
         if not model.profiles():

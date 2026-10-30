@@ -460,13 +460,18 @@ class MketyMt5Connector:
         if self.status_callback is None:
             return
         self.identity = terminal_identity(self.mt5)
-        self.status_callback(
-            state,
-            account_number=str(self.identity.get('accountNumber') or ''),
-            server_name=str(self.identity.get('serverName') or ''),
-            environment='live' if self.identity.get('isLive') else 'demo',
-            last_gateway_heartbeat_at=self.last_gateway_heartbeat_at,
-        )
+        try:
+            self.status_callback(
+                state,
+                account_number=str(self.identity.get('accountNumber') or ''),
+                server_name=str(self.identity.get('serverName') or ''),
+                environment='live' if self.identity.get('isLive') else 'demo',
+                last_gateway_heartbeat_at=self.last_gateway_heartbeat_at,
+            )
+        except OSError as exc:
+            # The local UI status file is advisory, never a trading/control dependency.
+            # Windows can temporarily deny os.replace while another process reads it.
+            print(f'Mkety connector status update deferred: {type(exc).__name__}')
 
     def begin_gateway_connection(self):
         self._gateway_authenticated = False
@@ -756,7 +761,10 @@ def main(argv=None):
         connector.run_forever(stop_requested=stop_requested)
     except Exception:
         if writer:
-            writer.update('stopped')
+            try:
+                writer.update('stopped')
+            except OSError:
+                pass  # Preserve the original failure, not an advisory status-file exception.
         raise
     finally:
         mt5.shutdown()
