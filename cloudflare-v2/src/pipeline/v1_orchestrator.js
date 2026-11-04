@@ -12,6 +12,8 @@ function normalizeAccount(account = {}) {
     if (legacy === 'symbol_equivalent') return 'SYMBOL_EQUIVALENT';
     if (legacy === 'balance_percent') return 'BALANCE_PERCENT';
     if (legacy === 'risk_percent') return 'RISK_PERCENT';
+    if (legacy === 'equity_risk_percent') return 'EQUITY_RISK_PERCENT';
+    if (legacy === 'balance_risk_percent') return 'BALANCE_RISK_PERCENT';
     if (legacy === 'fixed_risk') return 'FIXED_RISK';
     return undefined;
   })();
