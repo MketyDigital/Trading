@@ -151,7 +151,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const volumeStep = Number(instrument.stepLots ?? 0.01);
   const sizingMode = String(account.sizingMode ?? 'RISK_PERCENT').toUpperCase();
 
-  if ((sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK')
+  if ((['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingMode))
       && entryMaterializedIntent.stopLoss != null
       && executableIntent.stopLoss == null
       && protection.protectionSkips.some((item) => item.field === 'stopLoss')) {
@@ -188,13 +188,14 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     if (!(brokerBalanceLots > 0)) throw new TypeError('broker-authoritative balance-percent lot sizing required');
     const lotsPerTarget = normalizeFixedLots(brokerBalanceLots, instrument);
     totalLots = Number((lotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
-  } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
+  } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'EQUITY_RISK_PERCENT' || sizingMode === 'BALANCE_RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
-      riskPercent: sizingMode === 'RISK_PERCENT' ? account.riskPercent : undefined,
+      riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent : undefined,
       riskAmount: sizingMode === 'FIXED_RISK' ? account.riskAmount : undefined,
+      riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : 'EQUITY',
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
     });
     totalLots = risk.totalLots;
