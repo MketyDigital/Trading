@@ -69,3 +69,25 @@ test('fails closed when safe risk-sized volume is below broker minimum instead o
     },
   }), /below broker minimum/i);
 });
+
+test('balance-based percentage risk uses balance rather than equity', () => {
+  const plan = calculateRiskPlan({
+    equity: 20000,
+    balance: 5000,
+    riskPercent: 2,
+    riskBasis: 'BALANCE',
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 1,
+    instrument: {
+      tickSize: 1,
+      tickValuePerLot: 10,
+      minLots: 0.01,
+      maxLots: 100,
+      stepLots: 0.01,
+    },
+  });
+  assert.equal(plan.riskAmount, 100);
+  assert.equal(plan.riskBasis, 'BALANCE');
+  assert.equal(plan.totalLots, 1);
+});
