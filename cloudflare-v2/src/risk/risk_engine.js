@@ -38,22 +38,29 @@ export function calculateRiskPlan({
   equity, balance, riskPercent, riskAmount, riskBasis = 'EQUITY',
   entry, stopLoss, targetCount = 1, instrument = {},
 }) {
-  const allowedRisk = resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis });
+  if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
+  // Risk amount / percentage is per TP leg. Each leg gets its own risk budget.
+  const riskPerLeg = resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis });
   const lossPerLotAtStop = resolveLossPerLot({ entry, stopLoss, instrument });
   const step = Number(instrument.stepLots ?? 0.01);
   const min = Number(instrument.minLots ?? step);
   const max = Number(instrument.maxLots ?? Number.POSITIVE_INFINITY);
   if (!(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid volume constraints required');
-  const rawLots = allowedRisk / lossPerLotAtStop;
-  const steppedLots = Math.floor(rawLots / step) * step;
-  if (steppedLots < min) throw new RangeError('risk-sized volume is below broker minimum');
-  const totalLots = Number(clampMax(steppedLots, max).toFixed(decimals(step)));
-  const actualRisk = totalLots * lossPerLotAtStop;
+  const rawLotsPerLeg = riskPerLeg / lossPerLotAtStop;
+  const steppedLotsPerLeg = Math.floor(rawLotsPerLeg / step) * step;
+  if (steppedLotsPerLeg < min) throw new RangeError('risk-sized volume per leg is below broker minimum');
+  const lotsPerLeg = Number(clampMax(steppedLotsPerLeg, max).toFixed(decimals(step)));
+  const totalLots = Number((lotsPerLeg * targetCount).toFixed(decimals(step)));
   const legLots = allocateVolumeAcrossTargets(totalLots, targetCount, step);
+  const actualRiskPerLeg = lotsPerLeg * lossPerLotAtStop;
   return {
-    riskAmount: Number(allowedRisk.toFixed(2)),
+    riskAmount: Number(riskPerLeg.toFixed(2)),
+    riskAmountPerLeg: Number(riskPerLeg.toFixed(2)),
+    totalRiskAmount: Number((riskPerLeg * targetCount).toFixed(2)),
     riskBasis: String(riskBasis).toUpperCase(),
     lossPerLotAtStop: Number(lossPerLotAtStop.toFixed(8)),
-    totalLots, legLots, estimatedRisk: Number(actualRisk.toFixed(2)),
+    lotsPerLeg, totalLots, legLots,
+    estimatedRiskPerLeg: Number(actualRiskPerLeg.toFixed(2)),
+    estimatedRisk: Number((actualRiskPerLeg * targetCount).toFixed(2)),
   };
 }
