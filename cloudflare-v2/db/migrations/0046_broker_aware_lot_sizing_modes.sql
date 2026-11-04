@@ -24,5 +24,7 @@ ALTER TABLE public.trade_accounts
     'symbol_equivalent',
     'balance_percent',
     'multiplier',
-    'risk_percent'
+    'risk_percent',
+    'equity_risk_percent',
+    'balance_risk_percent'
   ));
