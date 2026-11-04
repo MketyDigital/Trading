@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateRiskPlan } from '../src/risk/risk_engine.js';
 
-test('sizes total lots from account risk using tick metadata then splits across targets', () => {
+test('applies risk budget per TP leg and reports aggregate risk', () => {
   const plan = calculateRiskPlan({
     equity: 10000,
     riskPercent: 1,
@@ -18,10 +18,14 @@ test('sizes total lots from account risk using tick metadata then splits across 
     },
   });
 
-  assert.equal(plan.riskAmount, 100);
+  assert.equal(plan.riskAmountPerLeg, 100);
+  assert.equal(plan.totalRiskAmount, 300);
   assert.equal(plan.lossPerLotAtStop, 1000);
-  assert.equal(plan.totalLots, 0.1);
-  assert.deepEqual(plan.legLots, [0.04, 0.03, 0.03]);
+  assert.equal(plan.lotsPerLeg, 0.1);
+  assert.equal(plan.totalLots, 0.3);
+  assert.deepEqual(plan.legLots, [0.1, 0.1, 0.1]);
+  assert.equal(plan.estimatedRiskPerLeg, 100);
+  assert.equal(plan.estimatedRisk, 300);
 });
 
 test('accepts adapter-computed loss-per-lot for non-simple instrument models', () => {
@@ -38,8 +42,9 @@ test('accepts adapter-computed loss-per-lot for non-simple instrument models', (
   });
 
   assert.equal(plan.riskAmount, 100);
-  assert.equal(plan.totalLots, 0.4);
-  assert.deepEqual(plan.legLots, [0.2, 0.2]);
+  assert.equal(plan.totalRiskAmount, 200);
+  assert.equal(plan.totalLots, 0.8);
+  assert.deepEqual(plan.legLots, [0.4, 0.4]);
 });
 
 test('fails closed when no reliable loss model is available', () => {
@@ -53,7 +58,7 @@ test('fails closed when no reliable loss model is available', () => {
   }), /loss model/i);
 });
 
-test('fails closed when safe risk-sized volume is below broker minimum instead of rounding risk upward', () => {
+test('fails closed when safe risk-sized volume per leg is below broker minimum', () => {
   assert.throws(() => calculateRiskPlan({
     balance: 1000,
     riskAmount: 1,
