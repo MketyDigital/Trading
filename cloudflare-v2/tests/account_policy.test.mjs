@@ -49,3 +49,17 @@ test('close/protective management remains allowed under loss lock unless kill sw
   const result = evaluateAccountPolicy(base, { ...request, actionKind: 'REDUCE_RISK', currentDailyPnlPercent: -10 });
   assert.equal(result.allowed, true);
 });
+
+test('only explicit broker minimum-floor overage may exceed max risk percent', () => {
+  assert.ok(evaluateAccountPolicy(base, { ...request, riskPercent: 2.05 }).reasons.includes('MAX_RISK_EXCEEDED'));
+  assert.deepEqual(evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.05,
+    minimumVolumeRiskOveragePercent: 0.05,
+  }), { allowed: true, reasons: [] });
+  assert.ok(evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.2,
+    minimumVolumeRiskOveragePercent: 0.05,
+  }).reasons.includes('MAX_RISK_EXCEEDED'));
+});
