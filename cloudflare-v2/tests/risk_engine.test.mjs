@@ -58,8 +58,8 @@ test('fails closed when no reliable loss model is available', () => {
   }), /loss model/i);
 });
 
-test('fails closed when safe risk-sized volume per leg is below broker minimum', () => {
-  assert.throws(() => calculateRiskPlan({
+test('floors below-budget risk volume to broker minimum and reports actual excess risk', () => {
+  const args = {
     balance: 1000,
     riskAmount: 1,
     entry: 100,
@@ -72,7 +72,14 @@ test('fails closed when safe risk-sized volume per leg is below broker minimum',
       maxLots: 10,
       stepLots: 0.1,
     },
-  }), /below broker minimum/i);
+  };
+  const plan = calculateRiskPlan(args);
+  assert.equal(plan.lotsPerLeg, 0.1);
+  assert.equal(plan.minimumFloorApplied, true);
+  assert.equal(plan.estimatedRiskPerLeg, 10);
+  assert.equal(plan.riskOverBudgetPerLeg, 9);
+
+  assert.throws(() => calculateRiskPlan({ ...args, minimumLotPolicy: 'REJECT' }), /below broker minimum/i);
 });
 
 test('balance-based percentage risk uses balance rather than equity', () => {
