@@ -262,8 +262,8 @@ def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='
         amount = None if risk_amount in (None, '') else float(risk_amount)
     except (TypeError, ValueError) as exc:
         raise ValueError('copy risk values must be numeric') from exc
-    if percent is not None and percent <= 0:
-        raise ValueError('copy risk percent must be positive')
+    if percent is not None and not (0 < percent <= 100):
+        raise ValueError('copy risk percent must be between 0 and 100')
     if amount is not None and amount <= 0:
         raise ValueError('copy risk amount must be positive')
     if mode == 'fixed_risk' and amount is None:
