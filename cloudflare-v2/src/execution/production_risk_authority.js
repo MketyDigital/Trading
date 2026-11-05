@@ -146,18 +146,11 @@ export function validateProductionRiskAction({
     throw wrapped;
   }
 
-  // The earlier plan may be smaller than the newly-authoritative broker result;
-  // that is safe. It may never be larger. A later task may choose to resize
-  // downward explicitly, but Task 3 intentionally preserves the planned amount
-  // and blocks only unsafe over-sizing.
-  const tolerance = Math.max(1e-12, Number(instrument.stepLots ?? 0.01) * 1e-9);
-  if (plannedLots - risk.totalLots > tolerance) {
-    const error = new RangeError('planned volume exceeds current broker-authoritative risk allowance');
-    error.code = 'BROKER_RISK_EXCEEDED';
-    throw error;
-  }
-
-  const finalAction = { ...action, lots: plannedLots };
+  // Broker-authoritative sizing is the final lot materializer. Upstream lots
+  // can be stale or calculated with incomplete broker constraints; resize this
+  // valid OPEN to the current executable risk-sized volume rather than rejecting
+  // it solely because the earlier plan differs.
+  const finalAction = { ...action, lots: risk.lotsPerLeg };
   const riskBasisAmount = String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE'
     ? brokerBalance(brokerAccount)
     : brokerEquity(brokerAccount);
