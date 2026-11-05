@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from math import isfinite
 import os
 import re
 import tempfile
@@ -246,10 +247,10 @@ def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='
         multiplier = float(lot_multiplier)
     except (TypeError, ValueError) as exc:
         raise ValueError('copy lot multiplier must be positive') from exc
-    if multiplier <= 0:
+    if not isfinite(multiplier) or multiplier <= 0:
         raise ValueError('copy lot multiplier must be positive')
     fixed = None if fixed_lot in (None, '') else float(fixed_lot)
-    if fixed is not None and fixed <= 0:
+    if fixed is not None and (not isfinite(fixed) or fixed <= 0):
         raise ValueError('copy fixed lot must be positive')
     mode = str(risk_mode or 'fixed_lot').strip().lower()
     if mode not in {'fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'}:
@@ -262,9 +263,9 @@ def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='
         amount = None if risk_amount in (None, '') else float(risk_amount)
     except (TypeError, ValueError) as exc:
         raise ValueError('copy risk values must be numeric') from exc
-    if percent is not None and not (0 < percent <= 100):
+    if percent is not None and not (isfinite(percent) and 0 < percent <= 100):
         raise ValueError('copy risk percent must be between 0 and 100')
-    if amount is not None and amount <= 0:
+    if amount is not None and (not isfinite(amount) or amount <= 0):
         raise ValueError('copy risk amount must be positive')
     if mode == 'fixed_risk' and amount is None:
         raise ValueError('fixed risk mode requires a risk amount')
