@@ -76,6 +76,19 @@ test('configured BALANCE risk basis is honored during live broker revalidation',
   assert.equal(result.risk.totalLots, 0.1);
 });
 
+test('explicit fixed monetary risk overrides percentage mode during broker revalidation', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ riskPercent: 5, riskAmount: 100 }),
+    action: openAction({ lots: 0.1 }),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.risk.riskAmount, 100);
+  assert.equal(result.risk.totalLots, 0.1);
+});
+
 test('changed broker economics that make planned lots exceed current risk authority block rather than resize upward or send', () => {
   assert.throws(() => validateProductionRiskAction({
     account: riskAccount(),
