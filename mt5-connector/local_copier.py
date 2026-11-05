@@ -7,7 +7,7 @@ from adapters. It never interprets an absent/uncertain snapshot as a close.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, floor, isfinite
 from typing import Callable
 
 
@@ -40,6 +40,10 @@ def _closable_volume(value, minimum, step):
     return round(amount, 8)
 
 
+def _step_index_tolerance(ratio):
+    return 2.220446049250313e-16 * max(1.0, abs(float(ratio))) * 8
+
+
 def _broker_order_volume(value, order):
     """Return a valid MT5 step volume without raising an undersized request."""
     try:
@@ -53,11 +57,12 @@ def _broker_order_volume(value, order):
         return None
     if amount < minimum or minimum <= 0 or step <= 0 or maximum < minimum:
         return None
-    minimum_steps = int((minimum / step) - 1e-12)
-    if minimum_steps * step < minimum - 1e-12:
-        minimum_steps += 1
-    maximum_steps = int((maximum / step) + 1e-12)
-    requested_steps = int((amount / step) + 1e-12)
+    minimum_ratio = minimum / step
+    maximum_ratio = maximum / step
+    requested_ratio = amount / step
+    minimum_steps = ceil(minimum_ratio - _step_index_tolerance(minimum_ratio))
+    maximum_steps = floor(maximum_ratio + _step_index_tolerance(maximum_ratio))
+    requested_steps = floor(requested_ratio + _step_index_tolerance(requested_ratio))
     if maximum_steps < minimum_steps or requested_steps < minimum_steps:
         return None
     return round(min(requested_steps, maximum_steps) * step, 8)
@@ -100,11 +105,12 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
         return None
     # MT5 requires a whole multiple of SYMBOL_VOLUME_STEP. The minimum
     # executable volume is the first step multiple at or above volume_min.
-    minimum_steps = int((minimum / step) - 1e-12)
-    if minimum_steps * step < minimum - 1e-12:
-        minimum_steps += 1
-    maximum_steps = int((maximum / step) + 1e-12)
-    raw_steps = int((raw / step) + 1e-12)
+    minimum_ratio = minimum / step
+    maximum_ratio = maximum / step
+    raw_ratio = raw / step
+    minimum_steps = ceil(minimum_ratio - _step_index_tolerance(minimum_ratio))
+    maximum_steps = floor(maximum_ratio + _step_index_tolerance(maximum_ratio))
+    raw_steps = floor(raw_ratio + _step_index_tolerance(raw_ratio))
     if maximum_steps < minimum_steps or raw_steps < minimum_steps:
         return None
     sized_steps = min(raw_steps, maximum_steps)
