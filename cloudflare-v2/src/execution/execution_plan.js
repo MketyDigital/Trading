@@ -213,19 +213,6 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const riskBasisAmount = risk
     ? (String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE' ? Number(account.balance) : Number(account.equity))
     : 0;
-  if (risk && !(riskBasisAmount > 0)) {
-    return {
-      status: 'BLOCKED',
-      reason: 'RISK_BASIS_UNAVAILABLE',
-      policy: { allowed: false, reasons: ['RISK_BASIS_UNAVAILABLE'] },
-      risk,
-      riskEntryPrice,
-      group: null,
-      actions: [],
-      protectionIssues: protection.protectionIssues,
-      protectionSkips: protection.protectionSkips,
-    };
-  }
   // maxRiskPercent is a per-leg ceiling. The aggregate group risk is checked
   // separately against maxOpenRiskPercent so multiple TP legs each retain the
   // configured per-leg budget without hiding their combined exposure.
