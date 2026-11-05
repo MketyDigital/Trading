@@ -138,3 +138,32 @@ test('supports scientific-notation volume steps without invalid decimal precisio
   assert.equal(plan.lotsPerLeg, 0.00001);
   assert.equal(plan.legLots[0], 0.00001);
 });
+
+
+test('supports arbitrary dynamic TP counts with risk budget independently applied per leg', () => {
+  for (const targetCount of [1, 2, 4, 5, 7]) {
+    const plan = calculateRiskPlan({
+      equity: 10000,
+      riskPercent: 1,
+      entry: 2500,
+      stopLoss: 2490,
+      targetCount,
+      instrument: {
+        tickSize: 0.01,
+        tickValuePerLot: 1,
+        minLots: 0.01,
+        maxLots: 100,
+        stepLots: 0.01,
+      },
+    });
+
+    assert.equal(plan.riskAmountPerLeg, 100, `risk budget per leg for ${targetCount} targets`);
+    assert.equal(plan.totalRiskAmount, 100 * targetCount, `aggregate risk for ${targetCount} targets`);
+    assert.equal(plan.lotsPerLeg, 0.1);
+    assert.equal(plan.totalLots, 0.1 * targetCount);
+    assert.equal(plan.legLots.length, targetCount);
+    assert.deepEqual(plan.legLots, Array(targetCount).fill(0.1));
+    assert.equal(plan.estimatedRiskPerLeg, 100);
+    assert.equal(plan.estimatedRisk, 100 * targetCount);
+  }
+});
