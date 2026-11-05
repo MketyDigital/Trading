@@ -72,6 +72,10 @@ async function handleFollowerUpdate(request, env, dependencies, followerAccountI
           enabled: true,
           lotMultiplier: body.lotMultiplier,
           fixedLot: body.fixedLot,
+          riskMode: body.riskMode ?? body.risk_mode ?? 'fixed_lot',
+          riskPercent: body.riskPercent ?? body.risk_percent,
+          riskAmount: body.riskAmount ?? body.risk_amount,
+          riskBasis: body.riskBasis ?? body.risk_basis ?? 'equity',
         });
       } else {
         link = await dependencies.persistenceRuntime.accountFollowers.setEnabled(workspaceId, followerAccountId, false);
@@ -87,8 +91,13 @@ async function handleFollowerUpdate(request, env, dependencies, followerAccountI
         const lotMultiplier = body.lotMultiplier == null ? 1 : Number(body.lotMultiplier);
         const fixedLot = body.fixedLot == null ? null : Number(body.fixedLot);
         if (!(lotMultiplier > 0) || (fixedLot != null && !(fixedLot > 0))) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
+        const riskMode = String(body.riskMode ?? body.risk_mode ?? 'fixed_lot').trim().toLowerCase();
+        const riskPercent = body.riskPercent ?? body.risk_percent ?? null;
+        const riskAmount = body.riskAmount ?? body.risk_amount ?? null;
+        const riskBasis = String(body.riskBasis ?? body.risk_basis ?? 'equity').trim().toLowerCase();
+        if (!['fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'].includes(riskMode) || !['equity','balance'].includes(riskBasis) || (riskPercent != null && !(Number(riskPercent) > 0)) || (riskAmount != null && !(Number(riskAmount) > 0)) || (riskMode === 'fixed_risk' && !(Number(riskAmount) > 0)) || (['equity_percent','balance_percent'].includes(riskMode) && !(Number(riskPercent) > 0)) ) throw new Error('FOLLOWER_LINK_RISK_POLICY_INVALID');
         const payload = { workspace_id: workspaceId, follower_account_id: followerAccountId, parent_account_id: parentAccountId, enabled: true,
-          lot_multiplier: lotMultiplier, fixed_lot: fixedLot };
+          lot_multiplier: lotMultiplier, fixed_lot: fixedLot, risk_mode: riskMode, risk_percent: riskPercent, risk_amount: riskAmount, risk_basis: riskBasis };
         const { data, error } = await supabase.from('trading_account_followers').upsert(payload, { onConflict: 'workspace_id,follower_account_id' }).select('*').maybeSingle();
         if (error) throw new Error('FOLLOWER_UPDATE_FAILED');
         link = data;
