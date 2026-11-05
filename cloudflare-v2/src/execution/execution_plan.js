@@ -99,14 +99,15 @@ function normalizeFixedLots(value, instrument) {
   // rejecting a genuine trade solely because a broker uses a larger minimum
   // or coarser volume step. Never exceed the broker-reported maximum.
   const precision = decimals(step);
-  const minimumExecutable = Math.ceil((min / step) - 1e-12) * step;
+  const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  const minimumExecutable = Math.ceil((min / step) - stepIndexTolerance(min / step)) * step;
   const maximumExecutable = Number.isFinite(max)
-    ? Math.floor((max / step) + 1e-12) * step
+    ? Math.floor((max / step) + stepIndexTolerance(max / step)) * step
     : Number.POSITIVE_INFINITY;
   if (!(maximumExecutable >= minimumExecutable)) throw new RangeError('broker volume constraints have no executable lot size');
 
   const bounded = Math.min(Math.max(lots, minimumExecutable), maximumExecutable);
-  let executable = Math.floor((bounded / step) + 1e-12) * step;
+  let executable = Math.floor((bounded / step) + stepIndexTolerance(bounded / step)) * step;
   if (executable < minimumExecutable) executable = minimumExecutable;
   if (executable > maximumExecutable) executable = maximumExecutable;
   return Number(executable.toFixed(precision));
