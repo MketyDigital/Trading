@@ -1,8 +1,11 @@
 import { allocateVolumeAcrossTargets } from '../execution/position_group.js';
 
 function decimals(step) {
-  const text = String(step ?? 0.01);
-  return text.includes('.') ? text.split('.')[1].length : 0;
+  const text = String(step ?? 0.01).toLowerCase();
+  const [coefficient, exponentText] = text.split('e');
+  const fractionalDigits = coefficient.includes('.') ? coefficient.split('.')[1].length : 0;
+  const exponent = exponentText == null ? 0 : Number(exponentText);
+  return Math.max(0, fractionalDigits - exponent);
 }
 
 function resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis = 'EQUITY' }) {
