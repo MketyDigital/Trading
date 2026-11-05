@@ -22,6 +22,15 @@ function extractFillPrice(message) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function extractConfirmedLots(message, protocolLotSize) {
+  const payload = message?.payload || {};
+  const rawVolume = payload.deal?.volume ?? payload.position?.volume ?? payload.order?.filledVolume;
+  const volume = Number(rawVolume);
+  const lotSize = Number(protocolLotSize);
+  if (!(Number.isFinite(volume) && volume > 0 && Number.isFinite(lotSize) && lotSize > 0)) return null;
+  return volume / lotSize;
+}
+
 async function reserveAction(deliveryStore, action) {
   if (!action.idempotencyKey) throw new TypeError('idempotencyKey required for cTrader execution');
   const reservation = await deliveryStore.reserve(action.idempotencyKey, {
@@ -285,7 +294,7 @@ export async function executeCTraderAction(action, {
         ...(pending ? { status: 'PENDING' } : {}),
         ...ids,
         fillPrice,
-        executedLots: Number(prepared.executableAction.lots),
+        executedLots: extractConfirmedLots(executionResponse, prepared.lotSize),
         ...(prepared.volumeStepLots > 0 ? { volumeStepLots: prepared.volumeStepLots } : {}),
         ...(prepared.minimumLots > 0 ? { minimumLots: prepared.minimumLots } : {}),
         response: executionResponse,
