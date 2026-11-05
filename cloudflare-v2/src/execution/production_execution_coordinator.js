@@ -201,6 +201,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
   // Reserve newly accepted risk within this account-plan execution group so
   // later TP legs are checked against existing exposure plus prior accepted legs.
   let acceptedOpenRiskPercent = 0;
+  let acceptedOpenLots = 0;
   let initialOpenRiskPercent = null;
 
   for (const action of actions) {
@@ -243,7 +244,14 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     if (!protection.allowed) { outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: protection.reason || 'INVALID_PROTECTION_GEOMETRY' }); continue; }
     executableAction = protection.action;
     const mergedPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
+    let acceptedActionLots = 0;
     if (isRiskIncreasingAction(executableAction)) {
+      acceptedActionLots = optionalFiniteNumber(mergedPolicyRequest.totalLots)
+        ?? optionalFiniteNumber(executableAction.lots)
+        ?? 0;
+      // maxLotsPerTrade is a group ceiling: later TP legs must include the
+      // already accepted volume, just as they include previously accepted risk.
+      mergedPolicyRequest.totalLots = acceptedOpenLots + acceptedActionLots;
       const observedOpenRiskPercent = optionalFiniteNumber(mergedPolicyRequest.currentOpenRiskPercent) ?? 0;
       if (initialOpenRiskPercent == null) initialOpenRiskPercent = observedOpenRiskPercent;
       // Broker exposure can refresh after each fill and already include prior
@@ -281,6 +289,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     if (isRiskIncreasingAction(executableAction) && result?.duplicate !== true) {
       const acceptedRiskPercent = optionalFiniteNumber(mergedPolicyRequest.riskPercent);
       if (acceptedRiskPercent != null && acceptedRiskPercent > 0) acceptedOpenRiskPercent += acceptedRiskPercent;
+      if (acceptedActionLots > 0) acceptedOpenLots += acceptedActionLots;
     }
 
     const shouldBindState = result?.duplicate !== true && typeof stateBinder === 'function' && (hasBindableBrokerResult(result) || actionRequiresStateBinding(executableAction));
