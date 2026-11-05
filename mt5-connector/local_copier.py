@@ -41,7 +41,7 @@ def _closable_volume(value, minimum, step):
 
 
 def _broker_order_volume(value, order):
-    """Mirror MT5's target-side min/step rounding when comparing live orders."""
+    """Return a valid MT5 step volume without raising an undersized request."""
     try:
         amount = float(value)
         minimum = float(order.get("volume_min") or 0)
@@ -49,18 +49,18 @@ def _broker_order_volume(value, order):
         maximum = float(order.get("volume_max") or 0)
     except (TypeError, ValueError):
         return None
-    if amount <= 0:
+    if not all(isfinite(number) for number in (amount, minimum, step, maximum)):
         return None
-    if minimum > 0 and amount < minimum:
-        amount = minimum
-    if maximum > 0 and amount > maximum:
-        amount = maximum
-    if step > 0:
-        origin = minimum if minimum > 0 else 0.0
-        amount = origin + max(0, int((amount - origin + 1e-9) / step)) * step
-        if minimum > 0 and amount < minimum:
-            amount = minimum
-    return round(amount, 8)
+    if amount < minimum or minimum <= 0 or step <= 0 or maximum < minimum:
+        return None
+    minimum_steps = int((minimum / step) - 1e-12)
+    if minimum_steps * step < minimum - 1e-12:
+        minimum_steps += 1
+    maximum_steps = int((maximum / step) + 1e-12)
+    requested_steps = int((amount / step) + 1e-12)
+    if maximum_steps < minimum_steps or requested_steps < minimum_steps:
+        return None
+    return round(min(min(requested_steps, maximum_steps), maximum_steps) * step, 8)
 
 
 def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity'):
@@ -98,10 +98,17 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
     raw = budget / loss
     if not isfinite(raw) or raw + 1e-12 < minimum:
         return None
-    # MT5 volume steps are anchored at the broker minimum, not necessarily 0.
-    max_steps = int((maximum - minimum + 1e-12) / step)
-    raw_steps = int((raw - minimum + 1e-12) / step)
-    sized = minimum + min(raw_steps, max_steps) * step
+    # MT5 requires a whole multiple of SYMBOL_VOLUME_STEP. The minimum
+    # executable volume is the first step multiple at or above volume_min.
+    minimum_steps = int((minimum / step) - 1e-12)
+    if minimum_steps * step < minimum - 1e-12:
+        minimum_steps += 1
+    maximum_steps = int((maximum / step) + 1e-12)
+    raw_steps = int((raw / step) + 1e-12)
+    if maximum_steps < minimum_steps or raw_steps < minimum_steps:
+        return None
+    sized_steps = min(raw_steps, maximum_steps)
+    sized = sized_steps * step
     if sized + 1e-12 < minimum:
         return None
     return round(sized, 8)
