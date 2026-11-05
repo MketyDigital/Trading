@@ -55,6 +55,7 @@ test('risk-percent OPEN is accepted only when current broker account and symbol 
   assert.deepEqual(result.policyContext, {
     totalLots: 0.1,
     riskPercent: 1,
+    minimumVolumeRiskOveragePercent: 0,
     currentDailyPnlPercent: -0.5,
     currentOpenRiskPercent: 0.25,
   });
@@ -138,4 +139,17 @@ test('live policy context reports broker-calculated cash risk as a percentage', 
     exposure:{currentOpenRiskPercent:0},
   });
   assert.equal(result.policyContext.riskPercent, 5);
+});
+
+test('risk authority exposes only the broker-minimum excess as a policy tolerance', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ riskPercent: 0.01 }),
+    action: openAction({ lots: 0.01 }),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument({ tickSize: 1, tickValuePerLot: 10, minLots: 0.1, stepLots: 0.1 }),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.policyContext.riskPercent, 0.1);
+  assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
 });
