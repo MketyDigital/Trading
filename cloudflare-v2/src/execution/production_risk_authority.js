@@ -10,15 +10,17 @@ function text(value) {
 }
 
 function sizingMode(account = {}) {
-  return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
+  return text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
 }
 
 function configuredRiskPercent(account = {}, action = {}) {
+  const mode = sizingMode(account);
   return numberOrUndefined(
     action.riskPercent ??
     action.risk_percent ??
     account.riskPercent ??
-    account.risk_percent,
+    account.risk_percent ??
+    (['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode) ? account.lot_value : undefined),
   );
 }
 
