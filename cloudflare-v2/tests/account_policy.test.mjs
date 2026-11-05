@@ -71,3 +71,14 @@ test('only explicit broker minimum-floor overage may exceed max risk percent', (
     minimumVolumeRiskOveragePercent: 0.2,
   }), { allowed: true, reasons: [] });
 });
+
+test('minimum-volume tolerance never relaxes cumulative open-risk limits', () => {
+  const result = evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.05,
+    minimumVolumeRiskOveragePercent: 0.05,
+    currentOpenRiskPercent: 5.99,
+  });
+  assert.ok(result.reasons.includes('OPEN_RISK_LIMIT'));
+  assert.equal(result.allowed, false);
+});
