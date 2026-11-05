@@ -10,7 +10,9 @@ function decimals(step) {
 }
 
 function floorToStep(value, step) {
-  return Number((Math.floor((Number(value) / Number(step)) + 1e-12) * Number(step)).toFixed(decimals(step)));
+  const ratio = Number(value) / Number(step);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  return Number((Math.floor(ratio + tolerance) * Number(step)).toFixed(decimals(step)));
 }
 
 function finiteProtection(value) {
