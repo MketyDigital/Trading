@@ -560,6 +560,16 @@ class LocalCopierTests(unittest.TestCase):
                               ('balance_percent', {'risk_percent': 1.0})):
             self.assertEqual(plan_snapshot_actions(parent, follower, risk_mode=mode, **kwargs), [])
 
+    def test_risk_sizing_caps_to_maximum_aligned_volume_step(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 10.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 0.105,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='fixed_risk', risk_amount=5.0)
+        self.assertEqual(actions[0]['lots'], 0.10)
+
     def test_risk_sizing_below_broker_minimum_skips_instead_of_rounding_up(self):
         parent = {'complete': True, 'positions': [{
             'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
