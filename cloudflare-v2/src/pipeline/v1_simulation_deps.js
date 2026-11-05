@@ -140,7 +140,7 @@ function cleanHttpsBase(value) {
   return parsed.toString().replace(/\/$/, '');
 }
 
-async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
+async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch, { includeRiskContext = false } = {}) {
   const masterKey = text(env.TRADING_MASTER_KEY);
   const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
   if (!masterKey || !ciphertext) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning credentials unavailable');
@@ -194,7 +194,30 @@ async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn 
   if (!contextResponse.ok || body?.ok !== true || text(body.accountRowId) !== rowId) {
     throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker market context unavailable');
   }
-  const price = executionSidePrice(intent, body?.context?.tick || {});
+  const context = body?.context && typeof body.context === 'object' ? body.context : {};
+  const price = executionSidePrice(intent, context.tick || {});
+  if (includeRiskContext) {
+    const brokerSymbol = context.symbol && typeof context.symbol === 'object' ? context.symbol : {};
+    const symbol = { ...resolved, ...brokerSymbol };
+    const tickValueLoss = Number(symbol.tickValueLoss ?? symbol.tickValueLossPerLot ?? symbol.tickValue ?? symbol.tickValuePerLot);
+    const tickValueProfit = Number(symbol.tickValueProfit ?? symbol.tickValueProfitPerLot ?? symbol.tickValue ?? symbol.tickValuePerLot);
+    return {
+      brokerAccount: context.account || {},
+      instrument: {
+        ...symbol,
+        platformSymbol: text(symbol.platformSymbol || resolved.platformSymbol),
+        tickSize: Number(symbol.tickSize),
+        tickValuePerLot: tickValueLoss,
+        tickValueLossPerLot: tickValueLoss,
+        tickValueProfitPerLot: tickValueProfit,
+        minLots: Number(symbol.minLots ?? symbol.minVolume),
+        maxLots: Number(symbol.maxLots ?? symbol.maxVolume),
+        stepLots: Number(symbol.stepLots ?? symbol.stepVolume),
+        contractSize: Number(symbol.contractSize),
+      },
+      currentMarketPrice: Number.isFinite(Number(price)) && Number(price) > 0 ? Number(price) : undefined,
+    };
+  }
   if (!(price > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker tick unavailable');
   return price;
 }
@@ -276,8 +299,14 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
   }
 }
 
-async function defaultBrokerPlanningMarketPrice(account, intent, env = {}) {
-  if (isMt5ConnectorAccount(account)) return defaultMt5PlanningMarketPrice(account, intent, env);
+async function defaultBrokerPlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
+  const mode = text(account?.sizingMode ?? account?.sizing_mode ?? account?.lot_sizing_type).toUpperCase();
+  const followerMode = text(account?.followerLink?.risk_mode ?? account?.followerLink?.riskMode).toLowerCase();
+  const includeRiskContext = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)
+    || ['fixed_risk', 'equity_percent', 'balance_percent'].includes(followerMode);
+  if (isMt5ConnectorAccount(account)) {
+    return defaultMt5PlanningMarketPrice(account, intent, env, fetchFn, { includeRiskContext });
+  }
   if (isCTraderOauthAccount(account)) return defaultCTraderPlanningMarketPrice(account, intent, env);
   return undefined;
 }
