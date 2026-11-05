@@ -442,3 +442,46 @@ test('accepted OPEN risk is reserved even when state binding fails before the ne
   assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
   assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['OPEN_RISK_LIMIT']);
 });
+
+
+test('follower accounts load and materialize risk independently from their own account economics', async () => {
+  const sized = [];
+  const dispatched = [];
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-independent-sizing', brokerExecutionEnabled: true,
+    accountPlans: [
+      plan({ accountId: 'acct-small', actions: [openAction({ idempotencyKey: 'evt-independent-sizing:small', lots: 0.01 })] }),
+      plan({ accountId: 'acct-large', actions: [openAction({ idempotencyKey: 'evt-independent-sizing:large', lots: 0.01 })] }),
+    ],
+  }, {
+    accountLoader: async (_workspaceId, accountId) => account({
+      id: accountId,
+      equity: accountId === 'acct-small' ? 1000 : 10000,
+      balance: accountId === 'acct-small' ? 900 : 9500,
+    }),
+    riskMaterializer: async ({ account: currentAccount, action }) => {
+      const lots = currentAccount.equity * 0.001 / 100;
+      sized.push({ accountId: currentAccount.id, equity: currentAccount.equity, lots });
+      return {
+        allowed: true,
+        action: { ...action, lots },
+        policyContext: { totalLots: lots, riskPercent: 0.1, currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 },
+      };
+    },
+    dispatchAction: async ({ account: currentAccount, action }) => {
+      dispatched.push({ accountId: currentAccount.id, lots: action.lots });
+      return { ok: true, brokerPositionId: `position-${currentAccount.id}` };
+    },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(summary.succeeded, 2);
+  assert.deepEqual(sized, [
+    { accountId: 'acct-small', equity: 1000, lots: 0.01 },
+    { accountId: 'acct-large', equity: 10000, lots: 0.1 },
+  ]);
+  assert.deepEqual(dispatched, [
+    { accountId: 'acct-small', lots: 0.01 },
+    { accountId: 'acct-large', lots: 0.1 },
+  ]);
+});
