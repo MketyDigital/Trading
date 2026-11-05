@@ -35,7 +35,10 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
 
     const maxOpenRisk = Number(policy.maxOpenRiskPercent);
     const currentOpenRisk = Number(request.currentOpenRiskPercent || 0);
-    const newRisk = Number(request.riskPercent || 0);
+    // Plan-time checks may provide aggregate group risk separately from the
+    // per-leg riskPercent used by maxRiskPercent. Production dispatches omit
+    // this field and reserve each accepted leg incrementally.
+    const newRisk = Number(request.newOpenRiskPercent ?? request.riskPercent ?? 0);
     if (Number.isFinite(maxOpenRisk) && maxOpenRisk > 0 && currentOpenRisk + newRisk > maxOpenRisk) reasons.push('OPEN_RISK_LIMIT');
   }
 
