@@ -399,3 +399,44 @@ test('risk-sized signal with no TP uses one entry leg and one per-leg risk budge
   assert.equal(plan.actions[0].lots, 0.1);
   assert.equal(plan.actions[0].takeProfit, null);
 });
+
+
+test('risk sizing counts only retained executable TP targets after invalid targets are skipped', () => {
+  const plan = buildExecutionPlan({
+    side: 'SELL',
+    orderType: 'MARKET',
+    symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 },
+    stopLoss: 2510,
+    takeProfits: [2490, 2480, 2520, 2470],
+    incomplete: false,
+  }, {
+    account: {
+      equity: 10000,
+      sizingMode: 'RISK_PERCENT',
+      riskPercent: 1,
+      safetyPolicy: {
+        enabled: true,
+        invalidProtectionPolicy: 'skip_invalid',
+        allowInvalidTakeProfitSkip: true,
+      },
+    },
+    instrument,
+  });
+
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2490, 2480, 2470]);
+  assert.deepEqual(plan.actions.map((action) => action.targetIndex), [1, 2, 4]);
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 300);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.equal(plan.group.legs.length, 3);
+  assert.equal(plan.actions.length, 3);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+  assert.deepEqual(plan.protectionSkips, [{
+    field: 'takeProfits',
+    targetIndex: 3,
+    code: 'TP3_SKIPPED_INVALID_GEOMETRY',
+    value: 2520,
+  }]);
+});
