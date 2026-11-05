@@ -10,12 +10,12 @@ test('builds risk-sized three-leg plan from one canonical intent', () => {
     takeProfits: [2510, 2520, 2530], fastEntry: false,
   }, { account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 }, instrument });
   assert.equal(plan.status, 'READY');
-  assert.equal(plan.risk.totalLots, 0.1);
-  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.04, 0.03, 0.03]);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.1, 0.1, 0.1]);
   assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2510, 2520, 2530]);
 });
 
-test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
+test('fixed-risk sizing applies the cash risk budget independently to each TP leg', () => {
   const plan = buildExecutionPlan({
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
     takeProfits: [2510, 2520, 2530],
@@ -24,9 +24,10 @@ test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
     instrument,
   });
   assert.equal(plan.status, 'READY');
-  assert.equal(plan.risk.riskAmount, 100);
-  assert.equal(plan.risk.totalLots, 0.1);
-  assert.deepEqual(plan.actions.map((action) => action.lots), [0.04, 0.03, 0.03]);
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 300);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
 });
 
 test('explicit fixed monetary risk overrides percentage sizing during planning', () => {
@@ -376,6 +377,29 @@ test('execution plan creates any number of risk-sized TP actions with 1% risk pe
   }
 });
 
+
+test('maxRiskPercent is per TP leg while maxOpenRiskPercent checks aggregate group risk', () => {
+  const intent = {
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510, 2520, 2530], fastEntry: false,
+  };
+  const perLegAllowed = buildExecutionPlan(intent, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1,
+      safetyPolicy: { enabled: true, killSwitch: false, maxRiskPercent: 1.1, maxOpenRiskPercent: 3.1 } },
+    instrument,
+  });
+  assert.equal(perLegAllowed.status, 'READY');
+  assert.equal(perLegAllowed.risk.totalRiskAmount, 300);
+
+  const aggregateBlocked = buildExecutionPlan(intent, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1,
+      safetyPolicy: { enabled: true, killSwitch: false, maxRiskPercent: 1.1, maxOpenRiskPercent: 2.9 } },
+    instrument,
+  });
+  assert.equal(aggregateBlocked.status, 'BLOCKED');
+  assert.ok(aggregateBlocked.policy.reasons.includes('OPEN_RISK_LIMIT'));
+});
 
 test('risk-sized signal with no TP uses one entry leg and one per-leg risk budget', () => {
   const plan = buildExecutionPlan({
