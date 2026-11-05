@@ -67,6 +67,30 @@ function assertCTraderCbotConnected(account = {}) {
 function sizingModeOf(account = {}) {
   return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
 }
+function applyFollowerRiskSizing(account = {}, link = null) {
+  if (!link || !(link.enabled === true || link.enabled === 1 || link.enabled === '1')) return account;
+  const mode = text(link.risk_mode ?? link.riskMode).toLowerCase();
+  const riskPercent = Number(link.risk_percent ?? link.riskPercent);
+  const riskAmount = Number(link.risk_amount ?? link.riskAmount);
+  const riskBasis = text(link.risk_basis ?? link.riskBasis).toLowerCase() || 'equity';
+  const normalized = {
+    ...account,
+    followerLink: link,
+    copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId),
+    riskPercent: Number.isFinite(riskPercent) && riskPercent > 0 ? riskPercent : 0,
+    risk_percent: Number.isFinite(riskPercent) && riskPercent > 0 ? riskPercent : 0,
+    riskAmount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : 0,
+    risk_amount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : 0,
+    riskBasis,
+    risk_basis: riskBasis,
+  };
+  if (mode === 'fixed_risk') return { ...normalized, sizingMode: 'FIXED_RISK' };
+  if (mode === 'equity_percent') return { ...normalized, sizingMode: 'EQUITY_RISK_PERCENT' };
+  if (mode === 'balance_percent') return { ...normalized, sizingMode: 'BALANCE_RISK_PERCENT', riskBasis: 'balance', risk_basis: 'balance' };
+  // Fixed-lot and multiplier links have already materialized their per-leg
+  // lots in the trusted plan. Do not let the parent's risk mode resize them.
+  return { ...normalized, sizingMode: 'FIXED_LOTS' };
+}
 
 function safetyPolicyOf(account = {}) {
   const policy = account.safety_policy ?? account.safetyPolicy;
@@ -440,17 +464,40 @@ export function createProductionExecutionDependencies({
     const id = text(accountId);
     if (!id) throw new TypeError('accountId is required');
 
-    if (persistenceRuntime?.accounts) return persistenceRuntime.accounts.getAccount(boundWorkspaceId, id);
+    let account;
+    if (persistenceRuntime?.accounts) {
+      account = await persistenceRuntime.accounts.getAccount(boundWorkspaceId, id);
+    } else {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .select('*')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw new Error('failed to load production trade account');
+      account = data || null;
+    }
+    if (!account) return null;
 
-    const { data, error } = await supabase
-      .from('trade_accounts')
-      .select('*')
-      .eq('workspace_id', boundWorkspaceId)
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) throw new Error('failed to load production trade account');
-    return data || null;
+    const followerLinksEnabled = env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers);
+    if (!followerLinksEnabled) return account;
+    let followerLink = null;
+    if (typeof persistenceRuntime?.accountFollowers?.getLink === 'function') {
+      followerLink = await persistenceRuntime.accountFollowers.getLink(boundWorkspaceId, id);
+    } else if (supabase?.from) {
+      const { data, error } = await supabase
+        .from('trading_account_followers')
+        .select('*')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('follower_account_id', id)
+        .eq('enabled', true)
+        .maybeSingle();
+      if (error) throw new Error('failed to load production follower risk policy');
+      followerLink = data || null;
+    } else {
+      throw new Error('production follower risk policy storage is unavailable');
+    }
+    return applyFollowerRiskSizing(account, followerLink);
   }
 
   async function snapshotLoader({ workspaceId: requestedWorkspaceId, sourceId, account } = {}) {
