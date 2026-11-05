@@ -295,7 +295,13 @@ class ManagerViewModel:
             if profile.copy_role == 'follower' and profile.copy_parent_profile_id:
                 parent = profiles_by_id.get(profile.copy_parent_profile_id)
                 parent_label = parent.label if parent else profile.copy_parent_profile_id
-                if profile.copy_fixed_lot is not None:
+                if profile.copy_risk_mode == 'fixed_risk':
+                    sizing = f"{profile.copy_risk_amount:g} risk at SL"
+                elif profile.copy_risk_mode == 'equity_percent':
+                    sizing = f"{profile.copy_risk_percent:g}% equity risk"
+                elif profile.copy_risk_mode == 'balance_percent':
+                    sizing = f"{profile.copy_risk_percent:g}% balance risk"
+                elif profile.copy_fixed_lot is not None:
                     unit = 'lot' if profile.copy_fixed_lot == 1 else 'lots'
                     sizing = f"fixed {profile.copy_fixed_lot:g} {unit}"
                 else:
