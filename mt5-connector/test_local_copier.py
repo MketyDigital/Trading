@@ -46,6 +46,22 @@ class LocalCopierTests(unittest.TestCase):
         self.assertFalse(profile.copy_enabled)
         self.assertIsNone(profile.copy_parent_profile_id)
 
+    def test_profile_persists_independent_risk_sizing_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            follower = TerminalProfile('risk-follower', 'Risk Follower', Path('C:/follower/terminal64.exe'))
+            save_profile(follower, root)
+            update_copy_settings(follower, root, role='follower', parent_profile_id='parent',
+                                 enabled=True, risk_mode='equity_percent',
+                                 risk_percent=1.25, risk_basis='equity')
+            saved = {row.profile_id: row for row in load_profiles(root)}['risk-follower']
+            self.assertEqual(saved.copy_risk_mode, 'equity_percent')
+            self.assertEqual(saved.copy_risk_percent, 1.25)
+            self.assertEqual(saved.copy_risk_basis, 'equity')
+            with self.assertRaisesRegex(ValueError, 'requires a risk amount'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='fixed_risk')
+
     def test_normal_follower_setup_does_not_require_aliases_and_preserves_saved_aliases(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
