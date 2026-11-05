@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from local_copier import LocalCopyEngine, plan_snapshot_actions
+from local_copier import LocalCopyEngine, plan_snapshot_actions, _risk_sized_volume
 from profile_store import TerminalProfile, load_profiles, save_profile, update_copy_settings
 from copy_supervisor import CopyPairSpec, LocalCopySupervisor
 
@@ -39,6 +39,46 @@ class LocalCopierTests(unittest.TestCase):
                                                        'stop_limit_price': None,
                                                        'time_type': 0, 'expiration': 0,
                                                        'volume_min': 0.1, 'volume_max': None, 'volume_step': 0.1}])
+
+
+    def test_risk_sizing_uses_follower_minimum_as_volume_step_origin(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.03,
+            'volume_max': 0.15,
+            'volume_step': 0.02,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertEqual(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1), 0.09)
+
+    def test_risk_sizing_below_broker_minimum_fails_closed(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.03,
+            'volume_max': 0.15,
+            'volume_step': 0.02,
+        }
+        follower = {'equity': 2000, 'balance': 2000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1))
+
+    def test_risk_sizing_missing_broker_maximum_fails_closed(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': None,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1))
+
+    def test_fixed_cash_risk_sizing_does_not_require_percentage_basis(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        self.assertEqual(_risk_sized_volume(row, {}, risk_mode='fixed_risk', risk_amount=100), 0.1)
 
     def test_profile_copy_metadata_defaults_off(self):
         profile = TerminalProfile('p1', 'Primary')
