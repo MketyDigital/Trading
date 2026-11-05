@@ -186,3 +186,24 @@ test('risk lot step indexing handles tiny scientific steps without floating-poin
   assert.equal(plan.totalLots, 0.0000009);
   assert.deepEqual(plan.legLots, [0.0000003, 0.0000003, 0.0000003]);
 });
+
+
+test('risk plan retains exact monetary exposure alongside rounded display values', () => {
+  const plan = calculateRiskPlan({
+    riskAmount: 1.004,
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 1,
+    instrument: {
+      lossPerLotAtStop: 1,
+      minLots: 0.001,
+      maxLots: 10,
+      stepLots: 0.001,
+    },
+  });
+  assert.equal(plan.riskAmount, 1);
+  assert.equal(plan.riskAmountExact, 1.004);
+  assert.equal(plan.estimatedRisk, 1);
+  assert.equal(plan.estimatedRiskExact, 1.004);
+  assert.equal(plan.estimatedRiskPerLegExact, 1.004);
+});
