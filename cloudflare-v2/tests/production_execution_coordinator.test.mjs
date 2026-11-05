@@ -335,6 +335,35 @@ test('final durable authority is reloaded before every action so revocation afte
 });
 
 
+test('minimum-volume fallback authorization is still blocked when its risk overage exceeds account tolerance', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-min-floor', brokerExecutionEnabled: true,
+    accountPlans: [plan()],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 2 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action: { ...action, minimumVolumeFallbackAuthorized: true },
+      policyRequest: {
+        totalLots: 0.1,
+        riskPercent: 0.1,
+        minimumVolumeRiskOveragePercent: 0.09,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 0);
+  assert.equal(summary.accounts[0].status, 'BLOCKED');
+  assert.ok(summary.accounts[0].actions[0].policy.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+});
+
 test('maxLotsPerTrade accumulates accepted TP-leg volume within one account plan', async () => {
   let dispatchCalls = 0;
   const summary = await executeProductionPlan({
