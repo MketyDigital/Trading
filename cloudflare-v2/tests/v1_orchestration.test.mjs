@@ -772,6 +772,32 @@ test('management can target a fast-only trade before any full follow-up arrives'
 });
 
 
+test('orchestration reads per-account risk percent from persisted lot value', async () => {
+  const account = enabledAccount({
+    sizingMode: undefined,
+    lot_sizing_type: 'equity_risk_percent',
+    lot_value: 1,
+    equity: 10000,
+    balance: 10000,
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'persisted-risk-percent',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [account],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 100);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+});
+
+
 test('fixed-lot and multiplier followers inherit parent plan sizing before applying their volume policy', async () => {
   const base = {
     equity: 10000,
