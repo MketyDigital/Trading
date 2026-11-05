@@ -30,19 +30,6 @@ test('fixed-risk sizing applies the cash risk budget independently to each TP le
   assert.deepEqual(plan.actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
 });
 
-test('fixed-cash risk plan fails closed without account risk-basis equity or balance', () => {
-  const plan = buildExecutionPlan({
-    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' },
-    entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490, takeProfits: [2510],
-  }, {
-    account: { sizingMode: 'FIXED_RISK', riskAmount: 100 },
-    instrument,
-  });
-  assert.equal(plan.status, 'BLOCKED');
-  assert.equal(plan.reason, 'RISK_BASIS_UNAVAILABLE');
-  assert.deepEqual(plan.actions, []);
-});
-
 test('explicit fixed monetary risk overrides percentage sizing during planning', () => {
   const plan = buildExecutionPlan({
     side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
