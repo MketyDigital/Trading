@@ -203,10 +203,17 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     throw new TypeError(`unsupported sizing mode: ${sizingMode}`);
   }
 
+  const riskBasisAmount = risk
+    ? (String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE' ? Number(account.balance) : Number(account.equity))
+    : 0;
+  const actualRiskPercent = risk && riskBasisAmount > 0
+    ? (Number(risk.estimatedRisk) / riskBasisAmount) * 100
+    : (risk ? Number.POSITIVE_INFINITY : Number(exposure.estimatedRiskPercent || 0));
+
   const policy = evaluateAccountPolicy(safetyPolicy, {
     symbol: executableIntent.symbol.canonical,
     totalLots,
-    riskPercent: risk ? (Number(account.riskPercent) || 0) : Number(exposure.estimatedRiskPercent || 0),
+    riskPercent: actualRiskPercent,
     currentDailyPnlPercent: exposure.currentDailyPnlPercent,
     currentOpenRiskPercent: exposure.currentOpenRiskPercent,
     actionKind: 'INCREASE_RISK',
