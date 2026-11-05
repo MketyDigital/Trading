@@ -812,6 +812,11 @@ async function loadMatchedFastGroups(correlation, stateStore) {
   return { ok: true, groups };
 }
 
+function isRiskSizedAccount(account = {}) {
+  return ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(String(account?.sizingMode ?? account?.sizing_mode ?? account?.lot_sizing_type ?? '').trim().toUpperCase())
+    || ['fixed_risk', 'equity_percent', 'balance_percent'].includes(String(account?.followerLink?.risk_mode ?? account?.followerLink?.riskMode ?? '').trim().toLowerCase());
+}
+
 function needsPlanningMarketPrice(account = {}, intent = {}) {
   const sizingMode = String(account?.sizingMode ?? '').trim().toUpperCase();
   const takeProfits = Array.isArray(intent?.takeProfits) ? intent.takeProfits : [];
