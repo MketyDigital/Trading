@@ -25,7 +25,8 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
     const floorTolerance = Number.isFinite(configuredFloorTolerance) && configuredFloorTolerance >= 0
       ? configuredFloorTolerance
       : 0;
-    if (minimumFloorOverage > floorTolerance) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
+    const floorToleranceEpsilon = Number.EPSILON * Math.max(1, Math.abs(minimumFloorOverage), Math.abs(floorTolerance)) * 8;
+    if (minimumFloorOverage - floorTolerance > floorToleranceEpsilon) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
     const permittedRisk = maxRiskPercent + Math.min(minimumFloorOverage, floorTolerance);
     if (Number.isFinite(maxRiskPercent) && Number(request.riskPercent) > permittedRisk) reasons.push('MAX_RISK_EXCEEDED');
 
