@@ -117,7 +117,7 @@ test('cTrader accepted fill without confirmed filledVolume does not persist requ
     },
   };
 
-  const result = await executeCTraderAction(action, {
+  const result = await executeCTraderAction({ ...action, minimumVolumeFallbackAuthorized: true }, {
     session,
     accountId: 48685071,
     catalog: [symbol],
