@@ -334,3 +334,16 @@ test('per-target allocation preserves current one-sized-lot-per-TP behavior', ()
   assert.deepEqual(plan.actions.map((action)=>action.lots),[0.09,0.09,0.09]);
 });
 
+
+test('fixed monetary risk override is checked against actual risk percent for account policy', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'}, entry:{kind:'PRICE',value:2500},
+    stopLoss:2490, takeProfits:[2510],
+  }, {
+    account:{equity:10000,sizingMode:'EQUITY_RISK_PERCENT',riskPercent:1,riskAmount:500,
+      safetyPolicy:{enabled:true,killSwitch:false,maxRiskPercent:2}},
+    instrument,
+  });
+  assert.equal(plan.status,'BLOCKED');
+  assert.ok(plan.policy.reasons.includes('MAX_RISK_EXCEEDED'));
+});
