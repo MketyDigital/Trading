@@ -1,0 +1,10 @@
+BEGIN;
+ALTER TABLE public.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT 'fixed_lot';
+ALTER TABLE public.trading_account_followers ADD COLUMN IF NOT EXISTS risk_percent numeric;
+ALTER TABLE public.trading_account_followers ADD COLUMN IF NOT EXISTS risk_amount numeric;
+ALTER TABLE public.trading_account_followers ADD COLUMN IF NOT EXISTS risk_basis text NOT NULL DEFAULT 'equity';
+ALTER TABLE public.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_mode_check CHECK (risk_mode IN ('fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'));
+ALTER TABLE public.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_percent_check CHECK (risk_percent IS NULL OR risk_percent > 0);
+ALTER TABLE public.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_amount_check CHECK (risk_amount IS NULL OR risk_amount > 0);
+ALTER TABLE public.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_basis_check CHECK (risk_basis IN ('equity','balance'));
+COMMIT;
