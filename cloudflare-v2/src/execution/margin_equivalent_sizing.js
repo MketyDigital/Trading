@@ -1,6 +1,12 @@
 function decimals(step) {
-  const text = String(step ?? 0.01);
-  return text.includes('.') ? text.split('.')[1].length : 0;
+  const numeric = Number(step ?? 0.01);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  const [coefficient, exponentText] = String(numeric).toLowerCase().split('e');
+  const fractionDigits = coefficient.includes('.')
+    ? coefficient.split('.')[1].length
+    : 0;
+  const exponent = exponentText == null ? 0 : Number(exponentText);
+  return Math.max(0, fractionDigits - exponent);
 }
 
 function constraints(instrument = {}) {
