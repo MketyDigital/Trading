@@ -21,6 +21,10 @@ class CopyPairSpec:
     journal_path: Path | None = None
     stop_file: Path | None = None
     follower_symbol_map: dict | None = None
+    follower_risk_mode: str = 'fixed_lot'
+    follower_risk_percent: float | None = None
+    follower_risk_amount: float | None = None
+    follower_risk_basis: str = 'equity'
 
 
 class LocalCopySupervisor:
@@ -49,7 +53,13 @@ class LocalCopySupervisor:
             '--follower-terminal', str(spec.follower_terminal_path),
             '--lot-multiplier', str(spec.follower_lot_multiplier),
             '--poll-seconds', str(spec.poll_seconds),
+            '--risk-mode', str(spec.follower_risk_mode),
+            '--risk-basis', str(spec.follower_risk_basis),
         ]
+        if spec.follower_risk_percent is not None:
+            args.extend(['--risk-percent', str(spec.follower_risk_percent)])
+        if spec.follower_risk_amount is not None:
+            args.extend(['--risk-amount', str(spec.follower_risk_amount)])
         if spec.follower_fixed_lot is not None:
             args.extend(['--fixed-lot', str(spec.follower_fixed_lot)])
         if spec.follower_symbol_map:
