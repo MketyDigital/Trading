@@ -770,3 +770,44 @@ test('management can target a fast-only trade before any full follow-up arrives'
   assert.equal(result.accounts[0].status, 'READY');
   assert.deepEqual(result.accounts[0].actions.map((a) => a.type), ['CLOSE_POSITION']);
 });
+
+
+test('follower risk amount and mode override parent sizing values without legacy lot scaling', async () => {
+  const follower = enabledAccount({
+    id: 'follower-22',
+    equity: 12000,
+    balance: 9000,
+    sizingMode: 'FIXED_LOTS',
+    fixedLots: 0.05,
+    riskPercent: 0.5,
+    riskAmount: 25,
+    followerLink: {
+      follower_account_id: 'follower-22',
+      risk_mode: 'fixed_risk',
+      risk_amount: 100,
+      risk_percent: null,
+      risk_basis: 'equity',
+      fixed_lot: 0.01,
+      lot_multiplier: 0.5,
+    },
+  });
+  const persisted = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-risk-override',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => { persisted.push(group); return group; } },
+    accountProvider: async () => [follower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 100);
+  assert.equal(result.accounts[0].risk.totalRiskAmount, 300);
+  assert.equal(persisted[0].tradeAccountId, 'follower-22');
+});
