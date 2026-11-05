@@ -7,6 +7,7 @@ from adapters. It never interprets an absent/uncertain snapshot as a close.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Callable
 
 
@@ -74,25 +75,30 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
     try:
         loss = abs(float(row.get('loss_per_lot_at_stop')))
         funds_key = 'balance' if mode == 'balance_percent' or str(risk_basis).lower() == 'balance' else 'equity'
-        funds = float((follower_snapshot or {}).get(funds_key))
+        funds = float((follower_snapshot or {}).get(funds_key, 0) or 0)
         step = float(row.get('volume_step') or 0)
         minimum = float(row.get('volume_min') or step)
-        maximum = float(row.get('volume_max') or float('inf'))
+        maximum = float(row.get('volume_max') or 0)
         if mode == 'fixed_risk':
             budget = float(risk_amount)
         else:
             budget = funds * float(risk_percent) / 100.0
     except (TypeError, ValueError):
         return None
+    # Missing/non-finite broker limits are not treated as unlimited volume.
+    if not all(isfinite(value) for value in (loss, budget, funds, step, minimum, maximum)):
+        return None
     if not (loss > 0 and budget > 0 and step > 0 and minimum > 0 and maximum >= minimum):
         return None
     if mode != 'fixed_risk' and funds <= 0:
         return None
     raw = budget / loss
-    # Round down to the broker's volume step and never exceed max volume.
-    max_step_volume = (int((maximum + 1e-12) / step)) * step
-    sized = (int((raw + 1e-12) / step)) * step
-    sized = min(sized, max_step_volume)
+    if not isfinite(raw) or raw + 1e-12 < minimum:
+        return None
+    # MT5 volume steps are anchored at the broker minimum, not necessarily 0.
+    max_steps = int((maximum - minimum + 1e-12) / step)
+    raw_steps = int((raw - minimum + 1e-12) / step)
+    sized = minimum + min(raw_steps, max_steps) * step
     if sized + 1e-12 < minimum:
         return None
     return round(sized, 8)
