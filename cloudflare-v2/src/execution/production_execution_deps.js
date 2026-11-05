@@ -659,6 +659,7 @@ export function createProductionExecutionDependencies({
       runtime = await ctraderRuntimeFactory({
         environment,
         allowLiveTrading,
+        allowBrokerMinimumVolumeFallback: action?.minimumVolumeFallbackAuthorized === true,
         clientId,
         clientSecret,
         accessToken,
