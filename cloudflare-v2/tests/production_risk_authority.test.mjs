@@ -61,6 +61,21 @@ test('risk-percent OPEN is accepted only when current broker account and symbol 
   assert.equal(result.risk.totalLots, 0.1);
 });
 
+test('configured BALANCE risk basis is honored during live broker revalidation', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ riskPercent: 2, riskBasis: 'BALANCE' }),
+    action: openAction({ lots: 0.1 }),
+    brokerAccount: { equity: 10000, balance: 5000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+
+  assert.equal(result.risk.riskBasis, 'BALANCE');
+  assert.equal(result.risk.riskAmount, 100);
+  assert.equal(result.risk.totalLots, 0.1);
+});
+
 test('changed broker economics that make planned lots exceed current risk authority block rather than resize upward or send', () => {
   assert.throws(() => validateProductionRiskAction({
     account: riskAccount(),
