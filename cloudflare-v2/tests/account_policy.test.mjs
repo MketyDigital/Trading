@@ -81,6 +81,11 @@ test('minimum-volume overage is capped even when actual risk remains below maxRi
   assert.equal(result.allowed, false);
   assert.ok(result.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
   assert.ok(!result.reasons.includes('MAX_RISK_EXCEEDED'));
+  const malformed = evaluateAccountPolicy(base, {
+    ...request,
+    minimumVolumeRiskOveragePercent: 'not-a-number',
+  });
+  assert.ok(malformed.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
 });
 
 test('minimum-volume tolerance never relaxes cumulative open-risk limits', () => {
