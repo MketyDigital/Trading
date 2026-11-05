@@ -403,3 +403,42 @@ test('refreshed broker exposure that already includes prior TP risk is not doubl
   assert.equal(dispatchCalls, 2);
   assert.equal(summary.accounts[0].status, 'SUCCEEDED');
 });
+
+
+test('accepted OPEN risk is reserved even when state binding fails before the next TP leg', async () => {
+  const policyRequests = [];
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-risk-bind-failure', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      currentOpenRiskPercent: 1,
+      actions: [
+        openAction({ legId: 'tp-1', idempotencyKey: 'evt-risk-bind-failure:tp-1' }),
+        openAction({ legId: 'tp-2', idempotencyKey: 'evt-risk-bind-failure:tp-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxOpenRiskPercent: 2 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.75,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 1,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => { throw new Error('simulated persistence failure'); },
+    bindingRepairRecorder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 1, 'second TP must be blocked before broker dispatch');
+  assert.equal(summary.accounts[0].status, 'FAILED');
+  assert.equal(summary.accounts[0].actions[0].reason, 'STATE_BIND_FAILED');
+  assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
+  assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['OPEN_RISK_LIMIT']);
+});
