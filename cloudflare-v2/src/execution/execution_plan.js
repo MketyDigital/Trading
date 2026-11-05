@@ -214,7 +214,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     ? (String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE' ? Number(account.balance) : Number(account.equity))
     : 0;
   const actualRiskPercent = risk && riskBasisAmount > 0
-    ? (Number(risk.estimatedRisk) / riskBasisAmount) * 100
+    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
     : (risk ? Number.POSITIVE_INFINITY : Number(exposure.estimatedRiskPercent || 0));
 
   const policy = evaluateAccountPolicy(safetyPolicy, {
@@ -222,7 +222,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     totalLots,
     riskPercent: actualRiskPercent,
     minimumVolumeRiskOveragePercent: risk?.minimumFloorApplied === true && riskBasisAmount > 0
-      ? Math.max(0, actualRiskPercent - (Number(risk.riskAmount) / riskBasisAmount) * 100)
+      ? Math.max(0, actualRiskPercent - (Number(risk.riskAmountExact ?? risk.riskAmount) / riskBasisAmount) * 100)
       : 0,
     currentDailyPnlPercent: exposure.currentDailyPnlPercent,
     currentOpenRiskPercent: exposure.currentOpenRiskPercent,
