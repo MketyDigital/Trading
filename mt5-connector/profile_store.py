@@ -35,6 +35,10 @@ class TerminalProfile:
     copy_enabled: bool = False
     copy_lot_multiplier: float = 1.0
     copy_fixed_lot: float | None = None
+    copy_risk_mode: str = 'fixed_lot'
+    copy_risk_percent: float | None = None
+    copy_risk_amount: float | None = None
+    copy_risk_basis: str = 'equity'
     copy_symbol_map: dict[str, str] = field(default_factory=dict)
 
 
@@ -103,6 +107,10 @@ def _manifest_profiles(manifest_path: Path) -> list[TerminalProfile]:
             copy_enabled=bool(row.get('copy_enabled', False)),
             copy_lot_multiplier=float(row.get('copy_lot_multiplier') or 1.0),
             copy_fixed_lot=float(row['copy_fixed_lot']) if row.get('copy_fixed_lot') not in (None, '') else None,
+            copy_risk_mode=str(row.get('copy_risk_mode') or 'fixed_lot').strip().lower(),
+            copy_risk_percent=float(row['copy_risk_percent']) if row.get('copy_risk_percent') not in (None, '') else None,
+            copy_risk_amount=float(row['copy_risk_amount']) if row.get('copy_risk_amount') not in (None, '') else None,
+            copy_risk_basis=str(row.get('copy_risk_basis') or 'equity').strip().lower(),
             copy_symbol_map=validate_symbol_map(row.get('copy_symbol_map', {})),
         ))
     return result
@@ -144,6 +152,10 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
         copy_enabled=profile.copy_enabled,
         copy_lot_multiplier=profile.copy_lot_multiplier,
         copy_fixed_lot=profile.copy_fixed_lot,
+        copy_risk_mode=profile.copy_risk_mode,
+        copy_risk_percent=profile.copy_risk_percent,
+        copy_risk_amount=profile.copy_risk_amount,
+        copy_risk_basis=profile.copy_risk_basis,
         copy_symbol_map=profile.copy_symbol_map,
     ))
     existing_document = _read_manifest(manifest_path)
@@ -157,6 +169,10 @@ def save_profile(profile: TerminalProfile, app_data_dir: Path) -> None:
             'copy_enabled': item.copy_enabled,
             'copy_lot_multiplier': item.copy_lot_multiplier,
             'copy_fixed_lot': item.copy_fixed_lot,
+            'copy_risk_mode': item.copy_risk_mode,
+            'copy_risk_percent': item.copy_risk_percent,
+            'copy_risk_amount': item.copy_risk_amount,
+            'copy_risk_basis': item.copy_risk_basis,
             'copy_symbol_map': item.copy_symbol_map,
         }
         for item in profiles
@@ -216,7 +232,7 @@ def validate_symbol_map(value) -> dict[str, str]:
     return result
 
 
-def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='none', parent_profile_id=None, enabled=False, lot_multiplier=1.0, fixed_lot=None, symbol_map=None) -> TerminalProfile:
+def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='none', parent_profile_id=None, enabled=False, lot_multiplier=1.0, fixed_lot=None, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity', symbol_map=None) -> TerminalProfile:
     role = str(role or 'none').strip().lower()
     if role not in {'none', 'parent', 'follower'}:
         raise ValueError('copy role must be none, parent, or follower')
@@ -235,7 +251,27 @@ def update_copy_settings(profile: TerminalProfile, app_data_dir: Path, *, role='
     fixed = None if fixed_lot in (None, '') else float(fixed_lot)
     if fixed is not None and fixed <= 0:
         raise ValueError('copy fixed lot must be positive')
+    mode = str(risk_mode or 'fixed_lot').strip().lower()
+    if mode not in {'fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'}:
+        raise ValueError('copy risk mode must be fixed_lot, multiplier, fixed_risk, equity_percent, or balance_percent')
+    basis = str(risk_basis or 'equity').strip().lower()
+    if basis not in {'equity', 'balance'}:
+        raise ValueError('copy risk basis must be equity or balance')
+    try:
+        percent = None if risk_percent in (None, '') else float(risk_percent)
+        amount = None if risk_amount in (None, '') else float(risk_amount)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('copy risk values must be numeric') from exc
+    if percent is not None and percent <= 0:
+        raise ValueError('copy risk percent must be positive')
+    if amount is not None and amount <= 0:
+        raise ValueError('copy risk amount must be positive')
+    if mode == 'fixed_risk' and amount is None:
+        raise ValueError('fixed risk mode requires a risk amount')
+    if mode in {'equity_percent', 'balance_percent'} and percent is None:
+        raise ValueError('percentage risk mode requires a risk percent')
     updated = TerminalProfile(profile.profile_id, profile.label, profile.terminal_path, profile.legacy, role, parent, bool(enabled), multiplier, fixed,
+                              mode, percent, amount, basis,
                               validate_symbol_map(symbol_map if symbol_map is not None else profile.copy_symbol_map))
     save_profile(updated, app_data_dir)
     return updated
