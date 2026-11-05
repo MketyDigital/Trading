@@ -48,6 +48,25 @@ test('cTrader fixed lots below symbol minimum fail with a specific pre-send code
   assert.equal(deliveryStore.failures[0]?.code, 'CTRADER_VOLUME_BELOW_MINIMUM');
 });
 
+test('cTrader runtime fallback capability alone cannot authorize a broker-minimum increase', async () => {
+  const deliveryStore = store();
+  let sent = false;
+  const session = { request: async () => { sent = true; throw new Error('must not send'); } };
+
+  await assert.rejects(
+    executeCTraderAction(action, {
+      session,
+      accountId: 48685071,
+      catalog: [symbol],
+      deliveryStore,
+      allowBrokerMinimumVolumeFallback: true,
+    }),
+    (error) => error?.code === 'CTRADER_VOLUME_BELOW_MINIMUM',
+  );
+  assert.equal(sent, false);
+  assert.equal(deliveryStore.failures[0]?.code, 'CTRADER_VOLUME_BELOW_MINIMUM');
+});
+
 test('explicit broker-minimum fallback uses the live symbol minimum and records executed lots', async () => {
   const deliveryStore = store();
   const requests = [];
@@ -66,7 +85,7 @@ test('explicit broker-minimum fallback uses the live symbol minimum and records 
     },
   };
 
-  const result = await executeCTraderAction(action, {
+  const result = await executeCTraderAction({ ...action, minimumVolumeFallbackAuthorized: true }, {
     session,
     accountId: 48685071,
     catalog: [symbol],
