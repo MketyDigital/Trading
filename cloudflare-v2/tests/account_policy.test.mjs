@@ -72,6 +72,24 @@ test('only explicit broker minimum-floor overage may exceed max risk percent', (
   }), { allowed: true, reasons: [] });
 });
 
+test('absolute account-risk bounds apply even when optional policy caps are unset', () => {
+  const perLeg = evaluateAccountPolicy({ enabled: true, killSwitch: false }, {
+    ...request,
+    riskPercent: 101,
+  });
+  assert.equal(perLeg.allowed, false);
+  assert.ok(perLeg.reasons.includes('MAX_RISK_EXCEEDED'));
+
+  const aggregate = evaluateAccountPolicy({ enabled: true, killSwitch: false }, {
+    ...request,
+    riskPercent: 1,
+    newOpenRiskPercent: 101,
+  });
+  assert.equal(aggregate.allowed, false);
+  assert.ok(aggregate.reasons.includes('OPEN_RISK_LIMIT'));
+});
+
+
 test('minimum-volume overage is capped even when actual risk remains below maxRiskPercent', () => {
   const result = evaluateAccountPolicy(base, {
     ...request,
