@@ -15,9 +15,8 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
     if (Number.isFinite(Number(policy.maxLotsPerTrade)) && Number(request.totalLots) > Number(policy.maxLotsPerTrade)) reasons.push('MAX_LOTS_EXCEEDED');
     const maxRiskPercent = Number(policy.maxRiskPercent);
     const requestedFloorOverage = Number(request.minimumVolumeRiskOveragePercent ?? 0);
-    const minimumFloorOverage = Number.isFinite(requestedFloorOverage) && requestedFloorOverage >= 0
-      ? requestedFloorOverage
-      : Number.POSITIVE_INFINITY;
+    const minimumFloorOverageValid = Number.isFinite(requestedFloorOverage) && requestedFloorOverage >= 0;
+    const minimumFloorOverage = minimumFloorOverageValid ? requestedFloorOverage : 0;
     // Keep the broker-minimum exception deliberately small. This is an
     // independent cap on the amount above the requested per-leg risk budget,
     // not merely headroom against maxRiskPercent.
@@ -26,7 +25,7 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
       ? configuredFloorTolerance
       : 0;
     const floorToleranceEpsilon = Number.EPSILON * Math.max(1, Math.abs(minimumFloorOverage), Math.abs(floorTolerance)) * 8;
-    if (minimumFloorOverage - floorTolerance > floorToleranceEpsilon) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
+    if (!minimumFloorOverageValid || minimumFloorOverage - floorTolerance > floorToleranceEpsilon) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
     const permittedRisk = maxRiskPercent + Math.min(minimumFloorOverage, floorTolerance);
     if (Number.isFinite(maxRiskPercent) && Number(request.riskPercent) > permittedRisk) reasons.push('MAX_RISK_EXCEEDED');
 
