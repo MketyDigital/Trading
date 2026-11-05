@@ -41,7 +41,7 @@ export async function applyTradingAccountFollowerReplicationEvent(event, { targe
     const cols = Object.keys(row);
     if (item.mutation === 'delete') await query(`DELETE FROM ${table} WHERE id=$1 AND workspace_id=$2`, [item.id, row.workspace_id]);
     else if (item.mutation === 'insert') await query(`INSERT INTO ${table}(id,${cols.join(',')}) VALUES($1,${cols.map((key, index) => `$${index + 2}${['lot_multiplier', 'fixed_lot', 'risk_percent', 'risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')}) ON CONFLICT(id) DO NOTHING`, [item.id, ...cols.map((key) => row[key])]);
-    else { const fields = cols.filter((key) => key !== 'workspace_id'); await query(`UPDATE ${table} SET ${fields.map((key, index) => `${key}=${index + 1}${['lot_multiplier', 'fixed_lot', 'risk_percent', 'risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')} WHERE id=$${fields.length + 1} AND workspace_id=$${fields.length + 2}`, [...fields.map((key) => row[key]), item.id, row.workspace_id]); }
+    else { const fields = cols.filter((key) => key !== 'workspace_id'); await query(`UPDATE ${table} SET ${fields.map((key, index) => `${key}=$${index + 1}${['lot_multiplier', 'fixed_lot', 'risk_percent', 'risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')} WHERE id=$${fields.length + 1} AND workspace_id=$${fields.length + 2}`, [...fields.map((key) => row[key]), item.id, row.workspace_id]); }
     return { applied: true, entityId: event.entityId };
   });
 }
