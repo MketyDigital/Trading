@@ -170,6 +170,11 @@ export function validateProductionRiskAction({
   const riskBasisAmount = String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE'
     ? brokerBalance(brokerAccount)
     : brokerEquity(brokerAccount);
+  if (!(riskBasisAmount > 0)) {
+    const error = new Error('broker risk context unavailable: positive risk-basis equity or balance is required');
+    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    throw error;
+  }
   const actualRiskPercent = riskBasisAmount > 0
     ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
     : Number.POSITIVE_INFINITY;
