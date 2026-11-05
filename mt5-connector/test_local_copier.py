@@ -119,6 +119,12 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(saved.copy_risk_mode, 'equity_percent')
             self.assertEqual(saved.copy_risk_percent, 1.25)
             self.assertEqual(saved.copy_risk_basis, 'equity')
+            with self.assertRaisesRegex(ValueError, 'risk amount must be positive'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='fixed_risk', risk_amount=float('nan'))
+            with self.assertRaisesRegex(ValueError, 'lot multiplier must be positive'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, lot_multiplier=float('nan'))
             with self.assertRaisesRegex(ValueError, 'between 0 and 100'):
                 update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
                                     enabled=True, risk_mode='equity_percent', risk_percent=101)
