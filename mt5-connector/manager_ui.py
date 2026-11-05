@@ -198,6 +198,15 @@ class ManagerViewModel:
             raise ValueError('a profile cannot follow itself')
         if not follower.terminal_path or not parent.terminal_path:
             raise ValueError('both MT5 terminals must be selected before enabling local copy')
+        # A running worker owns an immutable copy of its startup risk settings.
+        # Stop the old pair before saving changed settings; the user must
+        # explicitly start it again with the new policy.
+        if follower.copy_parent_profile_id:
+            self.copy_supervisor.stop(
+                follower.copy_parent_profile_id,
+                follower.profile_id,
+                stop_file=self._copy_stop_file(follower),
+            )
         return update_copy_settings(follower, self.app_data_dir, role='follower', parent_profile_id=parent.profile_id,
                                     enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map,
                                     risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount, risk_basis=risk_basis)
@@ -782,7 +791,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
                 parent = model._profile(parent_id)
                 mode_label = (f"{risk_amount:g} account currency per trade at SL" if risk_mode == "fixed_risk"
                               else f"{risk_percent:g}% of follower {risk_mode.split('_')[0]}")
-                flow_text.set(f"{model._profile(profile_id).label} follows {parent.label} with independent risk sizing: {mode_label}.")
+                flow_text.set(f"{model._profile(profile_id).label} follows {parent.label} with independent risk sizing: {mode_label}. Select this follower and click Start local copy to apply the settings.")
             except Exception as exc:
                 messagebox.showerror("Could not enable risk-based copy", str(exc), parent=root)
             return
