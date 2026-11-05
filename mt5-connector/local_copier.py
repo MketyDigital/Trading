@@ -82,7 +82,10 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
         if mode == 'fixed_risk':
             budget = float(risk_amount)
         else:
-            budget = funds * float(risk_percent) / 100.0
+            percent = float(risk_percent)
+            if not (0 < percent <= 100):
+                return None
+            budget = funds * percent / 100.0
     except (TypeError, ValueError):
         return None
     # Missing/non-finite broker limits are not treated as unlimited volume.
@@ -90,7 +93,7 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
         return None
     if not (loss > 0 and budget > 0 and step > 0 and minimum > 0 and maximum >= minimum):
         return None
-    if mode != 'fixed_risk' and funds <= 0:
+    if funds <= 0 or (mode == 'fixed_risk' and budget > funds):
         return None
     raw = budget / loss
     if not isfinite(raw) or raw + 1e-12 < minimum:
