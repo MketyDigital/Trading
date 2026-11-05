@@ -278,8 +278,39 @@ def run(args):
                 symbol_map = json.loads(getattr(args, 'symbol_map', '{}') or '{}')
             except json.JSONDecodeError as exc:
                 raise RuntimeError('invalid local copier symbol map') from exc
+            # Risk metadata must be calculated against the follower broker's
+            # mapped symbol and contract, never the parent's instrument.
+            if args.risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'}:
+                if not mt5.initialize(path=str(args.follower_terminal)):
+                    time.sleep(args.poll_seconds)
+                    continue
+                try:
+                    for collection in ('positions', 'pending_orders'):
+                        for source_row in parent.get(collection, []):
+                            parent_symbol = str(source_row.get('symbol') or '')
+                            follower_symbol = str(symbol_map.get(parent_symbol, parent_symbol))
+                            info = mt5.symbol_info(follower_symbol)
+                            source_row['volume_min'] = getattr(info, 'volume_min', None) if info else None
+                            source_row['volume_max'] = getattr(info, 'volume_max', None) if info else None
+                            source_row['volume_step'] = getattr(info, 'volume_step', None) if info else None
+                            source_row['loss_per_lot_at_stop'] = None
+                            stop = _positive(source_row.get('sl'))
+                            entry = _positive(source_row.get('entry_price'))
+                            side = str(source_row.get('side') or '').upper()
+                            if info is not None and stop and entry and side in {'BUY', 'SELL'}:
+                                try:
+                                    order_type = getattr(mt5, 'ORDER_TYPE_BUY', 0) if side == 'BUY' else getattr(mt5, 'ORDER_TYPE_SELL', 1)
+                                    profit = mt5.order_calc_profit(order_type, follower_symbol, 1.0, entry, stop)
+                                    if profit is not None and float(profit) < 0:
+                                        source_row['loss_per_lot_at_stop'] = abs(float(profit))
+                                except (TypeError, ValueError, AttributeError):
+                                    pass
+                finally:
+                    mt5.shutdown()
             engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot,
-                                     enabled=True, symbol_map=symbol_map)
+                                     enabled=True, symbol_map=symbol_map, risk_mode=args.risk_mode,
+                                     risk_percent=args.risk_percent, risk_amount=args.risk_amount,
+                                     risk_basis=args.risk_basis)
             actions = engine.plan(parent, follower)
             if actions and mt5.initialize(path=str(args.follower_terminal)):
                 try:
@@ -368,6 +399,10 @@ def main(argv=None):
     parser.add_argument('--follower-terminal', required=True)
     parser.add_argument('--lot-multiplier', type=float, default=1.0)
     parser.add_argument('--fixed-lot', type=float, default=None)
+    parser.add_argument('--risk-mode', choices=('fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'), default='fixed_lot')
+    parser.add_argument('--risk-percent', type=float, default=None)
+    parser.add_argument('--risk-amount', type=float, default=None)
+    parser.add_argument('--risk-basis', choices=('equity', 'balance'), default='equity')
     parser.add_argument('--symbol-map', default='{}')
     parser.add_argument('--poll-seconds', type=int, default=2)
     parser.add_argument('--journal', default='local-copy-ledger.sqlite')
