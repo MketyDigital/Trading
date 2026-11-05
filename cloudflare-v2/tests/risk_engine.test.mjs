@@ -96,3 +96,21 @@ test('balance-based percentage risk uses balance rather than equity', () => {
   assert.equal(plan.riskBasis, 'BALANCE');
   assert.equal(plan.totalLots, 1);
 });
+
+test('floors broker maximum volume to the supported step instead of rounding above max', () => {
+  const plan = calculateRiskPlan({
+    riskAmount: 100,
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 1,
+    instrument: {
+      lossPerLotAtStop: 100,
+      minLots: 0.1,
+      maxLots: 0.25,
+      stepLots: 0.1,
+    },
+  });
+
+  assert.equal(plan.lotsPerLeg, 0.2);
+  assert.ok(plan.lotsPerLeg <= 0.25);
+});
