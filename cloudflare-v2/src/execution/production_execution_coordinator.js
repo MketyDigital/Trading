@@ -201,6 +201,7 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
   // Reserve newly accepted risk within this account-plan execution group so
   // later TP legs are checked against existing exposure plus prior accepted legs.
   let acceptedOpenRiskPercent = 0;
+  let initialOpenRiskPercent = null;
 
   for (const action of actions) {
     let currentAccount = account;
@@ -242,9 +243,16 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     if (!protection.allowed) { outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: protection.reason || 'INVALID_PROTECTION_GEOMETRY' }); continue; }
     executableAction = protection.action;
     const mergedPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
-    if (isRiskIncreasingAction(executableAction) && acceptedOpenRiskPercent > 0) {
-      const baseOpenRiskPercent = optionalFiniteNumber(mergedPolicyRequest.currentOpenRiskPercent) ?? 0;
-      mergedPolicyRequest.currentOpenRiskPercent = baseOpenRiskPercent + acceptedOpenRiskPercent;
+    if (isRiskIncreasingAction(executableAction)) {
+      const observedOpenRiskPercent = optionalFiniteNumber(mergedPolicyRequest.currentOpenRiskPercent) ?? 0;
+      if (initialOpenRiskPercent == null) initialOpenRiskPercent = observedOpenRiskPercent;
+      // Broker exposure can refresh after each fill and already include prior
+      // legs. Use the more conservative of refreshed exposure and the plan's
+      // initial exposure plus coordinator reservations to avoid double-counting.
+      mergedPolicyRequest.currentOpenRiskPercent = Math.max(
+        observedOpenRiskPercent,
+        initialOpenRiskPercent + acceptedOpenRiskPercent,
+      );
     }
     const policy = evaluateAccountPolicy(safetyPolicy, mergedPolicyRequest);
     if (!policy.allowed) {
