@@ -16,8 +16,9 @@ function constraints(instrument = {}) {
   if (!(step > 0) || !(min > 0) || !(max >= min) || !Number.isFinite(max)) {
     throw new TypeError('finite broker volume constraints required for broker-aware sizing');
   }
-  const minIndex = Math.ceil((min / step) - 1e-12);
-  const maxIndex = Math.floor((max / step) + 1e-12);
+  const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  const minIndex = Math.ceil((min / step) - stepIndexTolerance(min / step));
+  const maxIndex = Math.floor((max / step) + stepIndexTolerance(max / step));
   if (maxIndex < minIndex) throw new RangeError('broker volume constraints have no executable lot size');
   return { step, minIndex, maxIndex, precision: decimals(step) };
 }
@@ -26,7 +27,7 @@ export function normalizeReferenceLots(value, instrument = {}) {
   const wanted = Number(value);
   if (!(wanted > 0)) throw new TypeError('positive reference lots required');
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
-  const wantedIndex = Math.floor((wanted / step) + 1e-12);
+  const wantedIndex = Math.floor((wanted / step) + stepIndexTolerance(wanted / step));
   const index = Math.min(Math.max(wantedIndex, minIndex), maxIndex);
   return Number((index * step).toFixed(precision));
 }
@@ -47,7 +48,7 @@ export async function largestLotsWithinMargin({
 
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
   const normalizedMaximum = normalizeReferenceLots(maximumLots ?? instrument.maxLots, instrument);
-  const capIndex = Math.min(maxIndex, Math.max(minIndex, Math.floor((normalizedMaximum / step) + 1e-12)));
+  const capIndex = Math.min(maxIndex, Math.max(minIndex, Math.floor((normalizedMaximum / step) + stepIndexTolerance(normalizedMaximum / step))));
   const lotsFor = (index) => Number((index * step).toFixed(precision));
   const checked = new Map();
 
