@@ -60,7 +60,7 @@ def _broker_order_volume(value, order):
     requested_steps = int((amount / step) + 1e-12)
     if maximum_steps < minimum_steps or requested_steps < minimum_steps:
         return None
-    return round(min(min(requested_steps, maximum_steps), maximum_steps) * step, 8)
+    return round(min(requested_steps, maximum_steps) * step, 8)
 
 
 def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity'):
