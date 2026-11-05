@@ -194,7 +194,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent : undefined,
-      riskAmount: sizingMode === 'FIXED_RISK' ? account.riskAmount : undefined,
+      riskAmount: sizingMode === 'FIXED_RISK' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount : undefined,
       riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (String(account.riskBasis ?? account.risk_basis ?? 'EQUITY').trim().toUpperCase() === 'BALANCE' ? 'BALANCE' : 'EQUITY'),
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
     });
