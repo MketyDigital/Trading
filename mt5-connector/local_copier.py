@@ -84,13 +84,17 @@ def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_pe
             budget = funds * float(risk_percent) / 100.0
     except (TypeError, ValueError):
         return None
-    if not (loss > 0 and funds > 0 and budget > 0 and step > 0 and minimum > 0 and maximum >= minimum):
+    if not (loss > 0 and budget > 0 and step > 0 and minimum > 0 and maximum >= minimum):
+        return None
+    if mode != 'fixed_risk' and funds <= 0:
         return None
     raw = budget / loss
+    # Round down to the broker's volume step and never exceed max volume.
+    max_step_volume = (int((maximum + 1e-12) / step)) * step
     sized = (int((raw + 1e-12) / step)) * step
+    sized = min(sized, max_step_volume)
     if sized + 1e-12 < minimum:
         return None
-    sized = min(sized, maximum)
     return round(sized, 8)
 
 
