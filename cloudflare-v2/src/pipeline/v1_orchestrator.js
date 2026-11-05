@@ -33,6 +33,7 @@ function normalizeAccount(account = {}) {
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
     riskPercent: followerLink ? (followerLink.risk_percent ?? followerLink.riskPercent) : (account.riskPercent ?? account.risk_percent),
     riskAmount: followerLink ? (followerLink.risk_amount ?? followerLink.riskAmount) : (account.riskAmount ?? account.risk_amount),
+    riskBasis: followerLink ? (followerLink.risk_basis ?? followerLink.riskBasis ?? account.riskBasis ?? account.risk_basis) : (account.riskBasis ?? account.risk_basis),
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
     fastEntryPolicy: { enabled: true, mode: 'execute_immediately', locked: true },
   };
