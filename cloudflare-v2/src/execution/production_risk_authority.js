@@ -49,11 +49,15 @@ function exposureValue(exposure = {}, name) {
   return numberOrUndefined(exposure?.[name]) ?? 0;
 }
 
-function canonicalPolicyContext({ action, riskPercent, exposure }) {
+function canonicalPolicyContext({ action, riskPercent, exposure, minimumVolumeRiskOveragePercent = 0 }) {
   const lots = numberOrUndefined(action?.lots);
+  const overage = numberOrUndefined(minimumVolumeRiskOveragePercent);
   return {
     totalLots: lots != null ? lots : 0,
     riskPercent: numberOrUndefined(riskPercent) ?? 0,
+    // Nonzero only for broker minimum-volume floors; ordinary risk overruns
+    // remain subject to strict account policy.
+    minimumVolumeRiskOveragePercent: overage != null && overage > 0 ? overage : 0,
     currentDailyPnlPercent: exposureValue(exposure, 'currentDailyPnlPercent'),
     currentOpenRiskPercent: exposureValue(exposure, 'currentOpenRiskPercent'),
   };
@@ -157,10 +161,18 @@ export function validateProductionRiskAction({
   const actualRiskPercent = riskBasisAmount > 0
     ? (Number(risk.estimatedRisk) / riskBasisAmount) * 100
     : Number.POSITIVE_INFINITY;
+  const minimumVolumeRiskOveragePercent = risk.minimumFloorApplied === true
+    ? Math.max(0, actualRiskPercent - (numberOrUndefined(riskPercent) ?? 0))
+    : 0;
   return {
     allowed: true,
     action: finalAction,
-    policyContext: canonicalPolicyContext({ action: finalAction, riskPercent: actualRiskPercent, exposure }),
+    policyContext: canonicalPolicyContext({
+      action: finalAction,
+      riskPercent: actualRiskPercent,
+      exposure,
+      minimumVolumeRiskOveragePercent,
+    }),
     risk,
   };
 }
