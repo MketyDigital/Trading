@@ -110,3 +110,16 @@ test('risk-percent OPEN fails closed when current broker loss-at-stop economics 
     exposure: {},
   }), /loss model|risk context|broker.*economics/i);
 });
+
+test('live policy context reports broker-calculated cash risk as a percentage', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ sizingMode:'EQUITY_RISK_PERCENT', riskPercent:1, riskAmount:500,
+      safety_policy:{enabled:true,killSwitch:false,maxRiskPercent:2} }),
+    action: openAction({ lots:0.1 }),
+    brokerAccount:{equity:10000,balance:10000},
+    instrument:brokerInstrument(),
+    currentMarketPrice:2500,
+    exposure:{currentOpenRiskPercent:0},
+  });
+  assert.equal(result.policyContext.riskPercent, 5);
+});
