@@ -79,7 +79,8 @@ function normalizedReduceRiskAction(action = {}) {
   if (actionType === 'CLOSE_PARTIAL' && !(lots > 0)) {
     throw new TypeError('production partial-close lots must be positive');
   }
-  const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
+  const safeAction = { ...action };
+  delete safeAction.minimumVolumeFallbackAuthorized;
   return lots != null ? { ...safeAction, lots } : { ...safeAction };
 }
 
@@ -118,7 +119,8 @@ export function validateProductionRiskAction({
   const explicitRiskAmount = configuredRiskAmount(account, action);
   const riskAmountOverridesPercent = explicitRiskAmount != null && explicitRiskAmount > 0;
   if (!riskAmountOverridesPercent && !['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)) {
-    const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
+    const safeAction = { ...action };
+    delete safeAction.minimumVolumeFallbackAuthorized;
     return {
       allowed: true,
       action: { ...safeAction, lots: plannedLots },
