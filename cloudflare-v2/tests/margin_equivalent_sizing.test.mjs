@@ -92,3 +92,10 @@ test('largestLotsWithinMargin respects configured maximum lot', async () => {
   });
   assert.equal(result.lots,0.9);
 });
+
+test('normalizes scientific-notation broker steps without losing decimal precision', () => {
+  assert.equal(
+    normalizeReferenceLots(0.00000039, { minLots:0.0000001, maxLots:0.00001, stepLots:1e-7 }),
+    0.0000003,
+  );
+});
