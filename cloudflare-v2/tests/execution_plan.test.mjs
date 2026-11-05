@@ -375,3 +375,27 @@ test('execution plan creates any number of risk-sized TP actions with 1% risk pe
     assert.deepEqual(plan.actions.map((action) => action.lots), Array(targetCount).fill(0.1));
   }
 });
+
+
+test('risk-sized signal with no TP uses one entry leg and one per-leg risk budget', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY',
+    orderType: 'MARKET',
+    symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 },
+    stopLoss: 2490,
+    takeProfits: [],
+    fastEntry: false,
+  }, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 },
+    instrument,
+  });
+
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 100);
+  assert.equal(plan.group.legs.length, 1);
+  assert.equal(plan.actions.length, 1);
+  assert.equal(plan.actions[0].lots, 0.1);
+  assert.equal(plan.actions[0].takeProfit, null);
+});
