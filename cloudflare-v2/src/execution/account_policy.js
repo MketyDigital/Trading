@@ -14,14 +14,19 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
 
     if (Number.isFinite(Number(policy.maxLotsPerTrade)) && Number(request.totalLots) > Number(policy.maxLotsPerTrade)) reasons.push('MAX_LOTS_EXCEEDED');
     const maxRiskPercent = Number(policy.maxRiskPercent);
-    const minimumFloorOverage = Number(request.minimumVolumeRiskOveragePercent || 0);
-    // Keep the broker-minimum exception deliberately small. Policy may override
-    // this allowance in percentage points; default is 0.05 percentage points.
+    const requestedFloorOverage = Number(request.minimumVolumeRiskOveragePercent ?? 0);
+    const minimumFloorOverage = Number.isFinite(requestedFloorOverage) && requestedFloorOverage >= 0
+      ? requestedFloorOverage
+      : Number.POSITIVE_INFINITY;
+    // Keep the broker-minimum exception deliberately small. This is an
+    // independent cap on the amount above the requested per-leg risk budget,
+    // not merely headroom against maxRiskPercent.
     const configuredFloorTolerance = Number(policy.minimumVolumeRiskTolerancePercent ?? 0.05);
-    const floorTolerance = Number.isFinite(configuredFloorTolerance) && configuredFloorTolerance > 0
-      ? Math.min(minimumFloorOverage, configuredFloorTolerance)
+    const floorTolerance = Number.isFinite(configuredFloorTolerance) && configuredFloorTolerance >= 0
+      ? configuredFloorTolerance
       : 0;
-    const permittedRisk = maxRiskPercent + floorTolerance;
+    if (minimumFloorOverage > floorTolerance) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
+    const permittedRisk = maxRiskPercent + Math.min(minimumFloorOverage, floorTolerance);
     if (Number.isFinite(maxRiskPercent) && Number(request.riskPercent) > permittedRisk) reasons.push('MAX_RISK_EXCEEDED');
 
     const dailyLossLimit = Number(policy.maxDailyLossPercent);
