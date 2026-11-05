@@ -18,9 +18,18 @@ function normalizeAccount(account = {}) {
     return undefined;
   })();
 
+  const followerLink = account.followerLink;
+  const followerRiskMode = String(followerLink?.risk_mode ?? followerLink?.riskMode ?? '').toLowerCase();
+  const followerSizingMode = followerRiskMode === 'fixed_risk' ? 'FIXED_RISK'
+    : followerRiskMode === 'equity_percent' ? 'EQUITY_RISK_PERCENT'
+      : followerRiskMode === 'balance_percent' ? 'BALANCE_RISK_PERCENT'
+        : sizingMode;
+
   return {
     ...account,
-    sizingMode,
+    sizingMode: followerLink ? followerSizingMode : sizingMode,
+    riskPercent: followerLink ? (followerLink.risk_percent ?? followerLink.riskPercent) : (account.riskPercent ?? account.risk_percent),
+    riskAmount: followerLink ? (followerLink.risk_amount ?? followerLink.riskAmount) : (account.riskAmount ?? account.risk_amount),
     fixedLots: account.fixedLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'fixed' ? account.lot_value : undefined),
     referenceLots: account.referenceLots ?? (['adaptive_percent','symbol_equivalent','balance_percent'].includes(String(account.lot_sizing_type || '').toLowerCase()) ? account.lot_value : undefined),
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
