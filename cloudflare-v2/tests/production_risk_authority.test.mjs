@@ -195,3 +195,14 @@ test('risk authority does not preserve caller authorization when no minimum floo
   assert.equal(result.risk.minimumFloorApplied, false);
   assert.equal(Object.hasOwn(result.action, 'minimumVolumeFallbackAuthorized'), false);
 });
+
+test('fixed-cash risk fails closed when broker risk-basis equity or balance is unavailable', () => {
+  assert.throws(() => validateProductionRiskAction({
+    account: riskAccount({ sizingMode: 'FIXED_RISK', riskAmount: 100 }),
+    action: openAction({ lots: 0.1 }),
+    brokerAccount: {},
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  }), (error) => error?.code === 'BROKER_RISK_CONTEXT_UNAVAILABLE');
+});
