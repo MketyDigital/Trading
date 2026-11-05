@@ -77,6 +77,23 @@ function ctraderCredentialDecryptor(seen = null) {
 }
 
 
+
+test('production account loader normalizes persisted lot sizing mode and risk percentage', async () => {
+  const row = account({
+    lot_sizing_type: 'equity_risk_percent',
+    lot_value: 1.25,
+  });
+  const deps = createProductionExecutionDependencies({
+    env: {},
+    supabase: createAccountQuerySupabase(row),
+    workspaceId: 'ws-a',
+  });
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  assert.equal(loaded.sizingMode, 'EQUITY_RISK_PERCENT');
+  assert.equal(loaded.riskPercent, 1.25);
+  assert.equal(loaded.riskBasis, 'equity');
+});
+
 test('production account loader applies follower equity-risk settings before broker risk revalidation', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
