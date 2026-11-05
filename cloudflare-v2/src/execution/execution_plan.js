@@ -220,8 +220,8 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     symbol: executableIntent.symbol.canonical,
     totalLots,
     riskPercent: actualRiskPercent,
-    minimumVolumeRiskOveragePercent: risk?.minimumFloorApplied === true
-      ? Math.max(0, actualRiskPercent - Number(account.riskPercent ?? account.risk_percent ?? 0))
+    minimumVolumeRiskOveragePercent: risk?.minimumFloorApplied === true && riskBasisAmount > 0
+      ? Math.max(0, actualRiskPercent - (Number(risk.riskAmount) / riskBasisAmount) * 100)
       : 0,
     currentDailyPnlPercent: exposure.currentDailyPnlPercent,
     currentOpenRiskPercent: exposure.currentOpenRiskPercent,
