@@ -20,6 +20,25 @@ function createAccountQuerySupabase(row) {
   };
 }
 
+
+function createAccountAndFollowerSupabase(accountRow, followerRow) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      calls.push(['from', table]);
+      const row = table === 'trade_accounts' ? accountRow
+        : table === 'trading_account_followers' ? followerRow : null;
+      const query = {
+        select(value) { calls.push(['select', value]); return this; },
+        eq(column, value) { calls.push(['eq', column, value]); return this; },
+        async maybeSingle() { calls.push(['maybeSingle']); return { data: row, error: null }; },
+      };
+      return query;
+    },
+  };
+}
+
 function account(overrides = {}) {
   return {
     id: 'acct-row-a',
@@ -56,6 +75,97 @@ function ctraderCredentialDecryptor(seen = null) {
     };
   };
 }
+
+
+test('production account loader applies follower equity-risk settings before broker risk revalidation', async () => {
+  const row = account({
+    lot_sizing_type: 'risk_percent',
+    risk_percent: 5,
+    risk_amount: null,
+    risk_basis: 'equity',
+  });
+  const link = {
+    id: 'link-1',
+    workspace_id: 'ws-a',
+    follower_account_id: 'acct-row-a',
+    parent_account_id: 'parent-a',
+    enabled: true,
+    lot_multiplier: 1,
+    fixed_lot: null,
+    risk_mode: 'equity_percent',
+    risk_percent: 1,
+    risk_amount: null,
+    risk_basis: 'equity',
+  };
+  const deps = createProductionExecutionDependencies({
+    env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true', TRADING_MASTER_KEY: 'master' },
+    supabase: createAccountAndFollowerSupabase(row, link),
+    workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(),
+    mt5ContextLoader: async () => ({
+      brokerAccount: { equity: 10000, balance: 10000 },
+      catalog: [{
+        canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tickSize: 0.01,
+        tickValuePerLot: 1, minLots: 0.01, maxLots: 100, stepLots: 0.01,
+      }],
+    }),
+  });
+
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  assert.equal(loaded.sizingMode, 'EQUITY_RISK_PERCENT');
+  assert.equal(loaded.riskPercent, 1);
+  assert.equal(loaded.riskAmount, 0);
+
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: loaded,
+    action: {
+      type: 'OPEN_POSITION', side: 'BUY', symbol: 'XAUUSD',
+      entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490, lots: 0.5,
+    },
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.risk.riskAmountPerLeg, 100);
+  assert.equal(result.action.lots, 0.1);
+});
+
+test('fixed-lot follower policy prevents parent risk settings from resizing copied lots', async () => {
+  const row = account({
+    lot_sizing_type: 'risk_percent',
+    risk_percent: 5,
+    risk_amount: 100,
+    risk_basis: 'equity',
+  });
+  const link = {
+    id: 'link-2',
+    workspace_id: 'ws-a',
+    follower_account_id: 'acct-row-a',
+    parent_account_id: 'parent-a',
+    enabled: true,
+    lot_multiplier: 1,
+    fixed_lot: 0.2,
+    risk_mode: 'fixed_lot',
+    risk_percent: null,
+    risk_amount: null,
+    risk_basis: 'equity',
+  };
+  const deps = createProductionExecutionDependencies({
+    env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase: createAccountAndFollowerSupabase(row, link),
+    workspaceId: 'ws-a',
+  });
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: loaded,
+    action: { type: 'OPEN_POSITION', symbol: 'XAUUSD', lots: 0.2 },
+  });
+  assert.equal(loaded.sizingMode, 'FIXED_LOTS');
+  assert.equal(result.allowed, true);
+  assert.equal(result.risk, null);
+  assert.equal(result.action.lots, 0.2);
+});
 
 test('account loader is permanently bound to one workspace and one exact trade account id', async () => {
   const supabase = createAccountQuerySupabase(account());
