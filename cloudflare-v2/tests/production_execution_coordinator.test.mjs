@@ -369,3 +369,37 @@ test('max open risk accumulates accepted TP-leg risk within one account plan', a
   assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
   assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['OPEN_RISK_LIMIT']);
 });
+
+
+test('refreshed broker exposure that already includes prior TP risk is not double-counted', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-risk-refresh', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      currentOpenRiskPercent: 1,
+      actions: [
+        openAction({ legId: 'tp-1', idempotencyKey: 'evt-risk-refresh:tp-1' }),
+        openAction({ legId: 'tp-2', idempotencyKey: 'evt-risk-refresh:tp-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxOpenRiskPercent: 2.5 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.75,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: dispatchCalls === 0 ? 1 : 1.75,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 2);
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+});
