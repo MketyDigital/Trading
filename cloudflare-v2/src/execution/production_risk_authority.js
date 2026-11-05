@@ -110,7 +110,9 @@ export function validateProductionRiskAction({
   // Fixed-lot OPENs are still subject to final account policy and strict broker
   // volume validation in platform translation. They do not invent a monetary
   // risk percentage when the account was not configured as risk-sized.
-  if (!['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)) {
+  const explicitRiskAmount = configuredRiskAmount(account, action);
+  const riskAmountOverridesPercent = explicitRiskAmount != null && explicitRiskAmount > 0;
+  if (!riskAmountOverridesPercent && !['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)) {
     return {
       allowed: true,
       action: { ...action, lots: plannedLots },
@@ -131,7 +133,7 @@ export function validateProductionRiskAction({
       equity: brokerEquity(brokerAccount),
       balance: brokerBalance(brokerAccount),
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode) ? riskPercent : undefined,
-      riskAmount: mode === 'FIXED_RISK' ? configuredRiskAmount(account, action) : undefined,
+      riskAmount: riskAmountOverridesPercent || mode === 'FIXED_RISK' ? explicitRiskAmount : undefined,
       riskBasis: mode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (String(account.riskBasis ?? account.risk_basis ?? 'EQUITY').trim().toUpperCase() === 'BALANCE' ? 'BALANCE' : 'EQUITY'),
       entry,
       stopLoss,
