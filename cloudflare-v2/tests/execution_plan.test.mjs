@@ -440,3 +440,30 @@ test('risk sizing counts only retained executable TP targets after invalid targe
     value: 2520,
   }]);
 });
+
+
+test('fixed-lot normalization handles tiny scientific broker steps without drift', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'MICRO' },
+    entry: { kind: 'MARKET' }, stopLoss: null, takeProfits: [], fastEntry: true, incomplete: true,
+  }, {
+    account: { sizingMode: 'FIXED_LOTS', fixedLots: 0.0000003, safetyPolicy: { enabled: true, killSwitch: false } },
+    instrument: { minLots: 0.0000001, maxLots: 0.000001, stepLots: 0.0000001 },
+    currentMarketPrice: 100,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.0000003);
+});
+
+test('fixed-lot normalization does not round a genuinely fractional broker step upward', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'MICRO' },
+    entry: { kind: 'MARKET' }, stopLoss: null, takeProfits: [], fastEntry: true, incomplete: true,
+  }, {
+    account: { sizingMode: 'FIXED_LOTS', fixedLots: 0.00000039, safetyPolicy: { enabled: true, killSwitch: false } },
+    instrument: { minLots: 0.0000001, maxLots: 0.000001, stepLots: 0.0000001 },
+    currentMarketPrice: 100,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.0000003);
+});
