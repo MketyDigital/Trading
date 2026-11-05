@@ -723,7 +723,7 @@ async function decorateFollowerAccounts(accounts = [], workspaceId, { supabase, 
     if (persistenceRuntime?.accountFollowers?.listEnabledByFollowers) {
       links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
     } else if (supabase?.from && portalFollowerEnabled) {
-      const response = await supabase.from('trading_account_followers').select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids);
+      const response = await supabase.from('trading_account_followers').select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids);
       if (!response.error) links = response.data || [];
     }
     const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
