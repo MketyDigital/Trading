@@ -115,6 +115,7 @@ test('risk authority floors to broker minimum and exposes actual excess cash ris
   assert.equal(result.action.lots, 0.1);
   assert.equal(result.risk.minimumFloorApplied, true);
   assert.equal(result.risk.riskOverBudgetPerLeg, 9);
+  assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
 });
 
 test('risk-percent OPEN fails closed when current broker loss-at-stop economics are unavailable', () => {
@@ -152,6 +153,7 @@ test('risk authority exposes only the broker-minimum excess as a policy toleranc
   });
   assert.equal(result.policyContext.riskPercent, 0.1);
   assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
+  assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
 });
 
 test('minimum-volume tolerance for fixed monetary risk is measured against the cash budget', () => {
@@ -166,4 +168,17 @@ test('minimum-volume tolerance for fixed monetary risk is measured against the c
   assert.equal(result.risk.riskAmount, 1);
   assert.equal(result.risk.minimumFloorApplied, true);
   assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
+  assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
+});
+
+test('untrusted incoming fallback authorization is stripped from fixed-lot actions', () => {
+  const result = validateProductionRiskAction({
+    account: { sizingMode: 'FIXED_LOT' },
+    action: openAction({ minimumVolumeFallbackAuthorized: true }),
+    brokerAccount: {},
+    instrument: {},
+    exposure: {},
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(Object.hasOwn(result.action, 'minimumVolumeFallbackAuthorized'), false);
 });
