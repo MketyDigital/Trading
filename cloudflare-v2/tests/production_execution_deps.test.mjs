@@ -167,6 +167,30 @@ test('fixed-lot follower policy prevents parent risk settings from resizing copi
   assert.equal(result.action.lots, 0.2);
 });
 
+
+test('production account loader fails closed for malformed follower risk policy', async () => {
+  const link = {
+    workspace_id: 'ws-a',
+    follower_account_id: 'acct-row-a',
+    parent_account_id: 'parent-a',
+    enabled: true,
+    lot_multiplier: 1,
+    risk_mode: 'unknown_mode',
+    risk_percent: null,
+    risk_amount: null,
+    risk_basis: 'equity',
+  };
+  const deps = createProductionExecutionDependencies({
+    env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase: createAccountAndFollowerSupabase(account(), link),
+    workspaceId: 'ws-a',
+  });
+  await assert.rejects(
+    () => deps.accountLoader('ws-a', 'acct-row-a'),
+    (error) => error?.code === 'FOLLOWER_LINK_RISK_POLICY_INVALID',
+  );
+});
+
 test('account loader is permanently bound to one workspace and one exact trade account id', async () => {
   const supabase = createAccountQuerySupabase(account());
   const deps = createProductionExecutionDependencies({
