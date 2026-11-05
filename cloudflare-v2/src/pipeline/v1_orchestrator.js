@@ -952,15 +952,63 @@ export async function orchestrateTradingEventSimulation({
       : interpretation.intent;
 
     let instrument;
+    let planningAccount = account;
+    let planningInstrument;
     let exposure;
     let currentMarketPrice;
     try {
       instrument = await instrumentProvider(account, planningIntent, event);
       if (!instrument) throw new Error('instrument metadata unavailable');
+      planningInstrument = instrument;
       exposure = await exposureProvider(account, planningIntent, event) || {};
-      currentMarketPrice = needsPlanningMarketPrice(account, planningIntent)
-        ? await marketPriceProvider(account, planningIntent, instrument, event)
-        : undefined;
+
+      const requiresRiskContext = isRiskSizedAccount(account);
+      const requiresMarketPrice = needsPlanningMarketPrice(account, planningIntent);
+      if (requiresRiskContext) {
+        const marketContext = await marketPriceProvider(account, planningIntent, instrument, event);
+        if (marketContext && typeof marketContext === 'object' && !Array.isArray(marketContext)) {
+          const brokerAccount = marketContext.brokerAccount ?? marketContext.account ?? {};
+          const equity = Number(brokerAccount.equity);
+          const balance = Number(brokerAccount.balance);
+          const riskBasis = String(account.riskBasis ?? account.risk_basis ?? 'equity').toLowerCase();
+          const requiredBasis = String(account.sizingMode ?? account.sizing_mode).toUpperCase() === 'BALANCE_RISK_PERCENT'
+            ? balance
+            : riskBasis === 'balance' ? balance : equity;
+          if (!(Number.isFinite(requiredBasis) && requiredBasis > 0)) {
+            throw new Error('broker risk context unavailable: positive follower equity or balance is required');
+          }
+          planningAccount = {
+            ...account,
+            ...(Number.isFinite(equity) && equity > 0 ? { equity } : {}),
+            ...(Number.isFinite(balance) && balance > 0 ? { balance } : {}),
+          };
+          planningInstrument = { ...instrument, ...(marketContext.instrument || {}) };
+          const suppliedPrice = Number(marketContext.currentMarketPrice ?? marketContext.price);
+          if (requiresMarketPrice) {
+            if (!(Number.isFinite(suppliedPrice) && suppliedPrice > 0)) {
+              throw new Error('broker market price is unavailable for risk-sized planning');
+            }
+            currentMarketPrice = suppliedPrice;
+          }
+        } else {
+          const riskBasis = String(account.riskBasis ?? account.risk_basis ?? 'equity').toLowerCase();
+          const existingBasis = String(account.sizingMode ?? account.sizing_mode).toUpperCase() === 'BALANCE_RISK_PERCENT' || riskBasis === 'balance'
+            ? Number(account.balance)
+            : Number(account.equity);
+          if (!(Number.isFinite(existingBasis) && existingBasis > 0)) {
+            throw new Error('broker risk context unavailable for risk-sized planning');
+          }
+          if (requiresMarketPrice) {
+            const suppliedPrice = Number(marketContext);
+            if (!(Number.isFinite(suppliedPrice) && suppliedPrice > 0)) {
+              throw new Error('broker market price is unavailable for risk-sized planning');
+            }
+            currentMarketPrice = suppliedPrice;
+          }
+        }
+      } else if (requiresMarketPrice) {
+        currentMarketPrice = await marketPriceProvider(account, planningIntent, instrument, event);
+      }
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', error: error.message, actions: [] });
       continue;
@@ -983,8 +1031,8 @@ export async function orchestrateTradingEventSimulation({
         passedTakeProfitIndexes = prepared.passedTakeProfitIndexes || [];
       }
       plan = buildExecutionPlan(completionIntent, {
-        account,
-        instrument,
+        account: planningAccount,
+        instrument: planningInstrument,
         currentMarketPrice,
         ...(matchedGroup ? {
           protectionReferencePrice: fastCompletionProtectionReference(matchedGroup, currentMarketPrice),
@@ -992,7 +1040,7 @@ export async function orchestrateTradingEventSimulation({
         groupId,
         exposure,
       });
-      plan = applyFollowerLotPolicy(plan, account);
+      plan = applyFollowerLotPolicy(plan, planningAccount);
       if (completionProtectionSkips.length) {
         plan = {
           ...plan,
