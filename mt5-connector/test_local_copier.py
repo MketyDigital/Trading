@@ -41,7 +41,7 @@ class LocalCopierTests(unittest.TestCase):
                                                        'volume_min': 0.1, 'volume_max': None, 'volume_step': 0.1}])
 
 
-    def test_risk_sizing_uses_follower_minimum_as_volume_step_origin(self):
+    def test_risk_sizing_uses_mt5_step_multiples_and_respects_minimum(self):
         row = {
             'loss_per_lot_at_stop': 1000,
             'volume_min': 0.03,
@@ -49,7 +49,7 @@ class LocalCopierTests(unittest.TestCase):
             'volume_step': 0.02,
         }
         follower = {'equity': 10000, 'balance': 10000}
-        self.assertEqual(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1), 0.09)
+        self.assertEqual(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1), 0.1)
 
     def test_risk_sizing_below_broker_minimum_fails_closed(self):
         row = {
