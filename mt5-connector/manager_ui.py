@@ -191,7 +191,7 @@ class ManagerViewModel:
         for profile in self.profiles():
             self.supervisor.stop(profile.profile_id)
 
-    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None, symbol_map=None) -> TerminalProfile:
+    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None, symbol_map=None, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity') -> TerminalProfile:
         follower = self._profile(follower_profile_id)
         parent = self._profile(parent_profile_id)
         if follower.profile_id == parent.profile_id:
