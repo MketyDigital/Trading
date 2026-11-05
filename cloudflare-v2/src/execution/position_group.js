@@ -146,7 +146,8 @@ export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep =
   // ratios can sit just above an integer; floor with a small tolerance only for
   // representation noise, not for a genuine partial step.
   const ratio = Number(totalLots) / Number(volumeStep);
-  const totalSteps = Math.floor(ratio + 1e-10);
+  const stepIndexTolerance = Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  const totalSteps = Math.floor(ratio + stepIndexTolerance);
   if (totalSteps < targetCount) throw new RangeError('totalLots is too small for target count at configured volumeStep');
   const baseSteps = Math.floor(totalSteps / targetCount);
   let remainder = totalSteps - baseSteps * targetCount;
