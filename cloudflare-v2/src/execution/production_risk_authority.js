@@ -158,10 +158,16 @@ export function validateProductionRiskAction({
   }
 
   const finalAction = { ...action, lots: plannedLots };
+  const riskBasisAmount = String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE'
+    ? brokerBalance(brokerAccount)
+    : brokerEquity(brokerAccount);
+  const actualRiskPercent = riskBasisAmount > 0
+    ? (Number(risk.estimatedRisk) / riskBasisAmount) * 100
+    : Number.POSITIVE_INFINITY;
   return {
     allowed: true,
     action: finalAction,
-    policyContext: canonicalPolicyContext({ action: finalAction, riskPercent, exposure }),
+    policyContext: canonicalPolicyContext({ action: finalAction, riskPercent: actualRiskPercent, exposure }),
     risk,
   };
 }
