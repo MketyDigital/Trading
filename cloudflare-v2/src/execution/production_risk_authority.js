@@ -159,13 +159,13 @@ export function validateProductionRiskAction({
     ? brokerBalance(brokerAccount)
     : brokerEquity(brokerAccount);
   const actualRiskPercent = riskBasisAmount > 0
-    ? (Number(risk.estimatedRisk) / riskBasisAmount) * 100
+    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
     : Number.POSITIVE_INFINITY;
   // Compare the broker minimum against the actual configured monetary budget.
   // This also handles FIXED_RISK and riskAmount overrides, where riskPercent
   // may be absent or unrelated to the requested cash risk.
   const requestedRiskPercent = riskBasisAmount > 0
-    ? (Number(risk.riskAmount) / riskBasisAmount) * 100
+    ? (Number(risk.riskAmountExact ?? risk.riskAmount) / riskBasisAmount) * 100
     : 0;
   const minimumVolumeRiskOveragePercent = risk.minimumFloorApplied === true
     ? Math.max(0, actualRiskPercent - requestedRiskPercent)
