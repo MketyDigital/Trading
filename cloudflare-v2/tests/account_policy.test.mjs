@@ -60,6 +60,14 @@ test('only explicit broker minimum-floor overage may exceed max risk percent', (
   assert.ok(evaluateAccountPolicy(base, {
     ...request,
     riskPercent: 2.2,
-    minimumVolumeRiskOveragePercent: 0.05,
+    minimumVolumeRiskOveragePercent: 0.2,
   }).reasons.includes('MAX_RISK_EXCEEDED'));
+  assert.deepEqual(evaluateAccountPolicy({
+    ...base,
+    minimumVolumeRiskTolerancePercent: 0.1,
+  }, {
+    ...request,
+    riskPercent: 2.08,
+    minimumVolumeRiskOveragePercent: 0.2,
+  }), { allowed: true, reasons: [] });
 });
