@@ -182,3 +182,16 @@ test('untrusted incoming fallback authorization is stripped from fixed-lot actio
   assert.equal(result.allowed, true);
   assert.equal(Object.hasOwn(result.action, 'minimumVolumeFallbackAuthorized'), false);
 });
+
+test('risk authority does not preserve caller authorization when no minimum floor was applied', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount(),
+    action: openAction({ minimumVolumeFallbackAuthorized: true }),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.risk.minimumFloorApplied, false);
+  assert.equal(Object.hasOwn(result.action, 'minimumVolumeFallbackAuthorized'), false);
+});
