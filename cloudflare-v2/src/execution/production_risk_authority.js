@@ -158,7 +158,8 @@ export function validateProductionRiskAction({
   // can be stale or calculated with incomplete broker constraints; resize this
   // valid OPEN to the current executable risk-sized volume rather than rejecting
   // it solely because the earlier plan differs.
-  const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
+  const safeAction = { ...action };
+  delete safeAction.minimumVolumeFallbackAuthorized;
   const finalAction = {
     ...safeAction,
     lots: risk.lotsPerLeg,
