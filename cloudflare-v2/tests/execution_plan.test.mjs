@@ -347,3 +347,31 @@ test('fixed monetary risk override is checked against actual risk percent for ac
   assert.equal(plan.status,'BLOCKED');
   assert.ok(plan.policy.reasons.includes('MAX_RISK_EXCEEDED'));
 });
+
+
+test('execution plan creates any number of risk-sized TP actions with 1% risk per leg', () => {
+  for (const targetCount of [1, 2, 4, 5, 7]) {
+    const takeProfits = Array.from({ length: targetCount }, (_, index) => 2510 + (index * 10));
+    const plan = buildExecutionPlan({
+      side: 'BUY',
+      orderType: 'MARKET',
+      symbol: { canonical: 'XAUUSD' },
+      entry: { kind: 'PRICE', value: 2500 },
+      stopLoss: 2490,
+      takeProfits,
+      fastEntry: false,
+    }, {
+      account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 },
+      instrument,
+    });
+
+    assert.equal(plan.status, 'READY', `plan status for ${targetCount} targets`);
+    assert.equal(plan.risk.riskAmountPerLeg, 100);
+    assert.equal(plan.risk.totalRiskAmount, 100 * targetCount);
+    assert.equal(plan.risk.totalLots, 0.1 * targetCount);
+    assert.equal(plan.group.legs.length, targetCount);
+    assert.equal(plan.actions.length, targetCount);
+    assert.deepEqual(plan.actions.map((action) => action.takeProfit), takeProfits);
+    assert.deepEqual(plan.actions.map((action) => action.lots), Array(targetCount).fill(0.1));
+  }
+});
