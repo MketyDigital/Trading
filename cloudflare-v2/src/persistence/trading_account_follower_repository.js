@@ -2,12 +2,12 @@ import { verifyTradingStorageAuthority } from './trading_storage_authority.js';
 import { prepareD1ReplicationAppendStatements } from './d1_replication_journal.js';
 import { appendPostgresReplicationEventInTransaction } from './postgres_replication_journal.js';
 
-const FIELDS = new Set(['workspace_id', 'follower_account_id', 'parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'last_source_version', 'last_state_fingerprint', 'created_at', 'updated_at']);
+const FIELDS = new Set(['workspace_id', 'follower_account_id', 'parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'risk_mode', 'risk_percent', 'risk_amount', 'risk_basis', 'last_source_version', 'last_state_fingerprint', 'created_at', 'updated_at']);
 function text(value) { return String(value ?? '').trim(); }
 function bool(value) { return value === true || value === 1 || value === '1'; }
 function positive(value, fallback = null) { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : fallback; }
 function encode(row, d1) { return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'boolean' && d1 ? Number(value) : value])); }
-function decode(row) { if (!row) return null; return { ...row, enabled: bool(row.enabled), lot_multiplier: Number(row.lot_multiplier), fixed_lot: row.fixed_lot == null ? null : Number(row.fixed_lot) }; }
+function decode(row) { if (!row) return null; return { ...row, enabled: bool(row.enabled), lot_multiplier: Number(row.lot_multiplier), fixed_lot: row.fixed_lot == null ? null : Number(row.fixed_lot), risk_mode: row.risk_mode || 'fixed_lot', risk_percent: row.risk_percent == null ? null : Number(row.risk_percent), risk_amount: row.risk_amount == null ? null : Number(row.risk_amount), risk_basis: row.risk_basis || 'equity' }; }
 
 export function createTradingAccountFollowerRepository({ authority, postgresDatabase, idFactory = () => globalThis.crypto.randomUUID(), now = () => new Date().toISOString() } = {}) {
   if (!authority || !['d1', 'postgres'].includes(authority.kind)) throw new TypeError('Resolved D1 or PostgreSQL authority is required');
@@ -52,7 +52,7 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
     if (nested.length) throw new Error('FOLLOWER_LINK_PARENT_IS_FOLLOWER');
   }
   async function getLink(workspaceId, followerId) {
-    const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND follower_account_id=${d1 ? '?' : '$2'} LIMIT 1`, [String(workspaceId), String(followerId)]);
+    const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND follower_account_id=${d1 ? '?' : '$2'} LIMIT 1`, [String(workspaceId), String(followerId)]);
     return decode(rows[0]);
   }
   return {
@@ -83,10 +83,15 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       const lotMultiplier = positive(input.lotMultiplier ?? input.lot_multiplier, 1);
       const fixedLot = input.fixedLot ?? input.fixed_lot;
       const fixed = fixedLot == null || fixedLot === '' ? null : positive(fixedLot);
+      const riskMode = text(input.riskMode ?? input.risk_mode) || 'fixed_lot';
+      const riskPercent = input.riskPercent ?? input.risk_percent;
+      const riskAmount = input.riskAmount ?? input.risk_amount;
+      const riskBasis = text(input.riskBasis ?? input.risk_basis) || 'equity';
+      if (!['fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'].includes(riskMode) || !['equity','balance'].includes(riskBasis) || (riskPercent != null && !(positive(riskPercent))) || (riskAmount != null && !(positive(riskAmount))) || (riskMode === 'fixed_risk' && !positive(riskAmount)) || (['equity_percent','balance_percent'].includes(riskMode) && !positive(riskPercent))) throw new Error('FOLLOWER_LINK_RISK_POLICY_INVALID');
       if (!(lotMultiplier > 0) || (fixedLot != null && fixed == null)) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
       const current = await getLink(workspaceId, followerId);
-      const next = { workspace_id: String(workspaceId), follower_account_id: followerId, parent_account_id: parentId, enabled, lot_multiplier: lotMultiplier, fixed_lot: fixed, last_source_version: input.lastSourceVersion ?? input.last_source_version ?? null, last_state_fingerprint: input.lastStateFingerprint ?? input.last_state_fingerprint ?? null, updated_at: now() };
-      if (current && ['parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'last_source_version', 'last_state_fingerprint'].every((key) => String(current[key] ?? '') === String(next[key] ?? ''))) return current;
+      const next = { workspace_id: String(workspaceId), follower_account_id: followerId, parent_account_id: parentId, enabled, lot_multiplier: lotMultiplier, fixed_lot: fixed, risk_mode: riskMode, risk_percent: positive(riskPercent), risk_amount: positive(riskAmount), risk_basis: riskBasis, last_source_version: input.lastSourceVersion ?? input.last_source_version ?? null, last_state_fingerprint: input.lastStateFingerprint ?? input.last_state_fingerprint ?? null, updated_at: now() };
+      if (current && ['parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'risk_mode', 'risk_percent', 'risk_amount', 'risk_basis', 'last_source_version', 'last_state_fingerprint'].every((key) => String(current[key] ?? '') === String(next[key] ?? ''))) return current;
       const id = current?.id || String(input.id || idFactory());
       if (!current) next.created_at = now();
       const encoded = encode(next, d1);
