@@ -29,6 +29,16 @@ test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
   assert.deepEqual(plan.actions.map((action) => action.lots), [0.04, 0.03, 0.03]);
 });
 
+test('explicit fixed monetary risk overrides percentage sizing during planning', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510],
+  }, { account: { equity: 10000, sizingMode: 'EQUITY_RISK_PERCENT', riskPercent: 5, riskAmount: 100 }, instrument });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskAmount, 100);
+  assert.equal(plan.risk.totalLots, 0.1);
+});
+
 test('marks only newly planned pending order legs for future lifecycle tracking', () => {
   const pending = buildExecutionPlan({
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'EURUSD' }, entry: { kind: 'PRICE', value: 1.08 },
