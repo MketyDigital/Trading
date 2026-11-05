@@ -519,5 +519,56 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(stopped[-1], 'all')
 
 
+    def test_fixed_money_risk_sizes_position_from_follower_stop_loss(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.5,
+            'entry_price': 1.10, 'sl': 1.09, 'tp': 1.12,
+            'loss_per_lot_at_stop': 100.0, 'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 100.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 900.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='fixed_risk', risk_amount=50.0)
+        self.assertEqual(actions[0]['lots'], 0.5)
+
+    def test_equity_percentage_risk_uses_follower_equity_and_rounds_down(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'SELL', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.11, 'loss_per_lot_at_stop': 120.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1500.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='equity_percent', risk_percent=1.0)
+        self.assertEqual(actions[0]['lots'], 0.08)
+
+    def test_balance_percentage_risk_uses_follower_balance(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 100.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 3000.0, 'balance': 500.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='balance_percent', risk_percent=2.0)
+        self.assertEqual(actions[0]['lots'], 0.1)
+
+    def test_risk_sizing_fails_closed_without_stop_loss_estimate(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+            'entry_price': 1.10, 'sl': None, 'volume_min': 0.01, 'volume_step': 0.01,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        for mode, kwargs in (('fixed_risk', {'risk_amount': 50.0}),
+                              ('equity_percent', {'risk_percent': 1.0}),
+                              ('balance_percent', {'risk_percent': 1.0})):
+            self.assertEqual(plan_snapshot_actions(parent, follower, risk_mode=mode, **kwargs), [])
+
+    def test_risk_sizing_below_broker_minimum_skips_instead_of_rounding_up(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 10000.0,
+            'volume_min': 0.1, 'volume_step': 0.1, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        self.assertEqual(plan_snapshot_actions(parent, follower, risk_mode='equity_percent', risk_percent=1.0), [])
+
+
 if __name__ == '__main__':
     unittest.main()
