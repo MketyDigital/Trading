@@ -156,13 +156,15 @@ export async function createCTraderRuntime({
           };
         }
       }
-      const demoSyntheticFallback = mode === 'demo' && String(action?.symbol || '').toUpperCase().startsWith('DERIV:');
       return executeCTraderAction(action, {
         session,
         accountId: Number(accountId),
         catalog,
         deliveryStore,
-        allowBrokerMinimumVolumeFallback: demoSyntheticFallback || (mode === 'demo' && allowBrokerMinimumVolumeFallback === true),
+        // Synthetic/demo instruments are not implicitly exempt: the risk
+        // authority must mint action authorization and production must pass
+        // the runtime capability explicitly.
+        allowBrokerMinimumVolumeFallback: allowBrokerMinimumVolumeFallback === true,
       });
     },
     close() {
