@@ -199,7 +199,8 @@ class ManagerViewModel:
         if not follower.terminal_path or not parent.terminal_path:
             raise ValueError('both MT5 terminals must be selected before enabling local copy')
         return update_copy_settings(follower, self.app_data_dir, role='follower', parent_profile_id=parent.profile_id,
-                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map)
+                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map,
+                                    risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount, risk_basis=risk_basis)
 
     def disable_copy(self, profile_id: str) -> TerminalProfile:
         follower = self._profile(profile_id)
