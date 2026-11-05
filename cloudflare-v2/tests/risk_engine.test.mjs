@@ -121,3 +121,20 @@ test('floors broker maximum volume to the supported step instead of rounding abo
   assert.equal(plan.lotsPerLeg, 0.2);
   assert.ok(plan.lotsPerLeg <= 0.25);
 });
+
+test('supports scientific-notation volume steps without invalid decimal precision', () => {
+  const plan = calculateRiskPlan({
+    riskAmount: 0.00001,
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 1,
+    instrument: {
+      lossPerLotAtStop: 1,
+      minLots: 1e-7,
+      maxLots: 1,
+      stepLots: 1e-7,
+    },
+  });
+  assert.equal(plan.lotsPerLeg, 0.00001);
+  assert.equal(plan.legLots[0], 0.00001);
+});
