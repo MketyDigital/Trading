@@ -4,7 +4,7 @@ ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS r
 ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_amount numeric;
 ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_basis text NOT NULL DEFAULT 'equity';
 ALTER TABLE trading_storage.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_mode_check CHECK (risk_mode IN ('fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'));
-ALTER TABLE trading_storage.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_percent_check CHECK (risk_percent IS NULL OR risk_percent > 0);
+ALTER TABLE trading_storage.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_percent_check CHECK (risk_percent IS NULL OR (risk_percent > 0 AND risk_percent <= 100));
 ALTER TABLE trading_storage.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_amount_check CHECK (risk_amount IS NULL OR risk_amount > 0);
 ALTER TABLE trading_storage.trading_account_followers ADD CONSTRAINT trading_account_followers_risk_basis_check CHECK (risk_basis IN ('equity','balance'));
 COMMIT;
