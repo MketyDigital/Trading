@@ -198,6 +198,9 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   if (actions.length === 0) return blockedAccount(requestedAccountId, 'ACCOUNT_ACTIONS_REQUIRED');
   const outcomes = [];
+  // Reserve newly accepted risk within this account-plan execution group so
+  // later TP legs are checked against existing exposure plus prior accepted legs.
+  let acceptedOpenRiskPercent = 0;
 
   for (const action of actions) {
     let currentAccount = account;
@@ -238,7 +241,12 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     const protection = applyProtectionValidationPolicy(executableAction, safetyPolicy);
     if (!protection.allowed) { outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: protection.reason || 'INVALID_PROTECTION_GEOMETRY' }); continue; }
     executableAction = protection.action;
-    const policy = evaluateAccountPolicy(safetyPolicy, mergePolicyRequest(plan, executableAction, materialized));
+    const mergedPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
+    if (isRiskIncreasingAction(executableAction) && acceptedOpenRiskPercent > 0) {
+      const baseOpenRiskPercent = optionalFiniteNumber(mergedPolicyRequest.currentOpenRiskPercent) ?? 0;
+      mergedPolicyRequest.currentOpenRiskPercent = baseOpenRiskPercent + acceptedOpenRiskPercent;
+    }
+    const policy = evaluateAccountPolicy(safetyPolicy, mergedPolicyRequest);
     if (!policy.allowed) {
       if (policy.reasons?.includes('KILL_SWITCH')) return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', { policy });
       outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, policy }); continue;
@@ -288,6 +296,10 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       }
     }
     outcomes.push(safeBrokerOutcome(executableAction, result, protection.skipped));
+    if (isRiskIncreasingAction(executableAction) && result?.duplicate !== true) {
+      const acceptedRiskPercent = optionalFiniteNumber(mergedPolicyRequest.riskPercent);
+      if (acceptedRiskPercent != null && acceptedRiskPercent > 0) acceptedOpenRiskPercent += acceptedRiskPercent;
+    }
   }
 
   const failed = outcomes.some((item) => item.status === 'FAILED');
