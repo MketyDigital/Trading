@@ -99,3 +99,16 @@ test('normalizes scientific-notation broker steps without losing decimal precisi
     0.0000003,
   );
 });
+
+test('symbol-equivalent flags broker minimum floor against normalized reference lots', async () => {
+  const result = await buildSymbolEquivalentSizing({
+    referenceLots:0.099,
+    referenceInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    targetInstrument:{minLots:0.2,maxLots:100,stepLots:0.1},
+    estimateReferenceMargin:async () => 9,
+    estimateTargetMargin:async (lots) => lots * 100,
+  });
+  assert.equal(result.referenceLots,0.09);
+  assert.equal(result.lots,0.2);
+  assert.equal(result.minimumFloorApplied,true);
+});
