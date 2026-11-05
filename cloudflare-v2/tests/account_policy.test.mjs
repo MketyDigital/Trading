@@ -68,8 +68,19 @@ test('only explicit broker minimum-floor overage may exceed max risk percent', (
   }, {
     ...request,
     riskPercent: 2.08,
-    minimumVolumeRiskOveragePercent: 0.2,
+    minimumVolumeRiskOveragePercent: 0.08,
   }), { allowed: true, reasons: [] });
+});
+
+test('minimum-volume overage is capped even when actual risk remains below maxRiskPercent', () => {
+  const result = evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 0.1,
+    minimumVolumeRiskOveragePercent: 0.09,
+  });
+  assert.equal(result.allowed, false);
+  assert.ok(result.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+  assert.ok(!result.reasons.includes('MAX_RISK_EXCEEDED'));
 });
 
 test('minimum-volume tolerance never relaxes cumulative open-risk limits', () => {
