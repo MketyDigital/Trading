@@ -62,7 +62,7 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       if (!workspaceId || !ids.length) return [];
       await verifyTradingStorageAuthority(authority, { postgresDatabase });
       const placeholders = ids.map((_, index) => d1 ? '?' : `$${index + 2}`).join(',');
-      const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND enabled=${d1 ? '1' : 'TRUE'} AND parent_account_id IN (${placeholders}) ORDER BY parent_account_id ASC, follower_account_id ASC`, [String(workspaceId), ...ids]);
+      const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND enabled=${d1 ? '1' : 'TRUE'} AND parent_account_id IN (${placeholders}) ORDER BY parent_account_id ASC, follower_account_id ASC`, [String(workspaceId), ...ids]);
       return rows.map(decode);
     },
     async listEnabledByFollowers(workspaceId, followerIds = []) {
@@ -70,7 +70,7 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       if (!workspaceId || !ids.length) return [];
       await verifyTradingStorageAuthority(authority, { postgresDatabase });
       const placeholders = ids.map((_, index) => d1 ? '?' : `$${index + 2}`).join(',');
-      const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND enabled=${d1 ? '1' : 'TRUE'} AND follower_account_id IN (${placeholders}) ORDER BY follower_account_id ASC`, [String(workspaceId), ...ids]);
+      const rows = await query(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis,last_source_version,last_state_fingerprint,created_at,updated_at FROM ${table} WHERE workspace_id=${d1 ? '?' : '$1'} AND enabled=${d1 ? '1' : 'TRUE'} AND follower_account_id IN (${placeholders}) ORDER BY follower_account_id ASC`, [String(workspaceId), ...ids]);
       return rows.map(decode);
     },
     async upsertLink(workspaceId, input = {}) {
@@ -106,9 +106,9 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
         await record(e, async (q) => {
           if (current) {
             const keys = columns.filter((key) => key !== 'workspace_id');
-            return (await q(`UPDATE ${table} SET ${keys.map((key, i) => `${key}=$${i + 1}${key === 'lot_multiplier' || key === 'fixed_lot' ? '::numeric' : ''}`).join(',')} WHERE workspace_id=$${keys.length + 1} AND follower_account_id=$${keys.length + 2} RETURNING id`, [...keys.map((key) => encoded[key]), String(workspaceId), followerId])).rows?.[0];
+            return (await q(`UPDATE ${table} SET ${keys.map((key, i) => `${key}=$${i + 1}${['lot_multiplier','fixed_lot','risk_percent','risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')} WHERE workspace_id=$${keys.length + 1} AND follower_account_id=$${keys.length + 2} RETURNING id`, [...keys.map((key) => encoded[key]), String(workspaceId), followerId])).rows?.[0];
           }
-          return (await q(`INSERT INTO ${table}(id,${columns.join(',')}) VALUES($1,${columns.map((key, i) => `$${i + 2}${key === 'lot_multiplier' || key === 'fixed_lot' ? '::numeric' : ''}`).join(',')}) RETURNING id`, [id, ...columns.map((key) => encoded[key])])).rows?.[0];
+          return (await q(`INSERT INTO ${table}(id,${columns.join(',')}) VALUES($1,${columns.map((key, i) => `$${i + 2}${['lot_multiplier','fixed_lot','risk_percent','risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')}) RETURNING id`, [id, ...columns.map((key) => encoded[key])])).rows?.[0];
         });
       }
       return getLink(workspaceId, followerId);
