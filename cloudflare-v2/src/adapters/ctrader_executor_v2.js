@@ -79,7 +79,7 @@ function buildOpenMessage(action, { label, accountId, clientMsgId, symbol, allow
       ...symbolVolumeMetadata(symbol),
     };
   } catch (error) {
-    if (error?.code !== 'CTRADER_VOLUME_BELOW_MINIMUM' || allowBrokerMinimumVolumeFallback !== true) throw error;
+    if (error?.code !== 'CTRADER_VOLUME_BELOW_MINIMUM' || allowBrokerMinimumVolumeFallback !== true || action?.minimumVolumeFallbackAuthorized !== true) throw error;
     const meta = symbolVolumeMetadata(symbol);
     if (!(meta.minimumLots > 0)) throw error;
     const executableAction = { ...action, lots: meta.minimumLots };
