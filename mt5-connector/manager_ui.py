@@ -732,6 +732,60 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         parent_id = selected_parent["profile_id"]
         if not parent_id:
             return
+        use_risk_sizing = messagebox.askyesno(
+            "Follower risk-based sizing",
+            "Would you like this follower to calculate volume from its own account risk and stop-loss distance?\n\nYes: choose fixed money risk, % equity, or % balance.\nNo: keep the existing fixed-lot / multiplier sizing.",
+            parent=root,
+        )
+        if use_risk_sizing:
+            risk_choice = simpledialog.askstring(
+                "Follower risk mode",
+                "Enter one mode:\nfixed_risk — fixed account-currency risk at SL\nequity_percent — % of follower equity\nbalance_percent — % of follower balance",
+                initialvalue="equity_percent",
+                parent=root,
+            )
+            risk_mode = str(risk_choice or "").strip().lower()
+            if risk_mode not in {"fixed_risk", "equity_percent", "balance_percent"}:
+                if risk_choice is not None:
+                    messagebox.showerror("Invalid risk mode", "Choose fixed_risk, equity_percent, or balance_percent.", parent=root)
+                return
+            risk_amount = None
+            risk_percent = None
+            if risk_mode == "fixed_risk":
+                risk_amount = simpledialog.askfloat(
+                    "Risk amount per copied trade",
+                    "Enter the maximum account-currency loss at stop loss for EACH copied trade / TP leg.",
+                    minvalue=0.000001,
+                    parent=root,
+                )
+                if risk_amount is None:
+                    return
+            else:
+                risk_percent = simpledialog.askfloat(
+                    "Follower risk percentage",
+                    "Enter risk as a percentage of the follower's " + ("equity" if risk_mode == "equity_percent" else "balance") + " (for example, 1.0 for 1%).",
+                    minvalue=0.000001,
+                    maxvalue=100.0,
+                    parent=root,
+                )
+                if risk_percent is None:
+                    return
+            try:
+                model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=1.0, fixed_lot=None,
+                                    risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount,
+                                    risk_basis="equity")
+                saved_follower = model._profile(profile_id)
+                if saved_follower.copy_risk_mode != risk_mode:
+                    raise ValueError("The follower risk settings did not persist. Try again.")
+                refresh_profiles()
+                select_saved_profile(profile_id)
+                parent = model._profile(parent_id)
+                mode_label = (f"{risk_amount:g} account currency per trade at SL" if risk_mode == "fixed_risk"
+                              else f"{risk_percent:g}% of follower {risk_mode.split('_')[0]}")
+                flow_text.set(f"{model._profile(profile_id).label} follows {parent.label} with independent risk sizing: {mode_label}.")
+            except Exception as exc:
+                messagebox.showerror("Could not enable risk-based copy", str(exc), parent=root)
+            return
         use_fixed_lots = messagebox.askyesno(
             "Follower lot sizing",
             "Choose Yes for a fixed lot size, or No to scale the main account's lot size with a multiplier.",
