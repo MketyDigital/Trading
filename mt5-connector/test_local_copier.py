@@ -78,7 +78,28 @@ class LocalCopierTests(unittest.TestCase):
             'volume_max': 1.0,
             'volume_step': 0.01,
         }
-        self.assertEqual(_risk_sized_volume(row, {}, risk_mode='fixed_risk', risk_amount=100), 0.1)
+        self.assertEqual(_risk_sized_volume(row, {'equity': 10000, 'balance': 10000}, risk_mode='fixed_risk', risk_amount=100), 0.1)
+
+
+    def test_risk_sizing_rejects_percent_above_account_equity(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=101))
+
+    def test_fixed_cash_risk_cannot_exceed_follower_risk_basis(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 100, 'balance': 100}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='fixed_risk', risk_amount=101))
 
     def test_profile_copy_metadata_defaults_off(self):
         profile = TerminalProfile('p1', 'Primary')
@@ -98,6 +119,9 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(saved.copy_risk_mode, 'equity_percent')
             self.assertEqual(saved.copy_risk_percent, 1.25)
             self.assertEqual(saved.copy_risk_basis, 'equity')
+            with self.assertRaisesRegex(ValueError, 'between 0 and 100'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='equity_percent', risk_percent=101)
             with self.assertRaisesRegex(ValueError, 'requires a risk amount'):
                 update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
                                     enabled=True, risk_mode='fixed_risk')
