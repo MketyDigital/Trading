@@ -240,7 +240,11 @@ class ManagerViewModel:
         return self.copy_supervisor.start(CopyPairSpec(parent.profile_id, follower.profile_id, parent.terminal_path, follower.terminal_path,
                                                         follower.copy_lot_multiplier, follower.copy_fixed_lot,
                                                         follower_symbol_map=follower.copy_symbol_map, journal_path=journal_path,
-                                                        stop_file=self._copy_stop_file(follower)))
+                                                        stop_file=self._copy_stop_file(follower),
+                                                        follower_risk_mode=follower.copy_risk_mode,
+                                                        follower_risk_percent=follower.copy_risk_percent,
+                                                        follower_risk_amount=follower.copy_risk_amount,
+                                                        follower_risk_basis=follower.copy_risk_basis))
 
     def observe_account(self, profile_id: str, *, probe=None) -> dict:
         """Read the signed-in account identity from one selected terminal, without pairing/trading."""
