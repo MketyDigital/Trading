@@ -73,6 +73,18 @@ function applyFollowerRiskSizing(account = {}, link = null) {
   const riskPercent = Number(link.risk_percent ?? link.riskPercent);
   const riskAmount = Number(link.risk_amount ?? link.riskAmount);
   const riskBasis = text(link.risk_basis ?? link.riskBasis).toLowerCase() || 'equity';
+  const fixedLot = link.fixed_lot ?? link.fixedLot;
+  const multiplier = Number(link.lot_multiplier ?? link.lotMultiplier ?? 1);
+  const validModes = ['fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'];
+  if (!validModes.includes(mode) || !['equity', 'balance'].includes(riskBasis)
+    || (fixedLot != null && !(Number(fixedLot) > 0))
+    || !(multiplier > 0)
+    || (mode === 'fixed_risk' && !(riskAmount > 0))
+    || (['equity_percent', 'balance_percent'].includes(mode) && !(riskPercent > 0))) {
+    const error = new Error('production follower risk policy is invalid');
+    error.code = 'FOLLOWER_LINK_RISK_POLICY_INVALID';
+    throw error;
+  }
   const normalized = {
     ...account,
     followerLink: link,
