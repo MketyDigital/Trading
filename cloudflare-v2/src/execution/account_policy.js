@@ -13,7 +13,12 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
     if (allowedSymbols.length && !allowedSymbols.includes(String(request.symbol || '').toUpperCase())) reasons.push('SYMBOL_NOT_ALLOWED');
 
     if (Number.isFinite(Number(policy.maxLotsPerTrade)) && Number(request.totalLots) > Number(policy.maxLotsPerTrade)) reasons.push('MAX_LOTS_EXCEEDED');
-    if (Number.isFinite(Number(policy.maxRiskPercent)) && Number(request.riskPercent) > Number(policy.maxRiskPercent)) reasons.push('MAX_RISK_EXCEEDED');
+    const maxRiskPercent = Number(policy.maxRiskPercent);
+    const minimumFloorOverage = Number(request.minimumVolumeRiskOveragePercent || 0);
+    const permittedRisk = maxRiskPercent + (Number.isFinite(minimumFloorOverage) && minimumFloorOverage > 0
+      ? minimumFloorOverage
+      : 0);
+    if (Number.isFinite(maxRiskPercent) && Number(request.riskPercent) > permittedRisk) reasons.push('MAX_RISK_EXCEEDED');
 
     const dailyLossLimit = Number(policy.maxDailyLossPercent);
     const dailyPnl = Number(request.currentDailyPnlPercent);
