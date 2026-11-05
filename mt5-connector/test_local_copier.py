@@ -408,6 +408,42 @@ class LocalCopierTests(unittest.TestCase):
             self.assertEqual(calls[0].follower_fixed_lot, 0.01)
             self.assertEqual(calls[0].follower_symbol_map, {'XAUUSD': 'GOLD'})
 
+
+    def test_changing_follower_settings_stops_old_worker_before_new_policy_is_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path = root / 'parent' / 'terminal64.exe'
+            follower_path = root / 'follower' / 'terminal64.exe'
+            parent_path.parent.mkdir(); parent_path.write_bytes(b'parent')
+            follower_path.parent.mkdir(); follower_path.write_bytes(b'follower')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            calls = {'starts': [], 'stops': []}
+            class Copies:
+                def start(self, spec):
+                    calls['starts'].append(spec)
+                    return 123
+                def stop(self, parent_id, follower_id, **kwargs):
+                    calls['stops'].append((parent_id, follower_id, kwargs.get('stop_file')))
+                def stop_all(self): pass
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+                copy_supervisor=Copies(),
+            )
+            parent = model.add_terminal(parent_path, 'Main')
+            follower = model.add_terminal(follower_path, 'Follower')
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.01)
+            model.start_copy(follower.profile_id)
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.02)
+            saved = {row.profile_id: row for row in load_profiles(root / 'appdata')}[follower.profile_id]
+            self.assertEqual(saved.copy_fixed_lot, 0.02)
+            self.assertEqual(calls['starts'][0].follower_fixed_lot, 0.01)
+            self.assertEqual(calls['stops'][0][0:2], (parent.profile_id, follower.profile_id))
+            self.assertIsNotNone(calls['stops'][0][2])
+
     def test_fixed_one_lot_is_saved_as_a_follower_and_starts_copying(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
