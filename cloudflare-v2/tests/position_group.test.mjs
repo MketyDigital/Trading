@@ -149,3 +149,13 @@ test('target allocation preserves coarse fractional broker steps', () => {
   assert.deepEqual(allocateVolumeAcrossTargets(0.75, 3, 0.25), [0.25, 0.25, 0.25]);
   assert.deepEqual(allocateVolumeAcrossTargets(1.25, 3, 0.25), [0.5, 0.5, 0.25]);
 });
+
+
+test('target allocation uses scale-aware floating-point tolerance for very small broker steps', () => {
+  assert.deepEqual(allocateVolumeAcrossTargets(0.0000003, 3, 0.0000001), [
+    0.0000001, 0.0000001, 0.0000001,
+  ]);
+  assert.deepEqual(allocateVolumeAcrossTargets(0.0000007, 7, 0.0000001), [
+    0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001,
+  ]);
+});
