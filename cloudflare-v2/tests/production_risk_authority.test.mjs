@@ -196,6 +196,24 @@ test('risk authority does not preserve caller authorization when no minimum floo
   assert.equal(Object.hasOwn(result.action, 'minimumVolumeFallbackAuthorized'), false);
 });
 
+test('production risk authority reads persisted risk mode and percent from lot sizing columns', () => {
+  const result = validateProductionRiskAction({
+    account: {
+      lot_sizing_type: 'equity_risk_percent',
+      lot_value: 1,
+      risk_basis: 'equity',
+    },
+    action: openAction(),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.risk.riskAmountPerLeg, 100);
+  assert.equal(result.action.lots, 0.1);
+});
+
+
 test('fixed-cash risk fails closed when broker risk-basis equity or balance is unavailable', () => {
   assert.throws(() => validateProductionRiskAction({
     account: riskAccount({ sizingMode: 'FIXED_RISK', riskAmount: 100 }),
