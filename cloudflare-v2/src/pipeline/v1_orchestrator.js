@@ -44,13 +44,14 @@ function applyFollowerLotPolicy(plan, account) {
   const link = account?.followerLink;
   const followerId = String(account?.id ?? '').trim();
   if (!link || !followerId || !Array.isArray(plan?.actions)) return plan;
-  const actions = plan.actions.map((action) => scaleFollowerAction(action, {
-    ...link,
-    followerAccountId: followerId,
-  }));
+  const riskMode = String(link.risk_mode ?? link.riskMode ?? '').toLowerCase();
+  const independentlyRiskSized = ['fixed_risk', 'equity_percent', 'balance_percent'].includes(riskMode);
+  const actions = plan.actions.map((action) => independentlyRiskSized
+    ? { ...action }
+    : scaleFollowerAction(action, { ...link, followerAccountId: followerId }));
   const legs = Array.isArray(plan.group?.legs)
     ? plan.group.legs.map((leg) => {
-      if (leg?.lots == null) return { ...leg };
+      if (leg?.lots == null || independentlyRiskSized) return { ...leg };
       const scaled = scaleFollowerAction({ type: 'OPEN_POSITION', lots: leg.lots }, { ...link, followerAccountId: followerId });
       return { ...leg, lots: scaled.lots };
     })
