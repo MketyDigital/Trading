@@ -79,7 +79,8 @@ function normalizedReduceRiskAction(action = {}) {
   if (actionType === 'CLOSE_PARTIAL' && !(lots > 0)) {
     throw new TypeError('production partial-close lots must be positive');
   }
-  return lots != null ? { ...action, lots } : { ...action };
+  const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
+  return lots != null ? { ...safeAction, lots } : { ...safeAction };
 }
 
 /**
@@ -117,10 +118,11 @@ export function validateProductionRiskAction({
   const explicitRiskAmount = configuredRiskAmount(account, action);
   const riskAmountOverridesPercent = explicitRiskAmount != null && explicitRiskAmount > 0;
   if (!riskAmountOverridesPercent && !['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)) {
+    const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
     return {
       allowed: true,
-      action: { ...action, lots: plannedLots },
-      policyContext: canonicalPolicyContext({ action: { ...action, lots: plannedLots }, riskPercent, exposure }),
+      action: { ...safeAction, lots: plannedLots },
+      policyContext: canonicalPolicyContext({ action: { ...safeAction, lots: plannedLots }, riskPercent, exposure }),
       risk: null,
     };
   }
@@ -154,7 +156,14 @@ export function validateProductionRiskAction({
   // can be stale or calculated with incomplete broker constraints; resize this
   // valid OPEN to the current executable risk-sized volume rather than rejecting
   // it solely because the earlier plan differs.
-  const finalAction = { ...action, lots: risk.lotsPerLeg };
+  const { minimumVolumeFallbackAuthorized: _untrustedFallbackAuthorization, ...safeAction } = action;
+  const finalAction = {
+    ...safeAction,
+    lots: risk.lotsPerLeg,
+    // This capability is minted only by broker-authoritative risk sizing.
+    // The coordinator still must pass account policy before any dispatch.
+    ...(risk.minimumFloorApplied === true ? { minimumVolumeFallbackAuthorized: true } : {}),
+  };
   const riskBasisAmount = String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE'
     ? brokerBalance(brokerAccount)
     : brokerEquity(brokerAccount);
