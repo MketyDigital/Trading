@@ -167,3 +167,22 @@ test('supports arbitrary dynamic TP counts with risk budget independently applie
     assert.equal(plan.estimatedRisk, 100 * targetCount);
   }
 });
+
+
+test('risk lot step indexing handles tiny scientific steps without floating-point drift', () => {
+  const plan = calculateRiskPlan({
+    riskAmount: 0.0000003,
+    entry: 100,
+    stopLoss: 90,
+    targetCount: 3,
+    instrument: {
+      lossPerLotAtStop: 1,
+      minLots: 0.0000001,
+      maxLots: 0.00001,
+      stepLots: 0.0000001,
+    },
+  });
+  assert.equal(plan.lotsPerLeg, 0.0000003);
+  assert.equal(plan.totalLots, 0.0000009);
+  assert.deepEqual(plan.legLots, [0.0000003, 0.0000003, 0.0000003]);
+});
