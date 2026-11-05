@@ -159,3 +159,14 @@ test('target allocation uses scale-aware floating-point tolerance for very small
     0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001,
   ]);
 });
+
+
+test('partial-close lot flooring supports tiny broker steps without rounding upward', () => {
+  const group = {
+    symbol: 'MICRO',
+    legs: [{ legId: 'tiny', targetIndex: 1, brokerPositionId: 'p-tiny', lots: 0.000001, volumeStepLots: 0.0000001, status: 'OPEN' }],
+  };
+  assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_PARTIAL', lots: 0.00000039 }), [
+    { type: 'CLOSE_PARTIAL', legId: 'tiny', targetIndex: 1, brokerPositionId: 'p-tiny', symbol: 'MICRO', lots: 0.0000003 },
+  ]);
+});
