@@ -47,9 +47,13 @@ export function calculateRiskPlan({
   const max = Number(instrument.maxLots ?? Number.POSITIVE_INFINITY);
   if (!(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid volume constraints required');
   const rawLotsPerLeg = riskPerLeg / lossPerLotAtStop;
-  const steppedLotsPerLeg = Math.floor(rawLotsPerLeg / step) * step;
+  const steppedLotsPerLeg = Math.floor((rawLotsPerLeg / step) + 1e-12) * step;
+  const maximumSteppedLots = Number.isFinite(max)
+    ? Math.floor((max / step) + 1e-12) * step
+    : Number.POSITIVE_INFINITY;
+  if (!(maximumSteppedLots >= min)) throw new RangeError('broker volume constraints have no executable lot size');
   if (steppedLotsPerLeg < min) throw new RangeError('risk-sized volume per leg is below broker minimum');
-  const lotsPerLeg = Number(clampMax(steppedLotsPerLeg, max).toFixed(decimals(step)));
+  const lotsPerLeg = Number(Math.min(steppedLotsPerLeg, maximumSteppedLots).toFixed(decimals(step)));
   const totalLots = Number((lotsPerLeg * targetCount).toFixed(decimals(step)));
   const legLots = allocateVolumeAcrossTargets(totalLots, targetCount, step);
   const actualRiskPerLeg = lotsPerLeg * lossPerLotAtStop;
