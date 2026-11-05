@@ -213,14 +213,21 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const riskBasisAmount = risk
     ? (String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE' ? Number(account.balance) : Number(account.equity))
     : 0;
+  // maxRiskPercent is a per-leg ceiling. The aggregate group risk is checked
+  // separately against maxOpenRiskPercent so multiple TP legs each retain the
+  // configured per-leg budget without hiding their combined exposure.
   const actualRiskPercent = risk && riskBasisAmount > 0
-    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
+    ? (Number(risk.estimatedRiskPerLegExact ?? risk.estimatedRiskPerLeg) / riskBasisAmount) * 100
     : (risk ? Number.POSITIVE_INFINITY : Number(exposure.estimatedRiskPercent || 0));
+  const aggregateRiskPercent = risk && riskBasisAmount > 0
+    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
+    : actualRiskPercent;
 
   const policy = evaluateAccountPolicy(safetyPolicy, {
     symbol: executableIntent.symbol.canonical,
     totalLots,
     riskPercent: actualRiskPercent,
+    newOpenRiskPercent: aggregateRiskPercent,
     minimumVolumeRiskOveragePercent: risk?.minimumFloorApplied === true && riskBasisAmount > 0
       ? Math.max(0, actualRiskPercent - (Number(risk.riskAmountExact ?? risk.riskAmount) / riskBasisAmount) * 100)
       : 0,
