@@ -62,7 +62,39 @@ def _broker_order_volume(value, order):
     return round(amount, 8)
 
 
-def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot_multiplier=1, fixed_lot=None, symbol_map=None):
+def _risk_sized_volume(row, follower_snapshot, *, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity'):
+    """Calculate follower lots from follower funds and a precomputed 1-lot SL loss.
+
+    The broker adapter must populate loss_per_lot_at_stop using the follower's
+    symbol/contract specification. Missing SL, funds, or loss estimates fail closed.
+    """
+    mode = str(risk_mode or 'fixed_lot').strip().lower()
+    if mode not in {'fixed_risk', 'equity_percent', 'balance_percent'}:
+        return None
+    try:
+        loss = abs(float(row.get('loss_per_lot_at_stop')))
+        funds_key = 'balance' if mode == 'balance_percent' or str(risk_basis).lower() == 'balance' else 'equity'
+        funds = float((follower_snapshot or {}).get(funds_key))
+        step = float(row.get('volume_step') or 0)
+        minimum = float(row.get('volume_min') or step)
+        maximum = float(row.get('volume_max') or float('inf'))
+        if mode == 'fixed_risk':
+            budget = float(risk_amount)
+        else:
+            budget = funds * float(risk_percent) / 100.0
+    except (TypeError, ValueError):
+        return None
+    if not (loss > 0 and funds > 0 and budget > 0 and step > 0 and minimum > 0 and maximum >= minimum):
+        return None
+    raw = budget / loss
+    sized = (int((raw + 1e-12) / step)) * step
+    if sized + 1e-12 < minimum:
+        return None
+    sized = min(sized, maximum)
+    return round(sized, 8)
+
+
+def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot_multiplier=1, fixed_lot=None, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity', symbol_map=None):
     if not isinstance(parent_snapshot, dict) or parent_snapshot.get("complete") is not True:
         return []
     multiplier = _positive(lot_multiplier)
@@ -111,7 +143,11 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
         lots = _positive(parent.get("volume") or parent.get("lots"))
         if not symbol or side not in {"BUY", "SELL"} or lots is None:
             continue
-        desired_lots = fixed if fixed is not None else lots * multiplier
+        risk_row = {**parent, 'volume_min': parent.get('volume_min'), 'volume_step': parent.get('volume_step'), 'volume_max': parent.get('volume_max')}
+        risk_lots = _risk_sized_volume(risk_row, follower_snapshot, risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount, risk_basis=risk_basis)
+        desired_lots = risk_lots if risk_lots is not None else (fixed if fixed is not None else lots * multiplier)
+        if risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'} and risk_lots is None:
+            continue
         if desired_lots is None or desired_lots <= 0:
             continue
         current = follower_by_ticket.get(source_ticket)
@@ -155,7 +191,11 @@ def plan_snapshot_actions(parent_snapshot: dict, follower_snapshot: dict, *, lot
         if (not symbol or side not in {"BUY", "SELL"} or order_type not in {"LIMIT", "STOP", "STOP_LIMIT"}
                 or lots is None or entry_price is None or (order_type == "STOP_LIMIT" and stop_limit_price is None)):
             continue
-        desired_lots = fixed if fixed is not None else lots * multiplier
+        risk_row = {**parent, 'volume_min': parent.get('volume_min'), 'volume_step': parent.get('volume_step'), 'volume_max': parent.get('volume_max')}
+        risk_lots = _risk_sized_volume(risk_row, follower_snapshot, risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount, risk_basis=risk_basis)
+        desired_lots = risk_lots if risk_lots is not None else (fixed if fixed is not None else lots * multiplier)
+        if risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'} and risk_lots is None:
+            continue
         current = follower_order_by_ticket.get(source_ticket)
         if current is None:
             pending_actions.append({"type": "OPEN_PENDING", "source_ticket": source_ticket, "symbol": symbol,
@@ -215,12 +255,17 @@ class LocalCopyEngine:
     enabled: bool = False
     execute: Callable | None = None
     symbol_map: dict | None = None
+    risk_mode: str = 'fixed_lot'
+    risk_percent: float | None = None
+    risk_amount: float | None = None
+    risk_basis: str = 'equity'
 
     def plan(self, parent_snapshot, follower_snapshot):
         if not self.enabled:
             return []
         return plan_snapshot_actions(parent_snapshot, follower_snapshot, lot_multiplier=self.lot_multiplier, fixed_lot=self.fixed_lot,
-                                     symbol_map=self.symbol_map)
+                                     risk_mode=self.risk_mode, risk_percent=self.risk_percent, risk_amount=self.risk_amount,
+                                     risk_basis=self.risk_basis, symbol_map=self.symbol_map)
 
     def apply(self, parent_snapshot, follower_snapshot):
         actions = self.plan(parent_snapshot, follower_snapshot)
