@@ -65,7 +65,23 @@ function assertCTraderCbotConnected(account = {}) {
 }
 
 function sizingModeOf(account = {}) {
-  return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
+  return text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
+}
+function normalizeTradeAccountRiskSizing(account = {}) {
+  const rawMode = text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
+  const mode = rawMode === 'FIXED' ? 'FIXED_LOTS' : rawMode;
+  const isRiskPercentMode = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode);
+  const riskPercent = account.riskPercent ?? account.risk_percent
+    ?? (isRiskPercentMode ? account.lot_value : undefined);
+  const riskBasis = account.riskBasis ?? account.risk_basis
+    ?? (mode === 'BALANCE_RISK_PERCENT' ? 'balance' : 'equity');
+  return {
+    ...account,
+    sizingMode: mode,
+    ...(riskPercent !== undefined ? { riskPercent, risk_percent: riskPercent } : {}),
+    riskBasis,
+    risk_basis: riskBasis,
+  };
 }
 function applyFollowerRiskSizing(account = {}, link = null) {
   if (!link || !(link.enabled === true || link.enabled === 1 || link.enabled === '1')) return account;
@@ -490,6 +506,7 @@ export function createProductionExecutionDependencies({
       account = data || null;
     }
     if (!account) return null;
+    account = normalizeTradeAccountRiskSizing(account);
 
     const followerLinksEnabled = env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers);
     if (!followerLinksEnabled) return account;
