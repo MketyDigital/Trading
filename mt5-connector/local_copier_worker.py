@@ -61,6 +61,14 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
         def risk_metadata(symbol, side, entry, stop):
             info = symbols.get(symbol)
             if info is None:
+                # Broker-specific mapped symbols may not be visible in Market Watch
+                # yet. Select them before querying contract and volume metadata.
+                selector = getattr(mt5, 'symbol_select', None)
+                if callable(selector):
+                    try:
+                        selector(symbol, True)
+                    except Exception:
+                        pass
                 info = mt5.symbol_info(symbol)
                 symbols[symbol] = info
             if info is None:
