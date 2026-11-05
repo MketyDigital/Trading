@@ -275,6 +275,14 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: error?.code || 'BROKER_DISPATCH_FAILED' }); continue;
     }
 
+    // Reserve risk as soon as the broker confirms a non-duplicate OPEN.
+    // State persistence can fail after a real fill; subsequent TP legs must
+    // still account for the accepted exposure even when binding needs repair.
+    if (isRiskIncreasingAction(executableAction) && result?.duplicate !== true) {
+      const acceptedRiskPercent = optionalFiniteNumber(mergedPolicyRequest.riskPercent);
+      if (acceptedRiskPercent != null && acceptedRiskPercent > 0) acceptedOpenRiskPercent += acceptedRiskPercent;
+    }
+
     const shouldBindState = result?.duplicate !== true && typeof stateBinder === 'function' && (hasBindableBrokerResult(result) || actionRequiresStateBinding(executableAction));
     if (shouldBindState) {
       try {
@@ -304,10 +312,6 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       }
     }
     outcomes.push(safeBrokerOutcome(executableAction, result, protection.skipped));
-    if (isRiskIncreasingAction(executableAction) && result?.duplicate !== true) {
-      const acceptedRiskPercent = optionalFiniteNumber(mergedPolicyRequest.riskPercent);
-      if (acceptedRiskPercent != null && acceptedRiskPercent > 0) acceptedOpenRiskPercent += acceptedRiskPercent;
-    }
   }
 
   const failed = outcomes.some((item) => item.status === 'FAILED');
