@@ -92,6 +92,7 @@ export function calculateRiskPlan({
   const actualRiskPerLeg = lotsPerLeg * lossPerLotAtStop;
   return {
     riskAmount: Number(riskPerLeg.toFixed(2)),
+    riskAmountExact: riskPerLeg,
     riskAmountPerLeg: Number(riskPerLeg.toFixed(2)),
     totalRiskAmount: Number((riskPerLeg * targetCount).toFixed(2)),
     riskBasis: String(riskBasis).toUpperCase(),
@@ -102,7 +103,9 @@ export function calculateRiskPlan({
     minimumFloorApplied,
     maximumCapApplied,
     estimatedRiskPerLeg: Number(actualRiskPerLeg.toFixed(2)),
+    estimatedRiskPerLegExact: actualRiskPerLeg,
     estimatedRisk: Number((actualRiskPerLeg * targetCount).toFixed(2)),
+    estimatedRiskExact: actualRiskPerLeg * targetCount,
     riskOverBudgetPerLeg: Number(Math.max(0, actualRiskPerLeg - riskPerLeg).toFixed(2)),
   };
 }
