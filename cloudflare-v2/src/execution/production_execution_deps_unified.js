@@ -290,7 +290,7 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       }
     }
 
-    const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
+    const riskSized = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
     if (!riskSized || text(action.type).toUpperCase() !== 'OPEN_POSITION') {
       const result = validateProductionRiskAction({ account, action, brokerAccount: {}, instrument: {}, exposure });
       return { ...result, policyRequest: result.policyContext };
