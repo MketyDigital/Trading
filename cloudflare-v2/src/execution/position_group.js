@@ -1,6 +1,12 @@
 function decimals(step) {
-  const s = String(step);
-  return s.includes('.') ? s.split('.')[1].length : 0;
+  const value = Number(step);
+  if (!(Number.isFinite(value) && value > 0)) return 0;
+  const text = String(value).toLowerCase();
+  if (!text.includes('e')) return text.includes('.') ? text.split('.')[1].length : 0;
+  const [coefficient, exponentText] = text.split('e');
+  const exponent = Number(exponentText);
+  const fractionDigits = coefficient.includes('.') ? coefficient.split('.')[1].length : 0;
+  return Math.max(0, fractionDigits - exponent);
 }
 
 function floorToStep(value, step) {
