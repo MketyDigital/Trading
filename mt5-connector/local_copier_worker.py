@@ -293,10 +293,17 @@ def run(args):
                     time.sleep(args.poll_seconds)
                     continue
                 try:
+                    mapped_symbols = {str(key).strip().casefold(): str(value).strip() for key, value in symbol_map.items()}
                     for collection in ('positions', 'pending_orders'):
                         for source_row in parent.get(collection, []):
                             parent_symbol = str(source_row.get('symbol') or '')
-                            follower_symbol = str(symbol_map.get(parent_symbol, parent_symbol))
+                            follower_symbol = mapped_symbols.get(parent_symbol.strip().casefold(), parent_symbol)
+                            selector = getattr(mt5, 'symbol_select', None)
+                            if callable(selector):
+                                try:
+                                    selector(follower_symbol, True)
+                                except Exception:
+                                    pass
                             info = mt5.symbol_info(follower_symbol)
                             source_row['volume_min'] = getattr(info, 'volume_min', None) if info else None
                             source_row['volume_max'] = getattr(info, 'volume_max', None) if info else None
