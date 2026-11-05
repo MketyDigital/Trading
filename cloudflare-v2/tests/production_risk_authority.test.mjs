@@ -89,15 +89,31 @@ test('explicit fixed monetary risk overrides percentage mode during broker reval
   assert.equal(result.risk.totalLots, 0.1);
 });
 
-test('changed broker economics that make planned lots exceed current risk authority block rather than resize upward or send', () => {
-  assert.throws(() => validateProductionRiskAction({
+test('changed broker economics rematerialize risk lots downward rather than reject stale planned lots', () => {
+  const result = validateProductionRiskAction({
     account: riskAccount(),
     action: openAction({ lots: 0.1 }),
     brokerAccount: { equity: 10000, balance: 10000 },
     instrument: brokerInstrument({ tickValuePerLot: 2 }),
     currentMarketPrice: 2500,
     exposure: {},
-  }), /exceed.*broker.*risk|risk.*exceed/i);
+  });
+  assert.equal(result.action.lots, 0.05);
+  assert.equal(result.risk.lotsPerLeg, 0.05);
+});
+
+test('risk authority floors to broker minimum and exposes actual excess cash risk', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ riskPercent: 0.01 }),
+    action: openAction({ lots: 0.01 }),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument({ tickSize: 1, tickValuePerLot: 10, minLots: 0.1, stepLots: 0.1 }),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.action.lots, 0.1);
+  assert.equal(result.risk.minimumFloorApplied, true);
+  assert.equal(result.risk.riskOverBudgetPerLeg, 9);
 });
 
 test('risk-percent OPEN fails closed when current broker loss-at-stop economics are unavailable', () => {
