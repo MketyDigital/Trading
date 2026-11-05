@@ -60,7 +60,7 @@ test('explicit broker-minimum fallback uses the live symbol minimum and records 
           executionType: 3,
           position: { positionId: 9001, price: 6000 },
           order: { orderId: 8001 },
-          deal: { dealId: 7001, positionId: 9001, orderId: 8001, executionPrice: 6000 },
+          deal: { dealId: 7001, positionId: 9001, orderId: 8001, executionPrice: 6000, volume: 5 },
         },
       };
     },
