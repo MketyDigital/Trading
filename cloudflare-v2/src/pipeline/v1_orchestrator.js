@@ -32,7 +32,7 @@ function normalizeAccount(account = {}) {
     fixedLots: account.fixedLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'fixed' ? account.lot_value : undefined),
     referenceLots: account.referenceLots ?? (['adaptive_percent','symbol_equivalent','balance_percent'].includes(String(account.lot_sizing_type || '').toLowerCase()) ? account.lot_value : undefined),
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
-    riskPercent: independentlyRiskSized ? (followerLink.risk_percent ?? followerLink.riskPercent) : (account.riskPercent ?? account.risk_percent),
+    riskPercent: independentlyRiskSized ? (followerLink.risk_percent ?? followerLink.riskPercent) : (account.riskPercent ?? account.risk_percent ?? (['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.lot_value : undefined)),
     riskAmount: independentlyRiskSized ? (followerLink.risk_amount ?? followerLink.riskAmount) : (account.riskAmount ?? account.risk_amount),
     riskBasis: independentlyRiskSized ? (followerLink.risk_basis ?? followerLink.riskBasis ?? account.riskBasis ?? account.risk_basis) : (account.riskBasis ?? account.risk_basis),
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
