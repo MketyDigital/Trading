@@ -772,6 +772,58 @@ test('management can target a fast-only trade before any full follow-up arrives'
 });
 
 
+test('fixed-lot and multiplier followers inherit parent plan sizing before applying their volume policy', async () => {
+  const base = {
+    equity: 10000,
+    balance: 10000,
+    sizingMode: 'RISK_PERCENT',
+    riskPercent: 1,
+  };
+  const fixedFollower = enabledAccount({
+    ...base,
+    id: 'follower-fixed',
+    followerLink: {
+      follower_account_id: 'follower-fixed',
+      risk_mode: 'fixed_lot',
+      fixed_lot: 0.02,
+      lot_multiplier: 1,
+      risk_percent: null,
+      risk_amount: null,
+      risk_basis: 'equity',
+    },
+  });
+  const multiplierFollower = enabledAccount({
+    ...base,
+    id: 'follower-multiplier',
+    followerLink: {
+      follower_account_id: 'follower-multiplier',
+      risk_mode: 'multiplier',
+      fixed_lot: null,
+      lot_multiplier: 2,
+      risk_percent: null,
+      risk_amount: null,
+      risk_basis: 'equity',
+    },
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-fixed-and-multiplier',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [fixedFollower, multiplierFollower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.deepEqual(result.accounts.map((item) => item.status), ['READY', 'READY']);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.02, 0.02, 0.02]);
+  assert.deepEqual(result.accounts[1].actions.map((action) => action.lots), [0.2, 0.2, 0.2]);
+});
+
+
 test('follower risk amount and mode override parent sizing values without legacy lot scaling', async () => {
   const follower = enabledAccount({
     id: 'follower-22',
