@@ -510,7 +510,7 @@ export function createProductionExecutionDependencies({
       ? { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }
       : await loadExposure(account, action);
     const platform = platformOf(account);
-    const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
+    const riskSized = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
 
     if (platform === 'ctrader' && riskSized && String(action.type || '').toUpperCase() === 'OPEN_POSITION') {
       const error = new Error('cTrader broker risk context unavailable: reliable monetary loss model required');
