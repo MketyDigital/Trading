@@ -754,7 +754,7 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             if risk_mode == "fixed_risk":
                 risk_amount = simpledialog.askfloat(
                     "Risk amount per copied trade",
-                    "Enter the maximum account-currency loss at stop loss for EACH copied trade / TP leg.",
+                    "Enter the maximum account-currency loss at stop loss for EACH copied order / TP leg (each separate TP leg gets this risk budget).",
                     minvalue=0.000001,
                     parent=root,
                 )
