@@ -39,7 +39,8 @@ function volumePrecision(step) {
 
 function toStepIndex(volume, step, mode) {
   const ratio = volume / step;
-  return mode === 'ceil' ? Math.ceil(ratio - 1e-12) : Math.floor(ratio + 1e-12);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  return mode === 'ceil' ? Math.ceil(ratio - tolerance) : Math.floor(ratio + tolerance);
 }
 
 export function calculateRiskPlan({
