@@ -149,7 +149,7 @@ export async function buildSymbolEquivalentSizing({
       lots: targetRequestedLots,
       expectedMargin: targetRequestedMargin,
       marginBudget: referenceMargin,
-      minimumFloorApplied: targetRequestedLots > Number(referenceLots) + 1e-12,
+      minimumFloorApplied: targetRequestedLots > normalizedReferenceLots + 1e-12,
       reduced: false,
     };
   }
