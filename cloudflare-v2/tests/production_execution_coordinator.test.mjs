@@ -335,6 +335,38 @@ test('final durable authority is reloaded before every action so revocation afte
 });
 
 
+test('maxLotsPerTrade accumulates accepted TP-leg volume within one account plan', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-lot-legs', brokerExecutionEnabled: true,
+    accountPlans: [plan({ actions: [
+      openAction({ lots: 0.01, legId: 'tp-1', idempotencyKey: 'evt-lot-legs:tp-1' }),
+      openAction({ lots: 0.01, legId: 'tp-2', idempotencyKey: 'evt-lot-legs:tp-2' }),
+    ] })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxLotsPerTrade: 0.015 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.5,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'PARTIAL');
+  assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
+  assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['MAX_LOTS_EXCEEDED']);
+});
+
 test('max open risk accumulates accepted TP-leg risk within one account plan', async () => {
   let dispatchCalls = 0;
   const summary = await executeProductionPlan({
