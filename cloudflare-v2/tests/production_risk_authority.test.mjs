@@ -153,3 +153,17 @@ test('risk authority exposes only the broker-minimum excess as a policy toleranc
   assert.equal(result.policyContext.riskPercent, 0.1);
   assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
 });
+
+test('minimum-volume tolerance for fixed monetary risk is measured against the cash budget', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ sizingMode: 'FIXED_RISK', riskAmount: 1, riskPercent: undefined }),
+    action: openAction({ lots: 0.01 }),
+    brokerAccount: { equity: 10000, balance: 10000 },
+    instrument: brokerInstrument({ tickSize: 1, tickValuePerLot: 10, minLots: 0.1, stepLots: 0.1 }),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.risk.riskAmount, 1);
+  assert.equal(result.risk.minimumFloorApplied, true);
+  assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
+});
