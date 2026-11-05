@@ -298,7 +298,9 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
             : brokerPositionId != null ? 'OPEN' : brokerOrderId != null ? 'PENDING' : null,
           brokerPositionId, brokerOrderId, brokerDealId: result?.brokerDealId ?? null,
           fillPrice: optionalFiniteNumber(result?.fillPrice),
-          executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
+          executedLots: optionalFiniteNumber(result?.executedLots) != null && Number(result.executedLots) > 0
+            ? Number(result.executedLots)
+            : null,
           volumeStepLots: Number.isFinite(Number(result?.volumeStepLots)) ? Number(result.volumeStepLots) : null,
           minimumLots: Number.isFinite(Number(result?.minimumLots)) ? Number(result.minimumLots) : null,
           ...(desiredStopLoss != null ? { stopLoss: desiredStopLoss } : {}),
