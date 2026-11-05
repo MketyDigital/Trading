@@ -17,7 +17,7 @@ function providerConfigOf(account = {}) {
   const config = account.provider_config ?? account.providerConfig;
   return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
 }
-function sizingModeOf(account = {}) { return text(account.sizingMode ?? account.sizing_mode).toUpperCase(); }
+function sizingModeOf(account = {}) { return text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase(); }
 function safetyPolicyOf(account = {}) {
   const policy = account.safety_policy ?? account.safetyPolicy;
   return policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : {};
