@@ -795,7 +795,9 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             symbol_map = validate_symbol_map(symbol_map_text)
             model.configure_copy(profile_id, follower.copy_parent_profile_id, enabled=follower.copy_enabled,
                                  lot_multiplier=follower.copy_lot_multiplier, fixed_lot=follower.copy_fixed_lot,
-                                 symbol_map=symbol_map)
+                                 symbol_map=symbol_map, risk_mode=follower.copy_risk_mode,
+                                 risk_percent=follower.copy_risk_percent, risk_amount=follower.copy_risk_amount,
+                                 risk_basis=follower.copy_risk_basis)
             refresh_profiles()
             select_saved_profile(profile_id)
             flow_text.set(f"Saved {len(symbol_map)} advanced symbol alias(es).")
