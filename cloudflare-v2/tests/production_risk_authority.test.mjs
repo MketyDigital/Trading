@@ -92,6 +92,25 @@ test('balance-only broker snapshots infer BALANCE during live risk revalidation'
   assert.equal(result.action.lots, 0.1);
 });
 
+test('persisted balance basis in account sizing config overrides available equity', () => {
+  const result = validateProductionRiskAction({
+    account: {
+      lot_sizing_type: 'balance_risk_percent',
+      lot_value: 2,
+      lot_sizing_config: { riskBasis: 'balance' },
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 2 },
+    },
+    action: openAction(),
+    brokerAccount: { equity: 20000, balance: 5000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+  assert.equal(result.risk.riskBasis, 'BALANCE');
+  assert.equal(result.risk.riskAmountPerLeg, 100);
+  assert.equal(result.action.lots, 0.1);
+});
+
 test('explicit fixed monetary risk overrides percentage mode during broker revalidation', () => {
   const result = validateProductionRiskAction({
     account: riskAccount({ riskPercent: 5, riskAmount: 100 }),
