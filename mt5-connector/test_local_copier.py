@@ -27,7 +27,7 @@ class LocalCopierTests(unittest.TestCase):
             def positions_get(self): return (SimpleNamespace(ticket=12, symbol='Volatility 75 Index', type=0, volume=0.2, sl=0, tp=0),)
             def orders_get(self): return (SimpleNamespace(ticket=24, symbol='Volatility 75 Index', type=2, volume_current=0.3, volume_initial=0.3,
                                                           price_open=100.0, sl=90.0, tp=120.0, comment='parent-order'),)
-            def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_step=0.1)
+            def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_max=100.0, volume_step=0.1)
         snapshot = _snapshot(FakeMT5(), 'deriv-terminal.exe')
         self.assertTrue(snapshot['complete'])
         self.assertEqual(snapshot['account_mode'], 'HEDGING')
