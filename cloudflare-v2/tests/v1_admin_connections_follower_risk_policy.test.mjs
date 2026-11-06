@@ -86,7 +86,7 @@ test('partial follower update does not inject default risk settings into reposit
   assert.equal(response.status, 200);
   const write = fixture.calls.find((call) => call[0] === 'upsertLink');
   assert.ok(write);
-  for (const key of ['riskMode', 'risk_mode', 'riskPercent', 'risk_percent', 'riskAmount', 'risk_amount', 'riskBasis', 'risk_basis']) {
+  for (const key of ['lotMultiplier', 'lot_multiplier', 'fixedLot', 'fixed_lot', 'riskMode', 'risk_mode', 'riskPercent', 'risk_percent', 'riskAmount', 'risk_amount', 'riskBasis', 'risk_basis']) {
     assert.equal(Object.prototype.hasOwnProperty.call(write[2], key), false, key);
   }
 });
