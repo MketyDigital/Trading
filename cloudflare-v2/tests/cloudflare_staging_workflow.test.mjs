@@ -79,8 +79,11 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /db\/d1-migrations\/0006_account_follower_risk_sizing\.sql/);
   assert.match(block, /ENCRYPT_D1_PRE_MIGRATION_EXPORT/);
   assert.match(block, /trading-staging-pre-migration\.sql\.enc/);
-  assert.ok(block.indexOf('npx wrangler d1 export trading-staging') < block.indexOf('npx wrangler d1 migrations apply trading-staging'),
+  assert.ok(block.indexOf('npx wrangler d1 export trading-staging') < block.indexOf('name: Apply and verify D1 schema after PostgreSQL migration'),
     'an encrypted D1 recovery export must be captured before schema writes');
+  assert.ok(block.indexOf('VERIFY_SAFE_PROBE_RESULT') < block.indexOf('name: Apply and verify D1 schema after PostgreSQL migration'),
+    'PostgreSQL migration must verify successfully before D1 schema writes');
+  assert.match(block, /0006_account_follower_risk_sizing\.sql/);
   assert.match(block, /autogenerate_domain:\s*false/);
   assert.match(block, /-X DELETE/);
   assert.match(block, /applications\/\$APP_UUID/);
