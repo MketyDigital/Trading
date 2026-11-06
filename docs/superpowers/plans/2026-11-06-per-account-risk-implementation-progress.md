@@ -291,3 +291,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 
 - Expanded the additive D1 migration regression to snapshot an existing active follower link's parent, enabled state, multiplier and fixed lot before the risk-column migration and assert every existing field remains identical afterward. The test also snapshots the existing fixed-lot trade account and verifies its sizing, activation, execution and safety state remains unchanged.
 - Migration regression commit: `2a3be59f`. A new exact-code-head CI run is required.
+
+
+### 2026-11-06 — PostgreSQL migration runner now supports reviewed additive upgrades
+
+- Review of the existing PostgreSQL installer found its allowlist still ended at `0003`, even though the repository already contained `0004` follower creation and `0005` broker-observation index migrations. The new `0006` risk migration would therefore have been rejected before execution.
+- Updated the reviewed allowlist to include the ordered `0001`–`0006` set. Existing-schema handling now validates that the applied migration ledger is an exact checksum-matched prefix (minimum bootstrap prefix `0001`–`0003`), assumes the restricted `trading_owner` role, and transactionally applies only the unapplied suffix. Unknown, reordered, altered or non-prefix ledgers still fail closed. Clean schema creation applies the complete reviewed set.
+- Expanded PostgreSQL static safety coverage to include all six migrations and permit only the reviewed `ADD COLUMN IF NOT EXISTS` / `ADD CONSTRAINT` operations on `trading_storage.trading_account_followers` in `0006`; all other schema/data mutation remains rejected.
+- Expanded installer tests to verify the real six-file allowlist and simulate upgrading an existing schema with the first three checksummed migrations applied; the test asserts only `0004`–`0006` execute under `trading_owner`, with a commit and no schema recreation.
+- Commits: `5ad52667` (runner allowlist and prefix upgrade), `dd67c96a` (static SQL scope test), `51675218` (installer allowlist/upgrade regression). No migration was run against any database.
