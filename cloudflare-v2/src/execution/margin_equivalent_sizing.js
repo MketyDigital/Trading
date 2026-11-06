@@ -25,7 +25,7 @@ function constraints(instrument = {}) {
 
 export function normalizeReferenceLots(value, instrument = {}, { belowMinimumCode = 'SIZING_BELOW_BROKER_MINIMUM' } = {}) {
   const wanted = Number(value);
-  if (!(wanted > 0)) throw new TypeError('positive reference lots required');
+  if (!Number.isFinite(wanted) || !(wanted > 0)) throw new TypeError('finite positive reference lots required');
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
   const minimumLots = minIndex * step;
   const wantedRatio = wanted / step;
@@ -52,13 +52,25 @@ export async function largestLotsWithinMargin({
   maxIterations = 64,
 } = {}) {
   const budget = Number(marginBudget);
-  if (!(budget > 0) || typeof estimateMargin !== 'function') {
+  if (!Number.isFinite(budget) || !(budget > 0) || typeof estimateMargin !== 'function') {
     throw new TypeError('positive margin budget and estimator required');
   }
 
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
-  const normalizedMaximum = normalizeReferenceLots(maximumLots ?? instrument.maxLots, instrument);
-  const capIndex = Math.min(maxIndex, Math.max(minIndex, Math.floor((normalizedMaximum / step) + stepIndexTolerance(normalizedMaximum / step))));
+  const normalizedMaximum = Number(maximumLots ?? instrument.maxLots);
+  if (!Number.isFinite(normalizedMaximum) || !(normalizedMaximum > 0)) {
+    throw new TypeError('finite positive maximumLots required for broker margin sizing');
+  }
+  const minimumLots = minIndex * step;
+  const maximumTolerance = stepIndexTolerance(normalizedMaximum / step) * step;
+  if (normalizedMaximum < minimumLots - maximumTolerance) {
+    const error = new RangeError('maximum lots are below the broker minimum');
+    error.code = belowMinimumCode;
+    error.minimumLots = Number(minimumLots.toFixed(precision));
+    error.requestedLots = normalizedMaximum;
+    throw error;
+  }
+  const capIndex = Math.min(maxIndex, Math.floor((normalizedMaximum / step) + stepIndexTolerance(normalizedMaximum / step)));
   const lotsFor = (index) => Number((index * step).toFixed(precision));
   const checked = new Map();
 
