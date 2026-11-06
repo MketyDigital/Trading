@@ -747,22 +747,35 @@ async function decorateFollowerAccounts(accounts = [], workspaceId, { supabase, 
   const rows = Array.isArray(accounts) ? accounts : [];
   const ids = rows.map((account) => text(account?.id)).filter(Boolean);
   if (!ids.length) return rows;
-  try {
-    let links = [];
-    if (persistenceRuntime?.accountFollowers?.listEnabledByFollowers) {
-      links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
-    } else if (supabase?.from && portalFollowerEnabled) {
-      const response = await supabase.from('trading_account_followers').select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids);
-      if (!response.error) links = response.data || [];
+  const followerProcessingEnabled = portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers);
+  if (!followerProcessingEnabled) return rows;
+
+  let links = [];
+  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByFollowers === 'function') {
+    links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
+  } else if (supabase?.from) {
+    const response = await supabase.from('trading_account_followers')
+      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis')
+      .eq('workspace_id', workspaceId)
+      .eq('enabled', true)
+      .in('follower_account_id', ids);
+    if (response.error) {
+      const error = new Error('failed to load enabled follower risk policies');
+      error.code = 'FOLLOWER_LINK_LOAD_FAILED';
+      throw error;
     }
-    const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
-    return rows.map((account) => {
-      const link = byFollower.get(text(account?.id));
-      return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
-    });
-  } catch {
-    return rows;
+    links = response.data || [];
+  } else {
+    const error = new Error('follower risk policy storage is unavailable');
+    error.code = 'FOLLOWER_LINK_STORAGE_UNAVAILABLE';
+    throw error;
   }
+
+  const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
+  return rows.map((account) => {
+    const link = byFollower.get(text(account?.id));
+    return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
+  });
 }
 
 export async function createV1SimulationDependencies({ env = {}, supabase, persistenceRuntime = null, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
