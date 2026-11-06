@@ -1,6 +1,6 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const DERIVATION_CONTEXT = 'mkety-trading-secret-box-v1\\0';
+const DERIVATION_CONTEXT = 'mkety-trading-secret-box-v1\0';
 
 function decodeBase64Url(value) {
   const normalized = String(value ?? '').replace(/-/g, '+').replace(/_/g, '/');
@@ -12,7 +12,7 @@ function decodeBase64Url(value) {
 function encodeBase64Url(bytes) {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/=/g, '').replace(/\\+/g, '-').replace(/\\//g, '_');
+  return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 export async function deriveSecretBoxKeyBytes(masterKey) {
