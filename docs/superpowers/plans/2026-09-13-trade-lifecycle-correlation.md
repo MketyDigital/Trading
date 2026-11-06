@@ -12,7 +12,7 @@
 
 ## Global Constraints
 - Fixed lot means configured lot per TP leg.
-- Risk-based sizing remains trade-level risk distributed across target legs.
+- SL-based risk sizing applies the configured percentage or fixed-cash budget independently to each executable TP leg; aggregate exposure is checked separately.
 - Broker success must never be resent merely because state binding failed.
 - Untagged management commands execute only when target correlation is unique and safe.
 - Canonical trade semantics are immutable across presentation/rebranding.
@@ -48,7 +48,7 @@
 - Produces: `group.legs[].lots === normalized fixedLots` for every TP leg; risk-sized paths remain unchanged.
 
 - [ ] Add failing tests: 0.10 fixed lot + 3 TPs => three 0.10 legs and three 0.10 OPEN_POSITION actions.
-- [ ] Add regression test: risk-percent three-target sizing still distributes the calculated total volume.
+- [ ] Add regression test: risk-percent three-target sizing applies one risk budget per leg and checks aggregate open risk separately.
 - [ ] Implement fixed-lot per-leg allocation while preserving broker min/max/step validation.
 - [ ] Run targeted and full tests.
 - [ ] Commit.
