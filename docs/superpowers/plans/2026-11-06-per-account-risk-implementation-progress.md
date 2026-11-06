@@ -277,3 +277,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Added an HTTP-route regression proving that a follower-link request which omits risk fields does not inject `fixed_lot` or `equity` defaults into the repository write. The repository-level regression separately proves existing configured risk values survive the partial update.
 - This closes the review gap at both boundaries: API normalization and selected persistence repository.
 - Route test commit: `043e3baa`. Latest-head CI will be checked after this documentation update.
+
+
+### 2026-11-06 — preserve all follower link policies on partial updates
+
+- Extended the partial-update correction beyond risk fields: omitted `lotMultiplier` and `fixedLot` now also retain the existing values instead of silently resetting to `1` and `null`.
+- Both D1/PostgreSQL repository and the route's alternate adapter now merge omitted follower lot/risk fields from the existing link. The runtime API omits fields the caller did not supply, allowing the repository to distinguish omission from an explicit update.
+- Expanded both regression tests to assert preservation of lot multiplier, fixed lot, risk mode, risk percent and risk basis.
+- Commits: `0c975366` (repository merge), `87574bf2` (alternate adapter merge), `4c942e17` (route omission), `584aa5df` (repository regression), `c0bcfb99` (route regression). Latest full CI is required for these final adjustments.
