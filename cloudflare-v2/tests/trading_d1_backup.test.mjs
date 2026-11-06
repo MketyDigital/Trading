@@ -12,14 +12,14 @@ test('D1 backup streams large SQL exports through authenticated v2 encryption', 
   const encryptedPath = join(directory, 'before.sql.enc');
   const decryptedPath = join(directory, 'recovered.sql');
   const masterKey = 'test-trading-master-key';
-  const chunk = Buffer.from("INSERT INTO workspaces VALUES ('workspace-1', 'sensitive-value');\\n");
+  const chunk = Buffer.from("INSERT INTO workspaces VALUES ('workspace-1', 'sensitive-value');\n");
   const sql = Buffer.concat(Array.from({ length: 350000 }, () => chunk));
   try {
     await writeFile(inputPath, sql, { mode: 0o600 });
     const encryptedResult = await encryptTradingD1BackupFile({ inputPath, outputPath: encryptedPath, masterKey });
     assert.equal(encryptedResult.bytesEncrypted, sql.length);
     const encrypted = await readFile(encryptedPath);
-    assert.equal(encrypted.subarray(0, 27).toString('ascii'), 'MKETY-TRADING-D1-BACKUP-V2\\n');
+    assert.equal(encrypted.subarray(0, 27).toString('ascii'), 'MKETY-TRADING-D1-BACKUP-V2\n');
     assert.equal(encrypted.includes(Buffer.from('sensitive-value')), false);
     const recovered = await decryptTradingD1BackupFile({ inputPath: encryptedPath, outputPath: decryptedPath, masterKey });
     assert.equal(recovered.bytesRecovered, sql.length);
@@ -37,9 +37,9 @@ test('legacy v1 D1 backup files remain decryptable', async () => {
   const encryptedPath = join(directory, 'legacy.enc');
   const outputPath = join(directory, 'legacy.sql');
   const masterKey = 'legacy-test-key';
-  const sql = 'CREATE TABLE legacy_backup (id TEXT);\\n';
+  const sql = 'CREATE TABLE legacy_backup (id TEXT);\n';
   try {
-    await writeFile(encryptedPath, `${await encryptSecret(sql, masterKey)}\\n`);
+    await writeFile(encryptedPath, `${await encryptSecret(sql, masterKey)}\n`);
     const result = await decryptTradingD1BackupFile({ inputPath: encryptedPath, outputPath, masterKey });
     assert.equal(result.format, 'v1');
     assert.equal(await readFile(outputPath, 'utf8'), sql);
