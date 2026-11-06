@@ -164,7 +164,7 @@ jobs:
         shell: bash
         run: |
           tag="$GITHUB_REF_NAME"
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "workflow_call" ]]; then
             tag="$RELEASE_TAG"
           fi
           if [[ ! "$tag" =~ ^mt5-connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
