@@ -9,6 +9,8 @@ import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
 import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
 import { validateProductionRiskAction } from './production_risk_authority.js';
+
+const BROKER_MINIMUM_FALLBACK_AUTH = Symbol('broker-minimum-fallback-authority');
 import { createRuntimeExecutionSnapshotCache } from './runtime_execution_snapshot.js';
 import { evaluateRetrySignalValidity } from './retry_signal_validity.js';
 
@@ -636,6 +638,14 @@ export function createProductionExecutionDependencies({
       currentMarketPrice: marketPrice,
       exposure,
     });
+    if (result?.allowed && result.action?.minimumVolumeFallbackAuthorized === true) {
+      // An in-memory capability survives coordinator object spreads but cannot
+      // be forged by JSON/API action input or by setting the public boolean.
+      Object.defineProperty(result.action, BROKER_MINIMUM_FALLBACK_AUTH, {
+        value: true,
+        enumerable: true,
+      });
+    }
     if (result?.allowed) rememberMt5ActionContext(account, result.action || action, context);
     return {
       ...result,
@@ -736,7 +746,7 @@ export function createProductionExecutionDependencies({
       runtime = await ctraderRuntimeFactory({
         environment,
         allowLiveTrading,
-        allowBrokerMinimumVolumeFallback: action?.minimumVolumeFallbackAuthorized === true,
+        allowBrokerMinimumVolumeFallback: action?.[BROKER_MINIMUM_FALLBACK_AUTH] === true,
         clientId,
         clientSecret,
         accessToken,
