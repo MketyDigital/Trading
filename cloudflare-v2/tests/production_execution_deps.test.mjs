@@ -205,6 +205,51 @@ test('production account loader applies follower equity-risk settings before bro
   assert.equal(result.action.lots, 0.1);
 });
 
+test('production follower balance-risk revalidation uses the follower broker balance only', async () => {
+  const row = account({ lot_sizing_type: 'risk_percent', lot_value: 5 });
+  const link = {
+    id: 'link-balance',
+    workspace_id: 'ws-a',
+    follower_account_id: 'acct-row-a',
+    parent_account_id: 'parent-a',
+    enabled: true,
+    lot_multiplier: 1,
+    fixed_lot: null,
+    risk_mode: 'balance_percent',
+    risk_percent: 1,
+    risk_amount: null,
+    risk_basis: 'equity',
+  };
+  const deps = createProductionExecutionDependencies({
+    env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true', TRADING_MASTER_KEY: 'master' },
+    supabase: createAccountAndFollowerSupabase(row, link),
+    workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(),
+    mt5ContextLoader: async () => ({
+      brokerAccount: { equity: 20000, balance: 5000 },
+      catalog: [{
+        canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tickSize: 0.01,
+        tickValuePerLot: 1, minLots: 0.01, maxLots: 100, stepLots: 0.01,
+      }],
+    }),
+  });
+
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  assert.equal(loaded.sizingMode, 'BALANCE_RISK_PERCENT');
+  assert.equal(loaded.riskBasis, 'balance');
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: loaded,
+    action: {
+      type: 'OPEN_POSITION', side: 'BUY', symbol: 'XAUUSD',
+      entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490, lots: 0.5,
+    },
+  });
+  assert.equal(result.risk.riskAmountPerLeg, 50);
+  assert.equal(result.action.lots, 0.05);
+});
+
 test('fixed-lot follower policy prevents parent risk settings from resizing copied lots', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
