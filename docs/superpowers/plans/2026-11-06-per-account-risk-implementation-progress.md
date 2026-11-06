@@ -110,7 +110,7 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Updated execution planning, production risk revalidation, and orchestration normalization to read the persisted risk basis and fixed-cash mode. Added regression tests for balance-only broker snapshots, persisted balance basis, fixed-cash planning/revalidation, owner-only authorization, and the account configuration API.
 - Account onboarding now accepts owner-selected risk modes but still forces new accounts inactive, execution-disabled, and kill-switched. Admins cannot submit risk modes or risk-limit fields during onboarding.
 - Restored `0046_broker_aware_lot_sizing_modes.sql` byte-for-byte to the version on `main`.
-- Removed the colliding follower-risk migration files and reintroduced the additive schema changes at unused versions: PostgreSQL `0052`, D1 `0006`, and namespaced PostgreSQL `0006`. Updated the follower repository test to load D1 migration `0006`.
+- Removed the colliding follower-risk migration files and reintroduced the additive schema changes only in the active D1 `0006` and namespaced PostgreSQL `0006` tracks. The legacy `db/migrations` public-schema track was deliberately excluded because it is not part of the current production storage path. Updated the follower repository test to load D1 migration `0006`.
 - Updated `docs/LOT_SIZING_MODES.md` with the canonical storage contract, owner authorization, risk caps, per-leg semantics, follower independence, and fail-closed platform rules.
 - Tests added/updated but not yet CI-verified. Trading V1 CI run #3496 was queued for an earlier commit in this implementation sequence; it does not include all later commits in this log. No local repository shell is available here to run Node tests directly.
 - Production remains untouched: no migration applied, no account policy written to production, and no deployment triggered.
@@ -181,3 +181,10 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Increased the CI diagnostic capture limit from 6,000 to 20,000 characters so future failing test files include the full TAP failure context in the workflow logs and step summary.
 - Corrected the strict floating-point aggregate-lot assertions in both risk-engine and execution-plan dynamic-TP tests using a (1e-12) tolerance. No runtime sizing or risk limits were relaxed.
 - Latest code commits: `2dfc2490`, `5b1624ea`. The latest complete branch head still requires its own CI result; #3504 is a pre-fix failing run and #3514 predates the latest tests.
+
+
+### 2026-11-06 — migration-track scope correction
+
+- Rechecked the migration inventory and found that `cloudflare-v2/db/migrations` is the retired public-schema/RLS migration track. Removed the previously created `0052_account_follower_risk_sizing.sql` from the feature branch.
+- Follower-risk schema changes now exist only in the current D1 migration track (`0006`) and the namespaced PostgreSQL track (`0006`) used by the current storage architecture. No new migration was added to the retired public-schema track.
+- The original historical `0046` file remains restored to `main`; existing `0051` and `0005` files remain untouched.
