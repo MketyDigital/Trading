@@ -156,10 +156,25 @@ function parseAccountCreation(body) {
     return { ok: false, reason: 'ACCOUNT_CREDENTIALS_INVALID' };
   }
 
-  const safetyPolicy = {
-    ...safeObject(body.safetyPolicy ?? body.safety_policy),
-    killSwitch: true,
-  };
+  const rawSafetyPolicy = safeObject(body.safetyPolicy ?? body.safety_policy);
+  const safetyPolicy = { ...rawSafetyPolicy, killSwitch: true };
+  for (const key of ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent']) {
+    if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, key)) {
+      const value = Number(rawSafetyPolicy[key]);
+      if (!(value > 0 && value <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+      safetyPolicy[key] = value;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, 'minimumVolumeRiskTolerancePercent')) {
+    const value = Number(rawSafetyPolicy.minimumVolumeRiskTolerancePercent);
+    if (!Number.isFinite(value) || value < 0 || value > 1) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+    safetyPolicy.minimumVolumeRiskTolerancePercent = value;
+  }
+  if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, 'minimumLotPolicy')) {
+    const value = String(rawSafetyPolicy.minimumLotPolicy).trim().toUpperCase();
+    if (!['FLOOR', 'REJECT'].includes(value)) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+    safetyPolicy.minimumLotPolicy = value;
+  }
 
   return {
     ok: true,
@@ -427,7 +442,10 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
       const requestedSizingType = String(body.lotSizingType ?? body.lot_sizing_type ?? 'fixed').trim().toLowerCase();
-      if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedSizingType)
+      const requestedSafetyPolicy = safeObject(body.safetyPolicy ?? body.safety_policy);
+      const hasRiskPolicyFields = ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy']
+        .some((key) => Object.prototype.hasOwnProperty.call(requestedSafetyPolicy, key));
+      if ((['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedSizingType) || hasRiskPolicyFields)
         && !isWorkspaceRiskOwner(authorization?.membership?.role)) return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
       const parsed = parseAccountCreation(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
