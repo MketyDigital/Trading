@@ -29,7 +29,7 @@ if(rp.maxOpenRiskPercent!=null)limits.push('open-risk cap '+esc(rp.maxOpenRiskPe
 if(rp.maxDailyLossPercent!=null)limits.push('daily-loss limit '+esc(rp.maxDailyLossPercent)+'%');
 if(rp.minimumVolumeRiskTolerancePercent!=null)limits.push('minimum-volume tolerance '+esc(rp.minimumVolumeRiskTolerancePercent)+'%');
 if(rp.minimumLotPolicy)limits.push('minimum lot '+esc(rp.minimumLotPolicy));
-return '<div class="small" style="margin-top:6px"><b>Sizing:</b> '+sizing+' • '+(limits.length?esc(limits.join(' • ')):'no optional risk caps configured')+'</div>'
+return '<div class="small" style="margin-top:6px"><b>Sizing:</b> '+sizing+' • '+(limits.length?esc(limits.join(' • ')):'no optional risk caps configured')+(canEditRiskPolicy?'':' • owner-managed')+'</div>'
 }
 if(mode==='adaptive_percent')return '<div class="small" style="margin-top:6px"><b>Sizing:</b> Simple '+esc(cfg.percent||'')+'% of '+esc(x.lotValue)+' chosen lot • broker min/max/step enforced</div>';
 if(mode==='symbol_equivalent')return '<div class="small" style="margin-top:6px"><b>Sizing:</b> Symbol-aware from '+esc(x.lotValue)+' chosen lot / '+esc(cfg.referenceSymbol||'reference symbol')+' • only reduces heavier products</div>';
