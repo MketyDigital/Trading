@@ -42,6 +42,7 @@ test('accepts adapter-computed loss-per-lot for non-simple instrument models', (
   });
 
   assert.equal(plan.riskAmount, 100);
+  assert.equal(plan.riskBasis, 'BALANCE');
   assert.equal(plan.totalRiskAmount, 200);
   assert.equal(plan.totalLots, 0.8);
   assert.deepEqual(plan.legLots, [0.4, 0.4]);
