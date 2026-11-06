@@ -1,4 +1,5 @@
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { isWorkspaceRiskOwner } from '../security/risk_policy_authorization.js';
 import {
   encryptConnectionCredentials,
   validateConnectionCredentials,
@@ -47,6 +48,13 @@ function sizingConfigFor(type, raw = {}) {
   if (type === 'balance_percent') {
     const percent = Number(config.percent);
     return percent > 0 && percent <= 100 ? { percent } : null;
+  }
+  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(type)) {
+    const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (type === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
+    if (!['equity', 'balance'].includes(riskBasis)
+      || (type === 'balance_risk_percent' && riskBasis !== 'balance')
+      || (type === 'equity_risk_percent' && riskBasis !== 'equity')) return null;
+    return { riskBasis };
   }
   return {};
 }
@@ -124,9 +132,10 @@ function parseAccountCreation(body) {
   if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
   }
-  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType)) {
+  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', 'risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(lotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
+  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent'].includes(lotSizingType) && !(Number(lotValue) <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
   const normalizedSizingConfig = sizingConfigFor(lotSizingType, lotSizingConfig);
   if (!normalizedSizingConfig) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
@@ -408,6 +417,9 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       }
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+      const requestedSizingType = String(body.lotSizingType ?? body.lot_sizing_type ?? 'fixed').trim().toLowerCase();
+      if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedSizingType)
+        && !isWorkspaceRiskOwner(authorization?.membership?.role)) return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
       const parsed = parseAccountCreation(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
       if (!env?.TRADING_MASTER_KEY) {
