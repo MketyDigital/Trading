@@ -51,7 +51,7 @@ var list=r.split(',').map(function(v){return v.trim().toLowerCase()}).filter(fun
 if(!list.length){msg('Choose at least one role: source or execution.','error');return}
 var currentMode=String(a.lotSizingType||'fixed').toLowerCase(),cfg=a.lotSizingConfig||{},payload={label:label,roles:list};
 if(canEditRiskPolicy||currentMode!=='risk_percent'){
-var mode=prompt('Lot sizing: fixed, adaptive_percent, symbol_equivalent, balance_percent, or risk_percent',currentMode);
+var mode=prompt('Lot sizing: '+(canEditRiskPolicy?'fixed, adaptive_percent, symbol_equivalent, balance_percent, or risk_percent':'fixed, adaptive_percent, symbol_equivalent, or balance_percent'),currentMode==='risk_percent'?'fixed':currentMode);
 if(mode===null)return;mode=mode.trim().toLowerCase();
 if(['fixed','adaptive_percent','symbol_equivalent','balance_percent','risk_percent'].indexOf(mode)<0){msg('Lot sizing mode is invalid.','error');return}
 if(mode==='risk_percent'){
