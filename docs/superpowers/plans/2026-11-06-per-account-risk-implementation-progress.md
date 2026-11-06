@@ -308,3 +308,10 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - The installer now strips only standalone outer `BEGIN;` and `COMMIT;` boundary statements from the SQL sent to PostgreSQL, while retaining checksums of the exact reviewed source files. All migration DDL and ledger writes therefore remain inside the installer's transaction.
 - Extended the installer regression fixture with a real wrapped migration and asserted the wrapper-free SQL executes inside the transaction rather than committing it independently.
 - Commits: `89148763` (transaction-safe migration execution), `eba2ff4a` and `34f93e94` (wrapper regression fixture). No database was contacted or migrated.
+
+
+### 2026-11-06 — PostgreSQL migration-ledger fail-closed regression
+
+- Added an installer regression proving that an existing Trading schema with a modified migration checksum is rejected before assuming the schema-owner role or applying any pending SQL; the installer rolls back.
+- This complements the successful-prefix upgrade test and the clean-install test: only a checksum-exact ordered prefix can be upgraded.
+- Test commit: `29c377c8`. The current CI run on the earlier runner/transaction fix is still underway; this new test commit will trigger another exact-head run.
