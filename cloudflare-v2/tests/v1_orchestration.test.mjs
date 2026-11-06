@@ -850,6 +850,41 @@ test('fixed-lot and multiplier followers inherit parent plan sizing before apply
 });
 
 
+test('balance-percent follower sizing always uses follower balance, not an inconsistent equity basis field', async () => {
+  const follower = enabledAccount({
+    id: 'follower-balance',
+    equity: 12000,
+    balance: 9000,
+    sizingMode: 'FIXED_LOTS',
+    riskPercent: 0.5,
+    followerLink: {
+      follower_account_id: 'follower-balance',
+      risk_mode: 'balance_percent',
+      risk_percent: 1,
+      risk_amount: null,
+      risk_basis: 'equity',
+      fixed_lot: null,
+      lot_multiplier: 1,
+    },
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-balance-basis',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [follower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 90);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.09, 0.09, 0.09]);
+});
+
+
 test('follower risk amount and mode override parent sizing values without legacy lot scaling', async () => {
   const follower = enabledAccount({
     id: 'follower-22',
