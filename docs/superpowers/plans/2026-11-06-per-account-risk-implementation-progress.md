@@ -270,3 +270,10 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Added a repository regression test: configure an equity-percent follower policy, then update the link without risk fields; all existing risk values must remain intact.
 - Commits: `4ee3aa6d` (repository preservation), `e2fc7cf1` (load current policy before merge), `912b0d68` (API adapter partial update), `81f2a061` (regression test). New exact-head CI is required before calling this fix verified.
 - No production deployment, migration application, account-policy write or connector release publication occurred.
+
+
+### 2026-11-06 — follower partial-update regression coverage completed
+
+- Added an HTTP-route regression proving that a follower-link request which omits risk fields does not inject `fixed_lot` or `equity` defaults into the repository write. The repository-level regression separately proves existing configured risk values survive the partial update.
+- This closes the review gap at both boundaries: API normalization and selected persistence repository.
+- Route test commit: `043e3baa`. Latest-head CI will be checked after this documentation update.
