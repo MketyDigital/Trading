@@ -84,3 +84,13 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 7. Update the canonical docs and roadmap with verified behaviour and CI evidence.
 8. Run full required CI, review the final diff, and keep the PR draft until every acceptance item is green.
 9. Only after a separate owner release decision: plan a controlled production rollout with before/after account-state snapshots and a rollback path. No deployment is authorized by this progress log.
+
+
+### 2026-11-06 — first risk-engine correction
+
+- Inspected the failing CI job logs from Trading V1 CI run #3460. The failures shared one root cause: the risk engine defaulted `riskBasis` to `EQUITY`, even when the caller supplied only a valid broker balance. This caused balance-only risk sizing to fail before the monetary stop-loss model could be evaluated.
+- Updated `cloudflare-v2/src/risk/risk_engine.js` to infer EQUITY only when equity is present and otherwise infer BALANCE, while preserving an explicitly selected basis.
+- Updated `cloudflare-v2/src/execution/execution_plan.js` to pass the same safe basis inference into risk planning instead of forcing EQUITY when the account's equity field is absent.
+- Strengthened `cloudflare-v2/tests/risk_engine.test.mjs` to assert the inferred BALANCE basis.
+- Commits: `0fcbab0c`, `e781112a`, `fab01437`.
+- The previous CI run #3461 was created before these code corrections and therefore cannot verify them. A new exact-head CI result is still required before this fix is marked verified.
