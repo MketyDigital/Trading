@@ -23,11 +23,21 @@ function constraints(instrument = {}) {
   return { step, minIndex, maxIndex, precision: decimals(step) };
 }
 
-export function normalizeReferenceLots(value, instrument = {}) {
+export function normalizeReferenceLots(value, instrument = {}, { belowMinimumCode = 'SIZING_BELOW_BROKER_MINIMUM' } = {}) {
   const wanted = Number(value);
   if (!(wanted > 0)) throw new TypeError('positive reference lots required');
   const { step, minIndex, maxIndex, precision } = constraints(instrument);
-  const wantedIndex = Math.floor((wanted / step) + stepIndexTolerance(wanted / step));
+  const minimumLots = minIndex * step;
+  const wantedRatio = wanted / step;
+  const minimumTolerance = stepIndexTolerance(wantedRatio) * step;
+  if (wanted < minimumLots - minimumTolerance) {
+    const error = new RangeError('requested lots are below the broker minimum');
+    error.code = belowMinimumCode;
+    error.minimumLots = Number(minimumLots.toFixed(precision));
+    error.requestedLots = wanted;
+    throw error;
+  }
+  const wantedIndex = Math.floor(wantedRatio + stepIndexTolerance(wantedRatio));
   const index = Math.min(Math.max(wantedIndex, minIndex), maxIndex);
   return Number((index * step).toFixed(precision));
 }
@@ -136,7 +146,7 @@ export async function buildSymbolEquivalentSizing({
   // Target products may be reduced when the same lot is heavier, but are never
   // increased above the chosen lot merely because their margin is cheaper.
   // The only upward exception is an unavoidable broker minimum.
-  const targetRequestedLots = normalizeReferenceLots(referenceLots, targetInstrument);
+  const targetRequestedLots = normalizeReferenceLots(referenceLots, targetInstrument, { belowMinimumCode: 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM' });
   const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
   if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
     throw new Error('target symbol expected margin unavailable');
@@ -160,7 +170,7 @@ export async function buildSymbolEquivalentSizing({
     marginBudget: referenceMargin,
     estimateMargin: estimateTargetMargin,
     maximumLots: targetRequestedLots,
-    allowBrokerMinimumFloor: true,
+    allowBrokerMinimumFloor: false,
     belowMinimumCode: 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM',
   });
 
@@ -190,7 +200,7 @@ export async function buildBalancePercentSizing({
   if (typeof estimateTargetMargin !== 'function') throw new TypeError('broker margin estimator required');
 
   const marginBudget = balance * scale / 100;
-  const targetRequestedLots = normalizeReferenceLots(maximumLots, targetInstrument);
+  const targetRequestedLots = normalizeReferenceLots(maximumLots, targetInstrument, { belowMinimumCode: 'BALANCE_PERCENT_BELOW_BROKER_MINIMUM' });
   const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
   if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
     throw new Error('target symbol expected margin unavailable');
