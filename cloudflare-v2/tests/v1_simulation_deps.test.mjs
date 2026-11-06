@@ -247,9 +247,8 @@ test('enabled follower routing fails closed when follower links cannot be read',
         }),
       };
       if (table === 'trading_account_followers') return {
-        select() { return this; }, eq() { return this; }, in: async () => ({
-          data: null, error: { message: 'temporary follower storage failure' },
-        }),
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        order: async () => ({ data: null, error: { message: 'temporary follower storage failure' } }),
       };
       throw new Error('unexpected table ' + table);
     },
