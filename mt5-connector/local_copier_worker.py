@@ -327,9 +327,9 @@ def run(args):
                 finally:
                     mt5.shutdown()
             engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot,
-                                     enabled=True, symbol_map=symbol_map, risk_mode=args.risk_mode,
-                                     risk_percent=args.risk_percent, risk_amount=args.risk_amount,
-                                     risk_basis=args.risk_basis)
+                                     enabled=True, symbol_map=symbol_map, risk_mode=risk_mode,
+                                     risk_percent=risk_percent, risk_amount=risk_amount,
+                                     risk_basis=risk_basis)
             actions = engine.plan(parent, follower)
             if actions and mt5.initialize(path=str(args.follower_terminal)):
                 try:
