@@ -110,6 +110,22 @@ test('owner can configure fixed-cash risk without treating cash as a percentage'
   assert.deepEqual(fixture.row.lot_sizing_config, { riskBasis: 'balance', riskMode: 'fixed_cash' });
 });
 
+test('partial risk value update preserves the existing fixed-cash mode and balance basis', async () => {
+  const fixture = makeRuntime('owner');
+  fixture.row.lot_sizing_type = 'risk_percent';
+  fixture.row.lot_value = 100;
+  fixture.row.lot_sizing_config = { riskBasis: 'balance', riskMode: 'fixed_cash' };
+  const response = await handleV1AdminConnectionsRequest(put({ lotValue: 150 }), {}, {
+    persistenceRuntime: fixture.runtime,
+    authorizeFn: fixture.authorizeFn,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(fixture.row.lot_sizing_type, 'risk_percent');
+  assert.equal(fixture.row.lot_value, 150);
+  assert.deepEqual(fixture.row.lot_sizing_config, { riskBasis: 'balance', riskMode: 'fixed_cash' });
+});
+
 test('risk policy validation rejects an excessive percentage without persisting any part of the update', async () => {
   const fixture = makeRuntime('owner');
   const response = await handleV1AdminConnectionsRequest(put({
