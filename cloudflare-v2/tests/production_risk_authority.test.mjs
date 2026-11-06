@@ -77,6 +77,21 @@ test('configured BALANCE risk basis is honored during live broker revalidation',
   assert.equal(result.risk.totalLots, 0.1);
 });
 
+test('balance-only broker snapshots infer BALANCE during live risk revalidation', () => {
+  const result = validateProductionRiskAction({
+    account: riskAccount({ riskBasis: undefined, risk_basis: undefined }),
+    action: openAction(),
+    brokerAccount: { balance: 10000 },
+    instrument: brokerInstrument(),
+    currentMarketPrice: 2500,
+    exposure: {},
+  });
+
+  assert.equal(result.risk.riskBasis, 'BALANCE');
+  assert.equal(result.risk.riskAmountPerLeg, 100);
+  assert.equal(result.action.lots, 0.1);
+});
+
 test('explicit fixed monetary risk overrides percentage mode during broker revalidation', () => {
   const result = validateProductionRiskAction({
     account: riskAccount({ riskPercent: 5, riskAmount: 100 }),
