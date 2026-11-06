@@ -74,6 +74,13 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /concurrency:\s*\n\s+group: trading-coolify-postgres-staging/);
   assert.match(block, /timeout-minutes:\s*70/);
   assert.match(block, /git_commit_sha:\s*sha,/);
+  assert.match(block, /TARGET_BRANCH: \$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}/);
+  assert.match(block, /git_branch: process\.env\.TARGET_BRANCH/);
+  assert.match(block, /db\/d1-migrations\/0006_account_follower_risk_sizing\.sql/);
+  assert.match(block, /ENCRYPT_D1_PRE_MIGRATION_EXPORT/);
+  assert.match(block, /trading-staging-pre-migration\.sql\.enc/);
+  assert.ok(block.indexOf('npx wrangler d1 export trading-staging') < block.indexOf('npx wrangler d1 migrations apply trading-staging'),
+    'an encrypted D1 recovery export must be captured before schema writes');
   assert.match(block, /autogenerate_domain:\s*false/);
   assert.match(block, /-X DELETE/);
   assert.match(block, /applications\/\$APP_UUID/);
@@ -254,6 +261,9 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(inventoryBlock, /github\.event_name == 'workflow_call'/);
+  assert.match(inventoryBlock, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /successful backup from the last 24 hours/);
   assert.match(inventoryBlock, /TRADING_PG_SCHEMA_MIGRATION_CONFIRM/);
   assert.match(inventoryBlock, /TRADING_SNAPSHOT_IMPORT_CONFIRM/);
