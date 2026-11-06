@@ -8,9 +8,9 @@ function decimals(step) {
   return Math.max(0, fractionalDigits - exponent);
 }
 
-function resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis = 'EQUITY' }) {
+function resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis }) {
   if (Number.isFinite(Number(riskAmount)) && Number(riskAmount) > 0) return Number(riskAmount);
-  const basis = String(riskBasis || 'EQUITY').trim().toUpperCase();
+  const basis = String(riskBasis || (equity != null ? 'EQUITY' : 'BALANCE')).trim().toUpperCase();
   const rawBase = basis === 'BALANCE' ? balance : equity;
   const base = Number(rawBase);
   const percent = Number(riskPercent);
