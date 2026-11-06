@@ -715,12 +715,19 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
       .eq('enabled', true)
       .in('parent_account_id', parentIds)
       .order('parent_account_id', { ascending: true });
-    if (error) return parentRefs;
+    if (error) {
+      const failure = new Error('failed to load enabled follower routes');
+      failure.code = 'FOLLOWER_LINK_LOAD_FAILED';
+      throw failure;
+    }
     const seen = new Set(parentRefs);
     const followerRefs = (data || []).map((row) => text(row.follower_account_id)).filter(Boolean).map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id).filter((ref) => !seen.has(ref));
     return [...parentRefs, ...followerRefs];
-  } catch {
-    return parentRefs;
+  } catch (error) {
+    if (error?.code === 'FOLLOWER_LINK_LOAD_FAILED') throw error;
+    const failure = new Error('failed to load enabled follower routes');
+    failure.code = 'FOLLOWER_LINK_LOAD_FAILED';
+    throw failure;
   }
 }
 
