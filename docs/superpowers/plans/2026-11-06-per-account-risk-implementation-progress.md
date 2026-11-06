@@ -260,3 +260,13 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - MT5 Connector Release #299 completed successfully: pure connector tests, Windows executable build, packaged manager/worker smoke tests, checksum generation and artifact upload all passed.
 - Its `publish-release` job was skipped as expected for this pull request; no versioned connector release was published.
 - cTrader cBot CI #539 has progressed: gateway tests passed; deployment-stack container/compose validation, cBot build and Worker/dashboard tests are still running. These are build/test jobs, not production deployment jobs.
+
+
+### 2026-11-06 — latest CI green and follower-policy preservation fix
+
+- Latest PR head before this follow-up (`32fd98e9`) passed Trading V1 CI #3553 and MT5 Compatibility CI #141. MT5 Connector Release #302 completed packaging, pure connector tests, packaged entrypoint smoke tests, checksum and artifact upload; `publish-release` was skipped.
+- cTrader CI #542: gateway tests, Worker/dashboard tests and cBot `.algo` build passed. Its deployment-stack Docker/TLS image build and Compose validation are still in progress. These are CI image/compose validation jobs, not production deployment.
+- Final route/repository review found a correctness gap: partial follower-link updates could replace an existing risk policy with default `fixed_lot`/`equity` values when the caller omitted risk fields. Corrected both the selected D1/PostgreSQL repository path and the legacy adapter path to preserve existing risk mode, percent, amount and basis unless those fields are explicitly supplied.
+- Added a repository regression test: configure an equity-percent follower policy, then update the link without risk fields; all existing risk values must remain intact.
+- Commits: `4ee3aa6d` (repository preservation), `e2fc7cf1` (load current policy before merge), `912b0d68` (API adapter partial update), `81f2a061` (regression test). New exact-head CI is required before calling this fix verified.
+- No production deployment, migration application, account-policy write or connector release publication occurred.
