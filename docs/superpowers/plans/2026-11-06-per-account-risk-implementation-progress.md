@@ -323,3 +323,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - MT5 Compatibility CI #163 passed.
 - The follow-up altered-ledger fail-closed test commit `29c377c8` triggered Trading V1 CI #3577; that exact run is still in progress. cTrader CI #566 and MT5 Connector Release #326 are also still queued/running for the earlier code head. Do not treat #3575 as verification of the later ledger regression.
 - No production deployment, migration, account-policy update or connector publication occurred; PR deployment/storage-inventory jobs remain skipped.
+
+
+### 2026-11-06 — migration ledger fail-closed regression verified
+
+- Trading V1 CI #3577 passed all Worker/trading-core tests, pure MT5 bridge tests and pure MTProto Python tests with the altered-checksum/non-prefix ledger regression included.
+- MT5 Compatibility CI #165 passed.
+- MT5 Connector Release #326 has passed pure connector tests, Windows executable build, packaged manager/worker smoke tests and checksum generation; artifact upload is in progress. The release-publication job remains skipped for this pull request.
+- cTrader CI #566 is queued. Earlier cTrader CI #542 completed successfully across gateway, Worker/dashboard, cBot build and deployment-stack Docker/TLS plus Compose validation.
+- PR production deployment, storage-inventory and acceptance jobs remain skipped. No deployment, database migration, account-policy update or release publication has occurred.
