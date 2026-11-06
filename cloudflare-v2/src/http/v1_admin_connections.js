@@ -737,7 +737,7 @@ export async function handleV1AdminConnectionsRequest(request, env = {}, {
       }
       const { data, error } = await supabase.from('trade_accounts').select(ACCOUNT_SELECT).eq('workspace_id', String(authorization.workspace.id)).order('created_at', { ascending: true });
       if (error) return json({ ok: false, reason: 'ACCOUNT_LIST_FAILED' }, 503);
-      return json({ ok: true, accounts: (data || []).map(publicAccount), readiness: connectionReadiness(env), riskPolicyEditable: isWorkspaceRiskOwner(authorization?.membership?.role) });
+      return json({ ok: true, accounts: (data || []).map(publicAccount), readiness: connectionReadiness(env) });
     }
     if (request.method === 'POST') return createMt5Connection(request, authorization, supabase, env, persistenceRuntime?.accounts || null);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
