@@ -328,7 +328,7 @@ test('PostgreSQL schema installer does not report an unsafe applied schema as sa
 
   await assert.rejects(
     applyTradingPostgresMigrations({ connectionString: 'postgres://user:secret@private.invalid/mkety', expectedDatabaseName: 'mkety', confirmation: 'APPLY_TRADING_STORAGE_SCHEMA', caCertificate: 'synthetic CA', ClientClass: Client, migrations }),
-    /restricted, fenced\/off defaults/i
+    /restricted, D1-fenced, broker-execution-off safety state/i
   );
   assert.ok(calls.includes('ROLLBACK'));
   assert.equal(calls.includes('COMMIT'), false);
