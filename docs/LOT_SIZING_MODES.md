@@ -6,15 +6,15 @@ Mkety keeps lot sizing and leg allocation explicit per account. Existing account
 
 The owner's `lot_value` is the requested lot for each target leg.
 
-Broker maximum and step remain authoritative. Requested fixed lots are floored to the broker step and capped at the broker maximum. If the requested lot is below the broker minimum, planning fails closed; fixed-lot mode cannot authorize an upward risk increase.
+Broker minimum, maximum and step are applied exactly as in the existing production path: a below-minimum preference is raised to the broker minimum, valid requests are floored to the broker step, and values are capped at the broker maximum. This compatibility behaviour is deliberately preserved for existing fixed-lot accounts.
 
-This is the current behavior and remains the default.
+This remains the default.
 
 ## adaptive_percent
 
 A simple percentage of the owner's chosen/reference lot.
 
-Example: reference lot `1.00`, percent `25` -> `0.25`, then broker-step flooring and maximum validation. If the result is below broker minimum, planning fails closed.
+Example: reference lot `1.00`, percent `25` -> `0.25`, then the existing broker-minimum floor, step normalization and maximum validation. This preserves the pre-existing adaptive sizing behaviour.
 
 This mode does not compare economic weight between different products.
 
@@ -32,7 +32,7 @@ Rules:
 3. If the destination symbol is not economically heavier, keep the owner's chosen lot.
 4. If it is heavier, reduce to the largest broker-executable lot whose expected margin does not exceed the reference symbol's expected margin.
 5. Never increase above the owner's chosen lot merely because another product is cheaper.
-6. If the destination broker minimum is above the owner's requested lot, sizing fails closed; it does not silently increase the position.
+6. If the destination broker minimum is above the owner's requested lot, sizing fails closed; it does not silently increase the symbol-equivalent position.
 7. Broker min/max/step are always authoritative.
 
 This mode does not use account balance, equity, free margin, SL, or TP as a sizing input. It therefore works with fast signals.
@@ -96,3 +96,8 @@ MT5 `symbol_equivalent` and `balance_percent` require the connector build that s
 ### Local MT5 copier boundary
 
 The local MT5 copier is a separate, explicitly opt-in profile feature. New profiles default to `copy_enabled=false`, `copy_role=none`, and `copy_risk_mode=fixed_lot`; saving a profile does not start a worker. A local profile owner must explicitly configure the follower and start its worker. Changing settings stops the existing pair worker before writing the new startup policy. Local copier risk is calculated from the follower terminal's own broker snapshot, not from the parent's account metrics.
+
+
+### Minimum-volume compatibility boundary
+
+The legacy `fixed` and `adaptive_percent` modes retain their existing production behaviour: broker minimum-volume flooring is preserved. `symbol_equivalent` and `balance_percent` retain their broker-budget fail-closed behaviour. Only the new SL-based `risk_percent` mode uses the explicit `minimumLotPolicy` plus `minimumVolumeRiskTolerancePercent` controls to authorize or reject a minimum-volume risk overage. This separation prevents the risk feature from silently changing existing account behaviour.
