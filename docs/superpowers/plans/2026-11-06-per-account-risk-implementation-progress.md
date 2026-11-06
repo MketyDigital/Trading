@@ -339,3 +339,13 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - MT5 Connector Release #326 completed successfully: pure connector tests, Windows executable build, packaged manager/worker smoke tests, checksum and artifact upload all passed. The `publish-release` job was skipped.
 - cTrader CI #566 has passed the cBot `.algo` build; Worker/dashboard tests and deployment-stack Docker/TLS plus Compose validation are still running/queued.
 - Trading V1 CI #3577 and MT5 Compatibility CI #165 remain green. No release publication, deployment, database migration or account-policy write occurred.
+
+
+### 2026-11-06 — all four automated workflows green on the reviewed code head
+
+- Trading V1 CI #3577: passed all Worker/trading-core, pure MT5 bridge and pure MTProto tests, including migration-runner prefix/ledger regressions.
+- MT5 Compatibility CI #165: passed.
+- cTrader cBot CI #566: passed gateway tests, Worker/dashboard tests, `.algo` build, Docker gateway/TLS image builds and Coolify Compose validation.
+- MT5 Connector Release #326: passed connector tests, Windows packaging, packaged entrypoint smoke tests, checksum and artifact upload. Versioned release publication was skipped.
+- These green runs are on the code head containing the follower partial-update safeguards and PostgreSQL additive migration runner/atomicity changes. Documentation-only progress updates followed; no runtime code changed after the verified code head.
+- Production deployment, storage inventory and acceptance jobs were skipped. No production or staging database migration, deployment, account-policy mutation or connector release publication occurred.
