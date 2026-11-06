@@ -107,3 +107,21 @@ test('symbol-equivalent does not floor a target to minimum above the normalized 
     estimateTargetMargin:async (lots) => lots * 100,
   }), (error) => error?.code === 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM');
 });
+
+test('margin-based sizing rejects non-finite budgets and lot ceilings', async () => {
+  assert.throws(() => normalizeReferenceLots(Number.POSITIVE_INFINITY, {
+    minLots:0.01,maxLots:10,stepLots:0.01,
+  }), /finite positive reference lots/i);
+  await assert.rejects(() => largestLotsWithinMargin({
+    instrument:{minLots:0.01,maxLots:10,stepLots:0.01},
+    marginBudget:Number.POSITIVE_INFINITY,
+    maximumLots:1,
+    estimateMargin:async (lots) => lots * 10,
+  }), /positive margin budget/i);
+  await assert.rejects(() => largestLotsWithinMargin({
+    instrument:{minLots:0.01,maxLots:10,stepLots:0.01},
+    marginBudget:100,
+    maximumLots:Number.POSITIVE_INFINITY,
+    estimateMargin:async (lots) => lots * 10,
+  }), /finite positive maximumLots/i);
+});
