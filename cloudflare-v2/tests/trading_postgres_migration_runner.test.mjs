@@ -7,7 +7,7 @@ const migrations = [
   { name: '0001_trading_storage_replication_authority.sql', sql: 'CREATE SCHEMA IF NOT EXISTS trading_storage;' },
   { name: '0002_trading_domain_schema.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.example (id integer);' },
   { name: '0003_trading_replication_health.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.health (id integer);' },
-  { name: '0004_account_followers.sql', sql: 'BEGIN;\\nCREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);\\nCOMMIT;' },
+  { name: '0004_account_followers.sql', sql: `BEGIN;\nCREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);\nCOMMIT;` },
   { name: '0005_broker_observation_due_index.sql', sql: 'CREATE INDEX IF NOT EXISTS idx_test_due ON trading_storage.position_legs(status);' },
   { name: '0006_account_follower_risk_sizing.sql', sql: 'ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT \'fixed_lot\';' }
 ];
