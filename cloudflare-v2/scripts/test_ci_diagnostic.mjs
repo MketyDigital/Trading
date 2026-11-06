@@ -7,7 +7,7 @@ const files = readdirSync(new URL('../tests/', import.meta.url))
 
 const failures = [];
 for (const file of files) {
-  const result = spawnSync(process.execPath, ['--test', `tests/${file}`], {
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=spec', `tests/${file}`], {
     cwd: new URL('..', import.meta.url),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
