@@ -349,3 +349,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - MT5 Connector Release #326: passed connector tests, Windows packaging, packaged entrypoint smoke tests, checksum and artifact upload. Versioned release publication was skipped.
 - These green runs are on the code head containing the follower partial-update safeguards and PostgreSQL additive migration runner/atomicity changes. Documentation-only progress updates followed; no runtime code changed after the verified code head.
 - Production deployment, storage inventory and acceptance jobs were skipped. No production or staging database migration, deployment, account-policy mutation or connector release publication occurred.
+
+
+### 2026-11-06 — final feature-branch diff review
+
+- Reviewed PR #253 against `main`: 62 changed files. The only newly added schema migrations are additive `0006_account_follower_risk_sizing.sql` files for the active D1 and namespaced PostgreSQL tracks. No historical migration file (including the previously conflicting broker-aware sizing migration or existing broker-observation migration) is modified.
+- Confirmed the PR remains open and draft. Its code head has green Trading V1 #3577, MT5 Compatibility #165, cTrader #566 and MT5 Connector Release #326 checks. Later branch-head changes after those runs are documentation-only.
+- Code-level acceptance is substantially complete. Remaining release gates are external/non-production: run the UI/account-specific acceptance against an isolated staging deployment; rehearse the PostgreSQL prefix upgrade and rollback against the approved isolated staging database; verify D1 upgrade behavior against an isolated staging target; then obtain owner approval for a separate release decision.
+- No staging or production deployment, database migration, account-policy mutation, or release publication was performed. The implementation is not marked production-ready until those external gates are deliberately authorized and verified.
