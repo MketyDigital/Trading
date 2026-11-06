@@ -97,9 +97,10 @@ function normalizeFixedLots(value, instrument) {
     throw new TypeError('valid fixed lots and volume constraints required');
   }
 
-  // Fixed-lot intent is never increased to satisfy a broker minimum. Requests
-  // below the first executable step fail closed; valid requests are floored
-  // to the broker step and capped at the broker-reported maximum.
+  // Preserve the production fixed/adaptive sizing contract: broker minimum
+  // volume may raise a configured preference, while the broker maximum and
+  // volume step remain authoritative. Risk-sized modes use their separate
+  // monetary-risk minimum-volume tolerance policy before reaching this path.
   const precision = decimals(step);
   const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
   const minimumExecutable = Math.ceil((min / step) - stepIndexTolerance(min / step)) * step;
@@ -111,16 +112,7 @@ function normalizeFixedLots(value, instrument) {
     || !(maximumExecutable >= minimumExecutable)) {
     throw new RangeError('broker volume constraints have no executable lot size');
   }
-
-  const minimumTolerance = stepIndexTolerance(lots / step) * step;
-  if (lots < minimumExecutable - minimumTolerance) {
-    const error = new RangeError('fixed lots are below the broker minimum; explicit risk sizing is required to authorize a minimum-volume floor');
-    error.code = 'FIXED_LOTS_BELOW_BROKER_MINIMUM';
-    error.minimumLots = Number(minimumExecutable.toFixed(precision));
-    error.requestedLots = lots;
-    throw error;
-  }
-  const bounded = Math.min(lots, maximumExecutable);
+  const bounded = Math.min(Math.max(lots, minimumExecutable), maximumExecutable);
   let executable = Math.floor((bounded / step) + stepIndexTolerance(bounded / step)) * step;
   if (executable < minimumExecutable) executable = minimumExecutable;
   if (executable > maximumExecutable) executable = maximumExecutable;
