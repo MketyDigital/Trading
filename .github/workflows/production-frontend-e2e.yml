@@ -23,8 +23,15 @@ jobs:
   browser-e2e:
     if: >-
       ${{
-        github.event_name != 'workflow_run' ||
+        github.event_name == 'workflow_call' ||
+        github.event_name == 'workflow_dispatch' ||
         (
+          github.event_name == 'push' &&
+          !contains(github.event.head_commit.message, '[orchestrated-risk-release]') &&
+          !contains(github.event.head_commit.message, 'feature/per-account-risk-sizing')
+        ) ||
+        (
+          github.event_name == 'workflow_run' &&
           github.event.workflow_run.conclusion == 'success' &&
           !contains(github.event.workflow_run.head_commit.message, '[orchestrated-risk-release]') &&
           !contains(github.event.workflow_run.head_commit.message, 'feature/per-account-risk-sizing')
