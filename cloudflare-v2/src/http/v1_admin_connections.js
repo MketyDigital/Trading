@@ -341,8 +341,9 @@ async function handleAccountConnection(request, authorization, supabase, account
       if (!(lot > 0)) return json({ ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' }, 400);
       update.lot_value = lot;
     }
-    if ('lotSizingConfig' in body || 'lot_sizing_config' in body || RISK_SIZING_TYPES.has(requestedSizingType)) {
-      const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
+    if ('lotSizingConfig' in body || 'lot_sizing_config' in body || 'lotSizingType' in body || 'lot_sizing_type' in body) {
+      const hasExplicitSizingType = 'lotSizingType' in body || 'lot_sizing_type' in body;
+      const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config ?? (hasExplicitSizingType ? {} : current.lot_sizing_config));
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
       if (requestedType === 'adaptive_percent') {
         const percent = Number(config.percent);
