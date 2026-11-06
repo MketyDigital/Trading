@@ -628,19 +628,37 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
             "$api/databases/hgxwkiyxgbmb2i3pl57kmxc8" > "$RUNNER_TEMP/trading-pg-probe-db.json"
-          DB_PATH="$RUNNER_TEMP/trading-pg-probe-db.json" node <<'VERIFY_EXISTING_COOLIFY_DB'
+          # Newer Coolify responses expose environment_id instead of embedding
+          # environment_uuid. Resolve that relation through the existing project.
+          curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" -H 'Accept: application/json' \
+            "$api/projects/0zqhpkprlhtvlacmsgmfyyhs/environments" > "$RUNNER_TEMP/trading-pg-probe-environments.json"
+          DB_PATH="$RUNNER_TEMP/trading-pg-probe-db.json" ENVIRONMENTS_PATH="$RUNNER_TEMP/trading-pg-probe-environments.json" node <<'VERIFY_EXISTING_COOLIFY_DB'
           import { readFile } from 'node:fs/promises';
 
           const payload = JSON.parse(await readFile(process.env.DB_PATH, 'utf8'));
           const db = payload?.database ?? payload?.data ?? payload;
-          const environmentUuid = db?.environment_uuid ?? db?.environment?.uuid;
+          const environmentPayload = JSON.parse(await readFile(process.env.ENVIRONMENTS_PATH, 'utf8'));
+          const environments = Array.isArray(environmentPayload)
+            ? environmentPayload
+            : environmentPayload?.environments ?? environmentPayload?.data ?? environmentPayload?.result;
+          if (!Array.isArray(environments)) {
+            throw new Error('Unexpected Coolify project environment response shape.');
+          }
+          const relatedEnvironment = environments.find((environment) =>
+            String(environment?.id ?? '') === String(db?.environment_id ?? '')
+          );
+          const environmentUuid = db?.environment_uuid ?? db?.environment?.uuid ?? relatedEnvironment?.uuid;
           if (db?.name !== 'mkety-postgres' || db?.is_public !== false || !String(db?.status || '').toLowerCase().includes('healthy')) {
             throw new Error('Existing Coolify PostgreSQL service identity, privacy, or health check failed.');
           }
-          if (environmentUuid !== 'rtebcetyfvzlaiqitzcp0gl8') {
-            throw new Error('Existing Coolify PostgreSQL service is not in the expected project environment.');
+          if (
+            environmentUuid !== 'rtebcetyfvzlaiqitzcp0gl8' ||
+            relatedEnvironment?.name !== 'production'
+          ) {
+            throw new Error('Existing Coolify PostgreSQL service is not in the expected production project environment.');
           }
-          console.log('Verified the existing private, healthy mkety-postgres service for the transient probe.');
+          console.log('Verified the existing private, healthy mkety-postgres service in the exact production environment.');
           VERIFY_EXISTING_COOLIFY_DB
 
           TARGET_SHA="$TARGET_SHA" APPLY_MODE="$APPLY_MODE" node <<'BUILD_PROBE_APP_PAYLOAD' > "$RUNNER_TEMP/trading-pg-probe-app.json"
