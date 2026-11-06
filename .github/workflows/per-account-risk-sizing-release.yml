@@ -72,8 +72,13 @@ jobs:
     uses: ./.github/workflows/production-cloudflare-deploy.yml
     secrets: inherit
 
-  frontend_verification:
+  platform_configuration:
     needs: deploy_worker
+    uses: ./.github/workflows/production-platform-secret-sync.yml
+    secrets: inherit
+
+  frontend_verification:
+    needs: platform_configuration
     uses: ./.github/workflows/production-frontend-e2e.yml
 
   connection_readiness:
