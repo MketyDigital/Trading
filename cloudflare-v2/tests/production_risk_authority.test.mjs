@@ -167,7 +167,7 @@ test('minimum-volume tolerance for fixed monetary risk is measured against the c
   });
   assert.equal(result.risk.riskAmount, 1);
   assert.equal(result.risk.minimumFloorApplied, true);
-  assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
+  assert.ok(Math.abs(result.policyContext.minimumVolumeRiskOveragePercent - 0.09) < 1e-12);
   assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
 });
 
