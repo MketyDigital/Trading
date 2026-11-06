@@ -79,7 +79,7 @@ function normalizeTradeAccountRiskSizing(account = {}) {
     ?? (isRiskPercentMode ? account.lot_value : undefined);
   const riskAmount = account.riskAmount ?? account.risk_amount
     ?? (accountRiskMode === 'fixed_cash' ? account.lot_value : undefined);
-  const riskBasis = account.riskBasis ?? account.risk_basis ?? lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis
+  const riskBasis = lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis ?? account.riskBasis ?? account.risk_basis
     ?? (mode === 'BALANCE_RISK_PERCENT' ? 'balance' : 'equity');
   return {
     ...account,
