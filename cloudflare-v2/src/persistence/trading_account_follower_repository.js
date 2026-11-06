@@ -79,15 +79,19 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       if (!workspaceId || !followerId || !parentId) throw new Error('FOLLOWER_LINK_REQUIRED');
       await verifyTradingStorageAuthority(authority, { postgresDatabase });
       await validateLink(workspaceId, followerId, parentId);
-      const enabled = input.enabled === undefined ? true : Boolean(input.enabled);
-      const lotMultiplier = positive(input.lotMultiplier ?? input.lot_multiplier, 1);
-      const fixedLot = input.fixedLot ?? input.fixed_lot;
-      const fixed = fixedLot == null || fixedLot === '' ? null : positive(fixedLot);
       const current = await getLink(workspaceId, followerId);
+      const enabled = input.enabled === undefined ? true : Boolean(input.enabled);
+      const has = (...keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(input, key));
+      const lotMultiplier = has('lotMultiplier', 'lot_multiplier')
+        ? positive(input.lotMultiplier ?? input.lot_multiplier, 1)
+        : positive(current?.lot_multiplier, 1);
+      const fixedLot = has('fixedLot', 'fixed_lot')
+        ? (input.fixedLot ?? input.fixed_lot)
+        : (current?.fixed_lot ?? null);
+      const fixed = fixedLot == null || fixedLot === '' ? null : positive(fixedLot);
       // A link re-save (for example, enabling/disabling or changing its
       // parent) must not silently reset an existing follower risk policy.
       // Only explicitly supplied risk fields are allowed to replace it.
-      const has = (...keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(input, key));
       const riskMode = has('riskMode', 'risk_mode')
         ? (text(input.riskMode ?? input.risk_mode) || 'fixed_lot')
         : (current?.risk_mode || 'fixed_lot');
