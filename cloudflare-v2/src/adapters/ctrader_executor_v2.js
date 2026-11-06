@@ -24,7 +24,7 @@ function extractFillPrice(message) {
 
 function extractConfirmedLots(message, protocolLotSize) {
   const payload = message?.payload || {};
-  const rawVolume = payload.deal?.filledVolume ?? payload.position?.volume ?? payload.order?.executedVolume ?? payload.order?.filledVolume;
+  const rawVolume = payload.deal?.filledVolume ?? payload.position?.volume;
   const volume = Number(rawVolume);
   const lotSize = Number(protocolLotSize);
   if (!(Number.isFinite(volume) && volume > 0 && Number.isFinite(lotSize) && lotSize > 0)) return null;
