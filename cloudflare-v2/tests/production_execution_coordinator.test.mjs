@@ -364,7 +364,7 @@ test('minimum-volume fallback authorization is still blocked when its risk overa
   assert.equal(dispatchCalls, 0);
   assert.equal(authorizationCalls, 0, 'fallback capability must not be minted before policy approval');
   assert.equal(summary.accounts[0].status, 'BLOCKED');
-  assert.ok(summary.accounts[0].actions[0].policy.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+  assert.ok(summary.accounts[0].policy.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
 });
 
 test('minimum-volume fallback capability is minted only after the coordinator approves policy', async () => {
