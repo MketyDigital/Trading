@@ -388,7 +388,7 @@ test('execution plan creates any number of risk-sized TP actions with 1% risk pe
     assert.equal(plan.status, 'READY', `plan status for ${targetCount} targets`);
     assert.equal(plan.risk.riskAmountPerLeg, 100);
     assert.equal(plan.risk.totalRiskAmount, 100 * targetCount);
-    assert.equal(plan.risk.totalLots, 0.1 * targetCount);
+    assert.ok(Math.abs(plan.risk.totalLots - (0.1 * targetCount)) < 1e-12, `aggregate lots for ${targetCount} targets`);
     assert.equal(plan.group.legs.length, targetCount);
     assert.equal(plan.actions.length, targetCount);
     assert.deepEqual(plan.actions.map((action) => action.takeProfit), takeProfits);
