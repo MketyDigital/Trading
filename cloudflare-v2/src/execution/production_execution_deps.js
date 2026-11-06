@@ -638,18 +638,29 @@ export function createProductionExecutionDependencies({
       currentMarketPrice: marketPrice,
       exposure,
     });
-    if (result?.allowed && result.action?.minimumVolumeFallbackAuthorized === true) {
-      // An in-memory capability survives coordinator object spreads but cannot
-      // be forged by JSON/API action input or by setting the public boolean.
-      Object.defineProperty(result.action, BROKER_MINIMUM_FALLBACK_AUTH, {
-        value: true,
-        enumerable: true,
-      });
-    }
+    const authorizeMinimumVolumeFallback = result?.allowed
+      && result.action?.minimumVolumeFallbackAuthorized === true
+      ? (candidateAction, policy) => {
+        const sameAuthorizedIntent = candidateAction?.type === result.action.type
+          && candidateAction?.idempotencyKey === result.action.idempotencyKey
+          && candidateAction?.symbol === result.action.symbol
+          && Number(candidateAction?.lots) === Number(result.action.lots)
+          && candidateAction?.minimumVolumeFallbackAuthorized === true;
+        if (policy?.allowed !== true || !sameAuthorizedIntent) return false;
+        // Mint only after the coordinator has approved the complete account
+        // policy (per-leg risk, floor tolerance, daily loss and open exposure).
+        Object.defineProperty(candidateAction, BROKER_MINIMUM_FALLBACK_AUTH, {
+          value: true,
+          enumerable: true,
+        });
+        return true;
+      }
+      : null;
     if (result?.allowed) rememberMt5ActionContext(account, result.action || action, context);
     return {
       ...result,
       policyRequest: result.policyContext,
+      ...(authorizeMinimumVolumeFallback ? { authorizeMinimumVolumeFallback } : {}),
     };
   }
 
