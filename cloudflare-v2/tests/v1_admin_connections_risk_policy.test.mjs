@@ -79,6 +79,38 @@ test('owner can configure balance-percent risk on exactly the selected account u
   assert.equal(fixture.calls.filter((call) => call[0] === 'updateAccount').length, 1);
 });
 
+test('admin may edit non-risk account details without changing existing owner-managed risk settings', async () => {
+  const fixture = makeRuntime('admin');
+  fixture.row.lot_sizing_type = 'risk_percent';
+  fixture.row.lot_value = 1;
+  fixture.row.lot_sizing_config = { riskBasis: 'balance', riskMode: 'percent' };
+  const response = await handleV1AdminConnectionsRequest(put({ label: 'Renamed account', roles: ['source'] }), {}, {
+    persistenceRuntime: fixture.runtime,
+    authorizeFn: fixture.authorizeFn,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(fixture.row.account_label, 'Renamed account');
+  assert.deepEqual(fixture.row.roles, ['source']);
+  assert.equal(fixture.row.lot_sizing_type, 'risk_percent');
+  assert.equal(fixture.row.lot_value, 1);
+  assert.deepEqual(fixture.row.lot_sizing_config, { riskBasis: 'balance', riskMode: 'percent' });
+});
+
+test('account list tells the dashboard that only the workspace owner can edit risk policy', async () => {
+  for (const [role, expected] of [['owner', true], ['admin', false]]) {
+    const fixture = makeRuntime(role);
+    fixture.runtime.accounts.listAccounts = async () => [{ ...fixture.row }];
+    const response = await handleV1AdminConnectionsRequest(new Request('https://trade.test/api/v1/admin/connections/accounts', { method: 'GET' }), {}, {
+      persistenceRuntime: fixture.runtime,
+      authorizeFn: fixture.authorizeFn,
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.riskPolicyEditable, expected);
+  }
+});
+
 test('admin with accounts.write cannot mutate account risk policy', async () => {
   const fixture = makeRuntime('admin');
   const response = await handleV1AdminConnectionsRequest(put({
