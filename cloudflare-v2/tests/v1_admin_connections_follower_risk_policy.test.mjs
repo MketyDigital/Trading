@@ -75,3 +75,18 @@ test('admin with accounts.write cannot change follower risk policy', async () =>
   assert.equal(fixture.calls.length, 0);
 });
 
+
+test('partial follower update does not inject default risk settings into repository input', async () => {
+  const fixture = makeFixture('owner');
+  const response = await handleV1AdminConnectionsRequest(followerPut({
+    enabled: true,
+    parentAccountId: 'parent-1',
+  }), {}, fixture.dependencies);
+
+  assert.equal(response.status, 200);
+  const write = fixture.calls.find((call) => call[0] === 'upsertLink');
+  assert.ok(write);
+  for (const key of ['riskMode', 'risk_mode', 'riskPercent', 'risk_percent', 'riskAmount', 'risk_amount', 'riskBasis', 'risk_basis']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(write[2], key), false, key);
+  }
+});
