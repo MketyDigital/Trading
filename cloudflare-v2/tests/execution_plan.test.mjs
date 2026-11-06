@@ -489,3 +489,14 @@ test('fixed-lot normalization does not round a genuinely fractional broker step 
   assert.equal(plan.status, 'READY');
   assert.equal(plan.actions[0].lots, 0.0000003);
 });
+
+test('fixed-lot planning rejects non-finite requested volume', () => {
+  assert.throws(() => buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:Number.POSITIVE_INFINITY},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    currentMarketPrice:2500,
+  }), /valid fixed lots and volume constraints/i);
+});
