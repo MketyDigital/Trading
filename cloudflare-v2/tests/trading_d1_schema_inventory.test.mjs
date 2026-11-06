@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareD1MigrationTableInventory } from '../scripts/trading_d1_schema_inventory.mjs';
+import { compareD1MigrationTableInventory, validateD1MigrationTableInventory } from '../scripts/trading_d1_schema_inventory.mjs';
 
 test('D1 schema inventory accepts the exact migration table set', () => {
   const migrationSql = `
@@ -20,4 +20,44 @@ test('D1 schema inventory rejects missing and unexpected tables', () => {
     actualTables: ['legacy_table', '_cf_unexpected'],
   }), { expectedCount: 1, actualCount: 2, missing: ['workspaces'], unexpected: ['_cf_unexpected', 'legacy_table'] });
   assert.throws(() => compareD1MigrationTableInventory({ migrationSql: '-- no tables', actualTables: [] }), /migration table inventory is empty/);
+});
+
+
+test('read-only D1 inspection may report expected tables that pending migrations will add', () => {
+  const inventory = {
+    expectedCount: 35,
+    actualCount: 34,
+    missing: ['trading_account_followers'],
+    unexpected: [],
+  };
+  assert.deepEqual(
+    validateD1MigrationTableInventory(inventory, { allowMissing: true }),
+    { ...inventory, exact: false },
+  );
+});
+
+test('D1 schema apply preflight remains strict about missing expected tables', () => {
+  const inventory = {
+    expectedCount: 35,
+    actualCount: 34,
+    missing: ['trading_account_followers'],
+    unexpected: [],
+  };
+  assert.throws(
+    () => validateD1MigrationTableInventory(inventory),
+    /Remote Trading D1 schema mismatch/,
+  );
+});
+
+test('read-only D1 inspection still rejects unexpected tables', () => {
+  const inventory = {
+    expectedCount: 35,
+    actualCount: 35,
+    missing: [],
+    unexpected: ['legacy_unexpected_table'],
+  };
+  assert.throws(
+    () => validateD1MigrationTableInventory(inventory, { allowMissing: true }),
+    /Remote Trading D1 schema mismatch/,
+  );
 });
