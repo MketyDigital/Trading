@@ -35,6 +35,8 @@ test('production schema migration is completed and verified before the Worker de
   assert.match(migrations, /ENCRYPT_D1_PRE_MIGRATION_EXPORT/);
   assert.match(migrations, /TRADING_PG_MIGRATION_OK=/);
   assert.match(migrations, /successful backup from the last 24 hours/);
+  assert.match(migrations, /Apply and verify D1 schema after PostgreSQL migration/);
+  assert.match(migrations, /result\.applied\.at\(-1\) === expectedMigrations\.at\(-1\)/);
 });
 
 test('production Worker push deploy is suppressed for this PR merge until the ordered release is dispatched', () => {
@@ -46,8 +48,10 @@ test('production Worker push deploy is suppressed for this PR merge until the or
 test('release verifies the deployed frontend and connection readiness before publishing MT5', () => {
   assert.match(release, /frontend_verification:[\s\S]*?needs: deploy_worker[\s\S]*?uses: \.\/\.github\/workflows\/production-frontend-e2e\.yml/);
   assert.match(frontend, /workflow_call:/);
+  assert.match(frontend, /orchestrated-risk-release/);
   assert.match(release, /connection_readiness:[\s\S]*?needs: frontend_verification[\s\S]*?uses: \.\/\.github\/workflows\/production-connection-readiness\.yml/);
   assert.match(readiness, /workflow_call:/);
+  assert.match(readiness, /orchestrated-risk-release/);
   assert.match(release, /publish_mt5_connector:[\s\S]*?needs: connection_readiness[\s\S]*?uses: \.\/\.github\/workflows\/mt5-connector-release\.yml/);
   assert.match(release, /release_tag: \$\{\{ inputs\.mt5_release_tag \}\}/);
   assert.match(mt5, /workflow_call:[\s\S]*?release_tag:[\s\S]*?required: true/);
