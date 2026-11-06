@@ -654,7 +654,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
       .filter(({ destination }) => destination)
       .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
       .map(({ destination }) => text(destination.destination_ref)).filter(Boolean);
-    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime);
+    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers));
   }
 
   const { data: routesData, error: routeError } = await supabase
@@ -731,10 +731,18 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
   }
 }
 
-async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime) {
+async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, followerProcessingEnabled = false) {
   const refs = [...new Set(parentRefs.map(text).filter(Boolean))];
   const parentIds = refs.map((ref) => text(ref).replace(/^trade-account:/, '')).filter(Boolean);
-  if (!parentIds.length || typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') return refs;
+  if (!parentIds.length) return refs;
+  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') {
+    if (followerProcessingEnabled) {
+      const error = new Error('follower routing repository is unavailable');
+      error.code = 'FOLLOWER_LINK_STORAGE_UNAVAILABLE';
+      throw error;
+    }
+    return refs;
+  }
   try {
     const links = await persistenceRuntime.accountFollowers.listEnabledByParents(workspaceId, parentIds);
     const seen = new Set(refs);
