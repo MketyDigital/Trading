@@ -44,13 +44,20 @@ test('additive follower-risk migration leaves existing account sizing and execut
   sqlite.exec(readFileSync(new URL('../db/d1-migrations/0004_account_followers.sql', import.meta.url), 'utf8'));
   sqlite.prepare(`INSERT INTO trading_workspace_access(id) VALUES ('ws')`).run();
   sqlite.prepare(`INSERT INTO trade_accounts(id,workspace_id,account_label,platform,account_id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy)
-    VALUES ('existing','ws','Existing','mt5','100','fixed','0.03','{}',1,0,'{"killSwitch":true}')`).run();
+    VALUES ('existing','ws','Existing','mt5','100','fixed','0.03','{}',1,0,'{"killSwitch":true}'),
+      ('parent','ws','Parent','mt5','101','fixed','0.02','{}',1,0,'{"killSwitch":true}'),
+      ('follower','ws','Follower','mt5','102','fixed','0.01','{}',1,0,'{"killSwitch":true}')`).run();
+  sqlite.prepare(`INSERT INTO trading_account_followers(id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot)
+    VALUES ('existing-link','ws','follower','parent',1,'0.75','0.04')`).run();
 
   const before = sqlite.prepare(`SELECT id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy FROM trade_accounts WHERE id='existing'`).get();
+  const followerBefore = sqlite.prepare(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot FROM trading_account_followers WHERE id='existing-link'`).get();
   sqlite.exec(readFileSync(new URL('../db/d1-migrations/0006_account_follower_risk_sizing.sql', import.meta.url), 'utf8'));
   const after = sqlite.prepare(`SELECT id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy FROM trade_accounts WHERE id='existing'`).get();
+  const followerAfter = sqlite.prepare(`SELECT id,workspace_id,follower_account_id,parent_account_id,enabled,lot_multiplier,fixed_lot FROM trading_account_followers WHERE id='existing-link'`).get();
 
   assert.deepEqual(after, before);
+  assert.deepEqual(followerAfter, followerBefore);
   const followerColumns = new Set(sqlite.prepare(`PRAGMA table_info(trading_account_followers)`).all().map((column) => column.name));
   for (const column of ['risk_mode', 'risk_percent', 'risk_amount', 'risk_basis']) assert.equal(followerColumns.has(column), true);
 });
