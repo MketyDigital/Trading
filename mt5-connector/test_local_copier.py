@@ -38,7 +38,7 @@ class LocalCopierTests(unittest.TestCase):
                                                        'entry_price': 100.0, 'sl': 90.0, 'tp': 120.0,
                                                        'stop_limit_price': None,
                                                        'time_type': 0, 'expiration': 0,
-                                                       'volume_min': 0.1, 'volume_max': None, 'volume_step': 0.1}])
+                                                       'volume_min': 0.1, 'volume_max': 100.0, 'volume_step': 0.1, 'loss_per_lot_at_stop': None}])
 
 
     def test_risk_sizing_uses_mt5_step_multiples_and_respects_minimum(self):
@@ -192,7 +192,7 @@ class LocalCopierTests(unittest.TestCase):
         }]}
         follower = {'complete': True, 'positions': [], 'pending_orders': [{
             'ticket': 'copy-20', 'source_ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY',
-            'order_type': 'LIMIT', 'volume': 0.1, 'volume_min': 0.01, 'volume_step': 0.01,
+            'order_type': 'LIMIT', 'volume': 0.1, 'volume_min': 0.01, 'volume_max': 100.0, 'volume_step': 0.01,
             'entry_price': 1.08, 'sl': None, 'tp': None,
         }]}
         actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
@@ -296,7 +296,7 @@ class LocalCopierTests(unittest.TestCase):
     def test_partial_close_below_broker_minimum_is_not_rounded_up(self):
         parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.19, 'sl': 0, 'tp': 0}]}
         follower = {'positions': [{'ticket': 'copy-33', 'source_ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 1.0,
-                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.1, 'volume_step': 0.1}]}
+                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.1, 'volume_max': 100.0, 'volume_step': 0.1}]}
         self.assertEqual(plan_snapshot_actions(parent, follower, fixed_lot=1.0), [])
 
     def test_closed_source_is_not_replayed_by_journal(self):
