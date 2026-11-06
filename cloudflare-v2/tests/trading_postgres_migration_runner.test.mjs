@@ -23,7 +23,9 @@ const safeSchemaState = {
   active_authority: 'd1',
   writes_fenced: true,
   control_count: 3,
-  disabled_control_count: 3,
+  disabled_control_count: 2,
+  execution_control_count: 2,
+  disabled_execution_control_count: 2,
   schema_owner: 'trading_owner',
   unsafe_definer_owner_count: 0,
   public_definer_execute_count: 0
