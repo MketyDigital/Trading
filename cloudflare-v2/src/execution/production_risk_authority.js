@@ -144,7 +144,7 @@ export function validateProductionRiskAction({
       balance: brokerBalance(brokerAccount),
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode) ? riskPercent : undefined,
       riskAmount: riskAmountOverridesPercent || mode === 'FIXED_RISK' ? explicitRiskAmount : undefined,
-      riskBasis: mode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (String(account.riskBasis ?? account.risk_basis ?? 'EQUITY').trim().toUpperCase() === 'BALANCE' ? 'BALANCE' : 'EQUITY'),
+      riskBasis: mode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.riskBasis ?? account.risk_basis ?? (brokerEquity(brokerAccount) != null ? 'EQUITY' : 'BALANCE')),
       entry,
       stopLoss,
       targetCount: 1,
