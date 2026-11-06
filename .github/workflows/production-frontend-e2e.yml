@@ -21,7 +21,15 @@ env:
 
 jobs:
   browser-e2e:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      ${{
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          !contains(github.event.workflow_run.head_commit.message, '[orchestrated-risk-release]') &&
+          !contains(github.event.workflow_run.head_commit.message, 'feature/per-account-risk-sizing')
+        )
+      }}
     runs-on: ubuntu-latest
     environment: staging
     steps:
