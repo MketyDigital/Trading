@@ -74,6 +74,8 @@ test('owner can configure balance-percent risk on exactly the selected account u
   assert.equal(fixture.row.safety_policy.maxOpenRiskPercent, 4);
   assert.equal(fixture.row.safety_policy.maxDailyLossPercent, 5);
   assert.equal(fixture.row.safety_policy.killSwitch, true);
+  assert.equal(fixture.row.is_active, false);
+  assert.equal(fixture.row.execution_enabled, false);
   assert.equal(fixture.calls.filter((call) => call[0] === 'updateAccount').length, 1);
 });
 
