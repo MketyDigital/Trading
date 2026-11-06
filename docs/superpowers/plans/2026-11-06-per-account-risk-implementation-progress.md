@@ -188,3 +188,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Rechecked the migration inventory and found that `cloudflare-v2/db/migrations` is the retired public-schema/RLS migration track. Removed the previously created `0052_account_follower_risk_sizing.sql` from the feature branch.
 - Follower-risk schema changes now exist only in the current D1 migration track (`0006`) and the namespaced PostgreSQL track (`0006`) used by the current storage architecture. No new migration was added to the retired public-schema track.
 - The original historical `0046` file remains restored to `main`; existing `0051` and `0005` files remain untouched.
+
+
+### 2026-11-06 — local MT5 copier ownership and opt-in review
+
+- Reviewed the local MT5 copier profile manager, persisted profile metadata, supervisor, worker and risk-sizing engine.
+- New local profiles default to no copy role, `copy_enabled=false`, and fixed-lot mode; saving a profile does not start a copier worker.
+- Local risk changes are made through the locally controlled profile manager, which is the ownership boundary for this desktop-only feature. The user must explicitly configure the follower and confirm the separate `Start local copy` action; the UI warns that broker orders may be opened immediately.
+- Changing an active local pair stops its worker before writing the new startup risk policy. Each risk-sized copy uses the follower terminal's own account funds and mapped symbol's contract/SL economics; missing risk data or a below-minimum volume fails closed.
+- Added the local copier opt-in and profile-ownership boundary to `docs/LOT_SIZING_MODES.md`.
