@@ -147,3 +147,13 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Follower independent risk planning/revalidation: code path reviewed and balance-basis regression added; remaining end-to-end dispatch/failure-isolation acceptance still required.
 - cTrader risk-sized OPEN: fail-closed code path retained and regression added; CI pending.
 - Production deployment/restart acceptance: not yet fully proven; no deployment has been performed.
+
+
+### 2026-11-06 — latest implementation additions
+
+- Added an end-to-end coordinator regression where one follower's broker-risk context fails while the explicitly routed parent and a sibling follower still dispatch successfully. The test also verifies that each account plan receives its own follower risk mode/amount/percentage.
+- Added production dependency coverage proving follower risk is recalculated from a fresh broker account snapshot on every OPEN dispatch; the test changes the follower's balance between reads and expects the monetary budget and lots to be recalculated downward.
+- Added a cTrader regression for risk-sized OPEN rejection and a D1 migration non-mutation test for existing account sizing/execution state.
+- Added owner onboarding coverage for fixed-cash risk stored using the canonical `risk_percent` type, with `riskMode=fixed_cash` and cash value above 100. This avoids misinterpreting a cash budget as a percentage.
+- Corrected onboarding validation to determine percentage-vs-cash validation from the explicit persisted risk mode.
+- Latest code/test commit: `ba263f87`. Trading V1 CI run #3514 was created for an earlier code commit and remains queued; it does not include these newest onboarding tests. A new latest-head CI result is required before any implementation can be called verified.
