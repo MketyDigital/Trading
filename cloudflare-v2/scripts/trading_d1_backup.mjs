@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { decryptSecret, deriveSecretBoxKeyBytes } from '../src/security/secret_box.js';
 
-const MAGIC = Buffer.from('MKETY-TRADING-D1-BACKUP-V2\\n', 'ascii');
+const MAGIC = Buffer.from('MKETY-TRADING-D1-BACKUP-V2\n', 'ascii');
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
