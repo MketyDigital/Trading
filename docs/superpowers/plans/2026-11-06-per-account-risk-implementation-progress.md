@@ -244,3 +244,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Restored that legacy fixed/adaptive minimum-floor contract while keeping the new risk-sizing path's separate monetary-risk tolerance and FLOOR/REJECT controls authoritative. This does not weaken the risk-sized OPEN checks.
 - Replaced the contradictory fixed-lot rejection test with a regression proving an existing fixed-lot account still produces the same broker-minimum volume as `main`.
 - Runtime fix commit: `3125afff`; regression commit: `332f8dab`. A fresh Trading V1 run is required to verify the fix.
+
+
+### 2026-11-06 — first green full Trading V1 and MT5 compatibility run
+
+- Trading V1 CI #3550 passed all Worker/trading-core tests, pure MT5 bridge tests, and pure MTProto Python tests on the feature code including the legacy minimum-volume compatibility correction.
+- MT5 Compatibility CI #138 passed.
+- cTrader cBot CI #539 is still queued; MT5 Connector Release #299 has passed connector unit tests and produced the Windows executable, with packaged entrypoint smoke tests still running.
+- Trading V1's production deployment/acceptance/inventory jobs were skipped for this pull request. No production deployment or storage migration was run.
+- The remaining release blockers are cTrader CI, connector packaged smoke/artifact completion, final diff review, migration upgrade/rollback acceptance, non-production UI/dispatch acceptance, and owner-approved release decision.
