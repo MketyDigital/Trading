@@ -19,7 +19,9 @@ function constraints(instrument = {}) {
   const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
   const minIndex = Math.ceil((min / step) - stepIndexTolerance(min / step));
   const maxIndex = Math.floor((max / step) + stepIndexTolerance(max / step));
-  if (maxIndex < minIndex) throw new RangeError('broker volume constraints have no executable lot size');
+  if (!Number.isFinite(minIndex) || !Number.isFinite(maxIndex) || maxIndex < minIndex) {
+    throw new RangeError('broker volume constraints have no executable lot size');
+  }
   return { step, minIndex, maxIndex, precision: decimals(step) };
 }
 
