@@ -217,15 +217,17 @@ test('risk-based sizing stays blocked when the only stop is invalid even under s
 });
 
 
-test('fixed lots below broker minimum fail closed instead of silently increasing exposure', () => {
-  assert.throws(() => buildExecutionPlan({
+test('legacy fixed-lot sizing preserves broker-minimum flooring for existing accounts', () => {
+  const plan = buildExecutionPlan({
     side:'BUY', orderType:'MARKET', symbol:{canonical:'DERIV:VOLATILITY_75_1S'},
     entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
   }, {
     account:{sizingMode:'FIXED_LOTS',fixedLots:0.01,safetyPolicy:{enabled:true,killSwitch:false}},
     instrument:{minLots:0.05,maxLots:100,stepLots:0.05},
     currentMarketPrice:6000,
-  }), (error) => error?.code === 'FIXED_LOTS_BELOW_BROKER_MINIMUM');
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.05);
 });
 
 test('fixed lots are floored to the broker step without exceeding the configured preference', () => {
