@@ -50,11 +50,14 @@ function sizingConfigFor(type, raw = {}) {
     return percent > 0 && percent <= 100 ? { percent } : null;
   }
   if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(type)) {
+    const allowedKeys = new Set(['riskBasis', 'risk_basis', 'riskMode', 'risk_mode']);
+    if (Object.keys(config).some((key) => !allowedKeys.has(key))) return null;
     const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (type === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
-    if (!['equity', 'balance'].includes(riskBasis)
+    const riskMode = String(config.riskMode ?? config.risk_mode ?? (type === 'fixed_risk' ? 'fixed_cash' : 'percent')).trim().toLowerCase();
+    if (!['equity', 'balance'].includes(riskBasis) || !['percent', 'fixed_cash'].includes(riskMode)
       || (type === 'balance_risk_percent' && riskBasis !== 'balance')
       || (type === 'equity_risk_percent' && riskBasis !== 'equity')) return null;
-    return { riskBasis, riskMode: type === 'fixed_risk' ? 'fixed_cash' : 'percent' };
+    return { riskBasis, riskMode };
   }
   return {};
 }
@@ -144,10 +147,12 @@ function parseAccountCreation(body) {
     && !['equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedLotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
-  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent'].includes(requestedLotSizingType) && !(Number(lotValue) <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
   const normalizedSizingConfig = sizingConfigFor(requestedLotSizingType, lotSizingConfig);
   if (!normalizedSizingConfig) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
+  }
+  if (lotSizingType === 'risk_percent' && normalizedSizingConfig.riskMode === 'percent' && !(Number(lotValue) <= 100)) {
+    return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
   }
 
   try {
