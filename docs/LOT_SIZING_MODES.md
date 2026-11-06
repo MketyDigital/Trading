@@ -91,3 +91,8 @@ Fixed, adaptive, symbol-equivalent and balance-percent lot values are interprete
 ## Deployment note
 
 MT5 `symbol_equivalent` and `balance_percent` require the connector build that supports `sizing_request`. Existing `fixed` accounts remain compatible with older connector builds and are not changed by this feature.
+
+
+### Local MT5 copier boundary
+
+The local MT5 copier is a separate, explicitly opt-in profile feature. New profiles default to `copy_enabled=false`, `copy_role=none`, and `copy_risk_mode=fixed_lot`; saving a profile does not start a worker. A local profile owner must explicitly configure the follower and start its worker. Changing settings stops the existing pair worker before writing the new startup policy. Local copier risk is calculated from the follower terminal's own broker snapshot, not from the parent's account metrics.
