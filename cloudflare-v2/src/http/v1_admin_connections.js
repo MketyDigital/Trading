@@ -12,6 +12,7 @@ const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server
 const SOURCE_SELECT = 'id,workspace_id,source_type,source_instance_id,display_name,is_active,source_family,provider_type,is_default,priority,external_identity,public_source_handle,config,provider_secret_ciphertext,health_status,last_heartbeat_at,last_event_at,last_connected_at,last_disconnected_at,restart_count,last_error_code';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
 const RISK_SIZING_TYPES = new Set(['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk']);
+const CANONICAL_RISK_SIZING_TYPE = 'risk_percent';
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -333,14 +334,14 @@ async function handleAccountConnection(request, authorization, supabase, account
       if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', ...RISK_SIZING_TYPES].includes(sizingType)) {
         return json({ ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' }, 400);
       }
-      update.lot_sizing_type = sizingType;
+      update.lot_sizing_type = RISK_SIZING_TYPES.has(sizingType) ? CANONICAL_RISK_SIZING_TYPE : sizingType;
     }
     if ('lotValue' in body || 'lot_value' in body) {
       const lot = Number(body.lotValue ?? body.lot_value);
       if (!(lot > 0)) return json({ ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' }, 400);
       update.lot_value = lot;
     }
-    if ('lotSizingConfig' in body || 'lot_sizing_config' in body) {
+    if ('lotSizingConfig' in body || 'lot_sizing_config' in body || RISK_SIZING_TYPES.has(requestedSizingType)) {
       const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
       if (requestedType === 'adaptive_percent') {
@@ -361,12 +362,15 @@ async function handleAccountConnection(request, authorization, supabase, account
           return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_INVALID' }, 400);
         }
         update.lot_sizing_config = { percent };
-      } else if (RISK_SIZING_TYPES.has(requestedType)) {
-        const allowedKeys = new Set(['riskBasis', 'risk_basis']);
+      } else if (RISK_SIZING_TYPES.has(requestedSizingType) || RISK_SIZING_TYPES.has(requestedType)) {
+        const allowedKeys = new Set(['riskBasis', 'risk_basis', 'riskMode', 'risk_mode']);
         if (Object.keys(config).some((key) => !allowedKeys.has(key))) return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_INVALID' }, 400);
-        const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (requestedType === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
-        if (!['equity', 'balance'].includes(riskBasis) || (requestedType === 'balance_risk_percent' && riskBasis !== 'balance') || (requestedType === 'equity_risk_percent' && riskBasis !== 'equity')) return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_INVALID' }, 400);
-        update.lot_sizing_config = { riskBasis };
+        const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (requestedSizingType === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
+        const riskMode = String(config.riskMode ?? config.risk_mode ?? (requestedSizingType === 'fixed_risk' ? 'fixed_cash' : 'percent')).trim().toLowerCase();
+        if (!['equity', 'balance'].includes(riskBasis) || !['percent', 'fixed_cash'].includes(riskMode)
+          || (requestedSizingType === 'balance_risk_percent' && riskBasis !== 'balance')
+          || (requestedSizingType === 'equity_risk_percent' && riskBasis !== 'equity')) return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_INVALID' }, 400);
+        update.lot_sizing_config = { riskBasis, riskMode };
       } else {
         update.lot_sizing_config = {};
       }
@@ -393,11 +397,10 @@ async function handleAccountConnection(request, authorization, supabase, account
       if (!RISK_SIZING_TYPES.has(currentSizingType) && !('lotValue' in body) && !('lot_value' in body)) {
         return json({ ok: false, reason: 'ACCOUNT_RISK_PERCENT_REQUIRED' }, 400);
       }
-      const riskPercent = Number(update.lot_value ?? current.lot_value);
-      const basis = String(effectiveConfig.riskBasis ?? effectiveConfig.risk_basis ?? (effectiveSizingType === 'balance_risk_percent' ? 'balance' : 'equity')).toLowerCase();
-      if (!(riskPercent > 0) || (effectiveSizingType !== 'fixed_risk' && riskPercent > 100) || !['equity', 'balance'].includes(basis)
-        || (effectiveSizingType === 'balance_risk_percent' && basis !== 'balance')
-        || (effectiveSizingType === 'equity_risk_percent' && basis !== 'equity')) {
+      const riskValue = Number(update.lot_value ?? current.lot_value);
+      const basis = String(effectiveConfig.riskBasis ?? effectiveConfig.risk_basis ?? 'equity').toLowerCase();
+      const riskMode = String(effectiveConfig.riskMode ?? effectiveConfig.risk_mode ?? 'percent').toLowerCase();
+      if (!(riskValue > 0) || (riskMode === 'percent' && riskValue > 100) || !['equity', 'balance'].includes(basis) || !['percent', 'fixed_cash'].includes(riskMode)) {
         return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_REQUIRED' }, 400);
       }
     }
