@@ -350,7 +350,8 @@ async function handleAccountConnection(request, authorization, supabase, account
     }
     if ('lotSizingConfig' in body || 'lot_sizing_config' in body || 'lotSizingType' in body || 'lot_sizing_type' in body) {
       const hasExplicitSizingType = 'lotSizingType' in body || 'lot_sizing_type' in body;
-      const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config ?? (hasExplicitSizingType ? {} : current.lot_sizing_config));
+      const suppliedConfig = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
+      const config = hasExplicitSizingType ? suppliedConfig : { ...safeObject(current.lot_sizing_config), ...suppliedConfig };
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
       if (requestedType === 'adaptive_percent') {
         const percent = Number(config.percent);
