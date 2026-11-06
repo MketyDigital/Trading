@@ -197,3 +197,13 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Local risk changes are made through the locally controlled profile manager, which is the ownership boundary for this desktop-only feature. The user must explicitly configure the follower and confirm the separate `Start local copy` action; the UI warns that broker orders may be opened immediately.
 - Changing an active local pair stops its worker before writing the new startup risk policy. Each risk-sized copy uses the follower terminal's own account funds and mapped symbol's contract/SL economics; missing risk data or a below-minimum volume fails closed.
 - Added the local copier opt-in and profile-ownership boundary to `docs/LOT_SIZING_MODES.md`.
+
+
+### 2026-11-06 — owner-only dashboard controls
+
+- Extended the unified trading-account dashboard to display the account's risk mode, risk basis, and configured risk limits.
+- The account-list API now returns an owner capability flag for the active D1 path. The dashboard only presents the risk configuration workflow when that flag confirms the current workspace membership is `owner`.
+- Owners can configure percentage or fixed-cash risk, equity/balance basis, per-leg/open/daily caps, broker-minimum tolerance and FLOOR/REJECT behaviour from the selected account's Edit flow.
+- Admins do not see risk-mode controls. They can still edit non-risk account details (label/roles) without touching existing owner-managed risk settings; backend checks remain authoritative.
+- Added API tests for owner capability metadata, admin non-risk edits on risk-configured accounts, and preservation of an already-active/live-enabled account's execution flags when its owner edits risk settings.
+- The legacy public-schema account-list response was intentionally left unchanged; the active D1 path carries the owner capability metadata.
