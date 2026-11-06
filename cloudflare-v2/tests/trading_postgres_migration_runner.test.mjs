@@ -7,7 +7,7 @@ const migrations = [
   { name: '0001_trading_storage_replication_authority.sql', sql: 'CREATE SCHEMA IF NOT EXISTS trading_storage;' },
   { name: '0002_trading_domain_schema.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.example (id integer);' },
   { name: '0003_trading_replication_health.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.health (id integer);' },
-  { name: '0004_account_followers.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);' },
+  { name: '0004_account_followers.sql', sql: 'BEGIN;\\nCREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);\\nCOMMIT;' },
   { name: '0005_broker_observation_due_index.sql', sql: 'CREATE INDEX IF NOT EXISTS idx_test_due ON trading_storage.position_legs(status);' },
   { name: '0006_account_follower_risk_sizing.sql', sql: 'ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT \'fixed_lot\';' }
 ];
@@ -81,7 +81,10 @@ test('PostgreSQL schema installer applies only approved migrations in one transa
   assert.ok(queries.includes('CREATE ROLE trading_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT'));
   assert.ok(queries.includes('CREATE SCHEMA trading_storage AUTHORIZATION trading_owner'));
   assert.ok(queries.includes('SET LOCAL ROLE trading_owner'));
-  assert.ok(migrations.every(({ sql }) => queries.includes(sql)));
+  assert.ok(migrations.every(({ sql }) => {
+    const transactionalSql = sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
+    return queries.includes(transactionalSql);
+  }));
   assert.ok(queries.includes('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())'));
   assert.doesNotMatch(JSON.stringify(result), /secret|private\.invalid/);
 });
@@ -244,7 +247,11 @@ test('existing PostgreSQL schema applies only the unapplied additive migration s
     alreadyApplied: false,
   });
   assert.ok(calls.includes('SET LOCAL ROLE trading_owner'));
-  for (const migration of migrations.slice(3)) assert.ok(calls.includes(migration.sql));
+  for (const migration of migrations.slice(3)) {
+    const transactionalSql = migration.sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
+    assert.ok(calls.includes(transactionalSql));
+    if (/^\\s*BEGIN\\s*;/i.test(migration.sql)) assert.equal(calls.includes(migration.sql), false);
+  }
   assert.equal(calls.filter((sql) => typeof sql === 'string' && sql.startsWith('CREATE SCHEMA')).length, 0);
   assert.ok(calls.includes('COMMIT'));
   assert.equal(calls.includes('ROLLBACK'), false);
