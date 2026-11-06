@@ -233,7 +233,12 @@ test('LIVE fixed-lot planning still fails closed for symbols absent from the aut
   });
 });
 
-test('enabled follower routing fails closed when follower links cannot be read', async () => {
+test('follower link lookup failure preserves explicit parent route and omits follower fanout', async () => {
+  const parent = {
+    id: 'parent-a', workspace_id: 'workspace-1', platform: 'mt5', is_active: true,
+    lot_sizing_type: 'fixed', lot_value: 0.1,
+    provider_config: { symbolCatalog: [{ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }] },
+  };
   const supabase = {
     from(table) {
       if (table === 'source_destination_routes') return {
@@ -241,14 +246,16 @@ test('enabled follower routing fails closed when follower links cannot be read',
         order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
       };
       if (table === 'trading_destinations') return {
-        select() { return this; }, eq() { return this; }, in: async () => ({
-          data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }],
-          error: null,
-        }),
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
       };
       if (table === 'trading_account_followers') return {
         select() { return this; }, eq() { return this; }, in() { return this; },
         order: async () => ({ data: null, error: { message: 'temporary follower storage failure' } }),
+      };
+      if (table === 'trade_accounts') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [parent], error: null }),
       };
       throw new Error('unexpected table ' + table);
     },
@@ -260,18 +267,16 @@ test('enabled follower routing fails closed when follower links cannot be read',
     event: { workspace_hint: 'workspace-1' },
   });
 
-  await assert.rejects(
-    () => deps.accountProvider(),
-    (error) => error?.code === 'FOLLOWER_LINK_LOAD_FAILED',
-  );
+  const accounts = await deps.accountProvider();
+  assert.deepEqual(accounts.map((row) => row.id), ['parent-a']);
 });
 
-
-test('enabled follower decoration fails closed when a follower risk policy cannot be loaded', async () => {
+test('one batched follower lookup decorates follower risk policy without a second query', async () => {
+  const catalog = [{ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }];
   const accountRows = ['parent-a', 'follower-a'].map((id) => ({
     id, workspace_id: 'workspace-1', platform: 'mt5', is_active: true,
     lot_sizing_type: 'risk_percent', lot_value: 5,
-    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }] },
+    provider_config: { symbolCatalog: catalog },
   }));
   let followerLookupCount = 0;
   const supabase = {
@@ -286,18 +291,13 @@ test('enabled follower decoration fails closed when a follower risk policy canno
       };
       if (table === 'trading_account_followers') {
         followerLookupCount += 1;
-        const lookup = {
-          select() { return this; }, eq() { return this; },
-          in(column) {
-            if (column === 'parent_account_id') return this;
-            return Promise.resolve({ data: null, error: { message: 'follower risk lookup failed' } });
-          },
+        return {
+          select() { return this; }, eq() { return this; }, in() { return this; },
           order: async () => ({
-            data: [{ follower_account_id: 'follower-a', parent_account_id: 'parent-a', risk_mode: 'equity_percent', risk_percent: 1, risk_basis: 'equity', enabled: true }],
+            data: [{ follower_account_id: 'follower-a', parent_account_id: 'parent-a', lot_multiplier: 1, fixed_lot: null, risk_mode: 'equity_percent', risk_percent: 1, risk_amount: null, risk_basis: 'balance', enabled: true }],
             error: null,
           }),
         };
-        return lookup;
       }
       if (table === 'trade_accounts') return {
         select() { return this; }, eq() { return this; },
@@ -313,13 +313,12 @@ test('enabled follower decoration fails closed when a follower risk policy canno
     event: { workspace_hint: 'workspace-1' },
   });
 
-  await assert.rejects(
-    () => deps.accountProvider(),
-    (error) => error?.code === 'FOLLOWER_LINK_LOAD_FAILED',
-  );
-  assert.equal(followerLookupCount, 2);
+  const accounts = await deps.accountProvider();
+  assert.deepEqual(accounts.map((row) => row.id), ['parent-a', 'follower-a']);
+  assert.equal(accounts[1].followerLink.risk_mode, 'equity_percent');
+  assert.equal(accounts[1].copiedFromAccountId, 'parent-a');
+  assert.equal(followerLookupCount, 1);
 });
-
 
 test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
   const account = {
