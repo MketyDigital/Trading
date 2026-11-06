@@ -227,3 +227,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Reviewed the MT5 connector release workflow: on a pull request it only builds, tests, smoke-tests and uploads a Windows artifact. Publishing a versioned connector release is gated to a tag or an explicit dispatch from `main`; this PR run is not publishing a release.
 - Latest-head CI run #3543 is running on PR head `985d9c231dfb4544fcb2b78afc651e25517f5417`. MT5 Compatibility CI #131 has passed. cTrader cBot CI #532 is queued. MT5 Connector Release #292 is packaging/testing only and currently building the artifact.
 - No production deployment, release publication, schema application, or account-policy write has occurred.
+
+
+### 2026-11-06 — execution-plan CI diagnosis follow-up
+
+- Trading V1 CI #3543 reached the test step and still failed in `execution_plan.test.mjs`; the captured log was cut off during TAP output before the failing assertion, so it did not provide enough evidence to make a safe runtime change.
+- Updated `cloudflare-v2/scripts/test_ci_diagnostic.mjs` to use Node's concise `spec` test reporter per file. The next run should expose the actual failing assertion rather than truncating the useful detail behind successful TAP output.
+- Latest diagnostic-script commit: `80f3c9be`. Trading V1 CI #3546 is running against that commit. MT5 Compatibility CI #134 is green; cTrader CI #535 and connector packaging run #295 are in progress/queued.
+- No production state or deployment has been touched. The failing execution-plan suite remains a release blocker until its exact failure is diagnosed and corrected, then latest-head CI passes.
