@@ -43,7 +43,7 @@ jobs:
             echo "Exact production release confirmation is required."
             exit 1
           }
-          [[ "$MT5_RELEASE_TAG" =~ ^mt5-connector-v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || {
+          [[ "$MT5_RELEASE_TAG" =~ ^mt5-connector-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
             echo "MT5 release tag must use mt5-connector-vMAJOR.MINOR.PATCH."
             exit 1
           }
