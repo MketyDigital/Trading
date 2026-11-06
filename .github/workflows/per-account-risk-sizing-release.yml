@@ -1,0 +1,86 @@
+name: Per-account Risk Sizing Production Release
+# One-click, ordered release: schema migrations -> Worker -> read-only verification -> MT5 package.
+# The PostgreSQL target is the existing production mkety database, not an isolated staging database.
+# The D1 resource is the existing Trading D1 bound to the production Worker.
+on:
+  workflow_dispatch:
+    inputs:
+      release_confirmation:
+        description: Type RELEASE_PER_ACCOUNT_RISK_SIZING_TO_PRODUCTION to authorize this ordered production release
+        required: true
+        type: string
+      mt5_release_tag:
+        description: New MT5 connector version tag (current latest is v1.1.16)
+        required: true
+        type: string
+        default: mt5-connector-v1.1.17
+
+permissions:
+  contents: read
+
+concurrency:
+  group: per-account-risk-sizing-production-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require main branch and exact release confirmation
+        shell: bash
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.release_confirmation }}
+          MT5_RELEASE_TAG: ${{ inputs.mt5_release_tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Production release may run only from main."
+            exit 1
+          }
+          test "$RELEASE_CONFIRMATION" = "RELEASE_PER_ACCOUNT_RISK_SIZING_TO_PRODUCTION" || {
+            echo "Exact production release confirmation is required."
+            exit 1
+          }
+          [[ "$MT5_RELEASE_TAG" =~ ^mt5-connector-v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || {
+            echo "MT5 release tag must use mt5-connector-vMAJOR.MINOR.PATCH."
+            exit 1
+          }
+          existing_sha="$(git ls-remote --tags "https://github.com/MketyDigital/Trading.git" "refs/tags/$MT5_RELEASE_TAG" | awk 'NR==1 {print $1}')"
+          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$GITHUB_SHA" ]; then
+            echo "Requested MT5 release tag already points to a different commit."
+            exit 1
+          fi
+          echo "Release preflight passed for exact main commit and MT5 tag."
+
+  schema:
+    needs: preflight
+    uses: ./.github/workflows/trading-v1-ci.yml
+    with:
+      mode: apply-existing-mkety-schema
+      confirmation: APPLY_TRADING_STORAGE_SCHEMA
+    secrets: inherit
+
+  deploy_worker:
+    needs: schema
+    uses: ./.github/workflows/production-cloudflare-deploy.yml
+    secrets: inherit
+
+  frontend_verification:
+    needs: deploy_worker
+    uses: ./.github/workflows/production-frontend-e2e.yml
+
+  connection_readiness:
+    needs: frontend_verification
+    uses: ./.github/workflows/production-connection-readiness.yml
+    secrets: inherit
+
+  publish_mt5_connector:
+    needs: connection_readiness
+    permissions:
+      contents: write
+    uses: ./.github/workflows/mt5-connector-release.yml
+    with:
+      release_tag: ${{ inputs.mt5_release_tag }}
+    secrets: inherit
