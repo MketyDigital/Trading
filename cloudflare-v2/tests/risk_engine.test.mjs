@@ -207,3 +207,34 @@ test('risk plan retains exact monetary exposure alongside rounded display values
   assert.equal(plan.estimatedRiskExact, 1.004);
   assert.equal(plan.estimatedRiskPerLegExact, 1.004);
 });
+
+test('rejects non-finite account equity and instrument tick economics', () => {
+  const validInstrument = {
+    tickSize: 1,
+    tickValuePerLot: 10,
+    minLots: 0.01,
+    maxLots: 100,
+    stepLots: 0.01,
+  };
+  assert.throws(() => calculateRiskPlan({
+    equity: Number.POSITIVE_INFINITY,
+    riskPercent: 1,
+    entry: 100,
+    stopLoss: 90,
+    instrument: validInstrument,
+  }), /equity.*required/i);
+  assert.throws(() => calculateRiskPlan({
+    equity: 1000,
+    riskPercent: 1,
+    entry: 100,
+    stopLoss: 90,
+    instrument: { ...validInstrument, tickValuePerLot: Number.POSITIVE_INFINITY },
+  }), /loss model/i);
+  assert.throws(() => calculateRiskPlan({
+    equity: 1000,
+    riskPercent: 1,
+    entry: 100,
+    stopLoss: Number.POSITIVE_INFINITY,
+    instrument: validInstrument,
+  }), /loss model/i);
+});
