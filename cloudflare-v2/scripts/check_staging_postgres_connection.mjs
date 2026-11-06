@@ -33,6 +33,12 @@ const SCHEMA_SAFETY_QUERY = `
     (SELECT writes_fenced FROM trading_storage.authority_control WHERE singleton_id = 1) AS writes_fenced,
     (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls) AS control_count,
     (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls WHERE enabled = false) AS disabled_control_count,
+    (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls
+       WHERE control_key IN ('broker_execution_enabled', 'live_broker_execution_enabled')) AS execution_control_count,
+    (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls
+       WHERE control_key IN ('broker_execution_enabled', 'live_broker_execution_enabled') AND enabled = false) AS disabled_execution_control_count,
+    (SELECT COALESCE(array_agg(control_key ORDER BY control_key), ARRAY[]::text[])
+       FROM trading_storage.runtime_controls WHERE enabled = true) AS enabled_runtime_control_keys,
     (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'trading_storage') AS schema_owner,
     (SELECT COUNT(*)::integer
        FROM pg_proc AS p
@@ -157,6 +163,11 @@ export async function checkStagingPostgresConnection({
           writesFenced: audit.writes_fenced === true,
           runtimeControlCount: safeCount(audit.control_count),
           disabledRuntimeControlCount: safeCount(audit.disabled_control_count),
+          executionControlCount: safeCount(audit.execution_control_count),
+          disabledExecutionControlCount: safeCount(audit.disabled_execution_control_count),
+          enabledRuntimeControlKeys: Array.isArray(audit.enabled_runtime_control_keys)
+            ? audit.enabled_runtime_control_keys.map(safeIdentifier).filter((key) => key !== '[redacted]')
+            : [],
           schemaOwner: safeIdentifier(audit.schema_owner),
           unsafeDefinerOwnerCount: safeCount(audit.unsafe_definer_owner_count),
           publicDefinerExecuteCount: safeCount(audit.public_definer_execute_count),
