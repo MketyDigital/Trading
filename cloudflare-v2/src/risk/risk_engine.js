@@ -14,7 +14,7 @@ function resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis
   const rawBase = basis === 'BALANCE' ? balance : equity;
   const base = Number(rawBase);
   const percent = Number(riskPercent);
-  if (!(base > 0) || !(percent > 0) || percent > 100) {
+  if (!Number.isFinite(base) || !(base > 0) || !Number.isFinite(percent) || !(percent > 0) || percent > 100) {
     throw new TypeError(`positive ${basis.toLowerCase()} and riskPercent between 0 and 100 required`);
   }
   return base * percent / 100;
@@ -27,10 +27,15 @@ function resolveLossPerLot({ entry, stopLoss, instrument }) {
   const tickSize = Number(instrument?.tickSize);
   const tickValuePerLot = Number(instrument?.tickValuePerLot);
   const distance = Math.abs(Number(entry) - Number(stopLoss));
-  if (!(distance > 0) || !(tickSize > 0) || !(tickValuePerLot > 0)) {
+  if (![distance, tickSize, tickValuePerLot].every(Number.isFinite)
+    || !(distance > 0) || !(tickSize > 0) || !(tickValuePerLot > 0)) {
     throw new Error('reliable instrument loss model is required');
   }
-  return (distance / tickSize) * tickValuePerLot;
+  const lossPerLot = (distance / tickSize) * tickValuePerLot;
+  if (!Number.isFinite(lossPerLot) || !(lossPerLot > 0)) {
+    throw new Error('reliable instrument loss model is required');
+  }
+  return lossPerLot;
 }
 
 function volumePrecision(step) {
@@ -55,7 +60,10 @@ export function calculateRiskPlan({
   const step = Number(instrument.stepLots ?? 0.01);
   const min = Number(instrument.minLots ?? step);
   const max = Number(instrument.maxLots ?? Number.POSITIVE_INFINITY);
-  if (!(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid volume constraints required');
+  if (!Number.isFinite(step) || !(step > 0) || !Number.isFinite(min) || !(min > 0)
+    || (!(Number.isFinite(max) || max === Number.POSITIVE_INFINITY)) || !(max >= min)) {
+    throw new TypeError('valid volume constraints required');
+  }
 
   // Broker constraints are expressed in step units to avoid floating-point drift.
   const minIndex = toStepIndex(min, step, 'ceil');
@@ -63,6 +71,7 @@ export function calculateRiskPlan({
   if (!(maxIndex >= minIndex)) throw new RangeError('broker volume constraints have no executable lot size');
 
   const rawLotsPerLeg = riskPerLeg / lossPerLotAtStop;
+  if (!Number.isFinite(rawLotsPerLeg) || !(rawLotsPerLeg > 0)) throw new RangeError('risk-sized lots are not finite and executable');
   const rawIndex = toStepIndex(rawLotsPerLeg, step, 'floor');
   const policy = String(minimumLotPolicy || 'FLOOR').trim().toUpperCase();
   let normalizedIndex = rawIndex;
@@ -90,6 +99,7 @@ export function calculateRiskPlan({
   const totalLots = Number((lotsPerLeg * targetCount).toFixed(volumePrecision(step)));
   const legLots = allocateVolumeAcrossTargets(totalLots, targetCount, step);
   const actualRiskPerLeg = lotsPerLeg * lossPerLotAtStop;
+  if (!Number.isFinite(actualRiskPerLeg) || !(actualRiskPerLeg > 0)) throw new RangeError('estimated stop-loss risk is not finite');
   return {
     riskAmount: Number(riskPerLeg.toFixed(2)),
     riskAmountExact: riskPerLeg,
