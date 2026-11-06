@@ -273,6 +273,55 @@ test('production follower balance-risk revalidation uses the follower broker bal
   assert.equal(result.action.lots, 0.05);
 });
 
+test('follower OPEN risk is recalculated from a fresh follower broker snapshot on every dispatch', async () => {
+  const row = account({ lot_sizing_type: 'risk_percent', lot_value: 5 });
+  const link = {
+    id: 'link-fresh',
+    workspace_id: 'ws-a',
+    follower_account_id: 'acct-row-a',
+    parent_account_id: 'parent-a',
+    enabled: true,
+    lot_multiplier: 1,
+    fixed_lot: null,
+    risk_mode: 'balance_percent',
+    risk_percent: 1,
+    risk_amount: null,
+    risk_basis: 'balance',
+  };
+  let contextReads = 0;
+  const deps = createProductionExecutionDependencies({
+    env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true', TRADING_MASTER_KEY: 'master' },
+    supabase: createAccountAndFollowerSupabase(row, link),
+    workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(),
+    mt5ContextLoader: async () => {
+      contextReads += 1;
+      return {
+        brokerAccount: { equity: 20000, balance: contextReads === 1 ? 5000 : 4000 },
+        catalog: [{
+          canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tickSize: 0.01,
+          tickValuePerLot: 1, minLots: 0.01, maxLots: 100, stepLots: 0.01,
+        }],
+      };
+    },
+  });
+
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  const action = {
+    type: 'OPEN_POSITION', side: 'BUY', symbol: 'XAUUSD',
+    entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490, lots: 0.5,
+  };
+  const first = await deps.riskMaterializer({ workspaceId: 'ws-a', account: loaded, action });
+  const second = await deps.riskMaterializer({ workspaceId: 'ws-a', account: loaded, action });
+
+  assert.equal(contextReads, 2);
+  assert.equal(first.risk.riskAmountPerLeg, 50);
+  assert.equal(first.action.lots, 0.05);
+  assert.equal(second.risk.riskAmountPerLeg, 40);
+  assert.equal(second.action.lots, 0.04);
+});
+
 test('fixed-lot follower policy prevents parent risk settings from resizing copied lots', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
