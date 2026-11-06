@@ -241,7 +241,7 @@ export async function applyTradingPostgresMigrations({
       'PostgreSQL migration did not switch to the restricted Trading owner',
       'Untracked trading_storage schema already exists',
       'Existing trading_storage migration ledger does not match reviewed files',
-      'PostgreSQL schema did not retain the required restricted, fenced/off defaults'
+      'PostgreSQL schema did not retain the required restricted, D1-fenced, broker-execution-off safety state'
     ]);
     if (safeMessages.has(error?.message)) throw error;
     const migration = migrationSet.find(({ name }) => stage === `apply migration ${name}`);
@@ -300,7 +300,7 @@ async function verifySchemaSafety(client) {
   `);
   const defaults = verification?.rows?.[0];
   if (!isTradingPostgresSafetyStateValid(defaults)) {
-    throw new Error('PostgreSQL schema did not retain the required restricted, fenced/off defaults');
+    throw new Error('PostgreSQL schema did not retain the required restricted, D1-fenced, broker-execution-off safety state');
   }
 }
 
