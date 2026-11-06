@@ -71,7 +71,8 @@ export function calculateRiskPlan({
   // Broker constraints are expressed in step units to avoid floating-point drift.
   const minIndex = toStepIndex(min, step, 'ceil');
   const maxIndex = Number.isFinite(max) ? toStepIndex(max, step, 'floor') : Number.POSITIVE_INFINITY;
-  if (!(maxIndex >= minIndex)) throw new RangeError('broker volume constraints have no executable lot size');
+  if (!Number.isFinite(minIndex) || (Number.isFinite(max) && !Number.isFinite(maxIndex))
+    || !(maxIndex >= minIndex)) throw new RangeError('broker volume constraints have no executable lot size');
 
   const rawLotsPerLeg = riskPerLeg / lossPerLotAtStop;
   if (!Number.isFinite(rawLotsPerLeg) || !(rawLotsPerLeg > 0)) throw new RangeError('risk-sized lots are not finite and executable');
