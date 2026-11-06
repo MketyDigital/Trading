@@ -94,6 +94,31 @@ test('production account loader normalizes persisted lot sizing mode and risk pe
   assert.equal(loaded.riskBasis, 'equity');
 });
 
+test('production account loading never activates or rewrites an existing fixed-lot account', async () => {
+  const row = account({
+    lot_sizing_type: 'fixed',
+    lot_value: 0.03,
+    is_active: true,
+    execution_enabled: false,
+    safety_policy: { enabled: true, killSwitch: true },
+  });
+  const supabase = createAccountQuerySupabase(row);
+  const deps = createProductionExecutionDependencies({
+    env: {},
+    supabase,
+    workspaceId: 'ws-a',
+  });
+
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+
+  assert.equal(loaded.lot_sizing_type, 'fixed');
+  assert.equal(loaded.lot_value, 0.03);
+  assert.equal(loaded.is_active, true);
+  assert.equal(loaded.execution_enabled, false);
+  assert.equal(loaded.safety_policy.killSwitch, true);
+  assert.deepEqual(supabase.calls.map((call) => call[0]), ['from', 'select', 'eq', 'eq', 'maybeSingle']);
+});
+
 test('production risk authority exposes minimum-floor capability only for the exact policy-approved intent', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
