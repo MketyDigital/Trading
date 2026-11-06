@@ -143,7 +143,10 @@ function coalesceCompoundProtectionActions(group, children) {
 
 export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep = 0.01) {
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
-  if (!(Number(totalLots) > 0) || !(Number(volumeStep) > 0)) throw new TypeError('positive totalLots and volumeStep required');
+  if (!Number.isFinite(Number(totalLots)) || !(Number(totalLots) > 0)
+    || !Number.isFinite(Number(volumeStep)) || !(Number(volumeStep) > 0)) {
+    throw new TypeError('finite positive totalLots and volumeStep required');
+  }
   // Never allocate more volume than the broker-normalized total. Floating-point
   // ratios can sit just above an integer; floor with a small tolerance only for
   // representation noise, not for a genuine partial step.
