@@ -47,7 +47,6 @@ export async function largestLotsWithinMargin({
   marginBudget,
   estimateMargin,
   maximumLots,
-  allowBrokerMinimumFloor = false,
   belowMinimumCode = 'SIZING_BELOW_BROKER_MINIMUM',
   maxIterations = 64,
 } = {}) {
@@ -85,15 +84,6 @@ export async function largestLotsWithinMargin({
 
   const minMargin = await marginFor(minIndex);
   if (minMargin > budget + 1e-9) {
-    if (allowBrokerMinimumFloor) {
-      return {
-        lots: lotsFor(minIndex),
-        expectedMargin: minMargin,
-        marginBudget: budget,
-        minimumFloorApplied: true,
-        exceededBudget: true,
-      };
-    }
     const error = new RangeError('broker minimum volume exceeds configured sizing budget');
     error.code = belowMinimumCode;
     error.minimumLots = lotsFor(minIndex);
