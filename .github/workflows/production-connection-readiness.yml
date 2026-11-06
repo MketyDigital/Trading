@@ -3,6 +3,7 @@ name: Production Connection Readiness
 # access fixtures or mutate customer/workspace state.
 
 on:
+  workflow_call:
   workflow_run:
     workflows:
       - Production Cloudflare Deploy
