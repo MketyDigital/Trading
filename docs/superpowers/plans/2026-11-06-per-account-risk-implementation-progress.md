@@ -300,3 +300,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Expanded PostgreSQL static safety coverage to include all six migrations and permit only the reviewed `ADD COLUMN IF NOT EXISTS` / `ADD CONSTRAINT` operations on `trading_storage.trading_account_followers` in `0006`; all other schema/data mutation remains rejected.
 - Expanded installer tests to verify the real six-file allowlist and simulate upgrading an existing schema with the first three checksummed migrations applied; the test asserts only `0004`–`0006` execute under `trading_owner`, with a commit and no schema recreation.
 - Commits: `5ad52667` (runner allowlist and prefix upgrade), `dd67c96a` (static SQL scope test), `51675218` (installer allowlist/upgrade regression). No migration was run against any database.
+
+
+### 2026-11-06 — preserve atomicity across historical migration wrappers
+
+- A further transaction review found that historical PostgreSQL migrations `0004` and `0006` contain standalone `BEGIN`/`COMMIT` wrappers, while the installer already owns one transaction for the full schema change. Sending those wrappers through as-is could commit the outer transaction before the migration ledger update and final safety checks.
+- The installer now strips only standalone outer `BEGIN;` and `COMMIT;` boundary statements from the SQL sent to PostgreSQL, while retaining checksums of the exact reviewed source files. All migration DDL and ledger writes therefore remain inside the installer's transaction.
+- Extended the installer regression fixture with a real wrapped migration and asserted the wrapper-free SQL executes inside the transaction rather than committing it independently.
+- Commits: `89148763` (transaction-safe migration execution), `eba2ff4a` and `34f93e94` (wrapper regression fixture). No database was contacted or migrated.
