@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { isTradingPostgresSafetyStateValid } from '../scripts/apply_trading_postgres_migrations.mjs';
 
 const here = new URL('.', import.meta.url);
 const sql = readFileSync(new URL('../db/postgres-migrations/0002_trading_domain_schema.sql', here), 'utf8');
@@ -134,4 +135,57 @@ test('new PostgreSQL authority and runtime controls start fenced and disabled', 
   assert.match(foundation, /'trading_access_enabled',\s*false/i);
   assert.match(foundation, /'broker_execution_enabled',\s*false/i);
   assert.match(foundation, /'live_broker_execution_enabled',\s*false/i);
+});
+
+
+test('PostgreSQL safety verification preserves trading access while requiring broker execution controls off', () => {
+  const safeState = {
+    active_authority: 'd1',
+    writes_fenced: true,
+    control_count: 3,
+    execution_control_count: 2,
+    disabled_execution_control_count: 2,
+    schema_owner: 'trading_owner',
+    unsafe_definer_owner_count: 0,
+    public_definer_execute_count: 0
+  };
+  assert.equal(isTradingPostgresSafetyStateValid(safeState), true);
+});
+
+test('PostgreSQL safety verification rejects either enabled broker execution control', () => {
+  const safeState = {
+    active_authority: 'd1',
+    writes_fenced: true,
+    control_count: 3,
+    execution_control_count: 2,
+    disabled_execution_control_count: 2,
+    schema_owner: 'trading_owner',
+    unsafe_definer_owner_count: 0,
+    public_definer_execute_count: 0
+  };
+  assert.equal(isTradingPostgresSafetyStateValid({ ...safeState, disabled_execution_control_count: 1 }), false);
+  assert.equal(isTradingPostgresSafetyStateValid({ ...safeState, execution_control_count: 1 }), false);
+});
+
+test('PostgreSQL safety verification still requires D1 authority, write fencing, and restricted function ownership', () => {
+  const safeState = {
+    active_authority: 'd1',
+    writes_fenced: true,
+    control_count: 3,
+    execution_control_count: 2,
+    disabled_execution_control_count: 2,
+    schema_owner: 'trading_owner',
+    unsafe_definer_owner_count: 0,
+    public_definer_execute_count: 0
+  };
+  for (const override of [
+    { active_authority: 'postgres' },
+    { writes_fenced: false },
+    { control_count: 2 },
+    { schema_owner: 'postgres' },
+    { unsafe_definer_owner_count: 1 },
+    { public_definer_execute_count: 1 }
+  ]) {
+    assert.equal(isTradingPostgresSafetyStateValid({ ...safeState, ...override }), false);
+  }
 });
