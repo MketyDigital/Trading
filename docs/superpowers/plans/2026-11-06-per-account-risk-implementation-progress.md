@@ -164,3 +164,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Updated account normalization, execution planning, and final broker revalidation to prefer an explicitly persisted `lot_sizing_config.riskBasis` over a legacy fallback basis field. This prevents an old/default equity value from overriding an owner's explicit balance selection.
 - Strengthened the production risk-authority regression to include a conflicting legacy `risk_basis: equity` field while asserting that persisted `riskBasis: balance` controls the calculation.
 - Latest code/test commit: `62a4750e`. CI for this exact branch head is pending; prior queued CI runs do not verify these newest changes.
+
+
+### 2026-11-06 — CI feedback and floating-point test correction
+
+- Inspected Trading V1 CI run #3504 logs. The original balance-basis and BUY/SELL range-entry failures are now passing in that run.
+- The remaining visible risk-engine failure was a strict floating-point equality assertion for seven 0.1-lot legs (`0.7` versus `0.7000000000000001`). The same exact-equality pattern existed in the execution-plan dynamic-TP test.
+- Replaced both aggregate-lot assertions with a tight numeric tolerance (`1e-12`); production risk calculations and volume rounding were not weakened or changed.
+- CI #3504 also marked `execution_plan.test.mjs` failed, but its diagnostic output was truncated to the first 6,000 characters, before the later test failure detail. The aggregate-lot assertion was the corresponding strict-float issue in that suite; the next CI run must confirm both files green.
+- Follow-up commits: `21dee683` and `2dfc2490`. Latest-head CI remains required; prior run #3514 was created before these test corrections.
