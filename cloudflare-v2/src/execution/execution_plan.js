@@ -215,7 +215,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent ?? account.risk_percent ?? account.lot_value ?? account.lotValue : undefined,
-      riskAmount: sizingMode === 'FIXED_RISK' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount ?? account.lot_value ?? account.lotValue : undefined,
+      riskAmount: sizingMode === 'FIXED_RISK' || String(account.lot_sizing_config?.riskMode ?? account.lot_sizing_config?.risk_mode ?? '').toLowerCase() === 'fixed_cash' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount ?? account.lot_value ?? account.lotValue : undefined,
       riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.riskBasis ?? account.risk_basis ?? account.lot_sizing_config?.riskBasis ?? account.lot_sizing_config?.risk_basis ?? (account.equity != null ? 'EQUITY' : 'BALANCE')),
       minimumLotPolicy: safetyPolicy.minimumLotPolicy ?? 'FLOOR',
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
