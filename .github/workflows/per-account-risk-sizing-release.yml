@@ -28,6 +28,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout main for authenticated release-tag inspection
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
       - name: Require main branch and exact release confirmation
         shell: bash
         env:
