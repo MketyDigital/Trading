@@ -27,6 +27,7 @@ var limits=[];
 if(rp.maxRiskPercent!=null)limits.push('per-leg cap '+esc(rp.maxRiskPercent)+'%');
 if(rp.maxOpenRiskPercent!=null)limits.push('open-risk cap '+esc(rp.maxOpenRiskPercent)+'%');
 if(rp.maxDailyLossPercent!=null)limits.push('daily-loss limit '+esc(rp.maxDailyLossPercent)+'%');
+if(rp.minimumVolumeRiskTolerancePercent!=null)limits.push('minimum-volume tolerance '+esc(rp.minimumVolumeRiskTolerancePercent)+'%');
 if(rp.minimumLotPolicy)limits.push('minimum lot '+esc(rp.minimumLotPolicy));
 return '<div class="small" style="margin-top:6px"><b>Sizing:</b> '+sizing+' • '+(limits.length?esc(limits.join(' • ')):'no optional risk caps configured')+'</div>'
 }
