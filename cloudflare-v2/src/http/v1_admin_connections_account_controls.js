@@ -72,10 +72,9 @@ async function handleFollowerUpdate(request, env, dependencies, followerAccountI
           followerAccountId,
           parentAccountId,
           enabled: true,
-          lotMultiplier: body.lotMultiplier,
-          fixedLot: body.fixedLot,
         };
         for (const [camel, snake] of [
+          ['lotMultiplier', 'lot_multiplier'], ['fixedLot', 'fixed_lot'],
           ['riskMode', 'risk_mode'], ['riskPercent', 'risk_percent'],
           ['riskAmount', 'risk_amount'], ['riskBasis', 'risk_basis'],
         ]) {
