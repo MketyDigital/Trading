@@ -4,10 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional explicit release tag (main only), e.g. mt5-connector-v1.1.0'
+        description: 'Optional explicit release tag (main only), e.g. mt5-connector-v1.1.17'
         required: false
         type: string
         default: ''
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Explicit version tag for the reviewed main-branch connector build
+        required: true
+        type: string
   pull_request:
     paths:
       - '.github/workflows/mt5-connector-release.yml'
@@ -106,7 +112,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mt5-connector-v') || (github.ref == 'refs/heads/main' && inputs.release_tag != '')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/mt5-connector-v')) || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && github.ref == 'refs/heads/main' && inputs.release_tag != '')
     needs: package-windows
     runs-on: ubuntu-latest
     permissions:
@@ -139,12 +145,17 @@ jobs:
             echo "Release tag must use mt5-connector-vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "Release tag already exists; refusing to replace it." >&2
-            exit 1
+          existing_sha="$(git ls-remote --tags origin "refs/tags/$tag" | awk 'NR==1 {print $1}')"
+          if [ -n "$existing_sha" ]; then
+            if [ "$existing_sha" != "$GITHUB_SHA" ]; then
+              echo "Release tag already points to a different commit; refusing to replace it." >&2
+              exit 1
+            fi
+            echo "Release tag already points to this exact commit; continuing idempotently."
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
           fi
-          git tag "$tag" "$GITHUB_SHA"
-          git push origin "refs/tags/$tag"
 
       - name: Create a new versioned release without replacing existing assets
         env:
