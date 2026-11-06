@@ -274,6 +274,72 @@ test('one account dispatch failure cannot block a successful sibling account', a
   assert.equal(successBinding.brokerPositionId, 'position-b');
 });
 
+test('one follower broker-risk failure cannot suppress the parent or another follower', async () => {
+  const dispatched = [];
+  const riskContexts = [];
+  const accountRows = {
+    parent: account({ id: 'parent' }),
+    followerA: account({ id: 'followerA', followerLink: { risk_mode: 'balance_percent', risk_percent: 1, risk_basis: 'balance' } }),
+    followerB: account({ id: 'followerB', followerLink: { risk_mode: 'fixed_risk', risk_amount: 75, risk_basis: 'equity' } }),
+  };
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a',
+    eventId: 'evt-follower-isolation',
+    brokerExecutionEnabled: true,
+    accountPlans: [
+      plan({ accountId: 'parent', groupId: 'parent-group' }),
+      plan({ accountId: 'followerA', groupId: 'follower-a-group' }),
+      plan({ accountId: 'followerB', groupId: 'follower-b-group' }),
+    ],
+  }, {
+    accountLoader: async (_workspaceId, accountId) => accountRows[accountId],
+    riskMaterializer: async ({ account, action }) => {
+      riskContexts.push({
+        accountId: account.id,
+        mode: account.followerLink?.risk_mode ?? 'parent',
+        amount: account.followerLink?.risk_amount ?? null,
+        percent: account.followerLink?.risk_percent ?? null,
+      });
+      if (account.id === 'followerA') {
+        const error = new Error('follower broker context unavailable');
+        error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+        throw error;
+      }
+      return {
+        allowed: true,
+        action,
+        policyContext: {
+          totalLots: action.lots,
+          riskPercent: 0.5,
+          minimumVolumeRiskOveragePercent: 0,
+          currentDailyPnlPercent: 0,
+          currentOpenRiskPercent: 0,
+        },
+      };
+    },
+    dispatchAction: async ({ account: row }) => {
+      dispatched.push(row.id);
+      return { ok: true, brokerPositionId: `position-${row.id}` };
+    },
+    stateBinder: async () => {},
+  });
+
+  assert.deepEqual(dispatched.sort(), ['followerB', 'parent']);
+  assert.equal(summary.succeeded, 2);
+  assert.equal(summary.blocked, 1);
+  assert.equal(summary.status, 'PARTIAL');
+  assert.deepEqual(summary.accounts.map((row) => [row.accountId, row.status]), [
+    ['parent', 'SUCCEEDED'],
+    ['followerA', 'BLOCKED'],
+    ['followerB', 'SUCCEEDED'],
+  ]);
+  assert.deepEqual(riskContexts, [
+    { accountId: 'parent', mode: 'parent', amount: null, percent: null },
+    { accountId: 'followerA', mode: 'balance_percent', amount: null, percent: 1 },
+    { accountId: 'followerB', mode: 'fixed_risk', amount: 75, percent: null },
+  ]);
+});
+
 test('successful MODIFY_POSITION binds requested SL/TP even when broker returns no new identifiers', async () => {
   const bound = [];
   const summary = await executeProductionPlan({
