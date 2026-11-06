@@ -54,7 +54,7 @@ function sizingConfigFor(type, raw = {}) {
     if (!['equity', 'balance'].includes(riskBasis)
       || (type === 'balance_risk_percent' && riskBasis !== 'balance')
       || (type === 'equity_risk_percent' && riskBasis !== 'equity')) return null;
-    return { riskBasis };
+    return { riskBasis, riskMode: type === 'fixed_risk' ? 'fixed_cash' : 'percent' };
   }
   return {};
 }
@@ -122,7 +122,8 @@ function parseAccountCreation(body) {
   const label = requiredText(body.label ?? body.accountLabel ?? body.account_label);
   const accountId = requiredText(body.accountId ?? body.account_id);
   const serverName = requiredText(body.serverName ?? body.server_name);
-  const lotSizingType = (requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed').toLowerCase();
+  const requestedLotSizingType = (requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed').toLowerCase();
+  const lotSizingType = ['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedLotSizingType) ? 'risk_percent' : requestedLotSizingType;
   const lotValue = optionalNumber(body.lotValue ?? body.lot_value);
   const lotSizingConfig = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
 
@@ -132,11 +133,12 @@ function parseAccountCreation(body) {
   if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
   }
-  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', 'risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(lotSizingType)) {
+  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', 'risk_percent'].includes(lotSizingType)
+    && !['equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedLotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
-  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent'].includes(lotSizingType) && !(Number(lotValue) <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
-  const normalizedSizingConfig = sizingConfigFor(lotSizingType, lotSizingConfig);
+  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent'].includes(requestedLotSizingType) && !(Number(lotValue) <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
+  const normalizedSizingConfig = sizingConfigFor(requestedLotSizingType, lotSizingConfig);
   if (!normalizedSizingConfig) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
   }
