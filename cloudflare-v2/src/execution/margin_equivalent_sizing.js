@@ -171,7 +171,6 @@ export async function buildSymbolEquivalentSizing({
     marginBudget: referenceMargin,
     estimateMargin: estimateTargetMargin,
     maximumLots: targetRequestedLots,
-    allowBrokerMinimumFloor: false,
     belowMinimumCode: 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM',
   });
 
