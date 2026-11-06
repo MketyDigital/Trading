@@ -315,3 +315,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Added an installer regression proving that an existing Trading schema with a modified migration checksum is rejected before assuming the schema-owner role or applying any pending SQL; the installer rolls back.
 - This complements the successful-prefix upgrade test and the clean-install test: only a checksum-exact ordered prefix can be upgraded.
 - Test commit: `29c377c8`. The current CI run on the earlier runner/transaction fix is still underway; this new test commit will trigger another exact-head run.
+
+
+### 2026-11-06 — PostgreSQL installer transaction fix verified by CI
+
+- Trading V1 CI #3575 passed all Worker/trading-core tests, MT5 bridge tests and MTProto Python tests on the code containing the six-migration allowlist, existing-schema prefix-upgrade path, and migration transaction-wrapper stripping.
+- MT5 Compatibility CI #163 passed.
+- The follow-up altered-ledger fail-closed test commit `29c377c8` triggered Trading V1 CI #3577; that exact run is still in progress. cTrader CI #566 and MT5 Connector Release #326 are also still queued/running for the earlier code head. Do not treat #3575 as verification of the later ledger regression.
+- No production deployment, migration, account-policy update or connector publication occurred; PR deployment/storage-inventory jobs remain skipped.
