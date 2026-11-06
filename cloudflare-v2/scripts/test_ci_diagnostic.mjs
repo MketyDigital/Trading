@@ -13,7 +13,7 @@ for (const file of files) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.status !== 0) {
-    const rawOutput = `${result.stdout || ''}\n${result.stderr || ''}`.trim().slice(0, 6000);
+    const rawOutput = `${result.stdout || ''}\n${result.stderr || ''}`.trim().slice(0, 20000);
     failures.push({ file, output: rawOutput || 'Test failed without output' });
     console.error(`::error file=tests/${file},title=Worker test failed::${(rawOutput || 'Test failed without output').replace(/\r?\n/g, '%0A')}`);
   }
