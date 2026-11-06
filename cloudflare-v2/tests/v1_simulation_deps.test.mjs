@@ -247,7 +247,7 @@ test('follower link lookup failure preserves explicit parent route and omits fol
       };
       if (table === 'trading_destinations') return {
         select() { return this; }, eq() { return this; },
-        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
       };
       if (table === 'trading_account_followers') return {
         select() { return this; }, eq() { return this; }, in() { return this; },
@@ -287,7 +287,7 @@ test('one batched follower lookup decorates follower risk policy without a secon
       };
       if (table === 'trading_destinations') return {
         select() { return this; }, eq() { return this; },
-        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
       };
       if (table === 'trading_account_followers') {
         followerLookupCount += 1;
