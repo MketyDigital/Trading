@@ -633,7 +633,7 @@ function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
   );
 }
 
-async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null, portalFollowerEnabled = false } = {}) {
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null, portalFollowerEnabled = false, followerLinksByAccount = new Map() } = {}) {
   const trustedSourceId = text(sourceId);
   if (!trustedSourceId) return [];
 
@@ -654,7 +654,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
       .filter(({ destination }) => destination)
       .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
       .map(({ destination }) => text(destination.destination_ref)).filter(Boolean);
-    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers));
+    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers), followerLinksByAccount);
   }
 
   const { data: routesData, error: routeError } = await supabase
@@ -710,86 +710,53 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     if (!parentIds.length) return parentRefs;
     const { data, error } = await supabase
       .from('trading_account_followers')
-      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot')
+      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis')
       .eq('workspace_id', workspaceId)
       .eq('enabled', true)
       .in('parent_account_id', parentIds)
       .order('parent_account_id', { ascending: true });
-    if (error) {
-      const failure = new Error('failed to load enabled follower routes');
-      failure.code = 'FOLLOWER_LINK_LOAD_FAILED';
-      throw failure;
+    // Follower fanout is additive: a link-table outage must not suppress the
+    // explicitly routed parent accounts. No follower refs are added on error.
+    if (error) return parentRefs;
+    const links = Array.isArray(data) ? data : [];
+    for (const link of links) {
+      const followerId = text(link.follower_account_id);
+      if (followerId) followerLinksByAccount.set(followerId, link);
     }
     const seen = new Set(parentRefs);
-    const followerRefs = (data || []).map((row) => text(row.follower_account_id)).filter(Boolean).map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id).filter((ref) => !seen.has(ref));
+    const followerRefs = links.map((row) => text(row.follower_account_id)).filter(Boolean)
+      .map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id)
+      .filter((ref) => !seen.has(ref));
     return [...parentRefs, ...followerRefs];
-  } catch (error) {
-    if (error?.code === 'FOLLOWER_LINK_LOAD_FAILED') throw error;
-    const failure = new Error('failed to load enabled follower routes');
-    failure.code = 'FOLLOWER_LINK_LOAD_FAILED';
-    throw failure;
+  } catch {
+    return parentRefs;
   }
 }
 
-async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, followerProcessingEnabled = false) {
+async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, followerProcessingEnabled = false, followerLinksByAccount = new Map()) {
   const refs = [...new Set(parentRefs.map(text).filter(Boolean))];
   const parentIds = refs.map((ref) => text(ref).replace(/^trade-account:/, '')).filter(Boolean);
-  if (!parentIds.length) return refs;
-  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') {
-    if (followerProcessingEnabled) {
-      const error = new Error('follower routing repository is unavailable');
-      error.code = 'FOLLOWER_LINK_STORAGE_UNAVAILABLE';
-      throw error;
-    }
-    return refs;
-  }
+  if (!parentIds.length || !followerProcessingEnabled) return refs;
+  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') return refs;
   try {
     const links = await persistenceRuntime.accountFollowers.listEnabledByParents(workspaceId, parentIds);
     const seen = new Set(refs);
     for (const link of links) {
       const followerId = text(link.follower_account_id ?? link.followerAccountId);
+      if (followerId) followerLinksByAccount.set(followerId, link);
       const ref = followerId ? (refs.some((item) => item.startsWith('trade-account:')) ? `trade-account:${followerId}` : followerId) : '';
       if (ref && !seen.has(ref)) { seen.add(ref); refs.push(ref); }
     }
   } catch {
-    const error = new Error('failed to load enabled follower routes');
-    error.code = 'FOLLOWER_LINK_LOAD_FAILED';
-    throw error;
+    // Keep parent routes intact; do not add any follower without its policy row.
   }
   return refs;
 }
 
-async function decorateFollowerAccounts(accounts = [], workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled = false } = {}) {
+function decorateFollowerAccounts(accounts = [], followerLinksByAccount = new Map()) {
   const rows = Array.isArray(accounts) ? accounts : [];
-  const ids = rows.map((account) => text(account?.id)).filter(Boolean);
-  if (!ids.length) return rows;
-  const followerProcessingEnabled = portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers);
-  if (!followerProcessingEnabled) return rows;
-
-  let links = [];
-  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByFollowers === 'function') {
-    links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
-  } else if (supabase?.from) {
-    const response = await supabase.from('trading_account_followers')
-      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis')
-      .eq('workspace_id', workspaceId)
-      .eq('enabled', true)
-      .in('follower_account_id', ids);
-    if (response.error) {
-      const error = new Error('failed to load enabled follower risk policies');
-      error.code = 'FOLLOWER_LINK_LOAD_FAILED';
-      throw error;
-    }
-    links = response.data || [];
-  } else {
-    const error = new Error('follower risk policy storage is unavailable');
-    error.code = 'FOLLOWER_LINK_STORAGE_UNAVAILABLE';
-    throw error;
-  }
-
-  const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
   return rows.map((account) => {
-    const link = byFollower.get(text(account?.id));
+    const link = followerLinksByAccount.get(text(account?.id));
     return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
   });
 }
