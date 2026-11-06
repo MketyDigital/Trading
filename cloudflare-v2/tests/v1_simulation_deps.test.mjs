@@ -233,6 +233,41 @@ test('LIVE fixed-lot planning still fails closed for symbols absent from the aut
   });
 });
 
+test('enabled follower routing fails closed when follower links cannot be read', async () => {
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') return {
+        select() { return this; }, eq() { return this; },
+        order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
+      };
+      if (table === 'trading_destinations') return {
+        select() { return this; }, eq() { return this; }, in: async () => ({
+          data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }],
+          error: null,
+        }),
+      };
+      if (table === 'trading_account_followers') return {
+        select() { return this; }, eq() { return this; }, in: async () => ({
+          data: null, error: { message: 'temporary follower storage failure' },
+        }),
+      };
+      throw new Error('unexpected table ' + table);
+    },
+  };
+  const deps = await createV1SimulationDependencies({
+    env: { ...baseEnv(), PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  await assert.rejects(
+    () => deps.accountProvider(),
+    (error) => error?.code === 'FOLLOWER_LINK_LOAD_FAILED',
+  );
+});
+
+
 test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
   const account = {
     id: 'acct-ctrader-demo',
