@@ -124,3 +124,26 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 5. Add deploy/restart/schema non-mutation tests and verify existing fixed-lot account behavior.
 6. Review the full branch diff and update all related design/roadmap docs with only CI-verified outcomes.
 7. Keep PR #253 draft and do not deploy until all checks pass and a separate explicit production release decision is made.
+
+
+### 2026-11-06 — follower isolation and production safety regression coverage
+
+- Added route-level tests proving only a workspace owner can configure portal follower risk; an admin with ordinary account-write permission is rejected before the follower repository is called.
+- Added a production execution dependency test proving a balance-percent follower uses its own broker balance even when the link's supplied basis says equity and the broker equity differs.
+- Added a production dependency test proving cTrader risk-sized OPEN remains blocked until a reliable monetary loss-at-stop model exists.
+- Added account update regression coverage proving partial updates preserve a previously selected fixed-cash mode and balance basis.
+- Added a D1 migration regression test that snapshots an existing fixed-lot account before applying the new follower-risk migration and asserts that its sizing, execution, and safety fields remain byte-for-byte equivalent afterward.
+- Confirmed the PR changed-file inventory now contains only the new unique migration versions for follower risk; the historical 0046 migration and existing 0051/0005 migration files are no longer changed by this PR.
+- Updated production account normalization to consume persisted risk basis and fixed-cash mode consistently in planning and final broker revalidation.
+- Latest Trading V1 CI run #3504 was queued for the prior progress-log commit; subsequent code/test commits were added after it. The latest complete branch state still needs its own CI run and a full green result.
+
+### Latest status
+
+- Owner-only account risk update path: implemented with route tests; CI pending.
+- Owner-only follower risk update path: implemented with route tests; CI pending.
+- Percentage and fixed-cash account risk persistence: implemented using the existing schema-compatible `risk_percent` type and config fields; CI pending.
+- Risk caps and broker-minimum policy persistence: implemented with validation; CI pending.
+- Historical migration immutability and unique follower migration numbering: corrected; D1 non-mutation regression added; CI pending.
+- Follower independent risk planning/revalidation: code path reviewed and balance-basis regression added; remaining end-to-end dispatch/failure-isolation acceptance still required.
+- cTrader risk-sized OPEN: fail-closed code path retained and regression added; CI pending.
+- Production deployment/restart acceptance: not yet fully proven; no deployment has been performed.
