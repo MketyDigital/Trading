@@ -6,7 +6,7 @@ Mkety keeps lot sizing and leg allocation explicit per account. Existing account
 
 The owner's `lot_value` is the requested lot for each target leg.
 
-Broker symbol minimum, maximum and step remain authoritative. If the owner's chosen lot is below the broker's minimum, the broker minimum can be used.
+Broker maximum and step remain authoritative. Requested fixed lots are floored to the broker step and capped at the broker maximum. If the requested lot is below the broker minimum, planning fails closed; fixed-lot mode cannot authorize an upward risk increase.
 
 This is the current behavior and remains the default.
 
@@ -14,7 +14,7 @@ This is the current behavior and remains the default.
 
 A simple percentage of the owner's chosen/reference lot.
 
-Example: reference lot `1.00`, percent `25` -> `0.25`, then broker min/max/step normalization.
+Example: reference lot `1.00`, percent `25` -> `0.25`, then broker-step flooring and maximum validation. If the result is below broker minimum, planning fails closed.
 
 This mode does not compare economic weight between different products.
 
@@ -32,7 +32,7 @@ Rules:
 3. If the destination symbol is not economically heavier, keep the owner's chosen lot.
 4. If it is heavier, reduce to the largest broker-executable lot whose expected margin does not exceed the reference symbol's expected margin.
 5. Never increase above the owner's chosen lot merely because another product is cheaper.
-6. The only upward exception is the destination broker's unavoidable minimum lot. Example: owner chooses `0.09`, destination minimum is `0.50` -> `0.50`.
+6. If the destination broker minimum is above the owner's requested lot, sizing fails closed; it does not silently increase the position.
 7. Broker min/max/step are always authoritative.
 
 This mode does not use account balance, equity, free margin, SL, or TP as a sizing input. It therefore works with fast signals.
@@ -49,18 +49,16 @@ Rules:
 1. Compute budget = broker-reported balance × selected percentage.
 2. Never exceed the owner's maximum lot.
 3. Reduce to the largest broker-executable lot whose expected margin fits the budget.
-4. If even the broker's minimum lot exceeds the budget, fail closed.
+4. If the owner's maximum lot is below the broker minimum, or even the broker minimum exceeds the margin budget, fail closed.
 5. No SL/TP is required, so this mode also supports fast signals.
 
 ## risk_percent
 
-The existing SL-based risk engine remains a separate sizing approach. It requires reliable risk geometry and does not replace symbol-equivalent or balance-percent sizing.
+The SL-based risk engine is a separate sizing approach. The configured percentage or fixed-cash budget applies independently to each executable TP leg. For example, 1% per leg with three targets means 3% aggregate planned risk. `maxRiskPercent` is checked per leg; `maxOpenRiskPercent` checks aggregate exposure. Risk sizing requires reliable stop-loss geometry and broker monetary loss conversion.
 
 ## Leg allocation
 
-Current Mkety behavior remains unchanged: the sized lot applies **per target leg**.
-
-A future split-total mode must be implemented as a separate feature because fast-entry signals open before the final number of TP legs is known. Enabling split-total without explicit fast->full rebalancing could accidentally increase exposure, so PR #135 intentionally does not add that behavior.
+Fixed, adaptive, symbol-equivalent and balance-percent lot values are interpreted per target leg. SL-based risk sizing also applies its configured risk budget independently to each executable TP leg; the aggregate is separately checked against the open-risk ceiling. No mode divides a single per-leg risk budget across the TP list.
 
 ## Broker authority
 
