@@ -216,7 +216,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
       equity: account.equity, balance: account.balance,
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent : undefined,
       riskAmount: sizingMode === 'FIXED_RISK' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount : undefined,
-      riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (String(account.riskBasis ?? account.risk_basis ?? 'EQUITY').trim().toUpperCase() === 'BALANCE' ? 'BALANCE' : 'EQUITY'),
+      riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.riskBasis ?? account.risk_basis ?? (account.equity != null ? 'EQUITY' : 'BALANCE')),
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
     });
     totalLots = risk.totalLots;
