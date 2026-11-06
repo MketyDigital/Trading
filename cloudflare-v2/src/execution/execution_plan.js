@@ -92,7 +92,10 @@ function normalizeFixedLots(value, instrument) {
   const step = Number(instrument?.stepLots ?? 0.01);
   const min = Number(instrument?.minLots ?? step);
   const max = Number(instrument?.maxLots ?? Number.POSITIVE_INFINITY);
-  if (!(lots > 0) || !(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid fixed lots and volume constraints required');
+  if (!Number.isFinite(lots) || !(lots > 0) || !Number.isFinite(step) || !(step > 0)
+    || !Number.isFinite(min) || !(min > 0) || (!(Number.isFinite(max) || max === Number.POSITIVE_INFINITY)) || !(max >= min)) {
+    throw new TypeError('valid fixed lots and volume constraints required');
+  }
 
   // A fixed-lot preference is user-facing intent; the broker catalog is the
   // execution authority. Materialize the nearest executable size without
