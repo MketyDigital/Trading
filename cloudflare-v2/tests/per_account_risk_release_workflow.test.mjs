@@ -49,6 +49,9 @@ test('release verifies the deployed frontend and connection readiness before pub
   assert.match(release, /frontend_verification:[\s\S]*?needs: deploy_worker[\s\S]*?uses: \.\/\.github\/workflows\/production-frontend-e2e\.yml/);
   assert.match(frontend, /workflow_call:/);
   assert.match(frontend, /orchestrated-risk-release/);
+  assert.match(frontend, /riskPolicyEditable/);
+  assert.match(frontend, /Risk mode: percent or fixed_cash/);
+  assert.match(frontend, /Only the workspace owner can change risk settings/);
   assert.match(release, /connection_readiness:[\s\S]*?needs: frontend_verification[\s\S]*?uses: \.\/\.github\/workflows\/production-connection-readiness\.yml/);
   assert.match(readiness, /workflow_call:/);
   assert.match(readiness, /orchestrated-risk-release/);
