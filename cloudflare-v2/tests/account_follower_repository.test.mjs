@@ -75,6 +75,8 @@ test('partial follower link updates preserve an explicitly configured risk polic
     followerAccountId: 'follower',
     parentAccountId: 'parent',
     enabled: true,
+    lotMultiplier: 0.5,
+    fixedLot: 0.2,
     riskMode: 'equity_percent',
     riskPercent: 2.5,
     riskBasis: 'equity',
@@ -86,6 +88,8 @@ test('partial follower link updates preserve an explicitly configured risk polic
     enabled: true,
   });
 
+  assert.equal(updated.lot_multiplier, 0.5);
+  assert.equal(updated.fixed_lot, 0.2);
   assert.equal(updated.risk_mode, 'equity_percent');
   assert.equal(updated.risk_percent, 2.5);
   assert.equal(updated.risk_basis, 'equity');
