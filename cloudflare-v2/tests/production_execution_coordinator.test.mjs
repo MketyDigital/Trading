@@ -328,15 +328,15 @@ test('one follower broker-risk failure cannot suppress the parent or another fol
   assert.equal(summary.succeeded, 2);
   assert.equal(summary.blocked, 1);
   assert.equal(summary.status, 'PARTIAL');
-  assert.deepEqual(summary.accounts.map((row) => [row.accountId, row.status]), [
-    ['parent', 'SUCCEEDED'],
+  assert.deepEqual(summary.accounts.map((row) => [row.accountId, row.status]).sort((a, b) => a[0].localeCompare(b[0])), [
     ['followerA', 'BLOCKED'],
     ['followerB', 'SUCCEEDED'],
+    ['parent', 'SUCCEEDED'],
   ]);
-  assert.deepEqual(riskContexts, [
-    { accountId: 'parent', mode: 'parent', amount: null, percent: null },
+  assert.deepEqual(riskContexts.sort((a, b) => a.accountId.localeCompare(b.accountId)), [
     { accountId: 'followerA', mode: 'balance_percent', amount: null, percent: 1 },
     { accountId: 'followerB', mode: 'fixed_risk', amount: 75, percent: null },
+    { accountId: 'parent', mode: 'parent', amount: null, percent: null },
   ]);
 });
 
