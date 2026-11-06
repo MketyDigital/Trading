@@ -28,6 +28,7 @@ function setup() {
   sqlite.exec(readFileSync(new URL('../db/d1-migrations/0001_trading_storage_replication.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../db/d1-migrations/0002_trading_domain_schema.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../db/d1-migrations/0004_account_followers.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../db/d1-migrations/0005_account_follower_risk_sizing.sql', import.meta.url), 'utf8'));
   sqlite.prepare(`UPDATE trading_storage_control SET writes_fenced=0 WHERE singleton_id=1`).run();
   sqlite.prepare(`INSERT INTO trading_workspace_access(id) VALUES ('ws')`).run();
   sqlite.prepare(`INSERT INTO trade_accounts(id,workspace_id,account_label,platform,account_id) VALUES ('parent','ws','Parent','mt5','1'),('follower','ws','Follower','mt5','2')`).run();
