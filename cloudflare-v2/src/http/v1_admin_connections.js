@@ -390,6 +390,9 @@ async function handleAccountConnection(request, authorization, supabase, account
       }
     }
     if (RISK_SIZING_TYPES.has(effectiveSizingType)) {
+      if (!RISK_SIZING_TYPES.has(currentSizingType) && !('lotValue' in body) && !('lot_value' in body)) {
+        return json({ ok: false, reason: 'ACCOUNT_RISK_PERCENT_REQUIRED' }, 400);
+      }
       const riskPercent = Number(update.lot_value ?? current.lot_value);
       const basis = String(effectiveConfig.riskBasis ?? effectiveConfig.risk_basis ?? (effectiveSizingType === 'balance_risk_percent' ? 'balance' : 'equity')).toLowerCase();
       if (!(riskPercent > 0 && riskPercent <= 100) || !['equity', 'balance'].includes(basis)
@@ -397,6 +400,30 @@ async function handleAccountConnection(request, authorization, supabase, account
         || (effectiveSizingType === 'equity_risk_percent' && basis !== 'equity')) {
         return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_REQUIRED' }, 400);
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'riskPolicy') || Object.prototype.hasOwnProperty.call(body, 'risk_policy')) {
+      const riskPolicy = safeObject(body.riskPolicy ?? body.risk_policy);
+      const allowedRiskPolicyKeys = new Set(['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy']);
+      if (Object.keys(riskPolicy).some((key) => !allowedRiskPolicyKeys.has(key))) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+      const normalizedRiskPolicy = {};
+      for (const key of ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent']) {
+        if (Object.prototype.hasOwnProperty.call(riskPolicy, key)) {
+          const value = Number(riskPolicy[key]);
+          if (!(value > 0 && value <= 100)) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+          normalizedRiskPolicy[key] = value;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(riskPolicy, 'minimumVolumeRiskTolerancePercent')) {
+        const value = Number(riskPolicy.minimumVolumeRiskTolerancePercent);
+        if (!Number.isFinite(value) || value < 0 || value > 1) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+        normalizedRiskPolicy.minimumVolumeRiskTolerancePercent = value;
+      }
+      if (Object.prototype.hasOwnProperty.call(riskPolicy, 'minimumLotPolicy')) {
+        const value = String(riskPolicy.minimumLotPolicy).trim().toUpperCase();
+        if (!['FLOOR', 'REJECT'].includes(value)) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+        normalizedRiskPolicy.minimumLotPolicy = value;
+      }
+      update.safety_policy = { ...safeObject(current.safety_policy), ...normalizedRiskPolicy };
     }
     if (!Object.keys(update).length) return json({ ok: false, reason: 'ACCOUNT_UPDATE_EMPTY' }, 400);
     if (accountsStore) {
