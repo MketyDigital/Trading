@@ -1,5 +1,6 @@
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { isWorkspaceRiskOwner } from '../security/risk_policy_authorization.js';
 import {
   decryptConnectionCredentials,
   encryptConnectionCredentials,
@@ -58,6 +59,7 @@ async function handleFollowerUpdate(request, env, dependencies, followerAccountI
   const authorization = await authorize(request, env, dependencies, supabase);
   if (!authorization?.ok) return json({ ok: false, reason: authorization?.reason || 'ADMIN_FORBIDDEN' }, authorization?.status || 403);
   if (!hasTradingPermission(authorization?.membership?.role, 'accounts.write')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
+  if (!isWorkspaceRiskOwner(authorization?.membership?.role)) return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
   const workspaceId = String(authorization.workspace.id);
   const enabled = body.enabled === true;
   if (typeof body.enabled !== 'boolean') return json({ ok: false, reason: 'FOLLOWER_CONFIGURATION_INVALID' }, 400);
