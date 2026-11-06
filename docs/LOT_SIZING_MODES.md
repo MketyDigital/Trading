@@ -56,6 +56,27 @@ Rules:
 
 The SL-based risk engine is a separate sizing approach. The configured percentage or fixed-cash budget applies independently to each executable TP leg. For example, 1% per leg with three targets means 3% aggregate planned risk. `maxRiskPercent` is checked per leg; `maxOpenRiskPercent` checks aggregate exposure. Risk sizing requires reliable stop-loss geometry and broker monetary loss conversion.
 
+### Risk configuration and authority
+
+Risk sizing remains stored under the existing `risk_percent` lot-sizing type so that the active D1 account schema does not need a table rebuild or a change to its existing CHECK constraint. The per-account `lot_sizing_config` carries:
+- `riskBasis`: `equity` or `balance`.
+- `riskMode`: `percent` or `fixed_cash`.
+
+`lot_value` is interpreted as a percentage (0–100) when `riskMode=percent`, or as a positive cash amount when `riskMode=fixed_cash`. The API accepts the explicit equity/balance/fixed-cash labels as input aliases but persists the canonical `risk_percent` type.
+
+The optional `safety_policy` risk limits are:
+- `maxRiskPercent`: maximum actual risk per TP leg.
+- `maxOpenRiskPercent`: maximum aggregate open exposure, including all TP legs.
+- `maxDailyLossPercent`: daily loss lock.
+- `minimumVolumeRiskTolerancePercent`: narrowly bounded allowance for broker minimum-volume excess.
+- `minimumLotPolicy`: `FLOOR` or `REJECT`; any floor is still checked against the explicit tolerance.
+
+Risk configuration mutations are owner-only. Ordinary `accounts.write` permission is not sufficient. Every write is scoped to the selected account and workspace. New account creation and follower risk policy changes use the same owner-only boundary. No deployment, restart, or schema migration activates risk settings for an existing account.
+
+Follower risk is independent of parent risk. Each follower uses its own stored risk mode/basis and its own broker account metrics; it must be revalidated immediately before its own broker dispatch. Failure of one follower must not alter the parent or another follower.
+
+cTrader risk-sized OPEN remains blocked until the adapter can provide a reliable monetary loss-at-stop calculation. Missing or stale account/symbol facts, missing SL economics, or risk beyond configured limits must fail closed.
+
 ## Leg allocation
 
 Fixed, adaptive, symbol-equivalent and balance-percent lot values are interpreted per target leg. SL-based risk sizing also applies its configured risk budget independently to each executable TP leg; the aggregate is separately checked against the open-risk ceiling. No mode divides a single per-leg risk budget across the TP list.
