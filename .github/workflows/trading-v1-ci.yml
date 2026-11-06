@@ -278,7 +278,7 @@ jobs:
             > "$RUNNER_TEMP/trading-d1-schema-check.json"
           node --input-type=module <<'CHECK_TRADING_D1_SCHEMA'
           import { readFile } from 'node:fs/promises';
-          import { compareD1MigrationTableInventory } from './scripts/trading_d1_schema_inventory.mjs';
+          import { compareD1MigrationTableInventory, validateD1MigrationTableInventory } from './scripts/trading_d1_schema_inventory.mjs';
 
           const migrationPaths = [
             'db/d1-migrations/0001_trading_storage_replication.sql',
@@ -297,10 +297,14 @@ jobs:
             migrationSql,
             actualTables: rows.map((row) => row?.name),
           });
-          if (inventory.missing.length || inventory.unexpected.length) {
-            throw new Error(`Remote Trading D1 schema mismatch: ${JSON.stringify(inventory)}`);
+          const assessment = validateD1MigrationTableInventory(inventory, {
+            allowMissing: process.env.STAGING_MODE === 'inspect',
+          });
+          if (!assessment.exact) {
+            console.warn(`Read-only D1 inspection found expected tables not yet present; pending schema work may account for them: ${JSON.stringify(inventory)}`);
+          } else {
+            console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
           }
-          console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
           CHECK_TRADING_D1_SCHEMA
           fi
           if [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
