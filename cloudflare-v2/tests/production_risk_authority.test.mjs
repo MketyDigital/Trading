@@ -152,7 +152,7 @@ test('risk authority exposes only the broker-minimum excess as a policy toleranc
     exposure: {},
   });
   assert.equal(result.policyContext.riskPercent, 0.1);
-  assert.equal(result.policyContext.minimumVolumeRiskOveragePercent, 0.09);
+  assert.ok(Math.abs(result.policyContext.minimumVolumeRiskOveragePercent - 0.09) < 1e-12);
   assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
 });
 
