@@ -119,6 +119,13 @@ function publicAccount(row = {}) {
     lotSizingType: row.lot_sizing_type ?? row.lotSizingType ?? 'fixed',
     lotValue: row.lot_value ?? row.lotValue ?? null,
     lotSizingConfig: safeObject(row.lot_sizing_config ?? row.lotSizingConfig),
+    riskPolicy: {
+      maxRiskPercent: safety.maxRiskPercent ?? null,
+      maxOpenRiskPercent: safety.maxOpenRiskPercent ?? null,
+      maxDailyLossPercent: safety.maxDailyLossPercent ?? null,
+      minimumVolumeRiskTolerancePercent: safety.minimumVolumeRiskTolerancePercent ?? null,
+      minimumLotPolicy: safety.minimumLotPolicy ?? 'FLOOR',
+    },
     createdAt: row.created_at ?? row.createdAt ?? null,
   };
 }
