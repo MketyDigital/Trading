@@ -256,12 +256,27 @@ export async function applyTradingPostgresMigrations({
   }
 }
 
+export function isTradingPostgresSafetyStateValid(defaults) {
+  return defaults?.active_authority === 'd1'
+    && defaults.writes_fenced === true
+    && defaults.control_count === 3
+    && defaults.execution_control_count === 2
+    && defaults.disabled_execution_control_count === 2
+    && defaults.schema_owner === 'trading_owner'
+    && defaults.unsafe_definer_owner_count === 0
+    && defaults.public_definer_execute_count === 0;
+}
+
 async function verifySchemaSafety(client) {
   const verification = await client.query(`
     SELECT authority.active_authority,
            authority.writes_fenced,
            (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls) AS control_count,
            (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls WHERE enabled = false) AS disabled_control_count,
+           (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls
+             WHERE control_key IN ('broker_execution_enabled', 'live_broker_execution_enabled')) AS execution_control_count,
+           (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls
+             WHERE control_key IN ('broker_execution_enabled', 'live_broker_execution_enabled') AND enabled = false) AS disabled_execution_control_count,
            pg_get_userbyid(namespace.nspowner) AS schema_owner,
            (SELECT COUNT(*)::integer
               FROM pg_proc AS p
@@ -284,10 +299,7 @@ async function verifySchemaSafety(client) {
      WHERE authority.singleton_id = 1
   `);
   const defaults = verification?.rows?.[0];
-  if (defaults?.active_authority !== 'd1' || defaults.writes_fenced !== true
-    || defaults.control_count !== 3 || defaults.disabled_control_count !== 3
-    || defaults.schema_owner !== 'trading_owner' || defaults.unsafe_definer_owner_count !== 0
-    || defaults.public_definer_execute_count !== 0) {
+  if (!isTradingPostgresSafetyStateValid(defaults)) {
     throw new Error('PostgreSQL schema did not retain the required restricted, fenced/off defaults');
   }
 }
