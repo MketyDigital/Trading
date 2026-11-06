@@ -253,3 +253,10 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - cTrader cBot CI #539 is still queued; MT5 Connector Release #299 has passed connector unit tests and produced the Windows executable, with packaged entrypoint smoke tests still running.
 - Trading V1's production deployment/acceptance/inventory jobs were skipped for this pull request. No production deployment or storage migration was run.
 - The remaining release blockers are cTrader CI, connector packaged smoke/artifact completion, final diff review, migration upgrade/rollback acceptance, non-production UI/dispatch acceptance, and owner-approved release decision.
+
+
+### 2026-11-06 — MT5 connector release workflow completed without publishing
+
+- MT5 Connector Release #299 completed successfully: pure connector tests, Windows executable build, packaged manager/worker smoke tests, checksum generation and artifact upload all passed.
+- Its `publish-release` job was skipped as expected for this pull request; no versioned connector release was published.
+- cTrader cBot CI #539 has progressed: gateway tests passed; deployment-stack container/compose validation, cBot build and Worker/dashboard tests are still running. These are build/test jobs, not production deployment jobs.
