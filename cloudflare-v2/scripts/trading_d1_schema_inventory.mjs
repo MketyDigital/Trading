@@ -23,3 +23,17 @@ export function compareD1MigrationTableInventory({ migrationSql, actualTables } 
     unexpected: actual.filter((name) => !expectedSet.has(name)),
   };
 }
+
+
+export function validateD1MigrationTableInventory(inventory, { allowMissing = false } = {}) {
+  if (!inventory || !Array.isArray(inventory.missing) || !Array.isArray(inventory.unexpected)) {
+    throw new Error('D1 schema inventory assessment is invalid');
+  }
+  if (inventory.unexpected.length || (!allowMissing && inventory.missing.length)) {
+    throw new Error(`Remote Trading D1 schema mismatch: ${JSON.stringify(inventory)}`);
+  }
+  return {
+    ...inventory,
+    exact: inventory.missing.length === 0,
+  };
+}
