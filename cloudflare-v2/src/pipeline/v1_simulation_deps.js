@@ -848,7 +848,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
           if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
           const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
           const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
-          return decorateFollowerAccounts(matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+          return matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean);
         }
         const { data, error } = await supabase
           .from('trade_accounts')
@@ -860,16 +860,23 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
         const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
         // Keep the result bounded to accounts on the already-correlated groups.
         // Do not reapply signal-symbol route filters to a symbol-less reply.
-        return decorateFollowerAccounts(matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+        return matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean);
       }
-      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers) });
+      const followerLinksByAccount = new Map();
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, {
+        event,
+        interpretation,
+        persistenceRuntime,
+        portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers),
+        followerLinksByAccount,
+      });
       if (!accountIds.length) return [];
       if (persistenceRuntime) {
         if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
         const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
         const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
         const orderedAccounts = accountIds.map(id => accountMap.get(id)).filter(Boolean);
-        return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: true });
+        return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime }), followerLinksByAccount);
       }
       const { data, error } = await supabase
         .from('trade_accounts')
@@ -880,7 +887,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
       if (error) throw new Error(`failed to load routed execution accounts: ${error.message || 'database error'}`);
       const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
       const orderedAccounts = accountIds.map((id) => accountMap.get(id)).filter(Boolean);
-      return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+      return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader }), followerLinksByAccount);
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);
