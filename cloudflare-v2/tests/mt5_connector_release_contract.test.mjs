@@ -30,6 +30,8 @@ test('pull request and main branch builds upload artifacts without publishing re
   assert.match(workflow, /publish-release:\s*\n\s*if: \(github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/mt5-connector-v'\)\)/);
   assert.match(workflow, /github\.event_name == 'workflow_call'/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event_name == 'workflow_call'/);
+  assert.match(workflow, /GITHUB_EVENT_NAME" == "workflow_dispatch" \|\| "\$GITHUB_EVENT_NAME" == "workflow_call"/);
   assert.match(workflow, /workflow_call:[\s\S]*?release_tag:[\s\S]*?required: true/);
   assert.doesNotMatch(workflow, /if:\s*github\.event_name\s*!=\s*'pull_request'[\s\S]{0,250}gh release/);
 });
