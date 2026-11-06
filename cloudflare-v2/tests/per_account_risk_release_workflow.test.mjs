@@ -12,6 +12,7 @@ const release = read('.github/workflows/per-account-risk-sizing-release.yml');
 const migrations = read('.github/workflows/trading-v1-ci.yml');
 const deploy = read('.github/workflows/production-cloudflare-deploy.yml');
 const frontend = read('.github/workflows/production-frontend-e2e.yml');
+const platform = read('.github/workflows/production-platform-secret-sync.yml');
 const readiness = read('.github/workflows/production-connection-readiness.yml');
 const mt5 = read('.github/workflows/mt5-connector-release.yml');
 
@@ -46,7 +47,9 @@ test('production Worker push deploy is suppressed for this PR merge until the or
 });
 
 test('release verifies the deployed frontend and connection readiness before publishing MT5', () => {
-  assert.match(release, /frontend_verification:[\s\S]*?needs: deploy_worker[\s\S]*?uses: \.\/\.github\/workflows\/production-frontend-e2e\.yml/);
+  assert.match(release, /platform_configuration:[\s\S]*?needs: deploy_worker[\s\S]*?uses: \.\/\.github\/workflows\/production-platform-secret-sync\.yml/);
+  assert.match(platform, /workflow_call:/);
+  assert.match(release, /frontend_verification:[\s\S]*?needs: platform_configuration[\s\S]*?uses: \.\/\.github\/workflows\/production-frontend-e2e\.yml/);
   assert.match(frontend, /workflow_call:/);
   assert.match(frontend, /orchestrated-risk-release/);
   assert.match(frontend, /riskPolicyEditable/);
