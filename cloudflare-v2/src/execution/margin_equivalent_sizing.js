@@ -142,7 +142,7 @@ export async function buildSymbolEquivalentSizing({
 
   const normalizedReferenceLots = normalizeReferenceLots(referenceLots, referenceInstrument);
   const referenceMargin = Number(await estimateReferenceMargin(normalizedReferenceLots));
-  if (!(referenceMargin > 0)) throw new Error('reference symbol expected margin unavailable');
+  if (!Number.isFinite(referenceMargin) || !(referenceMargin > 0)) throw new Error('reference symbol expected margin unavailable');
 
   // The owner's chosen lot is a ceiling/reference, not a target to maximize.
   // Target products may be reduced when the same lot is heavier, but are never
@@ -195,11 +195,12 @@ export async function buildBalancePercentSizing({
 } = {}) {
   const balance = Number(accountBalance);
   const scale = Number(percent);
-  if (!(balance > 0)) throw new TypeError('positive broker account balance required');
-  if (!(scale > 0 && scale <= 100)) throw new TypeError('balance percent must be between 0 and 100');
+  if (!Number.isFinite(balance) || !(balance > 0)) throw new TypeError('finite positive broker account balance required');
+  if (!Number.isFinite(scale) || !(scale > 0 && scale <= 100)) throw new TypeError('balance percent must be between 0 and 100');
   if (typeof estimateTargetMargin !== 'function') throw new TypeError('broker margin estimator required');
 
   const marginBudget = balance * scale / 100;
+  if (!Number.isFinite(marginBudget) || !(marginBudget > 0)) throw new TypeError('finite positive balance margin budget required');
   const targetRequestedLots = normalizeReferenceLots(maximumLots, targetInstrument, { belowMinimumCode: 'BALANCE_PERCENT_BELOW_BROKER_MINIMUM' });
   const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
   if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
