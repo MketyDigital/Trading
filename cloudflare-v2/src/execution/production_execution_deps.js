@@ -764,7 +764,14 @@ export function createProductionExecutionDependencies({
     }
 
     try {
-      return await runtime.execute(action);
+      const fallbackAuthorized = action?.[BROKER_MINIMUM_FALLBACK_AUTH] === true
+        && action?.minimumVolumeFallbackAuthorized === true;
+      let dispatchAction = action;
+      if (!fallbackAuthorized && Object.prototype.hasOwnProperty.call(action, 'minimumVolumeFallbackAuthorized')) {
+        dispatchAction = { ...action };
+        delete dispatchAction.minimumVolumeFallbackAuthorized;
+      }
+      return await runtime.execute(dispatchAction);
     } catch (error) {
       if (batchKey && ctraderBatchRuntimes.get(batchKey)?.runtime === runtime) {
         ctraderBatchRuntimes.delete(batchKey);
