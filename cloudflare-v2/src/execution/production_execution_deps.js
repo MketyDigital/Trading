@@ -72,15 +72,20 @@ function sizingModeOf(account = {}) {
 function normalizeTradeAccountRiskSizing(account = {}) {
   const rawMode = text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
   const mode = rawMode === 'FIXED' ? 'FIXED_LOTS' : rawMode;
+  const lotSizingConfig = account.lot_sizing_config ?? account.lotSizingConfig ?? {};
+  const accountRiskMode = text(lotSizingConfig.riskMode ?? lotSizingConfig.risk_mode).toLowerCase() || 'percent';
   const isRiskPercentMode = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode);
-  const riskPercent = account.riskPercent ?? account.risk_percent
+  const riskPercent = accountRiskMode === 'fixed_cash' ? undefined : account.riskPercent ?? account.risk_percent
     ?? (isRiskPercentMode ? account.lot_value : undefined);
-  const riskBasis = account.riskBasis ?? account.risk_basis
+  const riskAmount = account.riskAmount ?? account.risk_amount
+    ?? (accountRiskMode === 'fixed_cash' ? account.lot_value : undefined);
+  const riskBasis = account.riskBasis ?? account.risk_basis ?? lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis
     ?? (mode === 'BALANCE_RISK_PERCENT' ? 'balance' : 'equity');
   return {
     ...account,
     sizingMode: mode,
     ...(riskPercent !== undefined ? { riskPercent, risk_percent: riskPercent } : {}),
+    ...(riskAmount !== undefined ? { riskAmount, risk_amount: riskAmount } : {}),
     riskBasis,
     risk_basis: riskBasis,
   };
