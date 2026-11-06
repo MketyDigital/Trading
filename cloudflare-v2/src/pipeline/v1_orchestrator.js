@@ -38,7 +38,7 @@ function normalizeAccount(account = {}) {
     riskAmount: independentlyRiskSized ? (followerLink.risk_amount ?? followerLink.riskAmount) : (account.riskAmount ?? account.risk_amount ?? (accountRiskMode === 'fixed_cash' ? account.lot_value : undefined)),
     riskBasis: independentlyRiskSized
       ? (followerRiskMode === 'balance_percent' ? 'balance' : followerRiskMode === 'equity_percent' ? 'equity' : (followerLink.risk_basis ?? followerLink.riskBasis ?? account.riskBasis ?? account.risk_basis))
-      : (account.riskBasis ?? account.risk_basis ?? lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis),
+      : (lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis ?? account.riskBasis ?? account.risk_basis),
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
     fastEntryPolicy: { enabled: true, mode: 'execute_immediately', locked: true },
   };
