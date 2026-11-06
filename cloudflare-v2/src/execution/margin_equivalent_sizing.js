@@ -9,6 +9,8 @@ function decimals(step) {
   return Math.max(0, fractionDigits - exponent);
 }
 
+const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+
 function constraints(instrument = {}) {
   const step = Number(instrument.stepLots ?? 0.01);
   const min = Number(instrument.minLots ?? step);
@@ -16,7 +18,6 @@ function constraints(instrument = {}) {
   if (!(step > 0) || !(min > 0) || !(max >= min) || !Number.isFinite(max)) {
     throw new TypeError('finite broker volume constraints required for broker-aware sizing');
   }
-  const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
   const minIndex = Math.ceil((min / step) - stepIndexTolerance(min / step));
   const maxIndex = Math.floor((max / step) + stepIndexTolerance(max / step));
   if (!Number.isFinite(minIndex) || !Number.isFinite(maxIndex) || maxIndex < minIndex) {
