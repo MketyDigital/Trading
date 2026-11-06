@@ -161,7 +161,7 @@ test('supports arbitrary dynamic TP counts with risk budget independently applie
     assert.equal(plan.riskAmountPerLeg, 100, `risk budget per leg for ${targetCount} targets`);
     assert.equal(plan.totalRiskAmount, 100 * targetCount, `aggregate risk for ${targetCount} targets`);
     assert.equal(plan.lotsPerLeg, 0.1);
-    assert.equal(plan.totalLots, 0.1 * targetCount);
+    assert.ok(Math.abs(plan.totalLots - (0.1 * targetCount)) < 1e-12, `aggregate lots for ${targetCount} targets`);
     assert.equal(plan.legLots.length, targetCount);
     assert.deepEqual(plan.legLots, Array(targetCount).fill(0.1));
     assert.equal(plan.estimatedRiskPerLeg, 100);
