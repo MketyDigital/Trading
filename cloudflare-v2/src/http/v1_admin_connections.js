@@ -315,7 +315,9 @@ async function handleAccountConnection(request, authorization, supabase, account
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const currentSizingType = String(current.lot_sizing_type || 'fixed').trim().toLowerCase();
     const requestedSizingType = String(body.lotSizingType ?? body.lot_sizing_type ?? currentSizingType).trim().toLowerCase();
-    const riskPolicyMutation = RISK_SIZING_TYPES.has(currentSizingType) || RISK_SIZING_TYPES.has(requestedSizingType)
+    const hasSizingMutation = ['lotSizingType', 'lot_sizing_type', 'lotValue', 'lot_value', 'lotSizingConfig', 'lot_sizing_config']
+      .some((key) => Object.prototype.hasOwnProperty.call(body, key));
+    const riskPolicyMutation = (hasSizingMutation && (RISK_SIZING_TYPES.has(currentSizingType) || RISK_SIZING_TYPES.has(requestedSizingType)))
       || Object.prototype.hasOwnProperty.call(body, 'riskPolicy') || Object.prototype.hasOwnProperty.call(body, 'risk_policy');
     if (riskPolicyMutation && !isWorkspaceRiskOwner(authorization?.membership?.role)) {
       return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
@@ -730,12 +732,12 @@ export async function handleV1AdminConnectionsRequest(request, env = {}, {
     if (request.method === 'GET') {
       if (!can(authorization, 'accounts.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
       if (persistenceRuntime) {
-        try { return json({ ok: true, accounts: (await persistenceRuntime.accounts.listAccounts(String(authorization.workspace.id))).map(publicAccount), readiness: connectionReadiness(env) }); }
+        try { return json({ ok: true, accounts: (await persistenceRuntime.accounts.listAccounts(String(authorization.workspace.id))).map(publicAccount), readiness: connectionReadiness(env), riskPolicyEditable: isWorkspaceRiskOwner(authorization?.membership?.role) }); }
         catch { return json({ ok: false, reason: 'ACCOUNT_LIST_FAILED' }, 503); }
       }
       const { data, error } = await supabase.from('trade_accounts').select(ACCOUNT_SELECT).eq('workspace_id', String(authorization.workspace.id)).order('created_at', { ascending: true });
       if (error) return json({ ok: false, reason: 'ACCOUNT_LIST_FAILED' }, 503);
-      return json({ ok: true, accounts: (data || []).map(publicAccount), readiness: connectionReadiness(env) });
+      return json({ ok: true, accounts: (data || []).map(publicAccount), readiness: connectionReadiness(env), riskPolicyEditable: isWorkspaceRiskOwner(authorization?.membership?.role) });
     }
     if (request.method === 'POST') return createMt5Connection(request, authorization, supabase, env, persistenceRuntime?.accounts || null);
     return json({ ok: false, reason: 'METHOD_NOT_ALLOWED' }, 405, { Allow: 'GET, POST' });
