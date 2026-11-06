@@ -57,6 +57,9 @@ function put(body) {
 
 test('owner can configure balance-percent risk on exactly the selected account using the compatible stored type', async () => {
   const fixture = makeRuntime('owner');
+  fixture.row.is_active = true;
+  fixture.row.execution_enabled = true;
+  fixture.row.live_execution_enabled = true;
   const response = await handleV1AdminConnectionsRequest(put({
     lotSizingType: 'balance_risk_percent',
     lotValue: 1.5,
@@ -74,8 +77,9 @@ test('owner can configure balance-percent risk on exactly the selected account u
   assert.equal(fixture.row.safety_policy.maxOpenRiskPercent, 4);
   assert.equal(fixture.row.safety_policy.maxDailyLossPercent, 5);
   assert.equal(fixture.row.safety_policy.killSwitch, true);
-  assert.equal(fixture.row.is_active, false);
-  assert.equal(fixture.row.execution_enabled, false);
+  assert.equal(fixture.row.is_active, true);
+  assert.equal(fixture.row.execution_enabled, true);
+  assert.equal(fixture.row.live_execution_enabled, true);
   assert.equal(fixture.calls.filter((call) => call[0] === 'updateAccount').length, 1);
 });
 
