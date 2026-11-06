@@ -285,3 +285,9 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Both D1/PostgreSQL repository and the route's alternate adapter now merge omitted follower lot/risk fields from the existing link. The runtime API omits fields the caller did not supply, allowing the repository to distinguish omission from an explicit update.
 - Expanded both regression tests to assert preservation of lot multiplier, fixed lot, risk mode, risk percent and risk basis.
 - Commits: `0c975366` (repository merge), `87574bf2` (alternate adapter merge), `4c942e17` (route omission), `584aa5df` (repository regression), `c0bcfb99` (route regression). Latest full CI is required for these final adjustments.
+
+
+### 2026-11-06 — migration non-mutation coverage expanded
+
+- Expanded the additive D1 migration regression to snapshot an existing active follower link's parent, enabled state, multiplier and fixed lot before the risk-column migration and assert every existing field remains identical afterward. The test also snapshots the existing fixed-lot trade account and verifies its sizing, activation, execution and safety state remains unchanged.
+- Migration regression commit: `2a3be59f`. A new exact-code-head CI run is required.
