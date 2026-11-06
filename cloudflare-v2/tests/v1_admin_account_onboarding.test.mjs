@@ -202,6 +202,26 @@ test('admin cannot create an account with risk sizing even though admins have or
   assert.equal(store.calls.length, 0);
 });
 
+test('admin cannot set account risk limits during otherwise ordinary account onboarding', async () => {
+  const store = makeStore();
+  let encryptCalls = 0;
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({
+      safetyPolicy: { maxRiskPercent: 2 },
+    })),
+    { ...ownerAuthorization, membership: { ...ownerAuthorization.membership, role: 'admin' } },
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => { encryptCalls += 1; return 'fixture-envelope'; },
+    },
+  );
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, 'RISK_POLICY_OWNER_REQUIRED');
+  assert.equal(encryptCalls, 0);
+  assert.equal(store.calls.length, 0);
+});
+
 test('production cTrader onboarding uses the cTrader encrypted envelope and remains execution-disabled', async () => {
   const store = makeStore();
   const kinds = [];
