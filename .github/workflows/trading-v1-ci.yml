@@ -20,6 +20,20 @@ on:
         description: Audit reference for the rolling continuity import (does not pause public writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
         required: false
         type: string
+  workflow_call:
+    inputs:
+      mode:
+        description: Reviewed Trading schema action
+        required: true
+        type: string
+      confirmation:
+        description: Exact confirmation for the schema apply mode
+        required: false
+        type: string
+      cutover_reference:
+        description: Optional continuity-import audit reference
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -147,6 +161,11 @@ jobs:
               startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
+        ) || (
+          github.event_name == 'workflow_call' &&
+          github.ref == 'refs/heads/main' &&
+          inputs.mode == 'apply-existing-mkety-schema' &&
+          inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
         )
       }}
     runs-on: ubuntu-latest
@@ -176,7 +195,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TRADING_MASTER_KEY: ${{ inputs.mode == 'import-continuity-fresh-start' && secrets.TRADING_MASTER_KEY || '' }}
+          TRADING_MASTER_KEY: ${{ (inputs.mode == 'import-continuity-fresh-start' || inputs.mode == 'apply-existing-mkety-schema') && secrets.TRADING_MASTER_KEY || '' }}
           STAGING_MODE: ${{ inputs.mode || 'inspect' }}
         shell: bash
         run: |
@@ -227,7 +246,26 @@ jobs:
           await writeFile('wrangler.trading-staging.toml', config, { mode: 0o600 });
           console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
           D1_CONFIG
-          trap 'rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-staging-pre-import.sql"' EXIT
+          trap 'rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-staging-pre-import.sql" "$RUNNER_TEMP/trading-staging-pre-migration.sql"' EXIT
+          if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
+            test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing TRADING_MASTER_KEY for encrypted pre-migration D1 recovery export.'; exit 1; }
+            npx wrangler d1 export trading-staging --remote --skip-confirmation --config wrangler.trading-staging.toml --output "$RUNNER_TEMP/trading-staging-pre-migration.sql"
+            test -s "$RUNNER_TEMP/trading-staging-pre-migration.sql" || { echo 'Existing D1 pre-migration export is empty; refusing schema apply.'; exit 1; }
+            node --input-type=module <<'ENCRYPT_D1_PRE_MIGRATION_EXPORT'
+          import { unlink } from 'node:fs/promises';
+          import { encryptTradingD1BackupFile } from './scripts/trading_d1_backup.mjs';
+
+          const inputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-migration.sql`;
+          const outputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-migration.sql.enc`;
+          const result = await encryptTradingD1BackupFile({
+            inputPath,
+            outputPath,
+            masterKey: process.env.TRADING_MASTER_KEY,
+          });
+          await unlink(inputPath);
+          console.log(`Existing Trading D1 pre-migration recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
+          ENCRYPT_D1_PRE_MIGRATION_EXPORT
+          fi
           if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
             npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
           fi
@@ -243,6 +281,9 @@ jobs:
             'db/d1-migrations/0001_trading_storage_replication.sql',
             'db/d1-migrations/0002_trading_domain_schema.sql',
             'db/d1-migrations/0003_trading_replication_health.sql',
+            'db/d1-migrations/0004_account_followers.sql',
+            'db/d1-migrations/0005_broker_observation_due_index.sql',
+            'db/d1-migrations/0006_account_follower_risk_sizing.sql',
           ];
           const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check.json`, 'utf8'));
@@ -278,6 +319,14 @@ jobs:
           console.log(`Existing staging D1 recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
           ENCRYPT_D1_PRE_IMPORT_EXPORT
           fi
+      - name: Retain encrypted pre-migration D1 recovery export
+        if: ${{ inputs.mode == 'apply-existing-mkety-schema' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-staging-d1-pre-migration-${{ github.run_id }}
+          path: ${{ runner.temp }}/trading-staging-pre-migration.sql.enc
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain encrypted existing D1 recovery export
         if: ${{ inputs.mode == 'import-continuity-fresh-start' }}
         uses: actions/upload-artifact@v4
@@ -544,6 +593,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           APPLY_MODE: ${{ inputs.mode }}
           MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
           SOURCE_CUTOVER_REFERENCE: ${{ inputs.cutover_reference }}
@@ -603,7 +653,7 @@ jobs:
             server_uuid: 'ynkdc4tx6bi7cyxf0kuy8kte',
             environment_uuid: 'rtebcetyfvzlaiqitzcp0gl8',
             git_repository: 'https://github.com/MketyDigital/Trading',
-            git_branch: 'feat/trading-d1-cutover-implementation',
+            git_branch: process.env.TARGET_BRANCH,
             git_commit_sha: sha,
             build_pack: 'dockerfile',
             dockerfile_location: '/ops/coolify-staging-postgres-probe/Dockerfile',
