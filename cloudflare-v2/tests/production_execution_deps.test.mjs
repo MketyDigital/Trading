@@ -112,7 +112,7 @@ test('production account loader applies follower equity-risk settings before bro
     risk_mode: 'equity_percent',
     risk_percent: 1,
     risk_amount: null,
-    risk_basis: 'equity',
+    risk_basis: 'balance',
   };
   const deps = createProductionExecutionDependencies({
     env: { PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true', TRADING_MASTER_KEY: 'master' },
@@ -133,6 +133,7 @@ test('production account loader applies follower equity-risk settings before bro
   assert.equal(loaded.sizingMode, 'EQUITY_RISK_PERCENT');
   assert.equal(loaded.riskPercent, 1);
   assert.equal(loaded.riskAmount, 0);
+  assert.equal(loaded.riskBasis, 'equity');
 
   const result = await deps.riskMaterializer({
     workspaceId: 'ws-a',
