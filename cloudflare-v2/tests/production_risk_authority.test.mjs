@@ -97,6 +97,7 @@ test('persisted balance basis in account sizing config overrides available equit
     account: {
       lot_sizing_type: 'balance_risk_percent',
       lot_value: 2,
+      risk_basis: 'equity',
       lot_sizing_config: { riskBasis: 'balance' },
       safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 2 },
     },
