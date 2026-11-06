@@ -142,7 +142,7 @@ test('remove SL and indexed TP become explicit protection-clear MODIFY_POSITION 
 test('target allocation floors a non-step-aligned total instead of creating extra volume', () => {
   const legs = allocateVolumeAcrossTargets(0.099, 3, 0.01);
   assert.deepEqual(legs, [0.03, 0.03, 0.03]);
-  assert.ok(legs.reduce((sum, lots) => sum + lots, 0) <= 0.099 + 1e-12;
+  assert.ok(legs.reduce((sum, lots) => sum + lots, 0) <= 0.099 + 1e-12);
 });
 
 test('target allocation preserves coarse fractional broker steps', () => {
