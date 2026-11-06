@@ -235,3 +235,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Updated `cloudflare-v2/scripts/test_ci_diagnostic.mjs` to use Node's concise `spec` test reporter per file. The next run should expose the actual failing assertion rather than truncating the useful detail behind successful TAP output.
 - Latest diagnostic-script commit: `80f3c9be`. Trading V1 CI #3546 is running against that commit. MT5 Compatibility CI #134 is green; cTrader CI #535 and connector packaging run #295 are in progress/queued.
 - No production state or deployment has been touched. The failing execution-plan suite remains a release blocker until its exact failure is diagnosed and corrected, then latest-head CI passes.
+
+
+### 2026-11-06 — preserve existing minimum-volume behaviour
+
+- Trading V1 CI #3546 produced the actionable failure: an existing adaptive-sizing regression expected the broker minimum floor, but the risk branch had changed the shared fixed-lot normalizer to reject below-minimum requests.
+- Compared the implementation directly with `main`. Production's existing fixed/adaptive path floors to the broker minimum and caps at broker maximum. That behaviour must remain unchanged for accounts that have not opted into risk sizing.
+- Restored that legacy fixed/adaptive minimum-floor contract while keeping the new risk-sizing path's separate monetary-risk tolerance and FLOOR/REJECT controls authoritative. This does not weaken the risk-sized OPEN checks.
+- Replaced the contradictory fixed-lot rejection test with a regression proving an existing fixed-lot account still produces the same broker-minimum volume as `main`.
+- Runtime fix commit: `3125afff`; regression commit: `332f8dab`. A fresh Trading V1 run is required to verify the fix.
