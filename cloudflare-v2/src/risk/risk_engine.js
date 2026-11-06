@@ -51,13 +51,17 @@ function toStepIndex(volume, step, mode) {
 }
 
 export function calculateRiskPlan({
-  equity, balance, riskPercent, riskAmount, riskBasis = 'EQUITY',
+  equity, balance, riskPercent, riskAmount, riskBasis,
   entry, stopLoss, targetCount = 1, instrument = {},
   minimumLotPolicy = 'FLOOR',
 }) {
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
+  // Infer the available account basis only when the caller did not select one.
+  // Balance-only broker snapshots must not be rejected merely because the
+  // public function defaulted to EQUITY; explicit caller choices remain strict.
+  const effectiveRiskBasis = String(riskBasis || (equity != null ? 'EQUITY' : 'BALANCE')).trim().toUpperCase();
   // Risk amount / percentage is per TP leg. Each leg gets its own risk budget.
-  const riskPerLeg = resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis });
+  const riskPerLeg = resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis: effectiveRiskBasis });
   if (!Number.isFinite(riskPerLeg) || !(riskPerLeg > 0)) throw new TypeError('finite positive per-leg risk budget required');
   const lossPerLotAtStop = resolveLossPerLot({ entry, stopLoss, instrument });
   const step = Number(instrument.stepLots ?? 0.01);
@@ -114,7 +118,7 @@ export function calculateRiskPlan({
     riskAmountExact: riskPerLeg,
     riskAmountPerLeg: Number(riskPerLeg.toFixed(2)),
     totalRiskAmount: Number(totalRiskExact.toFixed(2)),
-    riskBasis: String(riskBasis).toUpperCase(),
+    riskBasis: effectiveRiskBasis,
     lossPerLotAtStop: Number(lossPerLotAtStop.toFixed(8)),
     rawLotsPerLeg: Number(rawLotsPerLeg.toFixed(8)),
     lotsPerLeg, totalLots, legLots,
