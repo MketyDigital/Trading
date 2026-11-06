@@ -207,3 +207,12 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Admins do not see risk-mode controls. They can still edit non-risk account details (label/roles) without touching existing owner-managed risk settings; backend checks remain authoritative.
 - Added API tests for owner capability metadata, admin non-risk edits on risk-configured accounts, and preservation of an already-active/live-enabled account's execution flags when its owner edits risk settings.
 - The legacy public-schema account-list response was intentionally left unchanged; the active D1 path carries the owner capability metadata.
+
+
+### 2026-11-06 — dashboard script validation and owner editor refinements
+
+- Added a Node test that extracts and parses the embedded dashboard script, then asserts owner capability gating and the risk controls are present.
+- The account dashboard now displays the configured broker-minimum tolerance and labels risk policy as owner-managed for non-owners.
+- Refined the backend authorization condition so an admin may still edit non-risk metadata (such as account label and source/execution roles) on a risk-configured account, while any sizing/risk-policy field mutation remains owner-only.
+- Added regression coverage for that admin metadata-only case and for the active/live account state remaining unchanged during owner risk edits.
+- Current branch head has not yet received a fresh Trading V1 CI run. CI #3514 is an earlier run that fails the pre-fix strict floating-point assertions; the fixes and new dashboard tests are later commits and remain unverified until CI runs on the current head.
