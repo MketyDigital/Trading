@@ -640,13 +640,28 @@ export function createProductionExecutionDependencies({
     });
     const authorizeMinimumVolumeFallback = result?.allowed
       && result.action?.minimumVolumeFallbackAuthorized === true
-      ? (candidateAction, policy) => {
+      ? (candidateAction, policy, policyRequest) => {
+        const expectedRiskPercent = Number(result.policyContext?.riskPercent);
+        const dispatchedRiskPercent = Number(policyRequest?.riskPercent);
+        const expectedFloorOverage = Number(result.policyContext?.minimumVolumeRiskOveragePercent);
+        const dispatchedFloorOverage = Number(policyRequest?.minimumVolumeRiskOveragePercent);
         const sameAuthorizedIntent = candidateAction?.type === result.action.type
           && candidateAction?.idempotencyKey === result.action.idempotencyKey
           && candidateAction?.symbol === result.action.symbol
+          && candidateAction?.side === result.action.side
+          && candidateAction?.orderType === result.action.orderType
+          && candidateAction?.entry === result.action.entry
+          && candidateAction?.stopLoss === result.action.stopLoss
+          && candidateAction?.takeProfit === result.action.takeProfit
           && Number(candidateAction?.lots) === Number(result.action.lots)
           && candidateAction?.minimumVolumeFallbackAuthorized === true;
-        if (policy?.allowed !== true || !sameAuthorizedIntent) return false;
+        const sameRiskAuthorization = Number.isFinite(expectedRiskPercent)
+          && Number.isFinite(dispatchedRiskPercent)
+          && Math.abs(expectedRiskPercent - dispatchedRiskPercent) <= 1e-12
+          && Number.isFinite(expectedFloorOverage)
+          && Number.isFinite(dispatchedFloorOverage)
+          && Math.abs(expectedFloorOverage - dispatchedFloorOverage) <= 1e-12;
+        if (policy?.allowed !== true || !sameAuthorizedIntent || !sameRiskAuthorization) return false;
         // Mint only after the coordinator has approved the complete account
         // policy (per-leg risk, floor tolerance, daily loss and open exposure).
         Object.defineProperty(candidateAction, BROKER_MINIMUM_FALLBACK_AUTH, {
