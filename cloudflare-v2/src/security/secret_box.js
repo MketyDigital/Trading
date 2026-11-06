@@ -21,13 +21,13 @@ export async function deriveSecretBoxKeyBytes(masterKey) {
 
   try {
     const raw = decodeBase64Url(value);
-    if (raw.length === 32) return Buffer.from(raw);
+    if (raw.length === 32) return raw;
   } catch {
     // Fall through to deterministic derivation for existing opaque secrets.
   }
 
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(`${DERIVATION_CONTEXT}${value}`));
-  return Buffer.from(new Uint8Array(digest));
+  return new Uint8Array(digest);
 }
 
 async function importMasterKey(masterKey) {
