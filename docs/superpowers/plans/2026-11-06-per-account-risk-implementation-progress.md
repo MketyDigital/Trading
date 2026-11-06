@@ -386,3 +386,15 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - To prevent deployment before migrations, the production Worker push job and its automatic post-deploy probes skip the marked risk-sizing merge. PR title now contains `[orchestrated-risk-release]`; merge via squash or a regular merge commit, not rebase, so the marker/branch guard remains effective. After merge, dispatch the one-click workflow from `main`.
 - No deployment, migration, connector publication, account-policy mutation, worker restart, or broker action has been performed. The release workflow is prepared but unavailable in the Actions menu until PR #253 is merged into the default branch.
 - CI status at the time of this log update: latest workflow run is still executing; do not treat this prepared workflow as production-ready until the final head's CI is green and the post-merge one-click release completes.
+
+
+### 2026-11-06 — release workflow code head CI completed
+
+- Verified all four required CI workflows are green on runtime/workflow code head `67c471d1169a434d4ddb5c1979912077cbb2d97c`:
+  - Trading V1 CI run `42190929299`: success (full Node Worker/trading-core regression suite, including the new workflow and frontend contract tests).
+  - MT5 Connector Release run `42190929218`: success for pure connector tests, Windows packaging, packaged manager/worker smoke tests, checksum and artifact upload. The publication job was correctly skipped on the feature PR; it will publish only through the post-merge ordered release workflow.
+  - MT5 Compatibility CI run `42190929288`: success.
+  - cTrader cBot CI run `42190929200`: success (gateway tests, Worker/dashboard tests, gateway and TLS container builds, Compose validation, cBot `.algo` build).
+- The latest PR head `1adec253404aac5443ed381fbd33d1d42e79f7f4` is documentation-only after the green code head; no runtime/workflow code changed after the verified CI head.
+- PR #253 is mergeable and has been moved out of draft for review. It has not been merged.
+- Production remains unchanged. The manual one-click release is still pending merge and dispatch; no database migration, Worker deployment, platform verification, MT5 release publication, account mutation, or broker action has run.
