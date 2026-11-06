@@ -29,7 +29,8 @@ function configuredRiskAmount(account = {}, action = {}) {
     action.riskAmount ??
     action.risk_amount ??
     account.riskAmount ??
-    account.risk_amount,
+    account.risk_amount ??
+    (sizingMode(account) === 'FIXED_RISK' ? account.lot_value ?? account.lotValue : undefined),
   );
 }
 
