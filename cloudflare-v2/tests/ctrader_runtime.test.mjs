@@ -85,6 +85,40 @@ test('bootstraps demo cTrader session, account rights and live account symbol ca
   assert.equal(runtime.ready, true);
 });
 
+test('demo synthetic cTrader instruments do not receive an implicit broker-minimum fallback', async () => {
+  const session = fakeSession();
+  const originalRequest = session.request.bind(session);
+  session.request = async (message) => {
+    const response = await originalRequest(message);
+    if (message.payloadType === 2114) {
+      response.payload.symbol[0].symbolName = 'DERIV:VOLATILITY_75_1S';
+    }
+    if (message.payloadType === 2116) {
+      response.payload.symbol[0].symbolName = 'DERIV:VOLATILITY_75_1S';
+      response.payload.symbol[0].minVolume = 500;
+      response.payload.symbol[0].stepVolume = 500;
+    }
+    return response;
+  };
+  const runtime = await createCTraderRuntime(runtimeOptions(session));
+
+  await assert.rejects(
+    () => runtime.execute({
+      type: 'OPEN_POSITION',
+      symbol: 'DERIV:VOLATILITY_75_1S',
+      side: 'BUY',
+      orderType: 'MARKET',
+      entry: { kind: 'MARKET' },
+      lots: 0.01,
+      idempotencyKey: 'deriv-minimum-guard',
+    }),
+    (error) => error?.code === 'CTRADER_VOLUME_BELOW_MINIMUM',
+  );
+  assert.equal(session.calls.some((call) => Array.isArray(call) && call[1] === 2127), false);
+  runtime.close();
+});
+
+
 test('cTrader BE command is safely blocked before dispatch when stop-trigger price has not crossed entry', async () => {
   const session = fakeSession();
   const runtime = await createCTraderRuntime(runtimeOptions(session));

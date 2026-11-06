@@ -179,8 +179,17 @@ export function normalizeOrderIntent(value) {
 }
 
 function decimalPlaces(step) {
-  const text = String(step);
-  return text.includes('.') ? text.split('.')[1].length : 0;
+  const numeric = Number(step);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+
+  // String(number) may use scientific notation (e.g. 1e-7). Convert the
+  // coefficient and exponent so broker precision is calculated correctly.
+  const [coefficient, exponentText] = String(numeric).toLowerCase().split('e');
+  const fractionDigits = coefficient.includes('.')
+    ? coefficient.split('.')[1].length
+    : 0;
+  const exponent = exponentText == null ? 0 : Number(exponentText);
+  return Math.max(0, fractionDigits - exponent);
 }
 
 function clamp(value, min, max) {

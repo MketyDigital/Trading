@@ -120,12 +120,23 @@ def captured_source_event(ticket='9001', occurred_at='2026-02-02T02:40:00.100000
 
 
 class MT5BridgeTests(unittest.TestCase):
-    def test_volume_normalization_uses_target_broker_minimum_and_step(self):
+    def test_volume_normalization_floors_to_step_without_raising_below_minimum(self):
         mt5 = FakeMT5()
         engine = MT5Engine(mt5)
         info = SimpleNamespace(volume_min=0.1, volume_max=2.0, volume_step=0.1)
         self.assertEqual(engine._normalize_volume(0.35, info), 0.3)
-        self.assertEqual(engine._normalize_volume(0.01, info), 0.1)
+        with self.assertRaisesRegex(RuntimeError, 'below broker minimum'):
+            engine._normalize_volume(0.01, info)
+        with self.assertRaisesRegex(RuntimeError, 'below broker minimum'):
+            engine._normalize_volume(0.05, info)
+
+    def test_volume_step_uses_zero_origin_and_validates_minimum_alignment(self):
+        mt5 = FakeMT5()
+        engine = MT5Engine(mt5)
+        info = SimpleNamespace(volume_min=0.1, volume_max=2.0, volume_step=0.01)
+        self.assertEqual(engine._normalize_volume(0.109, info), 0.10)
+        invalid = SimpleNamespace(volume_min=0.03, volume_max=2.0, volume_step=0.02)
+        self.assertEqual(engine._normalize_volume(0.1, invalid), 0.1)
 
     def test_unique_broker_suffix_is_resolved_but_ambiguous_symbol_fails_closed(self):
         class CatalogMT5(FakeMT5):

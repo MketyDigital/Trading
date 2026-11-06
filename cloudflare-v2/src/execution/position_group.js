@@ -1,10 +1,18 @@
 function decimals(step) {
-  const s = String(step);
-  return s.includes('.') ? s.split('.')[1].length : 0;
+  const value = Number(step);
+  if (!(Number.isFinite(value) && value > 0)) return 0;
+  const text = String(value).toLowerCase();
+  if (!text.includes('e')) return text.includes('.') ? text.split('.')[1].length : 0;
+  const [coefficient, exponentText] = text.split('e');
+  const exponent = Number(exponentText);
+  const fractionDigits = coefficient.includes('.') ? coefficient.split('.')[1].length : 0;
+  return Math.max(0, fractionDigits - exponent);
 }
 
 function floorToStep(value, step) {
-  return Number((Math.floor((Number(value) / Number(step)) + 1e-12) * Number(step)).toFixed(decimals(step)));
+  const ratio = Number(value) / Number(step);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  return Number((Math.floor(ratio + tolerance) * Number(step)).toFixed(decimals(step)));
 }
 
 function finiteProtection(value) {
@@ -135,8 +143,16 @@ function coalesceCompoundProtectionActions(group, children) {
 
 export function allocateVolumeAcrossTargets(totalLots, targetCount, volumeStep = 0.01) {
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
-  if (!(Number(totalLots) > 0) || !(Number(volumeStep) > 0)) throw new TypeError('positive totalLots and volumeStep required');
-  const totalSteps = Math.round(Number(totalLots) / Number(volumeStep));
+  if (!Number.isFinite(Number(totalLots)) || !(Number(totalLots) > 0)
+    || !Number.isFinite(Number(volumeStep)) || !(Number(volumeStep) > 0)) {
+    throw new TypeError('finite positive totalLots and volumeStep required');
+  }
+  // Never allocate more volume than the broker-normalized total. Floating-point
+  // ratios can sit just above an integer; floor with a small tolerance only for
+  // representation noise, not for a genuine partial step.
+  const ratio = Number(totalLots) / Number(volumeStep);
+  const stepIndexTolerance = Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  const totalSteps = Math.floor(ratio + stepIndexTolerance);
   if (totalSteps < targetCount) throw new RangeError('totalLots is too small for target count at configured volumeStep');
   const baseSteps = Math.floor(totalSteps / targetCount);
   let remainder = totalSteps - baseSteps * targetCount;

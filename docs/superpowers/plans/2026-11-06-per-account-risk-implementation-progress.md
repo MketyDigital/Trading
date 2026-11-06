@@ -1,0 +1,400 @@
+# Per-account risk sizing implementation progress
+
+**Updated:** 2026-11-06  
+**Working branch:** `feature/per-account-risk-sizing`  
+**Pull request:** #253 — draft, targeting `main`  
+**Production status:** unchanged. No production deployment, account-policy update, migration application, or broker action was performed.
+
+## Non-negotiable release constraints
+
+- New risk functionality is opt-in and dormant by default.
+- Deploying code, restarting a Worker/connector, or applying an additive schema change must not alter any existing account's sizing mode, risk settings, execution state, LIVE state, routes, or other preferences.
+- Only a workspace owner may change risk settings.
+- An owner may change only the explicitly selected account(s); no bulk/default activation.
+- Existing fixed-lot and other currently configured account behaviour remains unchanged unless an owner explicitly edits that account.
+- Follower risk policy is independent from the parent account and from every other follower.
+- Risk-sized execution fails closed when stop-loss economics, account basis, or fresh broker constraints cannot be established.
+- cTrader risk-sized OPEN remains blocked until reliable monetary stop-loss conversion is available.
+- Changes stay on the feature branch until all tests and acceptance checks pass. Production deployment requires a separate, explicit release decision.
+
+## Audit findings
+
+### Implemented code present on the feature branch (not yet release-verified)
+
+- Risk sizing engine and execution-plan integration.
+- Equity-percent, balance-percent, and fixed-cash stop-loss risk modes.
+- Per-TP-leg risk allocation and aggregate group exposure calculation.
+- Per-leg and aggregate open-risk policy checks.
+- Broker minimum/maximum/step volume handling and explicit minimum-volume policy.
+- Portal follower risk persistence and local MT5 copier risk configuration.
+- MT5 connector risk context and cTrader safeguards.
+- Risk, execution-plan, follower, adapter, and connector tests.
+
+Presence of these files is not proof of release readiness. The branch's CI currently reports failures in the risk-engine and execution-plan test suites.
+
+### Release blockers
+
+1. **Owner-only authorization:** the current account-control path uses the broad `accounts.write` permission, which is also granted to admins. A dedicated owner-role guard is required for every risk-policy mutation. Existing admin permissions for unrelated account controls must not be broaden or narrowed as a side effect.
+2. **Complete account configuration path:** the account creation API still validates only the older sizing-mode set. The new risk modes need a complete, explicitly owner-authorized, per-account read/write path with strict field allowlists and validation.
+3. **Migration history:** the feature branch edits an existing migration and introduces migration numbers already occupied in the applicable migration tracks. Applied migration files must remain immutable. New schema work must use unique, additive versions in each supported track.
+4. **Risk-engine tests:** current CI failures include balance-only account basis handling and BUY/SELL range-entry sizing. Fix the underlying selection/entry logic without weakening fail-closed validation.
+5. **Follower execution:** prove that every follower OPEN is sized from that follower's own account metrics and policy, then freshly revalidated immediately before dispatch. A follower failure must not suppress the parent or other followers.
+6. **Production isolation:** add regression checks proving that deploy/restart/schema rollout leaves every existing account's settings and execution behaviour unchanged.
+7. **Documentation:** reconcile the lot-sizing reference, architecture notes, implementation plan, and roadmap only after behaviour and tests are verified.
+
+## Required acceptance matrix
+
+| Scenario | Required result |
+|---|---|
+| Deploy new code with no owner edits | Every existing account retains its exact current configuration and behaviour |
+| Worker or connector restart | No risk policy is activated or rewritten |
+| Owner changes one account | Only that selected account changes |
+| Admin attempts risk mutation | Rejected; no persistence write |
+| Invalid/incomplete risk configuration | Rejected without partial update |
+| Missing/stale broker data or monetary SL model | Risk-sized OPEN blocked |
+| Broker minimum exceeds permitted risk tolerance | OPEN blocked |
+| cTrader risk-sized OPEN without reliable monetary SL conversion | OPEN blocked |
+| Follower has its own risk policy | Follower is sized from its own account context |
+| One follower fails | Parent and other followers continue independently |
+| Existing fixed-lot account | Exact pre-release behaviour retained |
+| Rollback | Existing account configuration and behaviour remain intact |
+
+## Progress log
+
+### 2026-11-06 — implementation resumed
+
+- Re-inspected PR #253 and its complete changed-file inventory.
+- Confirmed PR remains draft and targets `main`; implementation work is to remain isolated on `feature/per-account-risk-sizing`.
+- Reconfirmed the risk engine and execution-plan source paths and reviewed their current implementation and tests.
+- Reconfirmed that account-control authorization currently relies on `accounts.write`, which is not owner-exclusive.
+- Reconfirmed the account-creation validator does not yet accept the new risk-sizing modes.
+- Reconfirmed migration version collisions and modification of a historical migration.
+- Reconfirmed risk-engine and execution-plan CI failures remain unresolved.
+- No code, schema, production account, or deployment state was changed during this audit pass.
+- No tests were run from this session: the available GitHub integration can inspect and commit repository files but does not provide a repository shell or local test runner. A pushed feature-branch commit can trigger the repository's CI for authoritative test execution; changes must not be described as passing until that CI result is inspected.
+
+## Next implementation sequence
+
+1. Fix the existing risk-engine and execution-plan failures; add regression coverage for both balance-only accounts and both BUY/SELL range sides.
+2. Add a dedicated owner-only risk-policy mutation path and tests for owner allow / admin deny / cross-workspace deny.
+3. Complete the per-account risk configuration contract, including explicit account selection, supported modes, validated limits, safe defaults, and no implicit activation.
+4. Replace conflicting migration additions with unique additive migrations; leave every existing migration byte-for-byte unchanged.
+5. Finish independent follower sizing, freshness checks, idempotency, and failure isolation tests.
+6. Add deploy/restart non-mutation and existing fixed-lot compatibility acceptance tests.
+7. Update the canonical docs and roadmap with verified behaviour and CI evidence.
+8. Run full required CI, review the final diff, and keep the PR draft until every acceptance item is green.
+9. Only after a separate owner release decision: plan a controlled production rollout with before/after account-state snapshots and a rollback path. No deployment is authorized by this progress log.
+
+
+### 2026-11-06 — first risk-engine correction
+
+- Inspected the failing CI job logs from Trading V1 CI run #3460. The failures shared one root cause: the risk engine defaulted `riskBasis` to `EQUITY`, even when the caller supplied only a valid broker balance. This caused balance-only risk sizing to fail before the monetary stop-loss model could be evaluated.
+- Updated `cloudflare-v2/src/risk/risk_engine.js` to infer EQUITY only when equity is present and otherwise infer BALANCE, while preserving an explicitly selected basis.
+- Updated `cloudflare-v2/src/execution/execution_plan.js` to pass the same safe basis inference into risk planning instead of forcing EQUITY when the account's equity field is absent.
+- Strengthened `cloudflare-v2/tests/risk_engine.test.mjs` to assert the inferred BALANCE basis.
+- Commits: `0fcbab0c`, `e781112a`, `fab01437`.
+- The previous CI run #3461 was created before these code corrections and therefore cannot verify them. A new exact-head CI result is still required before this fix is marked verified.
+
+
+### 2026-11-06 — owner-only configuration and schema compatibility
+
+- Added `cloudflare-v2/src/security/risk_policy_authorization.js`. Only the exact workspace role `owner` passes the risk mutation guard; `admin`, `operator`, and `viewer` are denied even though admins retain ordinary `accounts.write`.
+- Enforced owner-only changes to follower links/risk settings in the account-controls route.
+- Added owner-only checks to the account-connection update path whenever the selected account is in risk mode, a risk mode is selected, or risk-policy fields are submitted.
+- Added account risk configuration validation and persistence for:
+  - percentage risk with explicit equity/balance basis;
+  - fixed-cash risk using the same existing persisted `risk_percent` sizing type plus `lot_sizing_config.riskMode=fixed_cash`;
+  - per-leg, aggregate-open, daily-loss and broker-minimum tolerance controls in the account safety policy;
+  - explicit selected-account and workspace scoping.
+- Kept the persisted sizing type compatible with the existing D1 schema CHECK constraint. Explicit UI/API aliases are canonicalized to `risk_percent`; no account table rebuild or new sizing enum is required.
+- Updated execution planning, production risk revalidation, and orchestration normalization to read the persisted risk basis and fixed-cash mode. Added regression tests for balance-only broker snapshots, persisted balance basis, fixed-cash planning/revalidation, owner-only authorization, and the account configuration API.
+- Account onboarding now accepts owner-selected risk modes but still forces new accounts inactive, execution-disabled, and kill-switched. Admins cannot submit risk modes or risk-limit fields during onboarding.
+- Restored `0046_broker_aware_lot_sizing_modes.sql` byte-for-byte to the version on `main`.
+- Removed the colliding follower-risk migration files and reintroduced the additive schema changes only in the active D1 `0006` and namespaced PostgreSQL `0006` tracks. The legacy `db/migrations` public-schema track was deliberately excluded because it is not part of the current production storage path. Updated the follower repository test to load D1 migration `0006`.
+- Updated `docs/LOT_SIZING_MODES.md` with the canonical storage contract, owner authorization, risk caps, per-leg semantics, follower independence, and fail-closed platform rules.
+- Tests added/updated but not yet CI-verified. Trading V1 CI run #3496 was queued for an earlier commit in this implementation sequence; it does not include all later commits in this log. No local repository shell is available here to run Node tests directly.
+- Production remains untouched: no migration applied, no account policy written to production, and no deployment triggered.
+
+## Current remaining work
+
+1. Confirm full Trading V1 CI against the latest feature-branch head; resolve every test failure.
+2. Add/verify route-level tests for follower owner-only changes and verify per-follower policy does not inherit parent risk policy.
+3. Complete follower dispatch acceptance: each follower must use its own broker account snapshot and fresh symbol economics immediately before OPEN; one follower failure must not suppress the parent or sibling followers.
+4. Recheck cTrader risk-sized OPEN rejection and MT5 broker-minimum/exposure handling with integration tests.
+5. Add deploy/restart/schema non-mutation tests and verify existing fixed-lot account behavior.
+6. Review the full branch diff and update all related design/roadmap docs with only CI-verified outcomes.
+7. Keep PR #253 draft and do not deploy until all checks pass and a separate explicit production release decision is made.
+
+
+### 2026-11-06 — follower isolation and production safety regression coverage
+
+- Added route-level tests proving only a workspace owner can configure portal follower risk; an admin with ordinary account-write permission is rejected before the follower repository is called.
+- Added a production execution dependency test proving a balance-percent follower uses its own broker balance even when the link's supplied basis says equity and the broker equity differs.
+- Added a production dependency test proving cTrader risk-sized OPEN remains blocked until a reliable monetary loss-at-stop model exists.
+- Added account update regression coverage proving partial updates preserve a previously selected fixed-cash mode and balance basis.
+- Added a D1 migration regression test that snapshots an existing fixed-lot account before applying the new follower-risk migration and asserts that its sizing, execution, and safety fields remain byte-for-byte equivalent afterward.
+- Confirmed the PR changed-file inventory now contains only the new unique migration versions for follower risk; the historical 0046 migration and existing 0051/0005 migration files are no longer changed by this PR.
+- Updated production account normalization to consume persisted risk basis and fixed-cash mode consistently in planning and final broker revalidation.
+- Latest Trading V1 CI run #3504 was queued for the prior progress-log commit; subsequent code/test commits were added after it. The latest complete branch state still needs its own CI run and a full green result.
+
+### Latest status
+
+- Owner-only account risk update path: implemented with route tests; CI pending.
+- Owner-only follower risk update path: implemented with route tests; CI pending.
+- Percentage and fixed-cash account risk persistence: implemented using the existing schema-compatible `risk_percent` type and config fields; CI pending.
+- Risk caps and broker-minimum policy persistence: implemented with validation; CI pending.
+- Historical migration immutability and unique follower migration numbering: corrected; D1 non-mutation regression added; CI pending.
+- Follower independent risk planning/revalidation: code path reviewed and balance-basis regression added; remaining end-to-end dispatch/failure-isolation acceptance still required.
+- cTrader risk-sized OPEN: fail-closed code path retained and regression added; CI pending.
+- Production deployment/restart acceptance: not yet fully proven; no deployment has been performed.
+
+
+### 2026-11-06 — latest implementation additions
+
+- Added an end-to-end coordinator regression where one follower's broker-risk context fails while the explicitly routed parent and a sibling follower still dispatch successfully. The test also verifies that each account plan receives its own follower risk mode/amount/percentage.
+- Added production dependency coverage proving follower risk is recalculated from a fresh broker account snapshot on every OPEN dispatch; the test changes the follower's balance between reads and expects the monetary budget and lots to be recalculated downward.
+- Added a cTrader regression for risk-sized OPEN rejection and a D1 migration non-mutation test for existing account sizing/execution state.
+- Added owner onboarding coverage for fixed-cash risk stored using the canonical `risk_percent` type, with `riskMode=fixed_cash` and cash value above 100. This avoids misinterpreting a cash budget as a percentage.
+- Corrected onboarding validation to determine percentage-vs-cash validation from the explicit persisted risk mode.
+- Latest code/test commit: `ba263f87`. Trading V1 CI run #3514 was created for an earlier code commit and remains queued; it does not include these newest onboarding tests. A new latest-head CI result is required before any implementation can be called verified.
+
+
+### 2026-11-06 — risk-basis precedence hardening
+
+- Updated account normalization, execution planning, and final broker revalidation to prefer an explicitly persisted `lot_sizing_config.riskBasis` over a legacy fallback basis field. This prevents an old/default equity value from overriding an owner's explicit balance selection.
+- Strengthened the production risk-authority regression to include a conflicting legacy `risk_basis: equity` field while asserting that persisted `riskBasis: balance` controls the calculation.
+- Latest code/test commit: `62a4750e`. CI for this exact branch head is pending; prior queued CI runs do not verify these newest changes.
+
+
+### 2026-11-06 — CI feedback and floating-point test correction
+
+- Inspected Trading V1 CI run #3504 logs. The original balance-basis and BUY/SELL range-entry failures are now passing in that run.
+- The remaining visible risk-engine failure was a strict floating-point equality assertion for seven 0.1-lot legs (`0.7` versus `0.7000000000000001`). The same exact-equality pattern existed in the execution-plan dynamic-TP test.
+- Replaced both aggregate-lot assertions with a tight numeric tolerance (`1e-12`); production risk calculations and volume rounding were not weakened or changed.
+- CI #3504 also marked `execution_plan.test.mjs` failed, but its diagnostic output was truncated to the first 6,000 characters, before the later test failure detail. The aggregate-lot assertion was the corresponding strict-float issue in that suite; the next CI run must confirm both files green.
+- Follow-up commits: `21dee683` and `2dfc2490`. Latest-head CI remains required; prior run #3514 was created before these test corrections.
+
+
+### 2026-11-06 — production non-activation check and CI diagnostics
+
+- Added a production account-loader regression proving that reading an existing fixed-lot account leaves its lot size, active flag, execution flag and kill switch unchanged; the test also asserts the loader performs only reads.
+- Increased the CI diagnostic capture limit from 6,000 to 20,000 characters so future failing test files include the full TAP failure context in the workflow logs and step summary.
+- Corrected the strict floating-point aggregate-lot assertions in both risk-engine and execution-plan dynamic-TP tests using a (1e-12) tolerance. No runtime sizing or risk limits were relaxed.
+- Latest code commits: `2dfc2490`, `5b1624ea`. The latest complete branch head still requires its own CI result; #3504 is a pre-fix failing run and #3514 predates the latest tests.
+
+
+### 2026-11-06 — migration-track scope correction
+
+- Rechecked the migration inventory and found that `cloudflare-v2/db/migrations` is the retired public-schema/RLS migration track. Removed the previously created `0052_account_follower_risk_sizing.sql` from the feature branch.
+- Follower-risk schema changes now exist only in the current D1 migration track (`0006`) and the namespaced PostgreSQL track (`0006`) used by the current storage architecture. No new migration was added to the retired public-schema track.
+- The original historical `0046` file remains restored to `main`; existing `0051` and `0005` files remain untouched.
+
+
+### 2026-11-06 — local MT5 copier ownership and opt-in review
+
+- Reviewed the local MT5 copier profile manager, persisted profile metadata, supervisor, worker and risk-sizing engine.
+- New local profiles default to no copy role, `copy_enabled=false`, and fixed-lot mode; saving a profile does not start a copier worker.
+- Local risk changes are made through the locally controlled profile manager, which is the ownership boundary for this desktop-only feature. The user must explicitly configure the follower and confirm the separate `Start local copy` action; the UI warns that broker orders may be opened immediately.
+- Changing an active local pair stops its worker before writing the new startup risk policy. Each risk-sized copy uses the follower terminal's own account funds and mapped symbol's contract/SL economics; missing risk data or a below-minimum volume fails closed.
+- Added the local copier opt-in and profile-ownership boundary to `docs/LOT_SIZING_MODES.md`.
+
+
+### 2026-11-06 — owner-only dashboard controls
+
+- Extended the unified trading-account dashboard to display the account's risk mode, risk basis, and configured risk limits.
+- The account-list API now returns an owner capability flag for the active D1 path. The dashboard only presents the risk configuration workflow when that flag confirms the current workspace membership is `owner`.
+- Owners can configure percentage or fixed-cash risk, equity/balance basis, per-leg/open/daily caps, broker-minimum tolerance and FLOOR/REJECT behaviour from the selected account's Edit flow.
+- Admins do not see risk-mode controls. They can still edit non-risk account details (label/roles) without touching existing owner-managed risk settings; backend checks remain authoritative.
+- Added API tests for owner capability metadata, admin non-risk edits on risk-configured accounts, and preservation of an already-active/live-enabled account's execution flags when its owner edits risk settings.
+- The legacy public-schema account-list response was intentionally left unchanged; the active D1 path carries the owner capability metadata.
+
+
+### 2026-11-06 — dashboard script validation and owner editor refinements
+
+- Added a Node test that extracts and parses the embedded dashboard script, then asserts owner capability gating and the risk controls are present.
+- The account dashboard now displays the configured broker-minimum tolerance and labels risk policy as owner-managed for non-owners.
+- Refined the backend authorization condition so an admin may still edit non-risk metadata (such as account label and source/execution roles) on a risk-configured account, while any sizing/risk-policy field mutation remains owner-only.
+- Added regression coverage for that admin metadata-only case and for the active/live account state remaining unchanged during owner risk edits.
+- Current branch head has not yet received a fresh Trading V1 CI run. CI #3514 is an earlier run that fails the pre-fix strict floating-point assertions; the fixes and new dashboard tests are later commits and remain unverified until CI runs on the current head.
+
+
+### 2026-11-06 — owner-only dashboard completion and latest CI
+
+- Added the owner-only risk editor to the unified trading-account dashboard. It operates on the explicitly selected account and supports percentage or fixed-cash risk, explicit equity/balance basis, per-leg/open/daily caps, minimum-volume tolerance, and FLOOR/REJECT minimum-lot handling.
+- The active D1-backed account-list response supplies `riskPolicyEditable` from the authenticated workspace membership. Non-owners do not receive the risk editor; backend owner authorization remains the security boundary.
+- Non-owners may still edit safe account metadata on an account that already has risk sizing, but the UI and API preserve the existing risk policy and sizing fields. Added route tests for the owner capability flag and admin metadata-only updates.
+- Added an embedded dashboard script parse test to catch syntax regressions in the dynamically injected UI.
+- Reviewed the MT5 connector release workflow: on a pull request it only builds, tests, smoke-tests and uploads a Windows artifact. Publishing a versioned connector release is gated to a tag or an explicit dispatch from `main`; this PR run is not publishing a release.
+- Latest-head CI run #3543 is running on PR head `985d9c231dfb4544fcb2b78afc651e25517f5417`. MT5 Compatibility CI #131 has passed. cTrader cBot CI #532 is queued. MT5 Connector Release #292 is packaging/testing only and currently building the artifact.
+- No production deployment, release publication, schema application, or account-policy write has occurred.
+
+
+### 2026-11-06 — execution-plan CI diagnosis follow-up
+
+- Trading V1 CI #3543 reached the test step and still failed in `execution_plan.test.mjs`; the captured log was cut off during TAP output before the failing assertion, so it did not provide enough evidence to make a safe runtime change.
+- Updated `cloudflare-v2/scripts/test_ci_diagnostic.mjs` to use Node's concise `spec` test reporter per file. The next run should expose the actual failing assertion rather than truncating the useful detail behind successful TAP output.
+- Latest diagnostic-script commit: `80f3c9be`. Trading V1 CI #3546 is running against that commit. MT5 Compatibility CI #134 is green; cTrader CI #535 and connector packaging run #295 are in progress/queued.
+- No production state or deployment has been touched. The failing execution-plan suite remains a release blocker until its exact failure is diagnosed and corrected, then latest-head CI passes.
+
+
+### 2026-11-06 — preserve existing minimum-volume behaviour
+
+- Trading V1 CI #3546 produced the actionable failure: an existing adaptive-sizing regression expected the broker minimum floor, but the risk branch had changed the shared fixed-lot normalizer to reject below-minimum requests.
+- Compared the implementation directly with `main`. Production's existing fixed/adaptive path floors to the broker minimum and caps at broker maximum. That behaviour must remain unchanged for accounts that have not opted into risk sizing.
+- Restored that legacy fixed/adaptive minimum-floor contract while keeping the new risk-sizing path's separate monetary-risk tolerance and FLOOR/REJECT controls authoritative. This does not weaken the risk-sized OPEN checks.
+- Replaced the contradictory fixed-lot rejection test with a regression proving an existing fixed-lot account still produces the same broker-minimum volume as `main`.
+- Runtime fix commit: `3125afff`; regression commit: `332f8dab`. A fresh Trading V1 run is required to verify the fix.
+
+
+### 2026-11-06 — first green full Trading V1 and MT5 compatibility run
+
+- Trading V1 CI #3550 passed all Worker/trading-core tests, pure MT5 bridge tests, and pure MTProto Python tests on the feature code including the legacy minimum-volume compatibility correction.
+- MT5 Compatibility CI #138 passed.
+- cTrader cBot CI #539 is still queued; MT5 Connector Release #299 has passed connector unit tests and produced the Windows executable, with packaged entrypoint smoke tests still running.
+- Trading V1's production deployment/acceptance/inventory jobs were skipped for this pull request. No production deployment or storage migration was run.
+- The remaining release blockers are cTrader CI, connector packaged smoke/artifact completion, final diff review, migration upgrade/rollback acceptance, non-production UI/dispatch acceptance, and owner-approved release decision.
+
+
+### 2026-11-06 — MT5 connector release workflow completed without publishing
+
+- MT5 Connector Release #299 completed successfully: pure connector tests, Windows executable build, packaged manager/worker smoke tests, checksum generation and artifact upload all passed.
+- Its `publish-release` job was skipped as expected for this pull request; no versioned connector release was published.
+- cTrader cBot CI #539 has progressed: gateway tests passed; deployment-stack container/compose validation, cBot build and Worker/dashboard tests are still running. These are build/test jobs, not production deployment jobs.
+
+
+### 2026-11-06 — latest CI green and follower-policy preservation fix
+
+- Latest PR head before this follow-up (`32fd98e9`) passed Trading V1 CI #3553 and MT5 Compatibility CI #141. MT5 Connector Release #302 completed packaging, pure connector tests, packaged entrypoint smoke tests, checksum and artifact upload; `publish-release` was skipped.
+- cTrader CI #542: gateway tests, Worker/dashboard tests and cBot `.algo` build passed. Its deployment-stack Docker/TLS image build and Compose validation are still in progress. These are CI image/compose validation jobs, not production deployment.
+- Final route/repository review found a correctness gap: partial follower-link updates could replace an existing risk policy with default `fixed_lot`/`equity` values when the caller omitted risk fields. Corrected both the selected D1/PostgreSQL repository path and the legacy adapter path to preserve existing risk mode, percent, amount and basis unless those fields are explicitly supplied.
+- Added a repository regression test: configure an equity-percent follower policy, then update the link without risk fields; all existing risk values must remain intact.
+- Commits: `4ee3aa6d` (repository preservation), `e2fc7cf1` (load current policy before merge), `912b0d68` (API adapter partial update), `81f2a061` (regression test). New exact-head CI is required before calling this fix verified.
+- No production deployment, migration application, account-policy write or connector release publication occurred.
+
+
+### 2026-11-06 — follower partial-update regression coverage completed
+
+- Added an HTTP-route regression proving that a follower-link request which omits risk fields does not inject `fixed_lot` or `equity` defaults into the repository write. The repository-level regression separately proves existing configured risk values survive the partial update.
+- This closes the review gap at both boundaries: API normalization and selected persistence repository.
+- Route test commit: `043e3baa`. Latest-head CI will be checked after this documentation update.
+
+
+### 2026-11-06 — preserve all follower link policies on partial updates
+
+- Extended the partial-update correction beyond risk fields: omitted `lotMultiplier` and `fixedLot` now also retain the existing values instead of silently resetting to `1` and `null`.
+- Both D1/PostgreSQL repository and the route's alternate adapter now merge omitted follower lot/risk fields from the existing link. The runtime API omits fields the caller did not supply, allowing the repository to distinguish omission from an explicit update.
+- Expanded both regression tests to assert preservation of lot multiplier, fixed lot, risk mode, risk percent and risk basis.
+- Commits: `0c975366` (repository merge), `87574bf2` (alternate adapter merge), `4c942e17` (route omission), `584aa5df` (repository regression), `c0bcfb99` (route regression). Latest full CI is required for these final adjustments.
+
+
+### 2026-11-06 — migration non-mutation coverage expanded
+
+- Expanded the additive D1 migration regression to snapshot an existing active follower link's parent, enabled state, multiplier and fixed lot before the risk-column migration and assert every existing field remains identical afterward. The test also snapshots the existing fixed-lot trade account and verifies its sizing, activation, execution and safety state remains unchanged.
+- Migration regression commit: `2a3be59f`. A new exact-code-head CI run is required.
+
+
+### 2026-11-06 — PostgreSQL migration runner now supports reviewed additive upgrades
+
+- Review of the existing PostgreSQL installer found its allowlist still ended at `0003`, even though the repository already contained `0004` follower creation and `0005` broker-observation index migrations. The new `0006` risk migration would therefore have been rejected before execution.
+- Updated the reviewed allowlist to include the ordered `0001`–`0006` set. Existing-schema handling now validates that the applied migration ledger is an exact checksum-matched prefix (minimum bootstrap prefix `0001`–`0003`), assumes the restricted `trading_owner` role, and transactionally applies only the unapplied suffix. Unknown, reordered, altered or non-prefix ledgers still fail closed. Clean schema creation applies the complete reviewed set.
+- Expanded PostgreSQL static safety coverage to include all six migrations and permit only the reviewed `ADD COLUMN IF NOT EXISTS` / `ADD CONSTRAINT` operations on `trading_storage.trading_account_followers` in `0006`; all other schema/data mutation remains rejected.
+- Expanded installer tests to verify the real six-file allowlist and simulate upgrading an existing schema with the first three checksummed migrations applied; the test asserts only `0004`–`0006` execute under `trading_owner`, with a commit and no schema recreation.
+- Commits: `5ad52667` (runner allowlist and prefix upgrade), `dd67c96a` (static SQL scope test), `51675218` (installer allowlist/upgrade regression). No migration was run against any database.
+
+
+### 2026-11-06 — preserve atomicity across historical migration wrappers
+
+- A further transaction review found that historical PostgreSQL migrations `0004` and `0006` contain standalone `BEGIN`/`COMMIT` wrappers, while the installer already owns one transaction for the full schema change. Sending those wrappers through as-is could commit the outer transaction before the migration ledger update and final safety checks.
+- The installer now strips only standalone outer `BEGIN;` and `COMMIT;` boundary statements from the SQL sent to PostgreSQL, while retaining checksums of the exact reviewed source files. All migration DDL and ledger writes therefore remain inside the installer's transaction.
+- Extended the installer regression fixture with a real wrapped migration and asserted the wrapper-free SQL executes inside the transaction rather than committing it independently.
+- Commits: `89148763` (transaction-safe migration execution), `eba2ff4a` and `34f93e94` (wrapper regression fixture). No database was contacted or migrated.
+
+
+### 2026-11-06 — PostgreSQL migration-ledger fail-closed regression
+
+- Added an installer regression proving that an existing Trading schema with a modified migration checksum is rejected before assuming the schema-owner role or applying any pending SQL; the installer rolls back.
+- This complements the successful-prefix upgrade test and the clean-install test: only a checksum-exact ordered prefix can be upgraded.
+- Test commit: `29c377c8`. The current CI run on the earlier runner/transaction fix is still underway; this new test commit will trigger another exact-head run.
+
+
+### 2026-11-06 — PostgreSQL installer transaction fix verified by CI
+
+- Trading V1 CI #3575 passed all Worker/trading-core tests, MT5 bridge tests and MTProto Python tests on the code containing the six-migration allowlist, existing-schema prefix-upgrade path, and migration transaction-wrapper stripping.
+- MT5 Compatibility CI #163 passed.
+- The follow-up altered-ledger fail-closed test commit `29c377c8` triggered Trading V1 CI #3577; that exact run is still in progress. cTrader CI #566 and MT5 Connector Release #326 are also still queued/running for the earlier code head. Do not treat #3575 as verification of the later ledger regression.
+- No production deployment, migration, account-policy update or connector publication occurred; PR deployment/storage-inventory jobs remain skipped.
+
+
+### 2026-11-06 — migration ledger fail-closed regression verified
+
+- Trading V1 CI #3577 passed all Worker/trading-core tests, pure MT5 bridge tests and pure MTProto Python tests with the altered-checksum/non-prefix ledger regression included.
+- MT5 Compatibility CI #165 passed.
+- MT5 Connector Release #326 has passed pure connector tests, Windows executable build, packaged manager/worker smoke tests and checksum generation; artifact upload is in progress. The release-publication job remains skipped for this pull request.
+- cTrader CI #566 is queued. Earlier cTrader CI #542 completed successfully across gateway, Worker/dashboard, cBot build and deployment-stack Docker/TLS plus Compose validation.
+- PR production deployment, storage-inventory and acceptance jobs remain skipped. No deployment, database migration, account-policy update or release publication has occurred.
+
+
+### 2026-11-06 — connector packaging green on migration-runner code head
+
+- MT5 Connector Release #326 completed successfully: pure connector tests, Windows executable build, packaged manager/worker smoke tests, checksum and artifact upload all passed. The `publish-release` job was skipped.
+- cTrader CI #566 has passed the cBot `.algo` build; Worker/dashboard tests and deployment-stack Docker/TLS plus Compose validation are still running/queued.
+- Trading V1 CI #3577 and MT5 Compatibility CI #165 remain green. No release publication, deployment, database migration or account-policy write occurred.
+
+
+### 2026-11-06 — all four automated workflows green on the reviewed code head
+
+- Trading V1 CI #3577: passed all Worker/trading-core, pure MT5 bridge and pure MTProto tests, including migration-runner prefix/ledger regressions.
+- MT5 Compatibility CI #165: passed.
+- cTrader cBot CI #566: passed gateway tests, Worker/dashboard tests, `.algo` build, Docker gateway/TLS image builds and Coolify Compose validation.
+- MT5 Connector Release #326: passed connector tests, Windows packaging, packaged entrypoint smoke tests, checksum and artifact upload. Versioned release publication was skipped.
+- These green runs are on the code head containing the follower partial-update safeguards and PostgreSQL additive migration runner/atomicity changes. Documentation-only progress updates followed; no runtime code changed after the verified code head.
+- Production deployment, storage inventory and acceptance jobs were skipped. No production or staging database migration, deployment, account-policy mutation or connector release publication occurred.
+
+
+### 2026-11-06 — final feature-branch diff review
+
+- Reviewed PR #253 against `main`: 62 changed files. The only newly added schema migrations are additive `0006_account_follower_risk_sizing.sql` files for the active D1 and namespaced PostgreSQL tracks. No historical migration file (including the previously conflicting broker-aware sizing migration or existing broker-observation migration) is modified.
+- Confirmed the PR remains open and draft. Its code head has green Trading V1 #3577, MT5 Compatibility #165, cTrader #566 and MT5 Connector Release #326 checks. Later branch-head changes after those runs are documentation-only.
+- Code-level acceptance is substantially complete. Remaining release gates are external/non-production: run the UI/account-specific acceptance against an isolated staging deployment; rehearse the PostgreSQL prefix upgrade and rollback against the approved isolated staging database; verify D1 upgrade behavior against an isolated staging target; then obtain owner approval for a separate release decision.
+- No staging or production deployment, database migration, account-policy mutation, or release publication was performed. The implementation is not marked production-ready until those external gates are deliberately authorized and verified.
+
+
+### 2026-11-06 — release-path and frontend audit after owner clarified production scope
+
+- Owner explicitly authorized the complete rollout, including the frontend, required migrations, worker deployment, and necessary connector publication. This authorization is recorded; it does not substitute for technical access or release validation.
+- Rechecked PR #253 at head `31fa0071b813845ce516df6e382be3364e345627`: it remains open and draft. The four previously verified CI workflows are completed successfully on the code head; the latest documentation-only head also reports those four PR workflow runs as successful.
+- Frontend audit: `cloudflare-v2/src/dashboard_unified_connections.js` does contain account-specific risk settings. The connected-account Edit flow offers risk-percent and fixed-cash modes, explicit equity/balance basis, per-leg/open-risk/daily-loss limits, minimum-volume tolerance and minimum-lot policy. The UI uses sequential browser `prompt()` dialogs rather than a dedicated, structured settings panel. It reads `riskPolicyEditable` from the account API and restricts risk edits to the owner. This is a real UI path, but it still needs authenticated browser acceptance on staging to verify discoverability, owner/admin behavior, validation, persistence, and responsive presentation.
+- Production workflow audit: `.github/workflows/production-cloudflare-deploy.yml` has a `workflow_dispatch` entry but explicitly checks out `main` and refuses a non-main ref. It deploys the Cloudflare Worker and performs health/runtime-control checks; it does not apply either new `0006` migration, perform a PostgreSQL migration/rollback rehearsal, or publish the MT5 connector release. It is configured with GitHub environment `staging` while performing production-host operations, which requires careful environment/secrets review before any run.
+- The workflow's generated production config turns on the deployment broker-execution capability while preserving the persisted owner broker switch. Although this is a dual-gate design, it is a global production capability change and must be reviewed against the no-existing-behaviour-change requirement before deployment.
+- `.github/workflows/cloudflare-staging-gate.yml` is read-only inspection/dry-run only and hard-codes a different reviewed branch name; it is not a staging deployment or migration rehearsal for this feature branch.
+- `.github/workflows/mt5-connector-release.yml` builds and uploads the Windows connector artifact on PR CI, but its release-publication job only runs for a version tag or an explicit main-branch dispatch with a version tag. The passing PR run did not publish a versioned release.
+- The workflow inventory contains no feature-specific workflow that applies D1/PostgreSQL migrations to staging or production. The PostgreSQL installer exists and is unit-tested, but there is no verified connected execution path from this session to run it against an isolated staging database.
+- No Cloudflare deployment, D1/PostgreSQL migration, connector publication, account-policy mutation, or broker action was performed. The available connected GitHub actions do not expose workflow dispatch or Cloudflare/database execution controls.
+- Release status remains blocked on: isolated staging deployment and authenticated UI acceptance; D1 migration upgrade test; PostgreSQL prefix-upgrade plus rollback rehearsal; explicit review of the global broker-capability change and GitHub environment/secrets mapping; connector release publication/distribution; and live post-deploy verification. Owner authorization is already granted and does not need to be requested again.
+
+
+### 2026-11-06 — one-click ordered production release prepared
+
+- Added `.github/workflows/per-account-risk-sizing-release.yml`, a main-only manual release orchestrator. It requires the typed confirmation `RELEASE_PER_ACCOUNT_RISK_SIZING_TO_PRODUCTION` and defaults the MT5 release to `mt5-connector-v1.1.17` (the latest published connector observed during this work was v1.1.16).
+- The orchestrator calls existing project workflows as reusable workflows in this order: Trading V1 CI + protected schema apply; production Cloudflare Worker deploy; production platform/connector binding verification; read-only frontend E2E; read-only connection readiness; MT5 Windows package and versioned GitHub Release.
+- Made the existing Trading V1 CI, production Worker deploy, platform verification, frontend E2E, connection-readiness, and MT5 release workflows reusable with `workflow_call`; their existing manual/push triggers remain.
+- The schema action is bound to `main` and the exact confirmation `APPLY_TRADING_STORAGE_SCHEMA`. It builds the Coolify probe from the exact main commit, verifies the existing `mkety` PostgreSQL database and a successful backup from the last 24 hours, runs the PostgreSQL migration transactionally, verifies the final 0001–0006 migration ledger, then applies and verifies D1 migrations. PostgreSQL now runs before D1 schema writes so a failed PostgreSQL backup/migration does not leave D1 advanced.
+- The existing D1 resource is named `trading-staging`, but the production Worker Wrangler configuration binds that same resource. The orchestrator explicitly treats it as the production D1 target. It captures an encrypted pre-migration D1 export using the existing backup encryption helper and retains the artifact for seven days. No plaintext D1 export is retained in the job workspace.
+- Updated the D1 schema inventory to include migrations 0001–0006. Updated the PostgreSQL migration acceptance to accept a valid pending suffix ending at 0006 or an already-applied complete ledger.
+- Updated the production frontend smoke to check that the risk editor and owner-only guard are present in the served dashboard script. The dashboard UI's existing unit tests continue to cover the editor behavior and authorization contract.
+- The MT5 release workflow now supports reusable invocation and retry-safe tags that may only point to the exact built commit. This PR modifies the MT5 bridge and Windows connector, so MT5 is republished. The cTrader cBot source/`.algo` is unchanged; cTrader adapter/runtime changes ship with the Worker and its existing CI builds the cBot for compatibility.
+- To prevent deployment before migrations, the production Worker push job and its automatic post-deploy probes skip the marked risk-sizing merge. PR title now contains `[orchestrated-risk-release]`; merge via squash or a regular merge commit, not rebase, so the marker/branch guard remains effective. After merge, dispatch the one-click workflow from `main`.
+- No deployment, migration, connector publication, account-policy mutation, worker restart, or broker action has been performed. The release workflow is prepared but unavailable in the Actions menu until PR #253 is merged into the default branch.
+- CI status at the time of this log update: latest workflow run is still executing; do not treat this prepared workflow as production-ready until the final head's CI is green and the post-merge one-click release completes.
+
+
+### 2026-11-06 — release workflow code head CI completed
+
+- Verified all four required CI workflows are green on runtime/workflow code head `67c471d1169a434d4ddb5c1979912077cbb2d97c`:
+  - Trading V1 CI run `42190929299`: success (full Node Worker/trading-core regression suite, including the new workflow and frontend contract tests).
+  - MT5 Connector Release run `42190929218`: success for pure connector tests, Windows packaging, packaged manager/worker smoke tests, checksum and artifact upload. The publication job was correctly skipped on the feature PR; it will publish only through the post-merge ordered release workflow.
+  - MT5 Compatibility CI run `42190929288`: success.
+  - cTrader cBot CI run `42190929200`: success (gateway tests, Worker/dashboard tests, gateway and TLS container builds, Compose validation, cBot `.algo` build).
+- The latest PR head `1adec253404aac5443ed381fbd33d1d42e79f7f4` is documentation-only after the green code head; no runtime/workflow code changed after the verified CI head.
+- PR #253 is mergeable and has been moved out of draft for review. It has not been merged.
+- Production remains unchanged. The manual one-click release is still pending merge and dispatch; no database migration, Worker deployment, platform verification, MT5 release publication, account mutation, or broker action has run.

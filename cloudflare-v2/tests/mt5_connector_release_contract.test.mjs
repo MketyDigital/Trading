@@ -27,8 +27,12 @@ test('pull request and main branch builds upload artifacts without publishing re
   assert.match(workflow, /pull_request:/);
   assert.match(workflow, /branches:\s*\n\s*- main/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.match(workflow, /publish-release:\s*\n\s*if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/mt5-connector-v'\)/);
-  assert.doesNotMatch(workflow, /publish-release:[\s\S]*?if:\s*github\.event_name\s*==\s*'workflow_dispatch'/);
+  assert.match(workflow, /publish-release:\s*\n\s*if: \(github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/mt5-connector-v'\)\)/);
+  assert.match(workflow, /github\.event_name == 'workflow_call'/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event_name == 'workflow_call'/);
+  assert.match(workflow, /GITHUB_EVENT_NAME" == "workflow_dispatch" \|\| "\$GITHUB_EVENT_NAME" == "workflow_call"/);
+  assert.match(workflow, /workflow_call:[\s\S]*?release_tag:[\s\S]*?required: true/);
   assert.doesNotMatch(workflow, /if:\s*github\.event_name\s*!=\s*'pull_request'[\s\S]{0,250}gh release/);
 });
 
@@ -37,6 +41,7 @@ test('release publishing accepts only a new explicit connector version tag and n
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /--verify-tag/);
   assert.doesNotMatch(workflow, /gh release upload[^\n]*--clobber/);
+  assert.match(workflow, /Release tag already points to this exact commit; continuing idempotently/);
   assert.doesNotMatch(workflow, /mt5-connector-v1\.0\.0/);
 });
 

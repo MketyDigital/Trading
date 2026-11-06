@@ -12,18 +12,33 @@ function normalizeAccount(account = {}) {
     if (legacy === 'symbol_equivalent') return 'SYMBOL_EQUIVALENT';
     if (legacy === 'balance_percent') return 'BALANCE_PERCENT';
     if (legacy === 'risk_percent') return 'RISK_PERCENT';
+    if (legacy === 'equity_risk_percent') return 'EQUITY_RISK_PERCENT';
+    if (legacy === 'balance_risk_percent') return 'BALANCE_RISK_PERCENT';
     if (legacy === 'fixed_risk') return 'FIXED_RISK';
     return undefined;
   })();
 
+  const lotSizingConfig = account.lot_sizing_config ?? account.lotSizingConfig ?? {};
+  const accountRiskMode = String(lotSizingConfig.riskMode ?? lotSizingConfig.risk_mode ?? 'percent').toLowerCase();
+  const followerLink = account.followerLink;
+  const followerRiskMode = String(followerLink?.risk_mode ?? followerLink?.riskMode ?? '').toLowerCase();
+  const independentlyRiskSized = ['fixed_risk', 'equity_percent', 'balance_percent'].includes(followerRiskMode);
+  const followerSizingMode = followerRiskMode === 'fixed_risk' ? 'FIXED_RISK'
+    : followerRiskMode === 'equity_percent' ? 'EQUITY_RISK_PERCENT'
+      : followerRiskMode === 'balance_percent' ? 'BALANCE_RISK_PERCENT'
+        : sizingMode;
+
   return {
     ...account,
-    sizingMode,
+    sizingMode: followerLink ? followerSizingMode : sizingMode,
     fixedLots: account.fixedLots ?? (String(account.lot_sizing_type || '').toLowerCase() === 'fixed' ? account.lot_value : undefined),
     referenceLots: account.referenceLots ?? (['adaptive_percent','symbol_equivalent','balance_percent'].includes(String(account.lot_sizing_type || '').toLowerCase()) ? account.lot_value : undefined),
     adaptivePercent: account.adaptivePercent ?? account.lot_sizing_config?.percent ?? account.lotSizingConfig?.percent,
-    riskPercent: account.riskPercent ?? account.risk_percent,
-    riskAmount: account.riskAmount ?? account.risk_amount,
+    riskPercent: independentlyRiskSized ? (followerLink.risk_percent ?? followerLink.riskPercent) : (accountRiskMode === 'fixed_cash' ? undefined : (account.riskPercent ?? account.risk_percent ?? (['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.lot_value : undefined))),
+    riskAmount: independentlyRiskSized ? (followerLink.risk_amount ?? followerLink.riskAmount) : (account.riskAmount ?? account.risk_amount ?? (accountRiskMode === 'fixed_cash' ? account.lot_value : undefined)),
+    riskBasis: independentlyRiskSized
+      ? (followerRiskMode === 'balance_percent' ? 'balance' : followerRiskMode === 'equity_percent' ? 'equity' : (followerLink.risk_basis ?? followerLink.riskBasis ?? account.riskBasis ?? account.risk_basis))
+      : (lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis ?? account.riskBasis ?? account.risk_basis),
     safetyPolicy: account.safetyPolicy || account.safety_policy || { enabled: true, killSwitch: false },
     fastEntryPolicy: { enabled: true, mode: 'execute_immediately', locked: true },
   };
@@ -33,13 +48,14 @@ function applyFollowerLotPolicy(plan, account) {
   const link = account?.followerLink;
   const followerId = String(account?.id ?? '').trim();
   if (!link || !followerId || !Array.isArray(plan?.actions)) return plan;
-  const actions = plan.actions.map((action) => scaleFollowerAction(action, {
-    ...link,
-    followerAccountId: followerId,
-  }));
+  const riskMode = String(link.risk_mode ?? link.riskMode ?? '').toLowerCase();
+  const independentlyRiskSized = ['fixed_risk', 'equity_percent', 'balance_percent'].includes(riskMode);
+  const actions = plan.actions.map((action) => independentlyRiskSized
+    ? { ...action }
+    : scaleFollowerAction(action, { ...link, followerAccountId: followerId }));
   const legs = Array.isArray(plan.group?.legs)
     ? plan.group.legs.map((leg) => {
-      if (leg?.lots == null) return { ...leg };
+      if (leg?.lots == null || independentlyRiskSized) return { ...leg };
       const scaled = scaleFollowerAction({ type: 'OPEN_POSITION', lots: leg.lots }, { ...link, followerAccountId: followerId });
       return { ...leg, lots: scaled.lots };
     })
@@ -800,6 +816,11 @@ async function loadMatchedFastGroups(correlation, stateStore) {
   return { ok: true, groups };
 }
 
+function isRiskSizedAccount(account = {}) {
+  return ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(String(account?.sizingMode ?? account?.sizing_mode ?? account?.lot_sizing_type ?? '').trim().toUpperCase())
+    || ['fixed_risk', 'equity_percent', 'balance_percent'].includes(String(account?.followerLink?.risk_mode ?? account?.followerLink?.riskMode ?? '').trim().toLowerCase());
+}
+
 function needsPlanningMarketPrice(account = {}, intent = {}) {
   const sizingMode = String(account?.sizingMode ?? '').trim().toUpperCase();
   const takeProfits = Array.isArray(intent?.takeProfits) ? intent.takeProfits : [];
@@ -935,15 +956,63 @@ export async function orchestrateTradingEventSimulation({
       : interpretation.intent;
 
     let instrument;
+    let planningAccount = account;
+    let planningInstrument;
     let exposure;
     let currentMarketPrice;
     try {
       instrument = await instrumentProvider(account, planningIntent, event);
       if (!instrument) throw new Error('instrument metadata unavailable');
+      planningInstrument = instrument;
       exposure = await exposureProvider(account, planningIntent, event) || {};
-      currentMarketPrice = needsPlanningMarketPrice(account, planningIntent)
-        ? await marketPriceProvider(account, planningIntent, instrument, event)
-        : undefined;
+
+      const requiresRiskContext = isRiskSizedAccount(account);
+      const requiresMarketPrice = needsPlanningMarketPrice(account, planningIntent);
+      if (requiresRiskContext) {
+        const marketContext = await marketPriceProvider(account, planningIntent, instrument, event);
+        if (marketContext && typeof marketContext === 'object' && !Array.isArray(marketContext)) {
+          const brokerAccount = marketContext.brokerAccount ?? marketContext.account ?? {};
+          const equity = Number(brokerAccount.equity);
+          const balance = Number(brokerAccount.balance);
+          const riskBasis = String(account.riskBasis ?? account.risk_basis ?? 'equity').toLowerCase();
+          const requiredBasis = String(account.sizingMode ?? account.sizing_mode).toUpperCase() === 'BALANCE_RISK_PERCENT'
+            ? balance
+            : riskBasis === 'balance' ? balance : equity;
+          if (!(Number.isFinite(requiredBasis) && requiredBasis > 0)) {
+            throw new Error('broker risk context unavailable: positive follower equity or balance is required');
+          }
+          planningAccount = {
+            ...account,
+            ...(Number.isFinite(equity) && equity > 0 ? { equity } : {}),
+            ...(Number.isFinite(balance) && balance > 0 ? { balance } : {}),
+          };
+          planningInstrument = { ...instrument, ...(marketContext.instrument || {}) };
+          const suppliedPrice = Number(marketContext.currentMarketPrice ?? marketContext.price);
+          if (requiresMarketPrice) {
+            if (!(Number.isFinite(suppliedPrice) && suppliedPrice > 0)) {
+              throw new Error('broker market price is unavailable for risk-sized planning');
+            }
+            currentMarketPrice = suppliedPrice;
+          }
+        } else {
+          const riskBasis = String(account.riskBasis ?? account.risk_basis ?? 'equity').toLowerCase();
+          const existingBasis = String(account.sizingMode ?? account.sizing_mode).toUpperCase() === 'BALANCE_RISK_PERCENT' || riskBasis === 'balance'
+            ? Number(account.balance)
+            : Number(account.equity);
+          if (!(Number.isFinite(existingBasis) && existingBasis > 0)) {
+            throw new Error('broker risk context unavailable for risk-sized planning');
+          }
+          if (requiresMarketPrice) {
+            const suppliedPrice = Number(marketContext);
+            if (!(Number.isFinite(suppliedPrice) && suppliedPrice > 0)) {
+              throw new Error('broker market price is unavailable for risk-sized planning');
+            }
+            currentMarketPrice = suppliedPrice;
+          }
+        }
+      } else if (requiresMarketPrice) {
+        currentMarketPrice = await marketPriceProvider(account, planningIntent, instrument, event);
+      }
     } catch (error) {
       results.push({ accountId: account.id, status: 'BLOCKED', reason: 'MARKET_CONTEXT_UNAVAILABLE', error: error.message, actions: [] });
       continue;
@@ -966,8 +1035,8 @@ export async function orchestrateTradingEventSimulation({
         passedTakeProfitIndexes = prepared.passedTakeProfitIndexes || [];
       }
       plan = buildExecutionPlan(completionIntent, {
-        account,
-        instrument,
+        account: planningAccount,
+        instrument: planningInstrument,
         currentMarketPrice,
         ...(matchedGroup ? {
           protectionReferencePrice: fastCompletionProtectionReference(matchedGroup, currentMarketPrice),
@@ -975,7 +1044,7 @@ export async function orchestrateTradingEventSimulation({
         groupId,
         exposure,
       });
-      plan = applyFollowerLotPolicy(plan, account);
+      plan = applyFollowerLotPolicy(plan, planningAccount);
       if (completionProtectionSkips.length) {
         plan = {
           ...plan,

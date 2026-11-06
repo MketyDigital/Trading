@@ -770,3 +770,157 @@ test('management can target a fast-only trade before any full follow-up arrives'
   assert.equal(result.accounts[0].status, 'READY');
   assert.deepEqual(result.accounts[0].actions.map((a) => a.type), ['CLOSE_POSITION']);
 });
+
+
+test('orchestration reads per-account risk percent from persisted lot value', async () => {
+  const account = enabledAccount({
+    sizingMode: undefined,
+    lot_sizing_type: 'equity_risk_percent',
+    lot_value: 1,
+    equity: 10000,
+    balance: 10000,
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'persisted-risk-percent',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [account],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 100);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+});
+
+
+test('fixed-lot and multiplier followers inherit parent plan sizing before applying their volume policy', async () => {
+  const base = {
+    equity: 10000,
+    balance: 10000,
+    sizingMode: 'RISK_PERCENT',
+    riskPercent: 1,
+  };
+  const fixedFollower = enabledAccount({
+    ...base,
+    id: 'follower-fixed',
+    followerLink: {
+      follower_account_id: 'follower-fixed',
+      risk_mode: 'fixed_lot',
+      fixed_lot: 0.02,
+      lot_multiplier: 1,
+      risk_percent: null,
+      risk_amount: null,
+      risk_basis: 'equity',
+    },
+  });
+  const multiplierFollower = enabledAccount({
+    ...base,
+    id: 'follower-multiplier',
+    followerLink: {
+      follower_account_id: 'follower-multiplier',
+      risk_mode: 'multiplier',
+      fixed_lot: null,
+      lot_multiplier: 2,
+      risk_percent: null,
+      risk_amount: null,
+      risk_basis: 'equity',
+    },
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-fixed-and-multiplier',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [fixedFollower, multiplierFollower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.deepEqual(result.accounts.map((item) => item.status), ['READY', 'READY']);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.02, 0.02, 0.02]);
+  assert.deepEqual(result.accounts[1].actions.map((action) => action.lots), [0.2, 0.2, 0.2]);
+});
+
+
+test('balance-percent follower sizing always uses follower balance, not an inconsistent equity basis field', async () => {
+  const follower = enabledAccount({
+    id: 'follower-balance',
+    equity: 12000,
+    balance: 9000,
+    sizingMode: 'FIXED_LOTS',
+    riskPercent: 0.5,
+    followerLink: {
+      follower_account_id: 'follower-balance',
+      risk_mode: 'balance_percent',
+      risk_percent: 1,
+      risk_amount: null,
+      risk_basis: 'equity',
+      fixed_lot: null,
+      lot_multiplier: 1,
+    },
+  });
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-balance-basis',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => group },
+    accountProvider: async () => [follower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 90);
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.09, 0.09, 0.09]);
+});
+
+
+test('follower risk amount and mode override parent sizing values without legacy lot scaling', async () => {
+  const follower = enabledAccount({
+    id: 'follower-22',
+    equity: 12000,
+    balance: 9000,
+    sizingMode: 'FIXED_LOTS',
+    fixedLots: 0.05,
+    riskPercent: 0.5,
+    riskAmount: 25,
+    followerLink: {
+      follower_account_id: 'follower-22',
+      risk_mode: 'fixed_risk',
+      risk_amount: 100,
+      risk_percent: null,
+      risk_basis: 'equity',
+      fixed_lot: 0.01,
+      lot_multiplier: 0.5,
+    },
+  });
+  const persisted = [];
+  const result = await orchestrateTradingEventSimulation({
+    event: { ...event, workspace_hint: 'workspace-1' },
+    interpretation,
+    eventId: 'follower-risk-override',
+  }, {
+    stateCoordinator: { correlate: async () => ({ status: 'NEW_GROUP' }) },
+    stateStore: { putGroup: async (group) => { persisted.push(group); return group; } },
+    accountProvider: async () => [follower],
+    instrumentProvider: async () => ({ ...instrument, lossPerLotAtStop: 1000 }),
+    exposureProvider: async () => ({}),
+    marketPriceProvider: async () => 2500,
+  });
+
+  assert.equal(result.accounts[0].status, 'READY');
+  assert.deepEqual(result.accounts[0].actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+  assert.equal(result.accounts[0].risk.riskAmountPerLeg, 100);
+  assert.equal(result.accounts[0].risk.totalRiskAmount, 300);
+  assert.equal(persisted[0].tradeAccountId, 'follower-22');
+});

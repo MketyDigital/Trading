@@ -138,3 +138,35 @@ test('remove SL and indexed TP become explicit protection-clear MODIFY_POSITION 
     { type: 'MODIFY_POSITION', managementType: 'REMOVE_TP', legId: '2', targetIndex: 2, brokerPositionId: 'p2', symbol: 'XAUUSD', clearTakeProfit: true },
   ]);
 });
+
+test('target allocation floors a non-step-aligned total instead of creating extra volume', () => {
+  const legs = allocateVolumeAcrossTargets(0.099, 3, 0.01);
+  assert.deepEqual(legs, [0.03, 0.03, 0.03]);
+  assert.ok(legs.reduce((sum, lots) => sum + lots, 0) <= 0.099 + 1e-12);
+});
+
+test('target allocation preserves coarse fractional broker steps', () => {
+  assert.deepEqual(allocateVolumeAcrossTargets(0.75, 3, 0.25), [0.25, 0.25, 0.25]);
+  assert.deepEqual(allocateVolumeAcrossTargets(1.25, 3, 0.25), [0.5, 0.5, 0.25]);
+});
+
+
+test('target allocation uses scale-aware floating-point tolerance for very small broker steps', () => {
+  assert.deepEqual(allocateVolumeAcrossTargets(0.0000003, 3, 0.0000001), [
+    0.0000001, 0.0000001, 0.0000001,
+  ]);
+  assert.deepEqual(allocateVolumeAcrossTargets(0.0000007, 7, 0.0000001), [
+    0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001, 0.0000001,
+  ]);
+});
+
+
+test('partial-close lot flooring supports tiny broker steps without rounding upward', () => {
+  const group = {
+    symbol: 'MICRO',
+    legs: [{ legId: 'tiny', targetIndex: 1, brokerPositionId: 'p-tiny', lots: 0.000001, volumeStepLots: 0.0000001, status: 'OPEN' }],
+  };
+  assert.deepEqual(buildManagementActions(group, { type: 'CLOSE_PARTIAL', lots: 0.00000039 }), [
+    { type: 'CLOSE_PARTIAL', legId: 'tiny', targetIndex: 1, brokerPositionId: 'p-tiny', symbol: 'MICRO', lots: 0.0000003 },
+  ]);
+});

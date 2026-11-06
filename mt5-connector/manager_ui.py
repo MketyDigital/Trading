@@ -191,15 +191,25 @@ class ManagerViewModel:
         for profile in self.profiles():
             self.supervisor.stop(profile.profile_id)
 
-    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None, symbol_map=None) -> TerminalProfile:
+    def configure_copy(self, follower_profile_id: str, parent_profile_id: str, *, enabled=True, lot_multiplier=1.0, fixed_lot=None, symbol_map=None, risk_mode='fixed_lot', risk_percent=None, risk_amount=None, risk_basis='equity') -> TerminalProfile:
         follower = self._profile(follower_profile_id)
         parent = self._profile(parent_profile_id)
         if follower.profile_id == parent.profile_id:
             raise ValueError('a profile cannot follow itself')
         if not follower.terminal_path or not parent.terminal_path:
             raise ValueError('both MT5 terminals must be selected before enabling local copy')
+        # A running worker owns an immutable copy of its startup risk settings.
+        # Stop the old pair before saving changed settings; the user must
+        # explicitly start it again with the new policy.
+        if follower.copy_parent_profile_id:
+            self.copy_supervisor.stop(
+                follower.copy_parent_profile_id,
+                follower.profile_id,
+                stop_file=self._copy_stop_file(follower),
+            )
         return update_copy_settings(follower, self.app_data_dir, role='follower', parent_profile_id=parent.profile_id,
-                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map)
+                                    enabled=enabled, lot_multiplier=lot_multiplier, fixed_lot=fixed_lot, symbol_map=symbol_map,
+                                    risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount, risk_basis=risk_basis)
 
     def disable_copy(self, profile_id: str) -> TerminalProfile:
         follower = self._profile(profile_id)
@@ -239,7 +249,11 @@ class ManagerViewModel:
         return self.copy_supervisor.start(CopyPairSpec(parent.profile_id, follower.profile_id, parent.terminal_path, follower.terminal_path,
                                                         follower.copy_lot_multiplier, follower.copy_fixed_lot,
                                                         follower_symbol_map=follower.copy_symbol_map, journal_path=journal_path,
-                                                        stop_file=self._copy_stop_file(follower)))
+                                                        stop_file=self._copy_stop_file(follower),
+                                                        follower_risk_mode=follower.copy_risk_mode,
+                                                        follower_risk_percent=follower.copy_risk_percent,
+                                                        follower_risk_amount=follower.copy_risk_amount,
+                                                        follower_risk_basis=follower.copy_risk_basis))
 
     def observe_account(self, profile_id: str, *, probe=None) -> dict:
         """Read the signed-in account identity from one selected terminal, without pairing/trading."""
@@ -290,7 +304,13 @@ class ManagerViewModel:
             if profile.copy_role == 'follower' and profile.copy_parent_profile_id:
                 parent = profiles_by_id.get(profile.copy_parent_profile_id)
                 parent_label = parent.label if parent else profile.copy_parent_profile_id
-                if profile.copy_fixed_lot is not None:
+                if profile.copy_risk_mode == 'fixed_risk':
+                    sizing = f"{profile.copy_risk_amount:g} risk at SL"
+                elif profile.copy_risk_mode == 'equity_percent':
+                    sizing = f"{profile.copy_risk_percent:g}% equity risk"
+                elif profile.copy_risk_mode == 'balance_percent':
+                    sizing = f"{profile.copy_risk_percent:g}% balance risk"
+                elif profile.copy_fixed_lot is not None:
                     unit = 'lot' if profile.copy_fixed_lot == 1 else 'lots'
                     sizing = f"fixed {profile.copy_fixed_lot:g} {unit}"
                 else:
@@ -721,6 +741,60 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
         parent_id = selected_parent["profile_id"]
         if not parent_id:
             return
+        use_risk_sizing = messagebox.askyesno(
+            "Follower risk-based sizing",
+            "Would you like this follower to calculate volume from its own account risk and stop-loss distance?\n\nYes: choose fixed money risk, % equity, or % balance.\nNo: keep the existing fixed-lot / multiplier sizing.",
+            parent=root,
+        )
+        if use_risk_sizing:
+            risk_choice = simpledialog.askstring(
+                "Follower risk mode",
+                "Enter one mode:\nfixed_risk — fixed account-currency risk at SL\nequity_percent — % of follower equity\nbalance_percent — % of follower balance",
+                initialvalue="equity_percent",
+                parent=root,
+            )
+            risk_mode = str(risk_choice or "").strip().lower()
+            if risk_mode not in {"fixed_risk", "equity_percent", "balance_percent"}:
+                if risk_choice is not None:
+                    messagebox.showerror("Invalid risk mode", "Choose fixed_risk, equity_percent, or balance_percent.", parent=root)
+                return
+            risk_amount = None
+            risk_percent = None
+            if risk_mode == "fixed_risk":
+                risk_amount = simpledialog.askfloat(
+                    "Risk amount per copied trade",
+                    "Enter the maximum account-currency loss at stop loss for EACH copied order / TP leg (each separate TP leg gets this risk budget).",
+                    minvalue=0.000001,
+                    parent=root,
+                )
+                if risk_amount is None:
+                    return
+            else:
+                risk_percent = simpledialog.askfloat(
+                    "Follower risk percentage",
+                    "Enter risk as a percentage of the follower's " + ("equity" if risk_mode == "equity_percent" else "balance") + " (for example, 1.0 for 1%).",
+                    minvalue=0.000001,
+                    maxvalue=100.0,
+                    parent=root,
+                )
+                if risk_percent is None:
+                    return
+            try:
+                model.configure_copy(profile_id, parent_id, enabled=True, lot_multiplier=1.0, fixed_lot=None,
+                                    risk_mode=risk_mode, risk_percent=risk_percent, risk_amount=risk_amount,
+                                    risk_basis="equity")
+                saved_follower = model._profile(profile_id)
+                if saved_follower.copy_risk_mode != risk_mode:
+                    raise ValueError("The follower risk settings did not persist. Try again.")
+                refresh_profiles()
+                select_saved_profile(profile_id)
+                parent = model._profile(parent_id)
+                mode_label = (f"{risk_amount:g} account currency per trade at SL" if risk_mode == "fixed_risk"
+                              else f"{risk_percent:g}% of follower {risk_mode.split('_')[0]}")
+                flow_text.set(f"{model._profile(profile_id).label} follows {parent.label} with independent risk sizing: {mode_label}. Select this follower and click Start local copy to apply the settings.")
+            except Exception as exc:
+                messagebox.showerror("Could not enable risk-based copy", str(exc), parent=root)
+            return
         use_fixed_lots = messagebox.askyesno(
             "Follower lot sizing",
             "Choose Yes for a fixed lot size, or No to scale the main account's lot size with a multiplier.",
@@ -790,7 +864,9 @@ def run_manager(app_data_dir: Path, supervisor: ConnectorSupervisor, catalog: Te
             symbol_map = validate_symbol_map(symbol_map_text)
             model.configure_copy(profile_id, follower.copy_parent_profile_id, enabled=follower.copy_enabled,
                                  lot_multiplier=follower.copy_lot_multiplier, fixed_lot=follower.copy_fixed_lot,
-                                 symbol_map=symbol_map)
+                                 symbol_map=symbol_map, risk_mode=follower.copy_risk_mode,
+                                 risk_percent=follower.copy_risk_percent, risk_amount=follower.copy_risk_amount,
+                                 risk_basis=follower.copy_risk_basis)
             refresh_profiles()
             select_saved_profile(profile_id)
             flow_text.set(f"Saved {len(symbol_map)} advanced symbol alias(es).")

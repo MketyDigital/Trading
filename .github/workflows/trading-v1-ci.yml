@@ -20,6 +20,20 @@ on:
         description: Audit reference for the rolling continuity import (does not pause public writes), e.g. source-cutover:TRADING-D1-CUTOVER-2026-10-18
         required: false
         type: string
+  workflow_call:
+    inputs:
+      mode:
+        description: Reviewed Trading schema action
+        required: true
+        type: string
+      confirmation:
+        description: Exact confirmation for the schema apply mode
+        required: false
+        type: string
+      cutover_reference:
+        description: Optional continuity-import audit reference
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -147,6 +161,11 @@ jobs:
               startsWith(inputs.cutover_reference, 'source-cutover:')
             )
           )
+        ) || (
+          (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch') &&
+          github.ref == 'refs/heads/main' &&
+          inputs.mode == 'apply-existing-mkety-schema' &&
+          inputs.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'
         )
       }}
     runs-on: ubuntu-latest
@@ -176,7 +195,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TRADING_MASTER_KEY: ${{ inputs.mode == 'import-continuity-fresh-start' && secrets.TRADING_MASTER_KEY || '' }}
+          TRADING_MASTER_KEY: ${{ (inputs.mode == 'import-continuity-fresh-start' || inputs.mode == 'apply-existing-mkety-schema') && secrets.TRADING_MASTER_KEY || '' }}
           STAGING_MODE: ${{ inputs.mode || 'inspect' }}
         shell: bash
         run: |
@@ -227,11 +246,28 @@ jobs:
           await writeFile('wrangler.trading-staging.toml', config, { mode: 0o600 });
           console.log(`Prepared isolated D1 migration target ${database.name} (${database.uuid})`);
           D1_CONFIG
-          trap 'rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-staging-pre-import.sql"' EXIT
+          trap 'rm -f "$RUNNER_TEMP/trading-staging-pre-import.sql" "$RUNNER_TEMP/trading-staging-pre-migration.sql"' EXIT
           if [ "$STAGING_MODE" = 'apply-existing-mkety-schema' ]; then
-            npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+            test -n "${TRADING_MASTER_KEY:-}" || { echo 'Missing TRADING_MASTER_KEY for encrypted pre-migration D1 recovery export.'; exit 1; }
+            npx wrangler d1 export trading-staging --remote --skip-confirmation --config wrangler.trading-staging.toml --output "$RUNNER_TEMP/trading-staging-pre-migration.sql"
+            test -s "$RUNNER_TEMP/trading-staging-pre-migration.sql" || { echo 'Existing D1 pre-migration export is empty; refusing schema apply.'; exit 1; }
+            node --input-type=module <<'ENCRYPT_D1_PRE_MIGRATION_EXPORT'
+          import { unlink } from 'node:fs/promises';
+          import { encryptTradingD1BackupFile } from './scripts/trading_d1_backup.mjs';
+
+          const inputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-migration.sql`;
+          const outputPath = `${process.env.RUNNER_TEMP}/trading-staging-pre-migration.sql.enc`;
+          const result = await encryptTradingD1BackupFile({
+            inputPath,
+            outputPath,
+            masterKey: process.env.TRADING_MASTER_KEY,
+          });
+          await unlink(inputPath);
+          console.log(`Existing Trading D1 pre-migration recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
+          ENCRYPT_D1_PRE_MIGRATION_EXPORT
           fi
           npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
+          if [ "$STAGING_MODE" != 'apply-existing-mkety-schema' ]; then
           npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --json \
             --command "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name;" \
             > "$RUNNER_TEMP/trading-d1-schema-check.json"
@@ -243,6 +279,9 @@ jobs:
             'db/d1-migrations/0001_trading_storage_replication.sql',
             'db/d1-migrations/0002_trading_domain_schema.sql',
             'db/d1-migrations/0003_trading_replication_health.sql',
+            'db/d1-migrations/0004_account_followers.sql',
+            'db/d1-migrations/0005_broker_observation_due_index.sql',
+            'db/d1-migrations/0006_account_follower_risk_sizing.sql',
           ];
           const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check.json`, 'utf8'));
@@ -258,6 +297,7 @@ jobs:
           }
           console.log(`Remote Trading D1 exact schema check passed (${inventory.actualCount} tables).`);
           CHECK_TRADING_D1_SCHEMA
+          fi
           if [ "$STAGING_MODE" = 'import-continuity-fresh-start' ]; then
             npx wrangler d1 export trading-staging --remote --skip-confirmation \
               --config wrangler.trading-staging.toml --output "$RUNNER_TEMP/trading-staging-pre-import.sql"
@@ -278,6 +318,14 @@ jobs:
           console.log(`Existing staging D1 recovery export encrypted (${result.bytesEncrypted} bytes); SQL contents are not printed.`);
           ENCRYPT_D1_PRE_IMPORT_EXPORT
           fi
+      - name: Retain encrypted pre-migration D1 recovery export
+        if: ${{ inputs.mode == 'apply-existing-mkety-schema' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-staging-d1-pre-migration-${{ github.run_id }}
+          path: ${{ runner.temp }}/trading-staging-pre-migration.sql.enc
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain encrypted existing D1 recovery export
         if: ${{ inputs.mode == 'import-continuity-fresh-start' }}
         uses: actions/upload-artifact@v4
@@ -544,6 +592,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           APPLY_MODE: ${{ inputs.mode }}
           MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
           SOURCE_CUTOVER_REFERENCE: ${{ inputs.cutover_reference }}
@@ -603,7 +652,7 @@ jobs:
             server_uuid: 'ynkdc4tx6bi7cyxf0kuy8kte',
             environment_uuid: 'rtebcetyfvzlaiqitzcp0gl8',
             git_repository: 'https://github.com/MketyDigital/Trading',
-            git_branch: 'feat/trading-d1-cutover-implementation',
+            git_branch: process.env.TARGET_BRANCH,
             git_commit_sha: sha,
             build_pack: 'dockerfile',
             dockerfile_location: '/ops/coolify-staging-postgres-probe/Dockerfile',
@@ -937,10 +986,16 @@ jobs:
             const expectedMigrations = [
               '0001_trading_storage_replication_authority.sql',
               '0002_trading_domain_schema.sql',
-              '0003_trading_replication_health.sql'
+              '0003_trading_replication_health.sql',
+              '0004_account_followers.sql',
+              '0005_broker_observation_due_index.sql',
+              '0006_account_follower_risk_sizing.sql'
             ];
             const appliedExactly = result.alreadyApplied === true
-              || (Array.isArray(result.applied) && JSON.stringify(result.applied) === JSON.stringify(expectedMigrations));
+              || (Array.isArray(result.applied)
+                && result.applied.length > 0
+                && result.applied.every((name) => expectedMigrations.includes(name))
+                && result.applied.at(-1) === expectedMigrations.at(-1));
             if (result.databaseName !== 'mkety' || result.schemaName !== 'trading_storage' || !appliedExactly) {
               throw new Error('Schema-only migration did not verify the expected database, schema, and migration ledger.');
             }
@@ -970,6 +1025,51 @@ jobs:
             echo 'The transient Coolify app did not report a successful probe, migration, or data import before the task-result timeout.'
             exit 5
           fi
+      - name: Apply and verify D1 schema after PostgreSQL migration
+        if: ${{ inputs.mode == 'apply-existing-mkety-schema' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s wrangler.trading-staging.toml || { echo 'Verified existing Trading D1 migration config is missing.'; exit 1; }
+          npx wrangler d1 migrations apply trading-staging --remote --config wrangler.trading-staging.toml
+          npx wrangler d1 migrations list trading-staging --remote --config wrangler.trading-staging.toml
+          npx wrangler d1 execute trading-staging --remote --config wrangler.trading-staging.toml --json \
+            --command "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name;" \
+            > "$RUNNER_TEMP/trading-d1-schema-check-after-migration.json"
+          node --input-type=module <<'VERIFY_APPLIED_TRADING_D1_SCHEMA'
+          import { readFile } from 'node:fs/promises';
+          import { compareD1MigrationTableInventory } from './scripts/trading_d1_schema_inventory.mjs';
+
+          const migrationPaths = [
+            'db/d1-migrations/0001_trading_storage_replication.sql',
+            'db/d1-migrations/0002_trading_domain_schema.sql',
+            'db/d1-migrations/0003_trading_replication_health.sql',
+            'db/d1-migrations/0004_account_followers.sql',
+            'db/d1-migrations/0005_broker_observation_due_index.sql',
+            'db/d1-migrations/0006_account_follower_risk_sizing.sql',
+          ];
+          const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
+          const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check-after-migration.json`, 'utf8'));
+          const rows = Array.isArray(payload)
+            ? payload.flatMap((item) => Array.isArray(item?.results) ? item.results : [])
+            : Array.isArray(payload?.results) ? payload.results : [];
+          const inventory = compareD1MigrationTableInventory({
+            migrationSql,
+            actualTables: rows.map((row) => row?.name),
+          });
+          if (inventory.missing.length || inventory.unexpected.length) {
+            throw new Error(`Remote Trading D1 schema mismatch after migration: ${JSON.stringify(inventory)}`);
+          }
+          console.log(`Remote Trading D1 exact schema check passed after PostgreSQL migration (${inventory.actualCount} tables).`);
+          VERIFY_APPLIED_TRADING_D1_SCHEMA
+      - name: Remove temporary D1 migration config
+        if: always()
+        shell: bash
+        run: rm -f wrangler.trading-staging.toml "$RUNNER_TEMP/trading-d1-schema-check-after-migration.json"
+
       - name: Delete ephemeral Trading PostgreSQL probe host
         if: always() && steps.postgres-probe-app.outputs.app_uuid != ''
         env:

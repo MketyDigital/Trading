@@ -36,7 +36,7 @@ class ReconcilingFakeMT5:
         self.history_order_calls = []
 
     def symbol_info(self, symbol):
-        return SimpleNamespace(name=symbol, visible=True)
+        return SimpleNamespace(name=symbol, visible=True, volume_min=0.01, volume_max=100.0, volume_step=0.01)
 
     def symbol_info_tick(self, _symbol):
         return SimpleNamespace(bid=2525.9, ask=2526.1)

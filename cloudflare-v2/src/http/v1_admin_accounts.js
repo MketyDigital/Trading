@@ -1,4 +1,5 @@
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { isWorkspaceRiskOwner } from '../security/risk_policy_authorization.js';
 import {
   encryptConnectionCredentials,
   validateConnectionCredentials,
@@ -48,6 +49,16 @@ function sizingConfigFor(type, raw = {}) {
     const percent = Number(config.percent);
     return percent > 0 && percent <= 100 ? { percent } : null;
   }
+  if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(type)) {
+    const allowedKeys = new Set(['riskBasis', 'risk_basis', 'riskMode', 'risk_mode']);
+    if (Object.keys(config).some((key) => !allowedKeys.has(key))) return null;
+    const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (type === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
+    const riskMode = String(config.riskMode ?? config.risk_mode ?? (type === 'fixed_risk' ? 'fixed_cash' : 'percent')).trim().toLowerCase();
+    if (!['equity', 'balance'].includes(riskBasis) || !['percent', 'fixed_cash'].includes(riskMode)
+      || (type === 'balance_risk_percent' && riskBasis !== 'balance')
+      || (type === 'equity_risk_percent' && riskBasis !== 'equity')) return null;
+    return { riskBasis, riskMode };
+  }
   return {};
 }
 
@@ -78,6 +89,13 @@ function publicAccount(account = {}) {
     lotSizingType: account.lot_sizing_type ?? account.lotSizingType ?? null,
     lotValue: account.lot_value ?? account.lotValue ?? null,
     lotSizingConfig: { ...safeObject(account.lot_sizing_config ?? account.lotSizingConfig) },
+    riskPolicy: {
+      maxRiskPercent: safetyPolicy?.maxRiskPercent ?? null,
+      maxOpenRiskPercent: safetyPolicy?.maxOpenRiskPercent ?? null,
+      maxDailyLossPercent: safetyPolicy?.maxDailyLossPercent ?? null,
+      minimumVolumeRiskTolerancePercent: safetyPolicy?.minimumVolumeRiskTolerancePercent ?? null,
+      minimumLotPolicy: safetyPolicy?.minimumLotPolicy ?? 'FLOOR',
+    },
     fastEntryPolicy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
     entryZonePolicy: canonicalEntryZonePolicy(account.entry_zone_policy ?? account.entryZonePolicy),
     credentialConfigured,
@@ -114,7 +132,8 @@ function parseAccountCreation(body) {
   const label = requiredText(body.label ?? body.accountLabel ?? body.account_label);
   const accountId = requiredText(body.accountId ?? body.account_id);
   const serverName = requiredText(body.serverName ?? body.server_name);
-  const lotSizingType = (requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed').toLowerCase();
+  const requestedLotSizingType = (requiredText(body.lotSizingType ?? body.lot_sizing_type) ?? 'fixed').toLowerCase();
+  const lotSizingType = ['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedLotSizingType) ? 'risk_percent' : requestedLotSizingType;
   const lotValue = optionalNumber(body.lotValue ?? body.lot_value);
   const lotSizingConfig = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
 
@@ -124,12 +143,16 @@ function parseAccountCreation(body) {
   if (!label || !accountId || lotValue === undefined || !(Number(lotValue) > 0)) {
     return { ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' };
   }
-  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType)) {
+  if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', 'risk_percent'].includes(lotSizingType)
+    && !['equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedLotSizingType)) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' };
   }
-  const normalizedSizingConfig = sizingConfigFor(lotSizingType, lotSizingConfig);
+  const normalizedSizingConfig = sizingConfigFor(requestedLotSizingType, lotSizingConfig);
   if (!normalizedSizingConfig) {
     return { ok: false, reason: 'ACCOUNT_LOT_SIZING_CONFIG_INVALID' };
+  }
+  if (lotSizingType === 'risk_percent' && normalizedSizingConfig.riskMode === 'percent' && !(Number(lotValue) <= 100)) {
+    return { ok: false, reason: 'ACCOUNT_RISK_PERCENT_INVALID' };
   }
 
   try {
@@ -138,10 +161,25 @@ function parseAccountCreation(body) {
     return { ok: false, reason: 'ACCOUNT_CREDENTIALS_INVALID' };
   }
 
-  const safetyPolicy = {
-    ...safeObject(body.safetyPolicy ?? body.safety_policy),
-    killSwitch: true,
-  };
+  const rawSafetyPolicy = safeObject(body.safetyPolicy ?? body.safety_policy);
+  const safetyPolicy = { ...rawSafetyPolicy, killSwitch: true };
+  for (const key of ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent']) {
+    if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, key)) {
+      const value = Number(rawSafetyPolicy[key]);
+      if (!(value > 0 && value <= 100)) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+      safetyPolicy[key] = value;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, 'minimumVolumeRiskTolerancePercent')) {
+    const value = Number(rawSafetyPolicy.minimumVolumeRiskTolerancePercent);
+    if (!Number.isFinite(value) || value < 0 || value > 1) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+    safetyPolicy.minimumVolumeRiskTolerancePercent = value;
+  }
+  if (Object.prototype.hasOwnProperty.call(rawSafetyPolicy, 'minimumLotPolicy')) {
+    const value = String(rawSafetyPolicy.minimumLotPolicy).trim().toUpperCase();
+    if (!['FLOOR', 'REJECT'].includes(value)) return { ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' };
+    safetyPolicy.minimumLotPolicy = value;
+  }
 
   return {
     ok: true,
@@ -408,6 +446,12 @@ export async function handleAuthorizedV1AdminAccountsRequest(request, authorizat
       }
       const body = await readJson(request);
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+      const requestedSizingType = String(body.lotSizingType ?? body.lot_sizing_type ?? 'fixed').trim().toLowerCase();
+      const requestedSafetyPolicy = safeObject(body.safetyPolicy ?? body.safety_policy);
+      const hasRiskPolicyFields = ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy']
+        .some((key) => Object.prototype.hasOwnProperty.call(requestedSafetyPolicy, key));
+      if ((['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(requestedSizingType) || hasRiskPolicyFields)
+        && !isWorkspaceRiskOwner(authorization?.membership?.role)) return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
       const parsed = parseAccountCreation(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
       if (!env?.TRADING_MASTER_KEY) {

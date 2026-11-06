@@ -274,6 +274,72 @@ test('one account dispatch failure cannot block a successful sibling account', a
   assert.equal(successBinding.brokerPositionId, 'position-b');
 });
 
+test('one follower broker-risk failure cannot suppress the parent or another follower', async () => {
+  const dispatched = [];
+  const riskContexts = [];
+  const accountRows = {
+    parent: account({ id: 'parent' }),
+    followerA: account({ id: 'followerA', followerLink: { risk_mode: 'balance_percent', risk_percent: 1, risk_basis: 'balance' } }),
+    followerB: account({ id: 'followerB', followerLink: { risk_mode: 'fixed_risk', risk_amount: 75, risk_basis: 'equity' } }),
+  };
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a',
+    eventId: 'evt-follower-isolation',
+    brokerExecutionEnabled: true,
+    accountPlans: [
+      plan({ accountId: 'parent', groupId: 'parent-group' }),
+      plan({ accountId: 'followerA', groupId: 'follower-a-group' }),
+      plan({ accountId: 'followerB', groupId: 'follower-b-group' }),
+    ],
+  }, {
+    accountLoader: async (_workspaceId, accountId) => accountRows[accountId],
+    riskMaterializer: async ({ account, action }) => {
+      riskContexts.push({
+        accountId: account.id,
+        mode: account.followerLink?.risk_mode ?? 'parent',
+        amount: account.followerLink?.risk_amount ?? null,
+        percent: account.followerLink?.risk_percent ?? null,
+      });
+      if (account.id === 'followerA') {
+        const error = new Error('follower broker context unavailable');
+        error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+        throw error;
+      }
+      return {
+        allowed: true,
+        action,
+        policyContext: {
+          totalLots: action.lots,
+          riskPercent: 0.5,
+          minimumVolumeRiskOveragePercent: 0,
+          currentDailyPnlPercent: 0,
+          currentOpenRiskPercent: 0,
+        },
+      };
+    },
+    dispatchAction: async ({ account: row }) => {
+      dispatched.push(row.id);
+      return { ok: true, brokerPositionId: `position-${row.id}` };
+    },
+    stateBinder: async () => {},
+  });
+
+  assert.deepEqual(dispatched.sort(), ['followerB', 'parent']);
+  assert.equal(summary.succeeded, 2);
+  assert.equal(summary.blocked, 1);
+  assert.equal(summary.status, 'PARTIAL');
+  assert.deepEqual(summary.accounts.map((row) => [row.accountId, row.status]).sort((a, b) => a[0].localeCompare(b[0])), [
+    ['followerA', 'BLOCKED'],
+    ['followerB', 'SUCCEEDED'],
+    ['parent', 'SUCCEEDED'],
+  ]);
+  assert.deepEqual(riskContexts.sort((a, b) => a.accountId.localeCompare(b.accountId)), [
+    { accountId: 'followerA', mode: 'balance_percent', amount: null, percent: 1 },
+    { accountId: 'followerB', mode: 'fixed_risk', amount: 75, percent: null },
+    { accountId: 'parent', mode: 'parent', amount: null, percent: null },
+  ]);
+});
+
 test('successful MODIFY_POSITION binds requested SL/TP even when broker returns no new identifiers', async () => {
   const bound = [];
   const summary = await executeProductionPlan({
@@ -332,4 +398,257 @@ test('final durable authority is reloaded before every action so revocation afte
   assert.equal(authorityCalls, 2);
   assert.equal(dispatchCalls, 1);
   assert.equal(summary.accounts[0].status, 'BLOCKED');
+});
+
+
+test('minimum-volume fallback authorization is still blocked when its risk overage exceeds account tolerance', async () => {
+  let dispatchCalls = 0;
+  let authorizationCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-min-floor', brokerExecutionEnabled: true,
+    accountPlans: [plan()],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 2 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action: { ...action, minimumVolumeFallbackAuthorized: true },
+      authorizeMinimumVolumeFallback: () => { authorizationCalls += 1; return true; },
+      policyRequest: {
+        totalLots: 0.1,
+        riskPercent: 0.1,
+        minimumVolumeRiskOveragePercent: 0.09,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 0);
+  assert.equal(authorizationCalls, 0, 'fallback capability must not be minted before policy approval');
+  assert.equal(summary.accounts[0].status, 'BLOCKED');
+  assert.ok(summary.accounts[0].policy.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+});
+
+test('minimum-volume fallback capability is minted only after the coordinator approves policy', async () => {
+  let authorizationCalls = 0;
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-min-floor-approved', brokerExecutionEnabled: true,
+    accountPlans: [plan()],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 1 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action: { ...action, minimumVolumeFallbackAuthorized: true },
+      policyRequest: {
+        totalLots: 0.1,
+        riskPercent: 0.95,
+        minimumVolumeRiskOveragePercent: 0.05,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+      authorizeMinimumVolumeFallback: (candidate, policy) => {
+        authorizationCalls += 1;
+        assert.equal(policy.allowed, true);
+        assert.equal(candidate.minimumVolumeFallbackAuthorized, true);
+        return true;
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-min-floor' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(authorizationCalls, 1);
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+});
+
+
+test('maxLotsPerTrade accumulates accepted TP-leg volume within one account plan', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-lot-legs', brokerExecutionEnabled: true,
+    accountPlans: [plan({ actions: [
+      openAction({ lots: 0.01, legId: 'tp-1', idempotencyKey: 'evt-lot-legs:tp-1' }),
+      openAction({ lots: 0.01, legId: 'tp-2', idempotencyKey: 'evt-lot-legs:tp-2' }),
+    ] })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxLotsPerTrade: 0.015 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.5,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'PARTIAL');
+  assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
+  assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['MAX_LOTS_EXCEEDED']);
+});
+
+test('max open risk accumulates accepted TP-leg risk within one account plan', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-risk-legs', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      currentOpenRiskPercent: 1,
+      actions: [
+        openAction({ legId: 'tp-1', idempotencyKey: 'evt-risk-legs:tp-1' }),
+        openAction({ legId: 'tp-2', idempotencyKey: 'evt-risk-legs:tp-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxOpenRiskPercent: 2 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.75,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 1,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'PARTIAL');
+  assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
+  assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['OPEN_RISK_LIMIT']);
+});
+
+
+test('refreshed broker exposure that already includes prior TP risk is not double-counted', async () => {
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-risk-refresh', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      currentOpenRiskPercent: 1,
+      actions: [
+        openAction({ legId: 'tp-1', idempotencyKey: 'evt-risk-refresh:tp-1' }),
+        openAction({ legId: 'tp-2', idempotencyKey: 'evt-risk-refresh:tp-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxOpenRiskPercent: 2.5 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.75,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: dispatchCalls === 0 ? 1 : 1.75,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 2);
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+});
+
+
+test('accepted OPEN risk is reserved even when state binding fails before the next TP leg', async () => {
+  const policyRequests = [];
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-risk-bind-failure', brokerExecutionEnabled: true,
+    accountPlans: [plan({
+      currentOpenRiskPercent: 1,
+      actions: [
+        openAction({ legId: 'tp-1', idempotencyKey: 'evt-risk-bind-failure:tp-1' }),
+        openAction({ legId: 'tp-2', idempotencyKey: 'evt-risk-bind-failure:tp-2' }),
+      ],
+    })],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxOpenRiskPercent: 2 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action,
+      policyContext: {
+        totalLots: action.lots,
+        riskPercent: 0.75,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 1,
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-1' }; },
+    stateBinder: async () => { throw new Error('simulated persistence failure'); },
+    bindingRepairRecorder: async () => {},
+  });
+
+  assert.equal(dispatchCalls, 1, 'second TP must be blocked before broker dispatch');
+  assert.equal(summary.accounts[0].status, 'FAILED');
+  assert.equal(summary.accounts[0].actions[0].reason, 'STATE_BIND_FAILED');
+  assert.equal(summary.accounts[0].actions[1].status, 'BLOCKED');
+  assert.deepEqual(summary.accounts[0].actions[1].policy.reasons, ['OPEN_RISK_LIMIT']);
+});
+
+
+test('follower accounts load and materialize risk independently from their own account economics', async () => {
+  const sized = [];
+  const dispatched = [];
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-independent-sizing', brokerExecutionEnabled: true,
+    accountPlans: [
+      plan({ accountId: 'acct-small', actions: [openAction({ idempotencyKey: 'evt-independent-sizing:small', lots: 0.01 })] }),
+      plan({ accountId: 'acct-large', actions: [openAction({ idempotencyKey: 'evt-independent-sizing:large', lots: 0.01 })] }),
+    ],
+  }, {
+    accountLoader: async (_workspaceId, accountId) => account({
+      id: accountId,
+      equity: accountId === 'acct-small' ? 1000 : 10000,
+      balance: accountId === 'acct-small' ? 900 : 9500,
+    }),
+    riskMaterializer: async ({ account: currentAccount, action }) => {
+      const lots = currentAccount.equity * 0.001 / 100;
+      sized.push({ accountId: currentAccount.id, equity: currentAccount.equity, lots });
+      return {
+        allowed: true,
+        action: { ...action, lots },
+        policyContext: { totalLots: lots, riskPercent: 0.1, currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 },
+      };
+    },
+    dispatchAction: async ({ account: currentAccount, action }) => {
+      dispatched.push({ accountId: currentAccount.id, lots: action.lots });
+      return { ok: true, brokerPositionId: `position-${currentAccount.id}` };
+    },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(summary.succeeded, 2);
+  assert.deepEqual(sized, [
+    { accountId: 'acct-small', equity: 1000, lots: 0.01 },
+    { accountId: 'acct-large', equity: 10000, lots: 0.1 },
+  ]);
+  assert.deepEqual(dispatched, [
+    { accountId: 'acct-small', lots: 0.01 },
+    { accountId: 'acct-large', lots: 0.1 },
+  ]);
 });

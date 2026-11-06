@@ -7,7 +7,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MIGRATION_NAMES = [
   '0001_trading_storage_replication_authority.sql',
   '0002_trading_domain_schema.sql',
-  '0003_trading_replication_health.sql'
+  '0003_trading_replication_health.sql',
+  '0004_account_followers.sql',
+  '0005_broker_observation_due_index.sql',
+  '0006_account_follower_risk_sizing.sql'
 ];
 const MIGRATION_LOCK = 'mkety.trading_storage.schema_migrations';
 
@@ -30,7 +33,7 @@ function safePermissionTarget(error) {
   return match ? `permission denied for ${match[1]} ${match[2]}` : '';
 }
 
-async function loadMigrations(directory = join(here, '../db/postgres-migrations')) {
+export async function loadMigrations(directory = join(here, '../db/postgres-migrations')) {
   const names = (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort();
   if (names.length !== MIGRATION_NAMES.length || names.some((name, index) => name !== MIGRATION_NAMES[index])) {
     throw new Error('PostgreSQL migration set does not match the reviewed allowlist');
@@ -49,6 +52,17 @@ function checksumsFor(migrations) {
     sql,
     checksum: createHash('sha256').update(sql).digest('hex')
   }));
+}
+
+// The installer owns one transaction for the complete migration set. Some
+// historical SQL files contain their own outer BEGIN/COMMIT wrappers; remove
+// only those standalone boundary statements so they cannot commit the install
+// transaction before its migration-ledger write and final safety checks.
+function migrationSqlWithinInstallerTransaction(sql) {
+  return String(sql)
+    .replace(/^\\s*BEGIN\\s*;\\s*/i, '')
+    .replace(/\\s*COMMIT\\s*;\\s*$/i, '')
+    .trim();
 }
 
 /** Apply the reviewed additive schema once, transactionally, to the existing mkety database. */
@@ -154,15 +168,38 @@ export async function applyTradingPostgresMigrations({
       }
       const ledgerResult = await client.query('SELECT version, checksum FROM trading_storage.schema_migrations ORDER BY version');
       const applied = ledgerResult?.rows || [];
-      const exact = applied.length === migrationSet.length && migrationSet.every((migration, index) => (
-        applied[index]?.version === migration.version && applied[index]?.checksum === migration.checksum
-      ));
-      if (!exact) throw new Error('Existing trading_storage migration ledger does not match reviewed files');
+      const validPrefix = applied.length >= 3
+        && applied.length <= migrationSet.length
+        && migrationSet.slice(0, applied.length).every((migration, index) => (
+          applied[index]?.version === migration.version && applied[index]?.checksum === migration.checksum
+        ));
+      if (!validPrefix) throw new Error('Existing trading_storage migration ledger does not match reviewed files');
+
+      const pending = migrationSet.slice(applied.length);
+      if (pending.length) {
+        stage = 'assume restricted Trading owner for additive upgrade';
+        await client.query('SET LOCAL ROLE trading_owner');
+        const effectiveRole = await client.query('SELECT current_user AS current_role');
+        if (effectiveRole?.rows?.[0]?.current_role !== 'trading_owner') {
+          throw new Error('PostgreSQL migration did not switch to the restricted Trading owner');
+        }
+        for (const migration of pending) {
+          stage = `apply migration ${migration.name}`;
+          await client.query(migrationSqlWithinInstallerTransaction(migration.sql));
+          await client.query('INSERT INTO trading_storage.schema_migrations (version, checksum) VALUES ($1, $2)', [migration.version, migration.checksum]);
+        }
+      }
+
       stage = 'verify fenced authority and function privileges';
       await verifySchemaSafety(client);
       await client.query('COMMIT');
       inTransaction = false;
-      return { databaseName: expectedDatabaseName, schemaName: 'trading_storage', applied: [], alreadyApplied: true };
+      return {
+        databaseName: expectedDatabaseName,
+        schemaName: 'trading_storage',
+        applied: pending.map(({ name }) => name),
+        alreadyApplied: pending.length === 0,
+      };
     }
 
     stage = 'apply reviewed schema migrations';
@@ -175,7 +212,7 @@ export async function applyTradingPostgresMigrations({
     for (let index = 0; index < migrationSet.length; index += 1) {
       const migration = migrationSet[index];
       stage = `apply migration ${migration.name}`;
-      await client.query(migration.sql);
+      await client.query(migrationSqlWithinInstallerTransaction(migration.sql));
       if (index === 0) {
         await client.query('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())');
       }

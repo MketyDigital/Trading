@@ -48,6 +48,25 @@ test('cTrader fixed lots below symbol minimum fail with a specific pre-send code
   assert.equal(deliveryStore.failures[0]?.code, 'CTRADER_VOLUME_BELOW_MINIMUM');
 });
 
+test('cTrader runtime fallback capability alone cannot authorize a broker-minimum increase', async () => {
+  const deliveryStore = store();
+  let sent = false;
+  const session = { request: async () => { sent = true; throw new Error('must not send'); } };
+
+  await assert.rejects(
+    executeCTraderAction(action, {
+      session,
+      accountId: 48685071,
+      catalog: [symbol],
+      deliveryStore,
+      allowBrokerMinimumVolumeFallback: true,
+    }),
+    (error) => error?.code === 'CTRADER_VOLUME_BELOW_MINIMUM',
+  );
+  assert.equal(sent, false);
+  assert.equal(deliveryStore.failures[0]?.code, 'CTRADER_VOLUME_BELOW_MINIMUM');
+});
+
 test('explicit broker-minimum fallback uses the live symbol minimum and records executed lots', async () => {
   const deliveryStore = store();
   const requests = [];
@@ -60,13 +79,13 @@ test('explicit broker-minimum fallback uses the live symbol minimum and records 
           executionType: 3,
           position: { positionId: 9001, price: 6000 },
           order: { orderId: 8001 },
-          deal: { dealId: 7001, positionId: 9001, orderId: 8001, executionPrice: 6000 },
+          deal: { dealId: 7001, positionId: 9001, orderId: 8001, executionPrice: 6000, volume: 5, filledVolume: 5 },
         },
       };
     },
   };
 
-  const result = await executeCTraderAction(action, {
+  const result = await executeCTraderAction({ ...action, minimumVolumeFallbackAuthorized: true }, {
     session,
     accountId: 48685071,
     catalog: [symbol],
@@ -79,4 +98,33 @@ test('explicit broker-minimum fallback uses the live symbol minimum and records 
   assert.equal(result.executedLots, 0.05);
   assert.equal(result.volumeStepLots, 0.05);
   assert.equal(result.minimumLots, 0.05);
+});
+
+
+test('cTrader accepted fill without confirmed filledVolume does not persist requested volume', async () => {
+  const deliveryStore = store();
+  const session = {
+    async request() {
+      return {
+        payloadType: 2126,
+        payload: {
+          executionType: 3,
+          position: { positionId: 9002, price: 6000 },
+          order: { orderId: 8002, executedVolume: 5 },
+          deal: { dealId: 7002, positionId: 9002, orderId: 8002, executionPrice: 6000, volume: 10 },
+        },
+      };
+    },
+  };
+
+  const result = await executeCTraderAction({ ...action, minimumVolumeFallbackAuthorized: true }, {
+    session,
+    accountId: 48685071,
+    catalog: [symbol],
+    deliveryStore,
+    allowBrokerMinimumVolumeFallback: true,
+  });
+
+  assert.equal(result.executedLots, null);
+  assert.equal(deliveryStore.completions[0]?.executedLots, null);
 });

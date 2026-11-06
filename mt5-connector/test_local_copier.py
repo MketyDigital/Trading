@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from local_copier import LocalCopyEngine, plan_snapshot_actions
+from local_copier import LocalCopyEngine, plan_snapshot_actions, _risk_sized_volume
 from profile_store import TerminalProfile, load_profiles, save_profile, update_copy_settings
 from copy_supervisor import CopyPairSpec, LocalCopySupervisor
 
@@ -27,7 +27,7 @@ class LocalCopierTests(unittest.TestCase):
             def positions_get(self): return (SimpleNamespace(ticket=12, symbol='Volatility 75 Index', type=0, volume=0.2, sl=0, tp=0),)
             def orders_get(self): return (SimpleNamespace(ticket=24, symbol='Volatility 75 Index', type=2, volume_current=0.3, volume_initial=0.3,
                                                           price_open=100.0, sl=90.0, tp=120.0, comment='parent-order'),)
-            def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_step=0.1)
+            def symbol_info(self, _symbol): return SimpleNamespace(volume_min=0.1, volume_max=100.0, volume_step=0.1)
         snapshot = _snapshot(FakeMT5(), 'deriv-terminal.exe')
         self.assertTrue(snapshot['complete'])
         self.assertEqual(snapshot['account_mode'], 'HEDGING')
@@ -38,13 +38,99 @@ class LocalCopierTests(unittest.TestCase):
                                                        'entry_price': 100.0, 'sl': 90.0, 'tp': 120.0,
                                                        'stop_limit_price': None,
                                                        'time_type': 0, 'expiration': 0,
-                                                       'volume_min': 0.1, 'volume_max': None, 'volume_step': 0.1}])
+                                                       'volume_min': 0.1, 'volume_max': 100.0, 'volume_step': 0.1, 'loss_per_lot_at_stop': None}])
+
+
+    def test_risk_sizing_uses_mt5_step_multiples_and_respects_minimum(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.03,
+            'volume_max': 0.15,
+            'volume_step': 0.02,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertEqual(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1), 0.1)
+
+    def test_risk_sizing_below_broker_minimum_fails_closed(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.03,
+            'volume_max': 0.15,
+            'volume_step': 0.02,
+        }
+        follower = {'equity': 2000, 'balance': 2000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1))
+
+    def test_risk_sizing_missing_broker_maximum_fails_closed(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': None,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=1))
+
+    def test_fixed_cash_risk_sizing_does_not_require_percentage_basis(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        self.assertEqual(_risk_sized_volume(row, {'equity': 10000, 'balance': 10000}, risk_mode='fixed_risk', risk_amount=100), 0.1)
+
+
+    def test_risk_sizing_rejects_percent_above_account_equity(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 10000, 'balance': 10000}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='equity_percent', risk_percent=101))
+
+    def test_fixed_cash_risk_cannot_exceed_follower_risk_basis(self):
+        row = {
+            'loss_per_lot_at_stop': 1000,
+            'volume_min': 0.01,
+            'volume_max': 1.0,
+            'volume_step': 0.01,
+        }
+        follower = {'equity': 100, 'balance': 100}
+        self.assertIsNone(_risk_sized_volume(row, follower, risk_mode='fixed_risk', risk_amount=101))
 
     def test_profile_copy_metadata_defaults_off(self):
         profile = TerminalProfile('p1', 'Primary')
         self.assertEqual(profile.copy_role, 'none')
         self.assertFalse(profile.copy_enabled)
         self.assertIsNone(profile.copy_parent_profile_id)
+
+    def test_profile_persists_independent_risk_sizing_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            follower = TerminalProfile('risk-follower', 'Risk Follower', Path('C:/follower/terminal64.exe'))
+            save_profile(follower, root)
+            update_copy_settings(follower, root, role='follower', parent_profile_id='parent',
+                                 enabled=True, risk_mode='equity_percent',
+                                 risk_percent=1.25, risk_basis='equity')
+            saved = {row.profile_id: row for row in load_profiles(root)}['risk-follower']
+            self.assertEqual(saved.copy_risk_mode, 'equity_percent')
+            self.assertEqual(saved.copy_risk_percent, 1.25)
+            self.assertEqual(saved.copy_risk_basis, 'equity')
+            with self.assertRaisesRegex(ValueError, 'risk amount must be positive'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='fixed_risk', risk_amount=float('nan'))
+            with self.assertRaisesRegex(ValueError, 'lot multiplier must be positive'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, lot_multiplier=float('nan'))
+            with self.assertRaisesRegex(ValueError, 'between 0 and 100'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='equity_percent', risk_percent=101)
+            with self.assertRaisesRegex(ValueError, 'requires a risk amount'):
+                update_copy_settings(saved, root, role='follower', parent_profile_id='parent',
+                                    enabled=True, risk_mode='fixed_risk')
 
     def test_normal_follower_setup_does_not_require_aliases_and_preserves_saved_aliases(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -106,7 +192,7 @@ class LocalCopierTests(unittest.TestCase):
         }]}
         follower = {'complete': True, 'positions': [], 'pending_orders': [{
             'ticket': 'copy-20', 'source_ticket': 'order-10', 'symbol': 'EURUSD', 'side': 'BUY',
-            'order_type': 'LIMIT', 'volume': 0.1, 'volume_min': 0.01, 'volume_step': 0.01,
+            'order_type': 'LIMIT', 'volume': 0.1, 'volume_min': 0.01, 'volume_max': 100.0, 'volume_step': 0.01,
             'entry_price': 1.08, 'sl': None, 'tp': None,
         }]}
         actions = plan_snapshot_actions(parent, follower, lot_multiplier=0.5)
@@ -210,7 +296,7 @@ class LocalCopierTests(unittest.TestCase):
     def test_partial_close_below_broker_minimum_is_not_rounded_up(self):
         parent = {'complete': True, 'positions': [{'ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 0.19, 'sl': 0, 'tp': 0}]}
         follower = {'positions': [{'ticket': 'copy-33', 'source_ticket': 'parent-10', 'symbol': 'XAUUSD', 'side': 'BUY', 'volume': 1.0,
-                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.1, 'volume_step': 0.1}]}
+                                   'source_initial_volume': 0.2, 'sl': 0, 'tp': 0, 'volume_min': 0.1, 'volume_max': 100.0, 'volume_step': 0.1}]}
         self.assertEqual(plan_snapshot_actions(parent, follower, fixed_lot=1.0), [])
 
     def test_closed_source_is_not_replayed_by_journal(self):
@@ -327,6 +413,42 @@ class LocalCopierTests(unittest.TestCase):
             model.start_copy(follower.profile_id)
             self.assertEqual(calls[0].follower_fixed_lot, 0.01)
             self.assertEqual(calls[0].follower_symbol_map, {'XAUUSD': 'GOLD'})
+
+
+    def test_changing_follower_settings_stops_old_worker_before_new_policy_is_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            parent_path = root / 'parent' / 'terminal64.exe'
+            follower_path = root / 'follower' / 'terminal64.exe'
+            parent_path.parent.mkdir(); parent_path.write_bytes(b'parent')
+            follower_path.parent.mkdir(); follower_path.write_bytes(b'follower')
+            from manager_ui import ManagerViewModel
+            from process_supervisor import ConnectorSupervisor
+            from terminal_catalog import TerminalCatalog
+            calls = {'starts': [], 'stops': []}
+            class Copies:
+                def start(self, spec):
+                    calls['starts'].append(spec)
+                    return 123
+                def stop(self, parent_id, follower_id, **kwargs):
+                    calls['stops'].append((parent_id, follower_id, kwargs.get('stop_file')))
+                def stop_all(self): pass
+            model = ManagerViewModel(
+                root / 'appdata',
+                ConnectorSupervisor(pid_is_running=lambda _pid: False),
+                TerminalCatalog(registry_reader=lambda: [], process_reader=lambda: [], common_paths=[]),
+                copy_supervisor=Copies(),
+            )
+            parent = model.add_terminal(parent_path, 'Main')
+            follower = model.add_terminal(follower_path, 'Follower')
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.01)
+            model.start_copy(follower.profile_id)
+            model.configure_copy(follower.profile_id, parent.profile_id, fixed_lot=0.02)
+            saved = {row.profile_id: row for row in load_profiles(root / 'appdata')}[follower.profile_id]
+            self.assertEqual(saved.copy_fixed_lot, 0.02)
+            self.assertEqual(calls['starts'][0].follower_fixed_lot, 0.01)
+            self.assertEqual(calls['stops'][0][0:2], (parent.profile_id, follower.profile_id))
+            self.assertIsNotNone(calls['stops'][0][2])
 
     def test_fixed_one_lot_is_saved_as_a_follower_and_starts_copying(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -501,6 +623,67 @@ class LocalCopierTests(unittest.TestCase):
             model.configure_copy(follower.profile_id, parent.profile_id)
             model.close_action('stop_and_exit')
             self.assertEqual(stopped[-1], 'all')
+
+
+    def test_fixed_money_risk_sizes_position_from_follower_stop_loss(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.5,
+            'entry_price': 1.10, 'sl': 1.09, 'tp': 1.12,
+            'loss_per_lot_at_stop': 100.0, 'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 100.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 900.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='fixed_risk', risk_amount=50.0)
+        self.assertEqual(actions[0]['lots'], 0.5)
+
+    def test_equity_percentage_risk_uses_follower_equity_and_rounds_down(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'SELL', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.11, 'loss_per_lot_at_stop': 120.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1500.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='equity_percent', risk_percent=1.0)
+        self.assertEqual(actions[0]['lots'], 0.08)
+
+    def test_balance_percentage_risk_uses_follower_balance(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 100.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 3000.0, 'balance': 500.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='balance_percent', risk_percent=2.0)
+        self.assertEqual(actions[0]['lots'], 0.1)
+
+    def test_risk_sizing_fails_closed_without_stop_loss_estimate(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+            'entry_price': 1.10, 'sl': None, 'volume_min': 0.01, 'volume_step': 0.01,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        for mode, kwargs in (('fixed_risk', {'risk_amount': 50.0}),
+                              ('equity_percent', {'risk_percent': 1.0}),
+                              ('balance_percent', {'risk_percent': 1.0})):
+            self.assertEqual(plan_snapshot_actions(parent, follower, risk_mode=mode, **kwargs), [])
+
+    def test_risk_sizing_caps_to_maximum_aligned_volume_step(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 1.0,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 10.0,
+            'volume_min': 0.01, 'volume_step': 0.01, 'volume_max': 0.105,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        actions = plan_snapshot_actions(parent, follower, risk_mode='fixed_risk', risk_amount=5.0)
+        self.assertEqual(actions[0]['lots'], 0.10)
+
+    def test_risk_sizing_below_broker_minimum_skips_instead_of_rounding_up(self):
+        parent = {'complete': True, 'positions': [{
+            'ticket': '10', 'symbol': 'EURUSD', 'side': 'BUY', 'volume': 0.1,
+            'entry_price': 1.10, 'sl': 1.09, 'loss_per_lot_at_stop': 10000.0,
+            'volume_min': 0.1, 'volume_step': 0.1, 'volume_max': 10.0,
+        }]}
+        follower = {'equity': 1000.0, 'balance': 1000.0, 'positions': []}
+        self.assertEqual(plan_snapshot_actions(parent, follower, risk_mode='equity_percent', risk_percent=1.0), [])
 
 
 if __name__ == '__main__':

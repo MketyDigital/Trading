@@ -198,6 +198,11 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   if (actions.length === 0) return blockedAccount(requestedAccountId, 'ACCOUNT_ACTIONS_REQUIRED');
   const outcomes = [];
+  // Reserve newly accepted risk within this account-plan execution group so
+  // later TP legs are checked against existing exposure plus prior accepted legs.
+  let acceptedOpenRiskPercent = 0;
+  let acceptedOpenLots = 0;
+  let initialOpenRiskPercent = null;
 
   for (const action of actions) {
     let currentAccount = account;
@@ -238,10 +243,39 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
     const protection = applyProtectionValidationPolicy(executableAction, safetyPolicy);
     if (!protection.allowed) { outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: protection.reason || 'INVALID_PROTECTION_GEOMETRY' }); continue; }
     executableAction = protection.action;
-    const policy = evaluateAccountPolicy(safetyPolicy, mergePolicyRequest(plan, executableAction, materialized));
+    const mergedPolicyRequest = mergePolicyRequest(plan, executableAction, materialized);
+    let acceptedActionLots = 0;
+    if (isRiskIncreasingAction(executableAction)) {
+      acceptedActionLots = optionalFiniteNumber(mergedPolicyRequest.totalLots)
+        ?? optionalFiniteNumber(executableAction.lots)
+        ?? 0;
+      // maxLotsPerTrade is a group ceiling: later TP legs must include the
+      // already accepted volume, just as they include previously accepted risk.
+      mergedPolicyRequest.totalLots = acceptedOpenLots + acceptedActionLots;
+      const observedOpenRiskPercent = optionalFiniteNumber(mergedPolicyRequest.currentOpenRiskPercent) ?? 0;
+      if (initialOpenRiskPercent == null) initialOpenRiskPercent = observedOpenRiskPercent;
+      // Broker exposure can refresh after each fill and already include prior
+      // legs. Use the more conservative of refreshed exposure and the plan's
+      // initial exposure plus coordinator reservations to avoid double-counting.
+      mergedPolicyRequest.currentOpenRiskPercent = Math.max(
+        observedOpenRiskPercent,
+        initialOpenRiskPercent + acceptedOpenRiskPercent,
+      );
+    }
+    const policy = evaluateAccountPolicy(safetyPolicy, mergedPolicyRequest);
     if (!policy.allowed) {
       if (policy.reasons?.includes('KILL_SWITCH')) return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', { policy });
       outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, policy }); continue;
+    }
+    if (typeof materialized?.authorizeMinimumVolumeFallback === 'function'
+      && materialized.authorizeMinimumVolumeFallback(executableAction, policy, mergedPolicyRequest) !== true) {
+      outcomes.push({
+        status: 'BLOCKED',
+        legId: executableAction?.legId ?? null,
+        idempotencyKey: executableAction?.idempotencyKey ?? null,
+        reason: 'BROKER_MINIMUM_FALLBACK_AUTHORIZATION_FAILED',
+      });
+      continue;
     }
 
     let result;
@@ -259,6 +293,15 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       outcomes.push({ status: 'FAILED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, reason: error?.code || 'BROKER_DISPATCH_FAILED' }); continue;
     }
 
+    // Reserve risk as soon as the broker confirms a non-duplicate OPEN.
+    // State persistence can fail after a real fill; subsequent TP legs must
+    // still account for the accepted exposure even when binding needs repair.
+    if (isRiskIncreasingAction(executableAction) && result?.duplicate !== true) {
+      const acceptedRiskPercent = optionalFiniteNumber(mergedPolicyRequest.riskPercent);
+      if (acceptedRiskPercent != null && acceptedRiskPercent > 0) acceptedOpenRiskPercent += acceptedRiskPercent;
+      if (acceptedActionLots > 0) acceptedOpenLots += acceptedActionLots;
+    }
+
     const shouldBindState = result?.duplicate !== true && typeof stateBinder === 'function' && (hasBindableBrokerResult(result) || actionRequiresStateBinding(executableAction));
     if (shouldBindState) {
       try {
@@ -274,7 +317,9 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
             : brokerPositionId != null ? 'OPEN' : brokerOrderId != null ? 'PENDING' : null,
           brokerPositionId, brokerOrderId, brokerDealId: result?.brokerDealId ?? null,
           fillPrice: optionalFiniteNumber(result?.fillPrice),
-          executedLots: Number.isFinite(Number(result?.executedLots)) ? Number(result.executedLots) : Number(executableAction?.lots),
+          executedLots: optionalFiniteNumber(result?.executedLots) != null && Number(result.executedLots) > 0
+            ? Number(result.executedLots)
+            : null,
           volumeStepLots: Number.isFinite(Number(result?.volumeStepLots)) ? Number(result.volumeStepLots) : null,
           minimumLots: Number.isFinite(Number(result?.minimumLots)) ? Number(result.minimumLots) : null,
           ...(desiredStopLoss != null ? { stopLoss: desiredStopLoss } : {}),

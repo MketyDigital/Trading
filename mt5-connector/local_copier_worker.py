@@ -58,16 +58,42 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
             return {'complete': False, 'reason': 'MT5_PENDING_ORDERS_UNAVAILABLE'}
         result = []
         symbols = {}
+        def risk_metadata(symbol, side, entry, stop):
+            info = symbols.get(symbol)
+            if info is None:
+                # Broker-specific mapped symbols may not be visible in Market Watch
+                # yet. Select them before querying contract and volume metadata.
+                selector = getattr(mt5, 'symbol_select', None)
+                if callable(selector):
+                    try:
+                        selector(symbol, True)
+                    except Exception:
+                        pass
+                info = mt5.symbol_info(symbol)
+                symbols[symbol] = info
+            if info is None:
+                return {'volume_min': None, 'volume_max': None, 'volume_step': None, 'loss_per_lot_at_stop': None}
+            loss = None
+            try:
+                entry_value, stop_value = float(entry), float(stop)
+                order_type = getattr(mt5, 'ORDER_TYPE_BUY', 0) if side == 'BUY' else getattr(mt5, 'ORDER_TYPE_SELL', 1)
+                pnl = mt5.order_calc_profit(order_type, symbol, 1.0, entry_value, stop_value)
+                if pnl is not None and float(pnl) < 0:
+                    loss = abs(float(pnl))
+            except (TypeError, ValueError, AttributeError):
+                loss = None
+            return {'volume_min': getattr(info, 'volume_min', None), 'volume_max': getattr(info, 'volume_max', None),
+                    'volume_step': getattr(info, 'volume_step', None), 'loss_per_lot_at_stop': loss}
+
         for row in positions:
             symbol = str(getattr(row, 'symbol', ''))
-            if symbol not in symbols:
-                symbols[symbol] = mt5.symbol_info(symbol)
-            symbol_info = symbols[symbol]
             side = 'BUY' if int(getattr(row, 'type', 1)) == int(getattr(mt5, 'ORDER_TYPE_BUY', 0)) else 'SELL'
+            entry = getattr(row, 'price_open', None)
+            stop = getattr(row, 'sl', None)
+            meta = risk_metadata(symbol, side, entry, stop) if _positive(stop) else risk_metadata(symbol, side, entry, None)
             result.append({'ticket': str(getattr(row, 'ticket', '')), 'identifier': str(getattr(row, 'identifier', '') or ''),
                            'comment': str(getattr(row, 'comment', '') or ''), 'symbol': symbol, 'side': side,
-                           'volume': float(getattr(row, 'volume', 0) or 0), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
-                           'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_step': getattr(symbol_info, 'volume_step', None)})
+                           'volume': float(getattr(row, 'volume', 0) or 0), 'entry_price': entry, 'sl': stop, 'tp': getattr(row, 'tp', None), **meta})
         type_names = {
             getattr(mt5, 'ORDER_TYPE_BUY_LIMIT', 2): ('BUY', 'LIMIT'),
             getattr(mt5, 'ORDER_TYPE_SELL_LIMIT', 3): ('SELL', 'LIMIT'),
@@ -90,18 +116,22 @@ def _snapshot(mt5, terminal_path, *, include_positions=True):
             if symbol not in symbols:
                 symbols[symbol] = mt5.symbol_info(symbol)
             symbol_info = symbols[symbol]
+            entry_price = getattr(row, 'price_open', None)
+            sl = getattr(row, 'sl', None)
+            meta = risk_metadata(symbol, order_type[0], entry_price, sl) if _positive(sl) else risk_metadata(symbol, order_type[0], entry_price, None)
             pending_rows.append({
                 'ticket': str(getattr(row, 'ticket', '')), 'comment': str(getattr(row, 'comment', '') or ''),
                 'symbol': symbol, 'side': order_type[0], 'order_type': order_type[1],
                 'volume': float(getattr(row, 'volume_current', 0) or getattr(row, 'volume_initial', 0) or 0),
-                'entry_price': getattr(row, 'price_open', None), 'sl': getattr(row, 'sl', None), 'tp': getattr(row, 'tp', None),
+                'entry_price': entry_price, 'sl': sl, 'tp': getattr(row, 'tp', None), **meta,
                 'stop_limit_price': getattr(row, 'price_stoplimit', None),
                 'time_type': int(getattr(row, 'type_time', getattr(mt5, 'ORDER_TIME_GTC', 0)) or 0),
                 'expiration': int(getattr(row, 'time_expiration', 0) or 0),
                 'volume_min': getattr(symbol_info, 'volume_min', None), 'volume_max': getattr(symbol_info, 'volume_max', None),
                 'volume_step': getattr(symbol_info, 'volume_step', None),
             })
-        return {'complete': True, 'account_mode': account_mode, 'positions': result, 'pending_orders': pending_rows}
+        return {'complete': True, 'account_mode': account_mode, 'equity': float(getattr(account, 'equity', 0) or 0),
+                'balance': float(getattr(account, 'balance', 0) or 0), 'positions': result, 'pending_orders': pending_rows}
     finally:
         mt5.shutdown()
 
@@ -256,8 +286,50 @@ def run(args):
                 symbol_map = json.loads(getattr(args, 'symbol_map', '{}') or '{}')
             except json.JSONDecodeError as exc:
                 raise RuntimeError('invalid local copier symbol map') from exc
+            # Risk metadata must be calculated against the follower broker's
+            # mapped symbol and contract, never the parent's instrument.
+            risk_mode = getattr(args, 'risk_mode', 'fixed_lot')
+            risk_percent = getattr(args, 'risk_percent', None)
+            risk_amount = getattr(args, 'risk_amount', None)
+            risk_basis = getattr(args, 'risk_basis', 'equity')
+            if risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'}:
+                if not mt5.initialize(path=str(args.follower_terminal)):
+                    time.sleep(args.poll_seconds)
+                    continue
+                try:
+                    mapped_symbols = {str(key).strip().casefold(): str(value).strip() for key, value in symbol_map.items()}
+                    for collection in ('positions', 'pending_orders'):
+                        for source_row in parent.get(collection, []):
+                            parent_symbol = str(source_row.get('symbol') or '')
+                            follower_symbol = mapped_symbols.get(parent_symbol.strip().casefold(), parent_symbol)
+                            selector = getattr(mt5, 'symbol_select', None)
+                            if callable(selector):
+                                try:
+                                    selector(follower_symbol, True)
+                                except Exception:
+                                    pass
+                            info = mt5.symbol_info(follower_symbol)
+                            source_row['volume_min'] = getattr(info, 'volume_min', None) if info else None
+                            source_row['volume_max'] = getattr(info, 'volume_max', None) if info else None
+                            source_row['volume_step'] = getattr(info, 'volume_step', None) if info else None
+                            source_row['loss_per_lot_at_stop'] = None
+                            stop = _positive(source_row.get('sl'))
+                            entry = _positive(source_row.get('entry_price'))
+                            side = str(source_row.get('side') or '').upper()
+                            if info is not None and stop and entry and side in {'BUY', 'SELL'}:
+                                try:
+                                    order_type = getattr(mt5, 'ORDER_TYPE_BUY', 0) if side == 'BUY' else getattr(mt5, 'ORDER_TYPE_SELL', 1)
+                                    profit = mt5.order_calc_profit(order_type, follower_symbol, 1.0, entry, stop)
+                                    if profit is not None and float(profit) < 0:
+                                        source_row['loss_per_lot_at_stop'] = abs(float(profit))
+                                except (TypeError, ValueError, AttributeError):
+                                    pass
+                finally:
+                    mt5.shutdown()
             engine = LocalCopyEngine(args.parent_profile, args.follower_profile, args.lot_multiplier, args.fixed_lot,
-                                     enabled=True, symbol_map=symbol_map)
+                                     enabled=True, symbol_map=symbol_map, risk_mode=risk_mode,
+                                     risk_percent=risk_percent, risk_amount=risk_amount,
+                                     risk_basis=risk_basis)
             actions = engine.plan(parent, follower)
             if actions and mt5.initialize(path=str(args.follower_terminal)):
                 try:
@@ -346,6 +418,10 @@ def main(argv=None):
     parser.add_argument('--follower-terminal', required=True)
     parser.add_argument('--lot-multiplier', type=float, default=1.0)
     parser.add_argument('--fixed-lot', type=float, default=None)
+    parser.add_argument('--risk-mode', choices=('fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'), default='fixed_lot')
+    parser.add_argument('--risk-percent', type=float, default=None)
+    parser.add_argument('--risk-amount', type=float, default=None)
+    parser.add_argument('--risk-basis', choices=('equity', 'balance'), default='equity')
     parser.add_argument('--symbol-map', default='{}')
     parser.add_argument('--poll-seconds', type=int, default=2)
     parser.add_argument('--journal', default='local-copy-ledger.sqlite')

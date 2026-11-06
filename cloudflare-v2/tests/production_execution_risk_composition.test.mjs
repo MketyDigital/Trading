@@ -90,10 +90,11 @@ test('real production dependencies expose broker-authoritative MT5 risk material
     riskPercent: 1,
     currentDailyPnlPercent: 0,
     currentOpenRiskPercent: 0,
+    minimumVolumeRiskOveragePercent: 0,
   });
 });
 
-test('real production MT5 risk materialization blocks when fresh broker economics reduce allowed volume', async () => {
+test('real production MT5 risk materialization resizes to fresh broker economics within the risk budget', async () => {
   const deps = createProductionExecutionDependencies({
     env: { TRADING_MASTER_KEY: 'master-key' },
     supabase: supabaseStub(),
@@ -105,8 +106,13 @@ test('real production MT5 risk materialization blocks when fresh broker economic
     mt5ContextLoader: async () => context(2),
   });
 
-  await assert.rejects(
-    () => deps.riskMaterializer({ workspaceId: 'ws-1', account: account(), action: action() }),
-    /exceed.*broker.*risk|risk.*exceed/i,
-  );
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-1',
+    account: account(),
+    action: action(),
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.action.lots, 0.05);
+  assert.equal(result.risk.estimatedRiskPerLeg, 100);
+  assert.equal(result.policyRequest.riskPercent, 1);
 });

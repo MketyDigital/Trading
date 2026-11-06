@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { applyTradingPostgresMigrations } from '../scripts/apply_trading_postgres_migrations.mjs';
+import { loadMigrations, applyTradingPostgresMigrations } from '../scripts/apply_trading_postgres_migrations.mjs';
 
 const migrations = [
   { name: '0001_trading_storage_replication_authority.sql', sql: 'CREATE SCHEMA IF NOT EXISTS trading_storage;' },
   { name: '0002_trading_domain_schema.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.example (id integer);' },
-  { name: '0003_trading_replication_health.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.health (id integer);' }
+  { name: '0003_trading_replication_health.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.health (id integer);' },
+  { name: '0004_account_followers.sql', sql: `BEGIN;\nCREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);\nCOMMIT;` },
+  { name: '0005_broker_observation_due_index.sql', sql: 'CREATE INDEX IF NOT EXISTS idx_test_due ON trading_storage.position_legs(status);' },
+  { name: '0006_account_follower_risk_sizing.sql', sql: 'ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT \'fixed_lot\';' }
 ];
 const restrictedOwner = {
   owner_is_superuser: false,
@@ -78,7 +81,10 @@ test('PostgreSQL schema installer applies only approved migrations in one transa
   assert.ok(queries.includes('CREATE ROLE trading_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT'));
   assert.ok(queries.includes('CREATE SCHEMA trading_storage AUTHORIZATION trading_owner'));
   assert.ok(queries.includes('SET LOCAL ROLE trading_owner'));
-  assert.ok(migrations.every(({ sql }) => queries.includes(sql)));
+  assert.ok(migrations.every(({ sql }) => {
+    const transactionalSql = sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
+    return queries.includes(transactionalSql);
+  }));
   assert.ok(queries.includes('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())'));
   assert.doesNotMatch(JSON.stringify(result), /secret|private\.invalid/);
 });
@@ -197,6 +203,97 @@ test('PostgreSQL schema installer skips an exact checksum-matched migration ledg
   assert.equal(calls.at(-1), 'end');
 });
 
+
+test('reviewed PostgreSQL migration allowlist loads all six ordered migrations', async () => {
+  const loaded = await loadMigrations();
+  assert.deepEqual(loaded.map(({ name }) => name), migrations.map(({ name }) => name));
+});
+
+test('existing PostgreSQL schema applies only the unapplied additive migration suffix', async () => {
+  const calls = [];
+  const ledger = migrations.slice(0, 3).map(({ name, sql }) => ({
+    version: name.slice(0, 4),
+    checksum: createHash('sha256').update(sql).digest('hex'),
+  }));
+  class Client {
+    async connect() { calls.push('connect'); }
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: false }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
+      if (sql.includes('pg_has_role')) return { rows: [{ is_member: true }] };
+      if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: true }] };
+      if (sql.includes('SELECT version, checksum')) return { rows: ledger };
+      if (sql.includes('SELECT current_user')) return { rows: [{ current_role: 'trading_owner' }] };
+      if (sql.includes('FROM trading_storage.authority_control')) return { rows: [safeSchemaState] };
+      return { rows: [] };
+    }
+    async end() { calls.push('end'); }
+  }
+
+  const result = await applyTradingPostgresMigrations({
+    connectionString: 'postgres://user:secret@private.invalid/mkety',
+    expectedDatabaseName: 'mkety',
+    confirmation: 'APPLY_TRADING_STORAGE_SCHEMA',
+    caCertificate: 'synthetic CA',
+    ClientClass: Client,
+    migrations,
+  });
+
+  assert.deepEqual(result, {
+    databaseName: 'mkety',
+    schemaName: 'trading_storage',
+    applied: migrations.slice(3).map(({ name }) => name),
+    alreadyApplied: false,
+  });
+  assert.ok(calls.includes('SET LOCAL ROLE trading_owner'));
+  for (const migration of migrations.slice(3)) {
+    const transactionalSql = migration.sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
+    assert.ok(calls.includes(transactionalSql));
+    if (/^\\s*BEGIN\\s*;/i.test(migration.sql)) assert.equal(calls.includes(migration.sql), false);
+  }
+  assert.equal(calls.filter((sql) => typeof sql === 'string' && sql.startsWith('CREATE SCHEMA')).length, 0);
+  assert.ok(calls.includes('COMMIT'));
+  assert.equal(calls.includes('ROLLBACK'), false);
+});
+
+test('existing PostgreSQL schema rejects a modified or non-prefix migration ledger before applying anything', async () => {
+  const calls = [];
+  const ledger = migrations.slice(0, 3).map(({ name, sql }) => ({
+    version: name.slice(0, 4),
+    checksum: createHash('sha256').update(sql).digest('hex'),
+  }));
+  ledger[1].checksum = 'tampered-checksum';
+  class Client {
+    async connect() {}
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: false }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
+      if (sql.includes('pg_has_role')) return { rows: [{ is_member: true }] };
+      if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: true }] };
+      if (sql.includes('SELECT version, checksum')) return { rows: ledger };
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  await assert.rejects(
+    applyTradingPostgresMigrations({
+      connectionString: 'postgres://user:secret@private.invalid/mkety',
+      expectedDatabaseName: 'mkety',
+      confirmation: 'APPLY_TRADING_STORAGE_SCHEMA',
+      caCertificate: 'synthetic CA',
+      ClientClass: Client,
+      migrations,
+    }),
+    /migration ledger does not match reviewed files/i,
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.includes('SET LOCAL ROLE trading_owner'), false);
+  assert.equal(calls.some((sql) => migrations.some((migration) => sql === migration.sql)), false);
+});
+
 test('PostgreSQL schema installer does not report an unsafe applied schema as safe', async () => {
   const ledger = migrations.map(({ name, sql }) => ({ version: name.slice(0, 4), checksum: createHash('sha256').update(sql).digest('hex') }));
   const calls = [];
@@ -223,11 +320,9 @@ test('PostgreSQL schema installer does not report an unsafe applied schema as sa
 });
 
 test('PostgreSQL schema installer identifies the failed migration and statement line without leaking raw errors', async () => {
-  const failingMigrations = [
-    migrations[0],
-    { name: migrations[1].name, sql: 'CREATE TABLE\ntrading_storage.example (id integer);' },
-    migrations[2]
-  ];
+  const failingMigrations = migrations.map((migration, index) => index === 1
+    ? { name: migration.name, sql: 'CREATE TABLE\ntrading_storage.example (id integer);' }
+    : migration);
   class Client {
     async connect() {}
     async query(sql) {

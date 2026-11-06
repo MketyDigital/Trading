@@ -7,13 +7,13 @@ const files = readdirSync(new URL('../tests/', import.meta.url))
 
 const failures = [];
 for (const file of files) {
-  const result = spawnSync(process.execPath, ['--test', `tests/${file}`], {
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=spec', `tests/${file}`], {
     cwd: new URL('..', import.meta.url),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (result.status !== 0) {
-    const rawOutput = `${result.stdout || ''}\n${result.stderr || ''}`.trim().slice(0, 6000);
+    const rawOutput = `${result.stdout || ''}\n${result.stderr || ''}`.trim().slice(0, 20000);
     failures.push({ file, output: rawOutput || 'Test failed without output' });
     console.error(`::error file=tests/${file},title=Worker test failed::${(rawOutput || 'Test failed without output').replace(/\r?\n/g, '%0A')}`);
   }

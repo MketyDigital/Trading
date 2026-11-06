@@ -36,16 +36,14 @@ test('symbol-equivalent reduces a heavier target but never increases above chose
   assert.ok(result.lots <= 0.9);
 });
 
-test('symbol-equivalent permits unavoidable broker minimum above chosen lot', async () => {
-  const result = await buildSymbolEquivalentSizing({
+test('symbol-equivalent rejects target broker minimum above the owner-selected lot', async () => {
+  await assert.rejects(() => buildSymbolEquivalentSizing({
     referenceLots:0.09,
     referenceInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
     targetInstrument:{minLots:0.5,maxLots:100,stepLots:0.5},
     estimateReferenceMargin:async () => 9,
     estimateTargetMargin:async () => 100,
-  });
-  assert.equal(result.lots,0.5);
-  assert.equal(result.minimumFloorApplied,true);
+  }), (error) => error?.code === 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM');
 });
 
 test('balance-percent caps at owner maximum lot and reduces when budget requires it', async () => {
@@ -91,4 +89,56 @@ test('largestLotsWithinMargin respects configured maximum lot', async () => {
     estimateMargin:async (lots) => lots * 10,
   });
   assert.equal(result.lots,0.9);
+});
+
+test('normalizes scientific-notation broker steps without losing decimal precision', () => {
+  assert.equal(
+    normalizeReferenceLots(0.00000039, { minLots:0.0000001, maxLots:0.00001, stepLots:1e-7 }),
+    0.0000003,
+  );
+});
+
+test('symbol-equivalent does not floor a target to minimum above the normalized reference lots', async () => {
+  await assert.rejects(() => buildSymbolEquivalentSizing({
+    referenceLots:0.099,
+    referenceInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    targetInstrument:{minLots:0.2,maxLots:100,stepLots:0.1},
+    estimateReferenceMargin:async () => 9,
+    estimateTargetMargin:async (lots) => lots * 100,
+  }), (error) => error?.code === 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM');
+});
+
+test('margin-based sizing rejects non-finite budgets and lot ceilings', async () => {
+  assert.throws(() => normalizeReferenceLots(Number.POSITIVE_INFINITY, {
+    minLots:0.01,maxLots:10,stepLots:0.01,
+  }), /finite positive reference lots/i);
+  await assert.rejects(() => largestLotsWithinMargin({
+    instrument:{minLots:0.01,maxLots:10,stepLots:0.01},
+    marginBudget:Number.POSITIVE_INFINITY,
+    maximumLots:1,
+    estimateMargin:async (lots) => lots * 10,
+  }), /positive margin budget/i);
+  await assert.rejects(() => largestLotsWithinMargin({
+    instrument:{minLots:0.01,maxLots:10,stepLots:0.01},
+    marginBudget:100,
+    maximumLots:Number.POSITIVE_INFINITY,
+    estimateMargin:async (lots) => lots * 10,
+  }), /finite positive maximumLots/i);
+});
+
+test('symbol-equivalent and balance-percent sizing reject non-finite broker context', async () => {
+  await assert.rejects(() => buildSymbolEquivalentSizing({
+    referenceLots: 1,
+    referenceInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    targetInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    estimateReferenceMargin:async () => Number.POSITIVE_INFINITY,
+    estimateTargetMargin:async () => 10,
+  }), /reference symbol expected margin unavailable/i);
+  await assert.rejects(() => buildBalancePercentSizing({
+    maximumLots:1,
+    percent:10,
+    accountBalance:Number.POSITIVE_INFINITY,
+    targetInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    estimateTargetMargin:async () => 10,
+  }), /finite positive broker account balance/i);
 });

@@ -140,7 +140,7 @@ function cleanHttpsBase(value) {
   return parsed.toString().replace(/\/$/, '');
 }
 
-async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
+async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn = fetch, { includeRiskContext = false } = {}) {
   const masterKey = text(env.TRADING_MASTER_KEY);
   const ciphertext = text(account?.credential_ciphertext ?? account?.credentialCiphertext);
   if (!masterKey || !ciphertext) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 planning credentials unavailable');
@@ -194,7 +194,30 @@ async function defaultMt5PlanningMarketPrice(account, intent, env = {}, fetchFn 
   if (!contextResponse.ok || body?.ok !== true || text(body.accountRowId) !== rowId) {
     throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker market context unavailable');
   }
-  const price = executionSidePrice(intent, body?.context?.tick || {});
+  const context = body?.context && typeof body.context === 'object' ? body.context : {};
+  const price = executionSidePrice(intent, context.tick || {});
+  if (includeRiskContext) {
+    const brokerSymbol = context.symbol && typeof context.symbol === 'object' ? context.symbol : {};
+    const symbol = { ...resolved, ...brokerSymbol };
+    const tickValueLoss = Number(symbol.tickValueLoss ?? symbol.tickValueLossPerLot ?? symbol.tickValue ?? symbol.tickValuePerLot);
+    const tickValueProfit = Number(symbol.tickValueProfit ?? symbol.tickValueProfitPerLot ?? symbol.tickValue ?? symbol.tickValuePerLot);
+    return {
+      brokerAccount: context.account || {},
+      instrument: {
+        ...symbol,
+        platformSymbol: text(symbol.platformSymbol || resolved.platformSymbol),
+        tickSize: Number(symbol.tickSize),
+        tickValuePerLot: tickValueLoss,
+        tickValueLossPerLot: tickValueLoss,
+        tickValueProfitPerLot: tickValueProfit,
+        minLots: Number(symbol.minLots ?? symbol.minVolume),
+        maxLots: Number(symbol.maxLots ?? symbol.maxVolume),
+        stepLots: Number(symbol.stepLots ?? symbol.stepVolume),
+        contractSize: Number(symbol.contractSize),
+      },
+      currentMarketPrice: Number.isFinite(Number(price)) && Number(price) > 0 ? Number(price) : undefined,
+    };
+  }
   if (!(price > 0)) throw codedError('BROKER_MARKET_CONTEXT_UNAVAILABLE', 'MT5 broker tick unavailable');
   return price;
 }
@@ -276,8 +299,14 @@ async function defaultCTraderPlanningMarketPrice(account, intent, env = {}) {
   }
 }
 
-async function defaultBrokerPlanningMarketPrice(account, intent, env = {}) {
-  if (isMt5ConnectorAccount(account)) return defaultMt5PlanningMarketPrice(account, intent, env);
+async function defaultBrokerPlanningMarketPrice(account, intent, env = {}, fetchFn = fetch) {
+  const mode = text(account?.sizingMode ?? account?.sizing_mode ?? account?.lot_sizing_type).toUpperCase();
+  const followerMode = text(account?.followerLink?.risk_mode ?? account?.followerLink?.riskMode).toLowerCase();
+  const includeRiskContext = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)
+    || ['fixed_risk', 'equity_percent', 'balance_percent'].includes(followerMode);
+  if (isMt5ConnectorAccount(account)) {
+    return defaultMt5PlanningMarketPrice(account, intent, env, fetchFn, { includeRiskContext });
+  }
   if (isCTraderOauthAccount(account)) return defaultCTraderPlanningMarketPrice(account, intent, env);
   return undefined;
 }
@@ -604,7 +633,7 @@ function resolveDestinationSymbol(account, symbol, sourceSymbol = null) {
   );
 }
 
-async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null, portalFollowerEnabled = false } = {}) {
+async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event = {}, interpretation = {}, persistenceRuntime = null, portalFollowerEnabled = false, followerLinksByAccount = new Map() } = {}) {
   const trustedSourceId = text(sourceId);
   if (!trustedSourceId) return [];
 
@@ -625,7 +654,7 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
       .filter(({ destination }) => destination)
       .filter(({ route, destination }) => evaluateRouteFilters(route.filters, interpretation, destination).allowed)
       .map(({ destination }) => text(destination.destination_ref)).filter(Boolean);
-    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime);
+    return expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, portalFollowerEnabled || Boolean(persistenceRuntime?.accountFollowers), followerLinksByAccount);
   }
 
   const { data: routesData, error: routeError } = await supabase
@@ -681,59 +710,55 @@ async function routedBrokerAccountIds(supabase, workspaceId, sourceId, { event =
     if (!parentIds.length) return parentRefs;
     const { data, error } = await supabase
       .from('trading_account_followers')
-      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot')
+      .select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis')
       .eq('workspace_id', workspaceId)
       .eq('enabled', true)
       .in('parent_account_id', parentIds)
       .order('parent_account_id', { ascending: true });
+    // Follower fanout is additive: a link-table outage must not suppress the
+    // explicitly routed parent accounts. No follower refs are added on error.
     if (error) return parentRefs;
+    const links = Array.isArray(data) ? data : [];
+    for (const link of links) {
+      const followerId = text(link.follower_account_id);
+      if (followerId) followerLinksByAccount.set(followerId, link);
+    }
     const seen = new Set(parentRefs);
-    const followerRefs = (data || []).map((row) => text(row.follower_account_id)).filter(Boolean).map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id).filter((ref) => !seen.has(ref));
+    const followerRefs = links.map((row) => text(row.follower_account_id)).filter(Boolean)
+      .map((id) => parentRefs.some((ref) => ref.startsWith('trade-account:')) ? `trade-account:${id}` : id)
+      .filter((ref) => !seen.has(ref));
     return [...parentRefs, ...followerRefs];
   } catch {
     return parentRefs;
   }
 }
 
-async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime) {
+async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, followerProcessingEnabled = false, followerLinksByAccount = new Map()) {
   const refs = [...new Set(parentRefs.map(text).filter(Boolean))];
   const parentIds = refs.map((ref) => text(ref).replace(/^trade-account:/, '')).filter(Boolean);
-  if (!parentIds.length || typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') return refs;
+  if (!parentIds.length || !followerProcessingEnabled) return refs;
+  if (typeof persistenceRuntime?.accountFollowers?.listEnabledByParents !== 'function') return refs;
   try {
     const links = await persistenceRuntime.accountFollowers.listEnabledByParents(workspaceId, parentIds);
     const seen = new Set(refs);
     for (const link of links) {
       const followerId = text(link.follower_account_id ?? link.followerAccountId);
+      if (followerId) followerLinksByAccount.set(followerId, link);
       const ref = followerId ? (refs.some((item) => item.startsWith('trade-account:')) ? `trade-account:${followerId}` : followerId) : '';
       if (ref && !seen.has(ref)) { seen.add(ref); refs.push(ref); }
     }
   } catch {
-    // Follower configuration is additive. A temporary link-table outage must
-    // preserve the existing explicit routes instead of blocking parent trades.
+    // Keep parent routes intact; do not add any follower without its policy row.
   }
   return refs;
 }
 
-async function decorateFollowerAccounts(accounts = [], workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled = false } = {}) {
+function decorateFollowerAccounts(accounts = [], followerLinksByAccount = new Map()) {
   const rows = Array.isArray(accounts) ? accounts : [];
-  const ids = rows.map((account) => text(account?.id)).filter(Boolean);
-  if (!ids.length) return rows;
-  try {
-    let links = [];
-    if (persistenceRuntime?.accountFollowers?.listEnabledByFollowers) {
-      links = await persistenceRuntime.accountFollowers.listEnabledByFollowers(workspaceId, ids);
-    } else if (supabase?.from && portalFollowerEnabled) {
-      const response = await supabase.from('trading_account_followers').select('follower_account_id,parent_account_id,lot_multiplier,fixed_lot').eq('workspace_id', workspaceId).eq('enabled', true).in('follower_account_id', ids);
-      if (!response.error) links = response.data || [];
-    }
-    const byFollower = new Map(links.map((link) => [text(link.follower_account_id ?? link.followerAccountId), link]));
-    return rows.map((account) => {
-      const link = byFollower.get(text(account?.id));
-      return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
-    });
-  } catch {
-    return rows;
-  }
+  return rows.map((account) => {
+    const link = followerLinksByAccount.get(text(account?.id));
+    return link ? { ...account, followerLink: link, copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId) } : account;
+  });
 }
 
 export async function createV1SimulationDependencies({ env = {}, supabase, persistenceRuntime = null, event = {}, interpretation = {}, sourceId, accountCatalogLoader, brokerMarketPriceLoader, brokerSizingLoader, lifecycleDependenciesFactory = createProductionExecutionDependencies } = {}) {
@@ -823,7 +848,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
           if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
           const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
           const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
-          return decorateFollowerAccounts(matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+          return matchedAccountIds.map(id => accountMap.get(id)).filter(Boolean);
         }
         const { data, error } = await supabase
           .from('trade_accounts')
@@ -835,16 +860,23 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
         const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
         // Keep the result bounded to accounts on the already-correlated groups.
         // Do not reapply signal-symbol route filters to a symbol-less reply.
-        return decorateFollowerAccounts(matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+        return matchedAccountIds.map((id) => accountMap.get(id)).filter(Boolean);
       }
-      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, { event, interpretation, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers) });
+      const followerLinksByAccount = new Map();
+      const accountIds = await routedBrokerAccountIds(supabase, workspaceId, sourceId, {
+        event,
+        interpretation,
+        persistenceRuntime,
+        portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers),
+        followerLinksByAccount,
+      });
       if (!accountIds.length) return [];
       if (persistenceRuntime) {
         if (typeof persistenceRuntime.accounts?.listAccounts !== 'function') throw new Error('TRADING_ACCOUNT_REPOSITORY_UNAVAILABLE');
         const rows = await persistenceRuntime.accounts.listAccounts(workspaceId);
         const accountMap = new Map(rows.filter(row => row.is_active === true || Number(row.is_active) === 1).map(row => [String(row.id), row]));
         const orderedAccounts = accountIds.map(id => accountMap.get(id)).filter(Boolean);
-        return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: true });
+        return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader, persistenceRuntime }), followerLinksByAccount);
       }
       const { data, error } = await supabase
         .from('trade_accounts')
@@ -855,7 +887,7 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
       if (error) throw new Error(`failed to load routed execution accounts: ${error.message || 'database error'}`);
       const accountMap = new Map((data || []).map((row) => [String(row.id), row]));
       const orderedAccounts = accountIds.map((id) => accountMap.get(id)).filter(Boolean);
-      return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader }), workspaceId, { supabase, persistenceRuntime, portalFollowerEnabled: env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' });
+      return decorateFollowerAccounts(await hydrateMissingAccountCatalogs(orderedAccounts, { supabase, env, accountCatalogLoader }), followerLinksByAccount);
     },
     async instrumentProvider(account, intent) {
       const symbol = canonicalSymbol(intent);

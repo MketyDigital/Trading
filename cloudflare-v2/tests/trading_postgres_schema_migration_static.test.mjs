@@ -7,7 +7,7 @@ const sql = readFileSync(new URL('../db/postgres-migrations/0002_trading_domain_
 const foundationSql = readFileSync(new URL('../db/postgres-migrations/0001_trading_storage_replication_authority.sql', here), 'utf8');
 const columns = JSON.parse(readFileSync(new URL('../../docs/supabase-trading-schema-snapshot-2026-10-17.json', here), 'utf8'));
 const metadata = JSON.parse(readFileSync(new URL('../../docs/supabase-trading-constraints-snapshot-2026-10-17.json', here), 'utf8'));
-const migrations = ['0001_trading_storage_replication_authority.sql', '0002_trading_domain_schema.sql', '0003_trading_replication_health.sql']
+const migrations = ['0001_trading_storage_replication_authority.sql', '0002_trading_domain_schema.sql', '0003_trading_replication_health.sql', '0004_account_followers.sql', '0005_broker_observation_due_index.sql', '0006_account_follower_risk_sizing.sql']
   .map((name) => [name, readFileSync(new URL(`../db/postgres-migrations/${name}`, here), 'utf8')]);
 
 test('Postgres migration covers every inventoried relation and observed index', () => {
@@ -74,7 +74,15 @@ test('all PostgreSQL migrations stay inside the Trading schema on the existing d
   const combined = migrations.map(([, contents]) => contents).join('\n');
   const executableSql = combined.replace(/^\s*--.*$/gm, '');
   assert.doesNotMatch(executableSql, /^\s*CREATE\s+SCHEMA\b/im, 'the installer creates trading_storage before switching to the restricted owner role');
-  assert.doesNotMatch(executableSql, /^\s*(?:ALTER|DROP|TRUNCATE|COMMENT|GRANT|DO|CALL|COPY)\b/im);
+  const reviewedAdditiveFollowerAlters = executableSql
+    .replace(/^\s*ALTER TABLE trading_storage\.trading_account_followers ADD COLUMN IF NOT EXISTS [^;]+;?/gim, '')
+    .replace(/^\s*ALTER TABLE trading_storage\.trading_account_followers ADD CONSTRAINT [^;]+;?/gim, '');
+  assert.doesNotMatch(reviewedAdditiveFollowerAlters, /^\s*(?:ALTER|DROP|TRUNCATE|COMMENT|GRANT|DO|CALL|COPY)\b/im);
+  const followerRiskMigration = migrations.find(([name]) => name === '0006_account_follower_risk_sizing.sql')?.[1] || '';
+  assert.equal([...followerRiskMigration.matchAll(/^ALTER TABLE\s+([^\s]+)\s+ADD COLUMN IF NOT EXISTS/gim)].length, 4);
+  assert.equal([...followerRiskMigration.matchAll(/^ALTER TABLE\s+([^\s]+)\s+ADD CONSTRAINT/gim)].length, 4);
+  assert.doesNotMatch(followerRiskMigration, /\b(?:DROP|DELETE|UPDATE|TRUNCATE)\b/i);
+  assert.doesNotMatch(followerRiskMigration, /\b(?:trade_accounts|workspaces|position_legs)\b/i);
   assert.doesNotMatch(executableSql, /\bpublic\s*\./i, 'must not modify Mkety shared public objects');
   const revokeCommands = [...executableSql.matchAll(/^\s*REVOKE\b[^;]*;?/gim)];
   for (const revoke of revokeCommands) {

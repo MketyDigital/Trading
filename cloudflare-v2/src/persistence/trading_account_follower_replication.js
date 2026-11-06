@@ -1,6 +1,6 @@
 import { assertAuthorityEpoch } from './trading_storage_authority.js';
 
-const FIELDS = new Set(['workspace_id', 'follower_account_id', 'parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'last_source_version', 'last_state_fingerprint', 'created_at', 'updated_at']);
+const FIELDS = new Set(['workspace_id', 'follower_account_id', 'parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'risk_mode', 'risk_percent', 'risk_amount', 'risk_basis', 'last_source_version', 'last_state_fingerprint', 'created_at', 'updated_at']);
 function validate(event, target) {
   const expected = event?.direction === 'd1_to_postgres' ? 'postgres' : event?.direction === 'postgres_to_d1' ? 'd1' : null;
   if (expected !== target) throw new Error('Replication target authority does not match event direction');
@@ -40,8 +40,8 @@ export async function applyTradingAccountFollowerReplicationEvent(event, { targe
     if (!current || current.active_authority !== source || Number(current.authority_epoch) !== item.epoch) throw new Error('Passive PostgreSQL replica rejected account follower event');
     const cols = Object.keys(row);
     if (item.mutation === 'delete') await query(`DELETE FROM ${table} WHERE id=$1 AND workspace_id=$2`, [item.id, row.workspace_id]);
-    else if (item.mutation === 'insert') await query(`INSERT INTO ${table}(id,${cols.join(',')}) VALUES($1,${cols.map((key, index) => `$${index + 2}${['lot_multiplier', 'fixed_lot'].includes(key) ? '::numeric' : ''}`).join(',')}) ON CONFLICT(id) DO NOTHING`, [item.id, ...cols.map((key) => row[key])]);
-    else { const fields = cols.filter((key) => key !== 'workspace_id'); await query(`UPDATE ${table} SET ${fields.map((key, index) => `${key}=$${index + 1}${['lot_multiplier', 'fixed_lot'].includes(key) ? '::numeric' : ''}`).join(',')} WHERE id=$${fields.length + 1} AND workspace_id=$${fields.length + 2}`, [...fields.map((key) => row[key]), item.id, row.workspace_id]); }
+    else if (item.mutation === 'insert') await query(`INSERT INTO ${table}(id,${cols.join(',')}) VALUES($1,${cols.map((key, index) => `$${index + 2}${['lot_multiplier', 'fixed_lot', 'risk_percent', 'risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')}) ON CONFLICT(id) DO NOTHING`, [item.id, ...cols.map((key) => row[key])]);
+    else { const fields = cols.filter((key) => key !== 'workspace_id'); await query(`UPDATE ${table} SET ${fields.map((key, index) => `${key}=$${index + 1}${['lot_multiplier', 'fixed_lot', 'risk_percent', 'risk_amount'].includes(key) ? '::numeric' : ''}`).join(',')} WHERE id=$${fields.length + 1} AND workspace_id=$${fields.length + 2}`, [...fields.map((key) => row[key]), item.id, row.workspace_id]); }
     return { applied: true, entityId: event.entityId };
   });
 }

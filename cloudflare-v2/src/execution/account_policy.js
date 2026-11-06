@@ -13,7 +13,23 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
     if (allowedSymbols.length && !allowedSymbols.includes(String(request.symbol || '').toUpperCase())) reasons.push('SYMBOL_NOT_ALLOWED');
 
     if (Number.isFinite(Number(policy.maxLotsPerTrade)) && Number(request.totalLots) > Number(policy.maxLotsPerTrade)) reasons.push('MAX_LOTS_EXCEEDED');
-    if (Number.isFinite(Number(policy.maxRiskPercent)) && Number(request.riskPercent) > Number(policy.maxRiskPercent)) reasons.push('MAX_RISK_EXCEEDED');
+    const maxRiskPercent = Number(policy.maxRiskPercent);
+    const requestedFloorOverage = Number(request.minimumVolumeRiskOveragePercent ?? 0);
+    const minimumFloorOverageValid = Number.isFinite(requestedFloorOverage) && requestedFloorOverage >= 0;
+    const minimumFloorOverage = minimumFloorOverageValid ? requestedFloorOverage : 0;
+    // Keep the broker-minimum exception deliberately small. This is an
+    // independent cap on the amount above the requested per-leg risk budget,
+    // not merely headroom against maxRiskPercent.
+    const configuredFloorTolerance = Number(policy.minimumVolumeRiskTolerancePercent ?? 0.05);
+    const floorTolerance = Number.isFinite(configuredFloorTolerance) && configuredFloorTolerance >= 0
+      ? configuredFloorTolerance
+      : 0;
+    const floorToleranceEpsilon = Number.EPSILON * Math.max(1, Math.abs(minimumFloorOverage), Math.abs(floorTolerance)) * 8;
+    if (!minimumFloorOverageValid || minimumFloorOverage - floorTolerance > floorToleranceEpsilon) reasons.push('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED');
+    const permittedRisk = maxRiskPercent + Math.min(minimumFloorOverage, floorTolerance);
+    const perLegRiskPercent = Number(request.riskPercent);
+    if (Number.isFinite(perLegRiskPercent) && perLegRiskPercent > 100) reasons.push('MAX_RISK_EXCEEDED');
+    if (Number.isFinite(maxRiskPercent) && perLegRiskPercent > permittedRisk) reasons.push('MAX_RISK_EXCEEDED');
 
     const dailyLossLimit = Number(policy.maxDailyLossPercent);
     const dailyPnl = Number(request.currentDailyPnlPercent);
@@ -21,8 +37,13 @@ export function evaluateAccountPolicy(policy = {}, request = {}) {
 
     const maxOpenRisk = Number(policy.maxOpenRiskPercent);
     const currentOpenRisk = Number(request.currentOpenRiskPercent || 0);
-    const newRisk = Number(request.riskPercent || 0);
-    if (Number.isFinite(maxOpenRisk) && maxOpenRisk > 0 && currentOpenRisk + newRisk > maxOpenRisk) reasons.push('OPEN_RISK_LIMIT');
+    // Plan-time checks may provide aggregate group risk separately from the
+    // per-leg riskPercent used by maxRiskPercent. Production dispatches omit
+    // this field and reserve each accepted leg incrementally.
+    const newRisk = Number(request.newOpenRiskPercent ?? request.riskPercent ?? 0);
+    const aggregateOpenRisk = currentOpenRisk + newRisk;
+    if (Number.isFinite(aggregateOpenRisk) && aggregateOpenRisk > 100) reasons.push('OPEN_RISK_LIMIT');
+    if (Number.isFinite(maxOpenRisk) && maxOpenRisk > 0 && aggregateOpenRisk > maxOpenRisk) reasons.push('OPEN_RISK_LIMIT');
   }
 
   return { allowed: reasons.length === 0, reasons };

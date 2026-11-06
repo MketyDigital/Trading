@@ -233,6 +233,93 @@ test('LIVE fixed-lot planning still fails closed for symbols absent from the aut
   });
 });
 
+test('follower link lookup failure preserves explicit parent route and omits follower fanout', async () => {
+  const parent = {
+    id: 'parent-a', workspace_id: 'workspace-1', platform: 'mt5', is_active: true,
+    lot_sizing_type: 'fixed', lot_value: 0.1,
+    provider_config: { symbolCatalog: [{ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }] },
+  };
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') return {
+        select() { return this; }, eq() { return this; },
+        order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
+      };
+      if (table === 'trading_destinations') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
+      };
+      if (table === 'trading_account_followers') return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        order: async () => ({ data: null, error: { message: 'temporary follower storage failure' } }),
+      };
+      if (table === 'trade_accounts') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [parent], error: null }),
+      };
+      throw new Error('unexpected table ' + table);
+    },
+  };
+  const deps = await createV1SimulationDependencies({
+    env: { ...baseEnv(), PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  const accounts = await deps.accountProvider();
+  assert.deepEqual(accounts.map((row) => row.id), ['parent-a']);
+});
+
+test('one batched follower lookup decorates follower risk policy without a second query', async () => {
+  const catalog = [{ canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }];
+  const accountRows = ['parent-a', 'follower-a'].map((id) => ({
+    id, workspace_id: 'workspace-1', platform: 'mt5', is_active: true,
+    lot_sizing_type: 'risk_percent', lot_value: 5,
+    provider_config: { symbolCatalog: catalog },
+  }));
+  let followerLookupCount = 0;
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') return {
+        select() { return this; }, eq() { return this; },
+        order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
+      };
+      if (table === 'trading_destinations') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
+      };
+      if (table === 'trading_account_followers') {
+        followerLookupCount += 1;
+        return {
+          select() { return this; }, eq() { return this; }, in() { return this; },
+          order: async () => ({
+            data: [{ follower_account_id: 'follower-a', parent_account_id: 'parent-a', lot_multiplier: 1, fixed_lot: null, risk_mode: 'equity_percent', risk_percent: 1, risk_amount: null, risk_basis: 'balance', enabled: true }],
+            error: null,
+          }),
+        };
+      }
+      if (table === 'trade_accounts') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: accountRows, error: null }),
+      };
+      throw new Error('unexpected table ' + table);
+    },
+  };
+  const deps = await createV1SimulationDependencies({
+    env: { ...baseEnv(), PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  const accounts = await deps.accountProvider();
+  assert.deepEqual(accounts.map((row) => row.id), ['parent-a', 'follower-a']);
+  assert.equal(accounts[1].followerLink.risk_mode, 'equity_percent');
+  assert.equal(accounts[1].copiedFromAccountId, 'parent-a');
+  assert.equal(followerLookupCount, 1);
+});
+
 test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
   const account = {
     id: 'acct-ctrader-demo',

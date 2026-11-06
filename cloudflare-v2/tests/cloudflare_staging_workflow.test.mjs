@@ -74,6 +74,16 @@ test('Trading storage PR stages D1 and probes existing PostgreSQL without creati
   assert.match(block, /concurrency:\s*\n\s+group: trading-coolify-postgres-staging/);
   assert.match(block, /timeout-minutes:\s*70/);
   assert.match(block, /git_commit_sha:\s*sha,/);
+  assert.match(block, /TARGET_BRANCH: \$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}/);
+  assert.match(block, /git_branch: process\.env\.TARGET_BRANCH/);
+  assert.match(block, /db\/d1-migrations\/0006_account_follower_risk_sizing\.sql/);
+  assert.match(block, /ENCRYPT_D1_PRE_MIGRATION_EXPORT/);
+  assert.match(block, /trading-staging-pre-migration\.sql\.enc/);
+  assert.ok(block.indexOf('npx wrangler d1 export trading-staging') < block.indexOf('name: Apply and verify D1 schema after PostgreSQL migration'),
+    'an encrypted D1 recovery export must be captured before schema writes');
+  assert.ok(block.indexOf('VERIFY_SAFE_PROBE_RESULT') < block.indexOf('name: Apply and verify D1 schema after PostgreSQL migration'),
+    'PostgreSQL migration must verify successfully before D1 schema writes');
+  assert.match(block, /0006_account_follower_risk_sizing\.sql/);
   assert.match(block, /autogenerate_domain:\s*false/);
   assert.match(block, /-X DELETE/);
   assert.match(block, /applications\/\$APP_UUID/);
@@ -254,10 +264,13 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.match(inventoryBlock, /inputs\.mode == 'inspect'/);
   assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /inputs\.confirmation == 'APPLY_TRADING_STORAGE_SCHEMA'/);
+  assert.match(inventoryBlock, /github\.event_name == 'workflow_call'/);
+  assert.match(inventoryBlock, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(inventoryBlock, /inputs\.mode == 'apply-existing-mkety-schema'/);
   assert.match(inventoryBlock, /successful backup from the last 24 hours/);
   assert.match(inventoryBlock, /TRADING_PG_SCHEMA_MIGRATION_CONFIRM/);
   assert.match(inventoryBlock, /TRADING_SNAPSHOT_IMPORT_CONFIRM/);
-  assert.match(inventoryBlock, /TRADING_MASTER_KEY: \$\{\{ inputs\.mode == 'import-continuity-fresh-start' && secrets\.TRADING_MASTER_KEY \|\| '' \}\}/);
+  assert.match(inventoryBlock, /TRADING_MASTER_KEY: \$\{\{ \(inputs\.mode == 'import-continuity-fresh-start' \|\| inputs\.mode == 'apply-existing-mkety-schema'\) && secrets\.TRADING_MASTER_KEY \|\| '' \}\}/);
   assert.match(inventoryBlock, /encryptTradingD1BackupFile/);
   assert.match(inventoryBlock, /await unlink\(inputPath\)/);
   assert.match(inventoryBlock, /Retain encrypted existing D1 recovery export/);
@@ -283,8 +296,10 @@ test('existing mkety inspect is read-only and schema apply remains exact-confirm
   assert.doesNotMatch(inventoryBlock, /JSON\.stringify\(result\.importantRows|JSON\.stringify\(result\.fences/,
     'import diagnostics must not serialize arbitrary snapshot rows or settings');
   assert.match(inventoryBlock, /Delete ephemeral Trading PostgreSQL probe host/);
-  assert.match(inventoryBlock, /if \[ "\$STAGING_MODE" = 'apply-existing-mkety-schema' \]; then\n\s+npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml[\s\S]*?\n\s+fi/,
-    'D1 schema changes must require the exact schema-apply mode');
+  assert.match(inventoryBlock, /name: Apply and verify D1 schema after PostgreSQL migration[\s\S]*?if: \$\{\{ inputs\.mode == 'apply-existing-mkety-schema' \}\}[\s\S]*?npx wrangler d1 migrations apply trading-staging --remote --config wrangler\.trading-staging\.toml/,
+    'D1 schema changes must run only after PostgreSQL migration and require the explicit schema-apply mode');
+  assert.ok(inventoryBlock.indexOf('VERIFY_SAFE_PROBE_RESULT') < inventoryBlock.indexOf('name: Apply and verify D1 schema after PostgreSQL migration'),
+    'PostgreSQL schema migration must verify before D1 schema writes');
   assert.doesNotMatch(inventoryBlock, /npx wrangler (?:deploy --config wrangler\.toml|deploy --config wrangler\.free\.toml)/);
   assert.doesNotMatch(inventoryBlock, /-X (?:POST|PATCH|PUT|DELETE)[^\n]*\/databases\//i);
   const dockerfile = await readFile(coolifyProbeDockerfilePath, 'utf8');

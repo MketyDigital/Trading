@@ -1,6 +1,7 @@
 import { authorizeV1AdminRequest } from './v1_admin.js';
 import { desiredTelegramFeedIds } from '../sources/source_feed_reconcile.js';
 import { hasTradingPermission } from '../security/trading_permissions.js';
+import { isWorkspaceRiskOwner } from '../security/risk_policy_authorization.js';
 import { encryptConnectionCredentials } from '../security/connection_credentials.js';
 import { CTraderJsonSession } from '../adapters/ctrader_session.js';
 import { ctraderEndpoint, buildAccountsByAccessTokenMessage } from '../adapters/ctrader_protocol.js';
@@ -10,6 +11,8 @@ const SOURCE_SECRET_KEY_PATTERN = /(secret|cipher|session|token|password|api[_-]
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const SOURCE_SELECT = 'id,workspace_id,source_type,source_instance_id,display_name,is_active,source_family,provider_type,is_default,priority,external_identity,public_source_handle,config,provider_secret_ciphertext,health_status,last_heartbeat_at,last_event_at,last_connected_at,last_disconnected_at,restart_count,last_error_code';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
+const RISK_SIZING_TYPES = new Set(['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk']);
+const CANONICAL_RISK_SIZING_TYPE = 'risk_percent';
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -116,6 +119,13 @@ function publicAccount(row = {}) {
     lotSizingType: row.lot_sizing_type ?? row.lotSizingType ?? 'fixed',
     lotValue: row.lot_value ?? row.lotValue ?? null,
     lotSizingConfig: safeObject(row.lot_sizing_config ?? row.lotSizingConfig),
+    riskPolicy: {
+      maxRiskPercent: safety.maxRiskPercent ?? null,
+      maxOpenRiskPercent: safety.maxOpenRiskPercent ?? null,
+      maxDailyLossPercent: safety.maxDailyLossPercent ?? null,
+      minimumVolumeRiskTolerancePercent: safety.minimumVolumeRiskTolerancePercent ?? null,
+      minimumLotPolicy: safety.minimumLotPolicy ?? 'FLOOR',
+    },
     createdAt: row.created_at ?? row.createdAt ?? null,
   };
 }
@@ -303,6 +313,15 @@ async function handleAccountConnection(request, authorization, supabase, account
   if (request.method === 'PUT') {
     const body = await readBody(request);
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
+    const currentSizingType = String(current.lot_sizing_type || 'fixed').trim().toLowerCase();
+    const requestedSizingType = String(body.lotSizingType ?? body.lot_sizing_type ?? currentSizingType).trim().toLowerCase();
+    const hasSizingMutation = ['lotSizingType', 'lot_sizing_type', 'lotValue', 'lot_value', 'lotSizingConfig', 'lot_sizing_config']
+      .some((key) => Object.prototype.hasOwnProperty.call(body, key));
+    const riskPolicyMutation = (hasSizingMutation && (RISK_SIZING_TYPES.has(currentSizingType) || RISK_SIZING_TYPES.has(requestedSizingType)))
+      || Object.prototype.hasOwnProperty.call(body, 'riskPolicy') || Object.prototype.hasOwnProperty.call(body, 'risk_policy');
+    if (riskPolicyMutation && !isWorkspaceRiskOwner(authorization?.membership?.role)) {
+      return json({ ok: false, reason: 'RISK_POLICY_OWNER_REQUIRED' }, 403);
+    }
     const immutable = ['platform', 'providerMode', 'provider_mode', 'accountId', 'account_id', 'active', 'executionEnabled', 'execution_enabled', 'killSwitch'];
     if (immutable.some((key) => Object.prototype.hasOwnProperty.call(body, key))) return json({ ok: false, reason: 'ACCOUNT_IDENTITY_OR_EXECUTION_IMMUTABLE' }, 400);
     const update = {};
@@ -321,18 +340,20 @@ async function handleAccountConnection(request, authorization, supabase, account
     if ('providerConfig' in body || 'provider_config' in body) update.provider_config = sanitizeConnectionConfig(safeObject(body.providerConfig ?? body.provider_config));
     if ('lotSizingType' in body || 'lot_sizing_type' in body) {
       const sizingType = safeText(body.lotSizingType ?? body.lot_sizing_type)?.toLowerCase();
-      if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(sizingType)) {
+      if (!['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent', ...RISK_SIZING_TYPES].includes(sizingType)) {
         return json({ ok: false, reason: 'ACCOUNT_LOT_SIZING_TYPE_INVALID' }, 400);
       }
-      update.lot_sizing_type = sizingType;
+      update.lot_sizing_type = RISK_SIZING_TYPES.has(sizingType) ? CANONICAL_RISK_SIZING_TYPE : sizingType;
     }
     if ('lotValue' in body || 'lot_value' in body) {
       const lot = Number(body.lotValue ?? body.lot_value);
       if (!(lot > 0)) return json({ ok: false, reason: 'ACCOUNT_CONFIGURATION_INVALID' }, 400);
       update.lot_value = lot;
     }
-    if ('lotSizingConfig' in body || 'lot_sizing_config' in body) {
-      const config = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
+    if ('lotSizingConfig' in body || 'lot_sizing_config' in body || 'lotSizingType' in body || 'lot_sizing_type' in body) {
+      const hasExplicitSizingType = 'lotSizingType' in body || 'lot_sizing_type' in body;
+      const suppliedConfig = safeObject(body.lotSizingConfig ?? body.lot_sizing_config);
+      const config = hasExplicitSizingType ? suppliedConfig : { ...safeObject(current.lot_sizing_config), ...suppliedConfig };
       const requestedType = update.lot_sizing_type ?? String(current.lot_sizing_type || 'fixed').toLowerCase();
       if (requestedType === 'adaptive_percent') {
         const percent = Number(config.percent);
@@ -352,6 +373,15 @@ async function handleAccountConnection(request, authorization, supabase, account
           return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_INVALID' }, 400);
         }
         update.lot_sizing_config = { percent };
+      } else if (RISK_SIZING_TYPES.has(requestedSizingType) || RISK_SIZING_TYPES.has(requestedType)) {
+        const allowedKeys = new Set(['riskBasis', 'risk_basis', 'riskMode', 'risk_mode']);
+        if (Object.keys(config).some((key) => !allowedKeys.has(key))) return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_INVALID' }, 400);
+        const riskBasis = String(config.riskBasis ?? config.risk_basis ?? (requestedSizingType === 'balance_risk_percent' ? 'balance' : 'equity')).trim().toLowerCase();
+        const riskMode = String(config.riskMode ?? config.risk_mode ?? (requestedSizingType === 'fixed_risk' ? 'fixed_cash' : 'percent')).trim().toLowerCase();
+        if (!['equity', 'balance'].includes(riskBasis) || !['percent', 'fixed_cash'].includes(riskMode)
+          || (requestedSizingType === 'balance_risk_percent' && riskBasis !== 'balance')
+          || (requestedSizingType === 'equity_risk_percent' && riskBasis !== 'equity')) return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_INVALID' }, 400);
+        update.lot_sizing_config = { riskBasis, riskMode };
       } else {
         update.lot_sizing_config = {};
       }
@@ -373,6 +403,41 @@ async function handleAccountConnection(request, authorization, supabase, account
       if (!(percent > 0 && percent <= 100)) {
         return json({ ok: false, reason: 'ACCOUNT_BALANCE_PERCENT_CONFIG_REQUIRED' }, 400);
       }
+    }
+    if (RISK_SIZING_TYPES.has(effectiveSizingType)) {
+      if (!RISK_SIZING_TYPES.has(currentSizingType) && !('lotValue' in body) && !('lot_value' in body)) {
+        return json({ ok: false, reason: 'ACCOUNT_RISK_PERCENT_REQUIRED' }, 400);
+      }
+      const riskValue = Number(update.lot_value ?? current.lot_value);
+      const basis = String(effectiveConfig.riskBasis ?? effectiveConfig.risk_basis ?? 'equity').toLowerCase();
+      const riskMode = String(effectiveConfig.riskMode ?? effectiveConfig.risk_mode ?? 'percent').toLowerCase();
+      if (!(riskValue > 0) || (riskMode === 'percent' && riskValue > 100) || !['equity', 'balance'].includes(basis) || !['percent', 'fixed_cash'].includes(riskMode)) {
+        return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_REQUIRED' }, 400);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'riskPolicy') || Object.prototype.hasOwnProperty.call(body, 'risk_policy')) {
+      const riskPolicy = safeObject(body.riskPolicy ?? body.risk_policy);
+      const allowedRiskPolicyKeys = new Set(['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy']);
+      if (Object.keys(riskPolicy).some((key) => !allowedRiskPolicyKeys.has(key))) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+      const normalizedRiskPolicy = {};
+      for (const key of ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent']) {
+        if (Object.prototype.hasOwnProperty.call(riskPolicy, key)) {
+          const value = Number(riskPolicy[key]);
+          if (!(value > 0 && value <= 100)) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+          normalizedRiskPolicy[key] = value;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(riskPolicy, 'minimumVolumeRiskTolerancePercent')) {
+        const value = Number(riskPolicy.minimumVolumeRiskTolerancePercent);
+        if (!Number.isFinite(value) || value < 0 || value > 1) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+        normalizedRiskPolicy.minimumVolumeRiskTolerancePercent = value;
+      }
+      if (Object.prototype.hasOwnProperty.call(riskPolicy, 'minimumLotPolicy')) {
+        const value = String(riskPolicy.minimumLotPolicy).trim().toUpperCase();
+        if (!['FLOOR', 'REJECT'].includes(value)) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+        normalizedRiskPolicy.minimumLotPolicy = value;
+      }
+      update.safety_policy = { ...safeObject(current.safety_policy), ...normalizedRiskPolicy };
     }
     if (!Object.keys(update).length) return json({ ok: false, reason: 'ACCOUNT_UPDATE_EMPTY' }, 400);
     if (accountsStore) {
@@ -667,7 +732,7 @@ export async function handleV1AdminConnectionsRequest(request, env = {}, {
     if (request.method === 'GET') {
       if (!can(authorization, 'accounts.read')) return json({ ok: false, reason: 'TRADING_PERMISSION_DENIED' }, 403);
       if (persistenceRuntime) {
-        try { return json({ ok: true, accounts: (await persistenceRuntime.accounts.listAccounts(String(authorization.workspace.id))).map(publicAccount), readiness: connectionReadiness(env) }); }
+        try { return json({ ok: true, accounts: (await persistenceRuntime.accounts.listAccounts(String(authorization.workspace.id))).map(publicAccount), readiness: connectionReadiness(env), riskPolicyEditable: isWorkspaceRiskOwner(authorization?.membership?.role) }); }
         catch { return json({ ok: false, reason: 'ACCOUNT_LIST_FAILED' }, 503); }
       }
       const { data, error } = await supabase.from('trade_accounts').select(ACCOUNT_SELECT).eq('workspace_id', String(authorization.workspace.id)).order('created_at', { ascending: true });

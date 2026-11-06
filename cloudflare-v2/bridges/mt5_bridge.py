@@ -5,7 +5,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -133,17 +133,27 @@ class MT5Engine:
         step = self._decimal(getattr(symbol_info, 'volume_step', 0))
         if requested <= 0:
             raise RuntimeError('MT5 volume must be positive')
-        if minimum > 0 and requested < minimum:
-            requested = minimum
-        if maximum > 0 and requested > maximum:
+        if minimum <= 0 or maximum < minimum or step <= 0:
+            raise RuntimeError('MT5 broker volume constraints unavailable')
+        # MT5 volume values must be whole multiples of SYMBOL_VOLUME_STEP.
+        # The smallest executable value is the first step multiple at/above min.
+        minimum_units = (minimum / step).to_integral_value(rounding=ROUND_CEILING)
+        maximum_units = (maximum / step).to_integral_value(rounding=ROUND_FLOOR)
+        minimum_executable = minimum_units * step
+        maximum_executable = maximum_units * step
+        if maximum_executable < minimum_executable:
+            raise RuntimeError('MT5 broker volume constraints have no executable step')
+        if requested < minimum:
+            raise RuntimeError('MT5 volume is below broker minimum')
+        if requested > maximum:
             requested = maximum
-        if step > 0:
-            origin = minimum if minimum > 0 else Decimal('0')
-            units = ((requested - origin) / step).to_integral_value(rounding=ROUND_FLOOR)
-            requested = origin + max(Decimal('0'), units) * step
-            if minimum > 0 and requested < minimum:
-                requested = minimum
-        return float(requested.normalize())
+        units = (requested / step).to_integral_value(rounding=ROUND_FLOOR)
+        normalized = units * step
+        if normalized < minimum_executable:
+            raise RuntimeError('MT5 volume is below executable broker minimum step')
+        if normalized > maximum_executable:
+            normalized = maximum_executable
+        return float(normalized.normalize())
 
     def _normalize_price(self, value, symbol_info):
         raw = self._decimal(value)

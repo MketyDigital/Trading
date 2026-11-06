@@ -9,6 +9,8 @@ import { resolveSymbolAgainstCatalog } from '../normalization/trading_normalizer
 import { createContextualDeliveryStore } from './destination_retry_composition.js';
 import { createProductionExecutionAuthorityLoader } from './production_execution_authority.js';
 import { validateProductionRiskAction } from './production_risk_authority.js';
+
+const BROKER_MINIMUM_FALLBACK_AUTH = Symbol('broker-minimum-fallback-authority');
 import { createRuntimeExecutionSnapshotCache } from './runtime_execution_snapshot.js';
 import { evaluateRetrySignalValidity } from './retry_signal_validity.js';
 
@@ -65,7 +67,65 @@ function assertCTraderCbotConnected(account = {}) {
 }
 
 function sizingModeOf(account = {}) {
-  return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
+  return text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
+}
+function normalizeTradeAccountRiskSizing(account = {}) {
+  const rawMode = text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
+  const mode = rawMode === 'FIXED' ? 'FIXED_LOTS' : rawMode;
+  const lotSizingConfig = account.lot_sizing_config ?? account.lotSizingConfig ?? {};
+  const accountRiskMode = text(lotSizingConfig.riskMode ?? lotSizingConfig.risk_mode).toLowerCase() || 'percent';
+  const isRiskPercentMode = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode);
+  const riskPercent = accountRiskMode === 'fixed_cash' ? undefined : account.riskPercent ?? account.risk_percent
+    ?? (isRiskPercentMode ? account.lot_value : undefined);
+  const riskAmount = account.riskAmount ?? account.risk_amount
+    ?? (accountRiskMode === 'fixed_cash' ? account.lot_value : undefined);
+  const riskBasis = lotSizingConfig.riskBasis ?? lotSizingConfig.risk_basis ?? account.riskBasis ?? account.risk_basis
+    ?? (mode === 'BALANCE_RISK_PERCENT' ? 'balance' : 'equity');
+  return {
+    ...account,
+    sizingMode: mode,
+    ...(riskPercent !== undefined ? { riskPercent, risk_percent: riskPercent } : {}),
+    ...(riskAmount !== undefined ? { riskAmount, risk_amount: riskAmount } : {}),
+    riskBasis,
+    risk_basis: riskBasis,
+  };
+}
+function applyFollowerRiskSizing(account = {}, link = null) {
+  if (!link || !(link.enabled === true || link.enabled === 1 || link.enabled === '1')) return account;
+  const mode = text(link.risk_mode ?? link.riskMode).toLowerCase();
+  const riskPercent = Number(link.risk_percent ?? link.riskPercent);
+  const riskAmount = Number(link.risk_amount ?? link.riskAmount);
+  const configuredRiskBasis = text(link.risk_basis ?? link.riskBasis).toLowerCase() || 'equity';
+  const riskBasis = mode === 'balance_percent' ? 'balance' : mode === 'equity_percent' ? 'equity' : configuredRiskBasis;
+  const fixedLot = link.fixed_lot ?? link.fixedLot;
+  const multiplier = Number(link.lot_multiplier ?? link.lotMultiplier ?? 1);
+  const validModes = ['fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'];
+  if (!validModes.includes(mode) || !['equity', 'balance'].includes(riskBasis)
+    || (fixedLot != null && !(Number(fixedLot) > 0))
+    || !(multiplier > 0)
+    || (mode === 'fixed_risk' && !(riskAmount > 0))
+    || (['equity_percent', 'balance_percent'].includes(mode) && !(riskPercent > 0))) {
+    const error = new Error('production follower risk policy is invalid');
+    error.code = 'FOLLOWER_LINK_RISK_POLICY_INVALID';
+    throw error;
+  }
+  const normalized = {
+    ...account,
+    followerLink: link,
+    copiedFromAccountId: text(link.parent_account_id ?? link.parentAccountId),
+    riskPercent: Number.isFinite(riskPercent) && riskPercent > 0 ? riskPercent : 0,
+    risk_percent: Number.isFinite(riskPercent) && riskPercent > 0 ? riskPercent : 0,
+    riskAmount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : 0,
+    risk_amount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : 0,
+    riskBasis,
+    risk_basis: riskBasis,
+  };
+  if (mode === 'fixed_risk') return { ...normalized, sizingMode: 'FIXED_RISK' };
+  if (mode === 'equity_percent') return { ...normalized, sizingMode: 'EQUITY_RISK_PERCENT' };
+  if (mode === 'balance_percent') return { ...normalized, sizingMode: 'BALANCE_RISK_PERCENT', riskBasis: 'balance', risk_basis: 'balance' };
+  // Fixed-lot and multiplier links have already materialized their per-leg
+  // lots in the trusted plan. Do not let the parent's risk mode resize them.
+  return { ...normalized, sizingMode: 'FIXED_LOTS' };
 }
 
 function safetyPolicyOf(account = {}) {
@@ -440,17 +500,41 @@ export function createProductionExecutionDependencies({
     const id = text(accountId);
     if (!id) throw new TypeError('accountId is required');
 
-    if (persistenceRuntime?.accounts) return persistenceRuntime.accounts.getAccount(boundWorkspaceId, id);
+    let account;
+    if (persistenceRuntime?.accounts) {
+      account = await persistenceRuntime.accounts.getAccount(boundWorkspaceId, id);
+    } else {
+      const { data, error } = await supabase
+        .from('trade_accounts')
+        .select('*')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw new Error('failed to load production trade account');
+      account = data || null;
+    }
+    if (!account) return null;
+    account = normalizeTradeAccountRiskSizing(account);
 
-    const { data, error } = await supabase
-      .from('trade_accounts')
-      .select('*')
-      .eq('workspace_id', boundWorkspaceId)
-      .eq('id', id)
-      .maybeSingle();
-
-    if (error) throw new Error('failed to load production trade account');
-    return data || null;
+    const followerLinksEnabled = env.PORTAL_ACCOUNT_FOLLOWERS_ENABLED === 'true' || Boolean(persistenceRuntime?.accountFollowers);
+    if (!followerLinksEnabled) return account;
+    let followerLink = null;
+    if (typeof persistenceRuntime?.accountFollowers?.getLink === 'function') {
+      followerLink = await persistenceRuntime.accountFollowers.getLink(boundWorkspaceId, id);
+    } else if (supabase?.from) {
+      const { data, error } = await supabase
+        .from('trading_account_followers')
+        .select('*')
+        .eq('workspace_id', boundWorkspaceId)
+        .eq('follower_account_id', id)
+        .eq('enabled', true)
+        .maybeSingle();
+      if (error) throw new Error('failed to load production follower risk policy');
+      followerLink = data || null;
+    } else {
+      throw new Error('production follower risk policy storage is unavailable');
+    }
+    return applyFollowerRiskSizing(account, followerLink);
   }
 
   async function snapshotLoader({ workspaceId: requestedWorkspaceId, sourceId, account } = {}) {
@@ -510,7 +594,7 @@ export function createProductionExecutionDependencies({
       ? { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 }
       : await loadExposure(account, action);
     const platform = platformOf(account);
-    const riskSized = ['RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
+    const riskSized = ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingModeOf(account));
 
     if (platform === 'ctrader' && riskSized && String(action.type || '').toUpperCase() === 'OPEN_POSITION') {
       const error = new Error('cTrader broker risk context unavailable: reliable monetary loss model required');
@@ -559,10 +643,44 @@ export function createProductionExecutionDependencies({
       currentMarketPrice: marketPrice,
       exposure,
     });
+    const authorizeMinimumVolumeFallback = result?.allowed
+      && result.action?.minimumVolumeFallbackAuthorized === true
+      ? (candidateAction, policy, policyRequest) => {
+        const expectedRiskPercent = Number(result.policyContext?.riskPercent);
+        const dispatchedRiskPercent = Number(policyRequest?.riskPercent);
+        const expectedFloorOverage = Number(result.policyContext?.minimumVolumeRiskOveragePercent);
+        const dispatchedFloorOverage = Number(policyRequest?.minimumVolumeRiskOveragePercent);
+        const sameAuthorizedIntent = candidateAction?.type === result.action.type
+          && candidateAction?.idempotencyKey === result.action.idempotencyKey
+          && candidateAction?.symbol === result.action.symbol
+          && candidateAction?.side === result.action.side
+          && candidateAction?.orderType === result.action.orderType
+          && candidateAction?.entry === result.action.entry
+          && candidateAction?.stopLoss === result.action.stopLoss
+          && candidateAction?.takeProfit === result.action.takeProfit
+          && Number(candidateAction?.lots) === Number(result.action.lots)
+          && candidateAction?.minimumVolumeFallbackAuthorized === true;
+        const sameRiskAuthorization = Number.isFinite(expectedRiskPercent)
+          && Number.isFinite(dispatchedRiskPercent)
+          && Math.abs(expectedRiskPercent - dispatchedRiskPercent) <= 1e-12
+          && Number.isFinite(expectedFloorOverage)
+          && Number.isFinite(dispatchedFloorOverage)
+          && Math.abs(expectedFloorOverage - dispatchedFloorOverage) <= 1e-12;
+        if (policy?.allowed !== true || !sameAuthorizedIntent || !sameRiskAuthorization) return false;
+        // Mint only after the coordinator has approved the complete account
+        // policy (per-leg risk, floor tolerance, daily loss and open exposure).
+        Object.defineProperty(candidateAction, BROKER_MINIMUM_FALLBACK_AUTH, {
+          value: true,
+          enumerable: true,
+        });
+        return true;
+      }
+      : null;
     if (result?.allowed) rememberMt5ActionContext(account, result.action || action, context);
     return {
       ...result,
       policyRequest: result.policyContext,
+      ...(authorizeMinimumVolumeFallback ? { authorizeMinimumVolumeFallback } : {}),
     };
   }
 
@@ -659,6 +777,7 @@ export function createProductionExecutionDependencies({
       runtime = await ctraderRuntimeFactory({
         environment,
         allowLiveTrading,
+        allowBrokerMinimumVolumeFallback: action?.[BROKER_MINIMUM_FALLBACK_AUTH] === true,
         clientId,
         clientSecret,
         accessToken,
@@ -676,7 +795,14 @@ export function createProductionExecutionDependencies({
     }
 
     try {
-      return await runtime.execute(action);
+      const fallbackAuthorized = action?.[BROKER_MINIMUM_FALLBACK_AUTH] === true
+        && action?.minimumVolumeFallbackAuthorized === true;
+      let dispatchAction = action;
+      if (!fallbackAuthorized && Object.prototype.hasOwnProperty.call(action, 'minimumVolumeFallbackAuthorized')) {
+        dispatchAction = { ...action };
+        delete dispatchAction.minimumVolumeFallbackAuthorized;
+      }
+      return await runtime.execute(dispatchAction);
     } catch (error) {
       if (batchKey && ctraderBatchRuntimes.get(batchKey)?.runtime === runtime) {
         ctraderBatchRuntimes.delete(batchKey);

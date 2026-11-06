@@ -5,8 +5,14 @@ import { applyProtectionPolicy } from './protection_validation_policy.js';
 import { materializeExecutionEntry } from './entry_materializer.js';
 
 function decimals(step) {
-  const text = String(step ?? 0.01);
-  return text.includes('.') ? text.split('.')[1].length : 0;
+  const numeric = Number(step ?? 0.01);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  const [coefficient, exponentText] = String(numeric).toLowerCase().split('e');
+  const fractionDigits = coefficient.includes('.')
+    ? coefficient.split('.')[1].length
+    : 0;
+  const exponent = exponentText == null ? 0 : Number(exponentText);
+  return Math.max(0, fractionDigits - exponent);
 }
 
 function policyMode(value, fallback) {
@@ -86,21 +92,28 @@ function normalizeFixedLots(value, instrument) {
   const step = Number(instrument?.stepLots ?? 0.01);
   const min = Number(instrument?.minLots ?? step);
   const max = Number(instrument?.maxLots ?? Number.POSITIVE_INFINITY);
-  if (!(lots > 0) || !(step > 0) || !(min > 0) || !(max >= min)) throw new TypeError('valid fixed lots and volume constraints required');
+  if (!Number.isFinite(lots) || !(lots > 0) || !Number.isFinite(step) || !(step > 0)
+    || !Number.isFinite(min) || !(min > 0) || (!(Number.isFinite(max) || max === Number.POSITIVE_INFINITY)) || !(max >= min)) {
+    throw new TypeError('valid fixed lots and volume constraints required');
+  }
 
-  // A fixed-lot preference is user-facing intent; the broker catalog is the
-  // execution authority. Materialize the nearest executable size without
-  // rejecting a genuine trade solely because a broker uses a larger minimum
-  // or coarser volume step. Never exceed the broker-reported maximum.
+  // Preserve the production fixed/adaptive sizing contract: broker minimum
+  // volume may raise a configured preference, while the broker maximum and
+  // volume step remain authoritative. Risk-sized modes use their separate
+  // monetary-risk minimum-volume tolerance policy before reaching this path.
   const precision = decimals(step);
-  const minimumExecutable = Math.ceil((min / step) - 1e-12) * step;
+  const stepIndexTolerance = (ratio) => Number.EPSILON * Math.max(1, Math.abs(ratio)) * 8;
+  const minimumExecutable = Math.ceil((min / step) - stepIndexTolerance(min / step)) * step;
   const maximumExecutable = Number.isFinite(max)
-    ? Math.floor((max / step) + 1e-12) * step
+    ? Math.floor((max / step) + stepIndexTolerance(max / step)) * step
     : Number.POSITIVE_INFINITY;
-  if (!(maximumExecutable >= minimumExecutable)) throw new RangeError('broker volume constraints have no executable lot size');
-
+  if (!Number.isFinite(minimumExecutable)
+    || (Number.isFinite(max) && !Number.isFinite(maximumExecutable))
+    || !(maximumExecutable >= minimumExecutable)) {
+    throw new RangeError('broker volume constraints have no executable lot size');
+  }
   const bounded = Math.min(Math.max(lots, minimumExecutable), maximumExecutable);
-  let executable = Math.floor((bounded / step) + 1e-12) * step;
+  let executable = Math.floor((bounded / step) + stepIndexTolerance(bounded / step)) * step;
   if (executable < minimumExecutable) executable = minimumExecutable;
   if (executable > maximumExecutable) executable = maximumExecutable;
   return Number(executable.toFixed(precision));
@@ -149,9 +162,9 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const executableIntent = protection.intent;
   const targetCount = Array.isArray(executableIntent.takeProfits) && executableIntent.takeProfits.length ? executableIntent.takeProfits.length : 1;
   const volumeStep = Number(instrument.stepLots ?? 0.01);
-  const sizingMode = String(account.sizingMode ?? 'RISK_PERCENT').toUpperCase();
+  const sizingMode = String(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type ?? 'RISK_PERCENT').toUpperCase();
 
-  if ((sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK')
+  if ((['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingMode))
       && entryMaterializedIntent.stopLoss != null
       && executableIntent.stopLoss == null
       && protection.protectionSkips.some((item) => item.field === 'stopLoss')) {
@@ -188,13 +201,15 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     if (!(brokerBalanceLots > 0)) throw new TypeError('broker-authoritative balance-percent lot sizing required');
     const lotsPerTarget = normalizeFixedLots(brokerBalanceLots, instrument);
     totalLots = Number((lotsPerTarget * targetCount).toFixed(decimals(volumeStep)));
-  } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
+  } else if (sizingMode === 'RISK_PERCENT' || sizingMode === 'EQUITY_RISK_PERCENT' || sizingMode === 'BALANCE_RISK_PERCENT' || sizingMode === 'FIXED_RISK') {
     if (!Number.isFinite(Number(executableIntent.stopLoss))) throw new Error('stop loss is required for risk sizing');
     riskEntryPrice = resolveRiskEntry(executableIntent, currentMarketPrice);
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
-      riskPercent: sizingMode === 'RISK_PERCENT' ? account.riskPercent : undefined,
-      riskAmount: sizingMode === 'FIXED_RISK' ? account.riskAmount : undefined,
+      riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent ?? account.risk_percent ?? account.lot_value ?? account.lotValue : undefined,
+      riskAmount: sizingMode === 'FIXED_RISK' || String(account.lot_sizing_config?.riskMode ?? account.lot_sizing_config?.risk_mode ?? '').toLowerCase() === 'fixed_cash' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount ?? account.lot_value ?? account.lotValue : undefined,
+      riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.lot_sizing_config?.riskBasis ?? account.lot_sizing_config?.risk_basis ?? account.riskBasis ?? account.risk_basis ?? (account.equity != null ? 'EQUITY' : 'BALANCE')),
+      minimumLotPolicy: safetyPolicy.minimumLotPolicy ?? 'FLOOR',
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
     });
     totalLots = risk.totalLots;
@@ -202,10 +217,27 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     throw new TypeError(`unsupported sizing mode: ${sizingMode}`);
   }
 
+  const riskBasisAmount = risk
+    ? (String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE' ? Number(account.balance) : Number(account.equity))
+    : 0;
+  // maxRiskPercent is a per-leg ceiling. The aggregate group risk is checked
+  // separately against maxOpenRiskPercent so multiple TP legs each retain the
+  // configured per-leg budget without hiding their combined exposure.
+  const actualRiskPercent = risk && riskBasisAmount > 0
+    ? (Number(risk.estimatedRiskPerLegExact ?? risk.estimatedRiskPerLeg) / riskBasisAmount) * 100
+    : (risk ? Number.POSITIVE_INFINITY : Number(exposure.estimatedRiskPercent || 0));
+  const aggregateRiskPercent = risk && riskBasisAmount > 0
+    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
+    : actualRiskPercent;
+
   const policy = evaluateAccountPolicy(safetyPolicy, {
     symbol: executableIntent.symbol.canonical,
     totalLots,
-    riskPercent: risk ? (Number(account.riskPercent) || 0) : Number(exposure.estimatedRiskPercent || 0),
+    riskPercent: actualRiskPercent,
+    newOpenRiskPercent: aggregateRiskPercent,
+    minimumVolumeRiskOveragePercent: risk?.minimumFloorApplied === true && riskBasisAmount > 0
+      ? Math.max(0, actualRiskPercent - (Number(risk.riskAmountExact ?? risk.riskAmount) / riskBasisAmount) * 100)
+      : 0,
     currentDailyPnlPercent: exposure.currentDailyPnlPercent,
     currentOpenRiskPercent: exposure.currentOpenRiskPercent,
     actionKind: 'INCREASE_RISK',

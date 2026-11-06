@@ -10,12 +10,12 @@ test('builds risk-sized three-leg plan from one canonical intent', () => {
     takeProfits: [2510, 2520, 2530], fastEntry: false,
   }, { account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 }, instrument });
   assert.equal(plan.status, 'READY');
-  assert.equal(plan.risk.totalLots, 0.1);
-  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.04, 0.03, 0.03]);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.deepEqual(plan.group.legs.map((leg) => leg.lots), [0.1, 0.1, 0.1]);
   assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2510, 2520, 2530]);
 });
 
-test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
+test('fixed-risk sizing applies the cash risk budget independently to each TP leg', () => {
   const plan = buildExecutionPlan({
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
     takeProfits: [2510, 2520, 2530],
@@ -24,9 +24,41 @@ test('fixed-risk sizing allocates one total risk budget across TP legs', () => {
     instrument,
   });
   assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 300);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+});
+
+test('explicit fixed monetary risk overrides percentage sizing during planning', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510],
+  }, { account: { equity: 10000, sizingMode: 'EQUITY_RISK_PERCENT', riskPercent: 5, riskAmount: 100 }, instrument });
+  assert.equal(plan.status, 'READY');
   assert.equal(plan.risk.riskAmount, 100);
   assert.equal(plan.risk.totalLots, 0.1);
-  assert.deepEqual(plan.actions.map((action) => action.lots), [0.04, 0.03, 0.03]);
+});
+
+test('plans persisted fixed-cash risk from the existing risk_percent account mode', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510],
+  }, {
+    account: {
+      equity: 20000,
+      balance: 5000,
+      lot_sizing_type: 'risk_percent',
+      lot_value: 100,
+      lot_sizing_config: { riskBasis: 'balance', riskMode: 'fixed_cash' },
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 3 },
+    },
+    instrument,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskBasis, 'BALANCE');
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.actions[0].lots, 0.1);
 });
 
 test('marks only newly planned pending order legs for future lifecycle tracking', () => {
@@ -185,7 +217,7 @@ test('risk-based sizing stays blocked when the only stop is invalid even under s
 });
 
 
-test('fixed lots below broker minimum are raised to the broker minimum instead of blocking a genuine trade', () => {
+test('legacy fixed-lot sizing preserves broker-minimum flooring for existing accounts', () => {
   const plan = buildExecutionPlan({
     side:'BUY', orderType:'MARKET', symbol:{canonical:'DERIV:VOLATILITY_75_1S'},
     entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
@@ -324,3 +356,170 @@ test('per-target allocation preserves current one-sized-lot-per-TP behavior', ()
   assert.deepEqual(plan.actions.map((action)=>action.lots),[0.09,0.09,0.09]);
 });
 
+
+test('fixed monetary risk override is checked against actual risk percent for account policy', () => {
+  const plan = buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'}, entry:{kind:'PRICE',value:2500},
+    stopLoss:2490, takeProfits:[2510],
+  }, {
+    account:{equity:10000,sizingMode:'EQUITY_RISK_PERCENT',riskPercent:1,riskAmount:500,
+      safetyPolicy:{enabled:true,killSwitch:false,maxRiskPercent:2}},
+    instrument,
+  });
+  assert.equal(plan.status,'BLOCKED');
+  assert.ok(plan.policy.reasons.includes('MAX_RISK_EXCEEDED'));
+});
+
+
+test('execution plan creates any number of risk-sized TP actions with 1% risk per leg', () => {
+  for (const targetCount of [1, 2, 4, 5, 7]) {
+    const takeProfits = Array.from({ length: targetCount }, (_, index) => 2510 + (index * 10));
+    const plan = buildExecutionPlan({
+      side: 'BUY',
+      orderType: 'MARKET',
+      symbol: { canonical: 'XAUUSD' },
+      entry: { kind: 'PRICE', value: 2500 },
+      stopLoss: 2490,
+      takeProfits,
+      fastEntry: false,
+    }, {
+      account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 },
+      instrument,
+    });
+
+    assert.equal(plan.status, 'READY', `plan status for ${targetCount} targets`);
+    assert.equal(plan.risk.riskAmountPerLeg, 100);
+    assert.equal(plan.risk.totalRiskAmount, 100 * targetCount);
+    assert.ok(Math.abs(plan.risk.totalLots - (0.1 * targetCount)) < 1e-12, `aggregate lots for ${targetCount} targets`);
+    assert.equal(plan.group.legs.length, targetCount);
+    assert.equal(plan.actions.length, targetCount);
+    assert.deepEqual(plan.actions.map((action) => action.takeProfit), takeProfits);
+    assert.deepEqual(plan.actions.map((action) => action.lots), Array(targetCount).fill(0.1));
+  }
+});
+
+
+test('maxRiskPercent is per TP leg while maxOpenRiskPercent checks aggregate group risk', () => {
+  const intent = {
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510, 2520, 2530], fastEntry: false,
+  };
+  const perLegAllowed = buildExecutionPlan(intent, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1,
+      safetyPolicy: { enabled: true, killSwitch: false, maxRiskPercent: 1.1, maxOpenRiskPercent: 3.1 } },
+    instrument,
+  });
+  assert.equal(perLegAllowed.status, 'READY');
+  assert.equal(perLegAllowed.risk.totalRiskAmount, 300);
+
+  const aggregateBlocked = buildExecutionPlan(intent, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1,
+      safetyPolicy: { enabled: true, killSwitch: false, maxRiskPercent: 1.1, maxOpenRiskPercent: 2.9 } },
+    instrument,
+  });
+  assert.equal(aggregateBlocked.status, 'BLOCKED');
+  assert.ok(aggregateBlocked.policy.reasons.includes('OPEN_RISK_LIMIT'));
+});
+
+test('risk-sized signal with no TP uses one entry leg and one per-leg risk budget', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY',
+    orderType: 'MARKET',
+    symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 },
+    stopLoss: 2490,
+    takeProfits: [],
+    fastEntry: false,
+  }, {
+    account: { equity: 10000, sizingMode: 'RISK_PERCENT', riskPercent: 1 },
+    instrument,
+  });
+
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 100);
+  assert.equal(plan.group.legs.length, 1);
+  assert.equal(plan.actions.length, 1);
+  assert.equal(plan.actions[0].lots, 0.1);
+  assert.equal(plan.actions[0].takeProfit, null);
+});
+
+
+test('risk sizing counts only retained executable TP targets after invalid targets are skipped', () => {
+  const plan = buildExecutionPlan({
+    side: 'SELL',
+    orderType: 'MARKET',
+    symbol: { canonical: 'XAUUSD' },
+    entry: { kind: 'PRICE', value: 2500 },
+    stopLoss: 2510,
+    takeProfits: [2490, 2480, 2520, 2470],
+    incomplete: false,
+  }, {
+    account: {
+      equity: 10000,
+      sizingMode: 'RISK_PERCENT',
+      riskPercent: 1,
+      safetyPolicy: {
+        enabled: true,
+        invalidProtectionPolicy: 'skip_invalid',
+        allowInvalidTakeProfitSkip: true,
+      },
+    },
+    instrument,
+  });
+
+  assert.equal(plan.status, 'READY');
+  assert.deepEqual(plan.actions.map((action) => action.takeProfit), [2490, 2480, 2470]);
+  assert.deepEqual(plan.actions.map((action) => action.targetIndex), [1, 2, 4]);
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.risk.totalRiskAmount, 300);
+  assert.equal(plan.risk.totalLots, 0.3);
+  assert.equal(plan.group.legs.length, 3);
+  assert.equal(plan.actions.length, 3);
+  assert.deepEqual(plan.actions.map((action) => action.lots), [0.1, 0.1, 0.1]);
+  assert.deepEqual(plan.protectionSkips, [{
+    field: 'takeProfits',
+    targetIndex: 3,
+    code: 'TP3_SKIPPED_INVALID_GEOMETRY',
+    value: 2520,
+  }]);
+});
+
+
+test('fixed-lot normalization handles tiny scientific broker steps without drift', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'MICRO' },
+    entry: { kind: 'MARKET' }, stopLoss: null, takeProfits: [], fastEntry: true, incomplete: true,
+  }, {
+    account: { sizingMode: 'FIXED_LOTS', fixedLots: 0.0000003, safetyPolicy: { enabled: true, killSwitch: false } },
+    instrument: { minLots: 0.0000001, maxLots: 0.000001, stepLots: 0.0000001 },
+    currentMarketPrice: 100,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.0000003);
+});
+
+test('fixed-lot normalization does not round a genuinely fractional broker step upward', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'MARKET', symbol: { canonical: 'MICRO' },
+    entry: { kind: 'MARKET' }, stopLoss: null, takeProfits: [], fastEntry: true, incomplete: true,
+  }, {
+    account: { sizingMode: 'FIXED_LOTS', fixedLots: 0.00000039, safetyPolicy: { enabled: true, killSwitch: false } },
+    instrument: { minLots: 0.0000001, maxLots: 0.000001, stepLots: 0.0000001 },
+    currentMarketPrice: 100,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.actions[0].lots, 0.0000003);
+});
+
+test('fixed-lot planning rejects non-finite requested volume', () => {
+  assert.throws(() => buildExecutionPlan({
+    side:'BUY', orderType:'MARKET', symbol:{canonical:'XAUUSD'},
+    entry:{kind:'MARKET'}, stopLoss:null, takeProfits:[], fastEntry:true, incomplete:true,
+  }, {
+    account:{sizingMode:'FIXED_LOTS',fixedLots:Number.POSITIVE_INFINITY},
+    instrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    currentMarketPrice:2500,
+  }), /valid fixed lots and volume constraints/i);
+});

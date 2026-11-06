@@ -49,3 +49,70 @@ test('close/protective management remains allowed under loss lock unless kill sw
   const result = evaluateAccountPolicy(base, { ...request, actionKind: 'REDUCE_RISK', currentDailyPnlPercent: -10 });
   assert.equal(result.allowed, true);
 });
+
+test('only explicit broker minimum-floor overage may exceed max risk percent', () => {
+  assert.ok(evaluateAccountPolicy(base, { ...request, riskPercent: 2.05 }).reasons.includes('MAX_RISK_EXCEEDED'));
+  assert.deepEqual(evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.05,
+    minimumVolumeRiskOveragePercent: 0.05,
+  }), { allowed: true, reasons: [] });
+  assert.ok(evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.2,
+    minimumVolumeRiskOveragePercent: 0.2,
+  }).reasons.includes('MAX_RISK_EXCEEDED'));
+  assert.deepEqual(evaluateAccountPolicy({
+    ...base,
+    minimumVolumeRiskTolerancePercent: 0.1,
+  }, {
+    ...request,
+    riskPercent: 2.08,
+    minimumVolumeRiskOveragePercent: 0.08,
+  }), { allowed: true, reasons: [] });
+});
+
+test('absolute account-risk bounds apply even when optional policy caps are unset', () => {
+  const perLeg = evaluateAccountPolicy({ enabled: true, killSwitch: false }, {
+    ...request,
+    riskPercent: 101,
+  });
+  assert.equal(perLeg.allowed, false);
+  assert.ok(perLeg.reasons.includes('MAX_RISK_EXCEEDED'));
+
+  const aggregate = evaluateAccountPolicy({ enabled: true, killSwitch: false }, {
+    ...request,
+    riskPercent: 1,
+    newOpenRiskPercent: 101,
+  });
+  assert.equal(aggregate.allowed, false);
+  assert.ok(aggregate.reasons.includes('OPEN_RISK_LIMIT'));
+});
+
+
+test('minimum-volume overage is capped even when actual risk remains below maxRiskPercent', () => {
+  const result = evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 0.1,
+    minimumVolumeRiskOveragePercent: 0.09,
+  });
+  assert.equal(result.allowed, false);
+  assert.ok(result.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+  assert.ok(!result.reasons.includes('MAX_RISK_EXCEEDED'));
+  const malformed = evaluateAccountPolicy(base, {
+    ...request,
+    minimumVolumeRiskOveragePercent: 'not-a-number',
+  });
+  assert.ok(malformed.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
+});
+
+test('minimum-volume tolerance never relaxes cumulative open-risk limits', () => {
+  const result = evaluateAccountPolicy(base, {
+    ...request,
+    riskPercent: 2.05,
+    minimumVolumeRiskOveragePercent: 0.05,
+    currentOpenRiskPercent: 5.99,
+  });
+  assert.ok(result.reasons.includes('OPEN_RISK_LIMIT'));
+  assert.equal(result.allowed, false);
+});

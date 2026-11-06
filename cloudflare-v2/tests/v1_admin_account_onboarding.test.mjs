@@ -161,6 +161,89 @@ test('owner creates production MT5 account with encrypted credentials and forced
   assertNoCredentialMaterial(body);
 });
 
+test('workspace owner can create an account with persisted risk sizing while execution remains disabled', async () => {
+  const store = makeStore();
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({
+      lotSizingType: 'balance_risk_percent',
+      lotValue: 1,
+      lotSizingConfig: {},
+    })),
+    ownerAuthorization,
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => 'fixture-envelope',
+    },
+  );
+  assert.equal(response.status, 201);
+  const create = store.calls.find((call) => call[0] === 'createAccount');
+  assert.equal(create[2].lotSizingType, 'risk_percent');
+  assert.deepEqual(create[2].lotSizingConfig, { riskBasis: 'balance', riskMode: 'percent' });
+  assert.equal(create[2].active, false);
+  assert.equal(create[2].executionEnabled, false);
+});
+
+test('owner can select fixed-cash risk through the canonical risk_percent storage type', async () => {
+  const store = makeStore();
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({
+      lotSizingType: 'risk_percent',
+      lotValue: 250,
+      lotSizingConfig: { riskBasis: 'balance', riskMode: 'fixed_cash' },
+    })),
+    ownerAuthorization,
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => 'fixture-envelope',
+    },
+  );
+  assert.equal(response.status, 201);
+  const create = store.calls.find((call) => call[0] === 'createAccount');
+  assert.equal(create[2].lotSizingType, 'risk_percent');
+  assert.equal(create[2].lotValue, 250);
+  assert.deepEqual(create[2].lotSizingConfig, { riskBasis: 'balance', riskMode: 'fixed_cash' });
+});
+
+test('admin cannot create an account with risk sizing even though admins have ordinary account-write permission', async () => {
+  const store = makeStore();
+  let encryptCalls = 0;
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({ lotSizingType: 'equity_risk_percent', lotValue: 1 })),
+    { ...ownerAuthorization, membership: { ...ownerAuthorization.membership, role: 'admin' } },
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => { encryptCalls += 1; return 'fixture-envelope'; },
+    },
+  );
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, 'RISK_POLICY_OWNER_REQUIRED');
+  assert.equal(encryptCalls, 0);
+  assert.equal(store.calls.length, 0);
+});
+
+test('admin cannot set account risk limits during otherwise ordinary account onboarding', async () => {
+  const store = makeStore();
+  let encryptCalls = 0;
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({
+      safetyPolicy: { maxRiskPercent: 2 },
+    })),
+    { ...ownerAuthorization, membership: { ...ownerAuthorization.membership, role: 'admin' } },
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => { encryptCalls += 1; return 'fixture-envelope'; },
+    },
+  );
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, 'RISK_POLICY_OWNER_REQUIRED');
+  assert.equal(encryptCalls, 0);
+  assert.equal(store.calls.length, 0);
+});
+
 test('production cTrader onboarding uses the cTrader encrypted envelope and remains execution-disabled', async () => {
   const store = makeStore();
   const kinds = [];

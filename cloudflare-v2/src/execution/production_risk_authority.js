@@ -10,15 +10,17 @@ function text(value) {
 }
 
 function sizingMode(account = {}) {
-  return text(account.sizingMode ?? account.sizing_mode).toUpperCase();
+  return text(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type).toUpperCase();
 }
 
 function configuredRiskPercent(account = {}, action = {}) {
+  const mode = sizingMode(account);
   return numberOrUndefined(
     action.riskPercent ??
     action.risk_percent ??
     account.riskPercent ??
-    account.risk_percent,
+    account.risk_percent ??
+    (['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode) ? account.lot_value : undefined),
   );
 }
 
@@ -27,7 +29,8 @@ function configuredRiskAmount(account = {}, action = {}) {
     action.riskAmount ??
     action.risk_amount ??
     account.riskAmount ??
-    account.risk_amount,
+    account.risk_amount ??
+    (sizingMode(account) === 'FIXED_RISK' || String(account.lot_sizing_config?.riskMode ?? account.lot_sizing_config?.risk_mode ?? '').toLowerCase() === 'fixed_cash' ? account.lot_value ?? account.lotValue : undefined),
   );
 }
 
@@ -49,11 +52,15 @@ function exposureValue(exposure = {}, name) {
   return numberOrUndefined(exposure?.[name]) ?? 0;
 }
 
-function canonicalPolicyContext({ action, riskPercent, exposure }) {
+function canonicalPolicyContext({ action, riskPercent, exposure, minimumVolumeRiskOveragePercent = 0 }) {
   const lots = numberOrUndefined(action?.lots);
+  const overage = numberOrUndefined(minimumVolumeRiskOveragePercent);
   return {
     totalLots: lots != null ? lots : 0,
     riskPercent: numberOrUndefined(riskPercent) ?? 0,
+    // Nonzero only for broker minimum-volume floors; ordinary risk overruns
+    // remain subject to strict account policy.
+    minimumVolumeRiskOveragePercent: overage != null && overage > 0 ? overage : 0,
     currentDailyPnlPercent: exposureValue(exposure, 'currentDailyPnlPercent'),
     currentOpenRiskPercent: exposureValue(exposure, 'currentOpenRiskPercent'),
   };
@@ -75,7 +82,9 @@ function normalizedReduceRiskAction(action = {}) {
   if (actionType === 'CLOSE_PARTIAL' && !(lots > 0)) {
     throw new TypeError('production partial-close lots must be positive');
   }
-  return lots != null ? { ...action, lots } : { ...action };
+  const safeAction = { ...action };
+  delete safeAction.minimumVolumeFallbackAuthorized;
+  return lots != null ? { ...safeAction, lots } : { ...safeAction };
 }
 
 /**
@@ -110,11 +119,15 @@ export function validateProductionRiskAction({
   // Fixed-lot OPENs are still subject to final account policy and strict broker
   // volume validation in platform translation. They do not invent a monetary
   // risk percentage when the account was not configured as risk-sized.
-  if (mode !== 'RISK_PERCENT' && mode !== 'FIXED_RISK') {
+  const explicitRiskAmount = configuredRiskAmount(account, action);
+  const riskAmountOverridesPercent = explicitRiskAmount != null && explicitRiskAmount > 0;
+  if (!riskAmountOverridesPercent && !['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(mode)) {
+    const safeAction = { ...action };
+    delete safeAction.minimumVolumeFallbackAuthorized;
     return {
       allowed: true,
-      action: { ...action, lots: plannedLots },
-      policyContext: canonicalPolicyContext({ action: { ...action, lots: plannedLots }, riskPercent, exposure }),
+      action: { ...safeAction, lots: plannedLots },
+      policyContext: canonicalPolicyContext({ action: { ...safeAction, lots: plannedLots }, riskPercent, exposure }),
       risk: null,
     };
   }
@@ -130,9 +143,11 @@ export function validateProductionRiskAction({
     risk = calculateRiskPlan({
       equity: brokerEquity(brokerAccount),
       balance: brokerBalance(brokerAccount),
-      riskPercent: mode === 'RISK_PERCENT' ? riskPercent : undefined,
-      riskAmount: mode === 'FIXED_RISK' ? configuredRiskAmount(account, action) : undefined,
+      riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(mode) ? riskPercent : undefined,
+      riskAmount: riskAmountOverridesPercent || mode === 'FIXED_RISK' ? explicitRiskAmount : undefined,
+      riskBasis: mode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.lot_sizing_config?.riskBasis ?? account.lot_sizing_config?.risk_basis ?? account.riskBasis ?? account.risk_basis ?? (brokerEquity(brokerAccount) != null ? 'EQUITY' : 'BALANCE')),
       entry,
+      minimumLotPolicy: account.safetyPolicy?.minimumLotPolicy ?? account.safety_policy?.minimumLotPolicy ?? 'FLOOR',
       stopLoss,
       targetCount: 1,
       instrument,
@@ -143,22 +158,48 @@ export function validateProductionRiskAction({
     throw wrapped;
   }
 
-  // The earlier plan may be smaller than the newly-authoritative broker result;
-  // that is safe. It may never be larger. A later task may choose to resize
-  // downward explicitly, but Task 3 intentionally preserves the planned amount
-  // and blocks only unsafe over-sizing.
-  const tolerance = Math.max(1e-12, Number(instrument.stepLots ?? 0.01) * 1e-9);
-  if (plannedLots - risk.totalLots > tolerance) {
-    const error = new RangeError('planned volume exceeds current broker-authoritative risk allowance');
-    error.code = 'BROKER_RISK_EXCEEDED';
+  // Broker-authoritative sizing is the final lot materializer. Upstream lots
+  // can be stale or calculated with incomplete broker constraints; resize this
+  // valid OPEN to the current executable risk-sized volume rather than rejecting
+  // it solely because the earlier plan differs.
+  const safeAction = { ...action };
+  delete safeAction.minimumVolumeFallbackAuthorized;
+  const finalAction = {
+    ...safeAction,
+    lots: risk.lotsPerLeg,
+    // This capability is minted only by broker-authoritative risk sizing.
+    // The coordinator still must pass account policy before any dispatch.
+    ...(risk.minimumFloorApplied === true ? { minimumVolumeFallbackAuthorized: true } : {}),
+  };
+  const riskBasisAmount = String(risk.riskBasis || 'EQUITY').toUpperCase() === 'BALANCE'
+    ? brokerBalance(brokerAccount)
+    : brokerEquity(brokerAccount);
+  if (!(riskBasisAmount > 0)) {
+    const error = new Error('broker risk context unavailable: positive risk-basis equity or balance is required');
+    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
     throw error;
   }
-
-  const finalAction = { ...action, lots: plannedLots };
+  const actualRiskPercent = riskBasisAmount > 0
+    ? (Number(risk.estimatedRiskExact ?? risk.estimatedRisk) / riskBasisAmount) * 100
+    : Number.POSITIVE_INFINITY;
+  // Compare the broker minimum against the actual configured monetary budget.
+  // This also handles FIXED_RISK and riskAmount overrides, where riskPercent
+  // may be absent or unrelated to the requested cash risk.
+  const requestedRiskPercent = riskBasisAmount > 0
+    ? (Number(risk.riskAmountExact ?? risk.riskAmount) / riskBasisAmount) * 100
+    : 0;
+  const minimumVolumeRiskOveragePercent = risk.minimumFloorApplied === true
+    ? Math.max(0, actualRiskPercent - requestedRiskPercent)
+    : 0;
   return {
     allowed: true,
     action: finalAction,
-    policyContext: canonicalPolicyContext({ action: finalAction, riskPercent, exposure }),
+    policyContext: canonicalPolicyContext({
+      action: finalAction,
+      riskPercent: actualRiskPercent,
+      exposure,
+      minimumVolumeRiskOveragePercent,
+    }),
     risk,
   };
 }
