@@ -1051,7 +1051,7 @@ jobs:
             'db/d1-migrations/0005_broker_observation_due_index.sql',
             'db/d1-migrations/0006_account_follower_risk_sizing.sql',
           ];
-          const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\\n');
+          const migrationSql = (await Promise.all(migrationPaths.map((path) => readFile(path, 'utf8')))).join('\n');
           const payload = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/trading-d1-schema-check-after-migration.json`, 'utf8'));
           const rows = Array.isArray(payload)
             ? payload.flatMap((item) => Array.isArray(item?.results) ? item.results : [])
