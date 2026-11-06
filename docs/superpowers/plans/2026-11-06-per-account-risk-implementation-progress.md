@@ -157,3 +157,10 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Added owner onboarding coverage for fixed-cash risk stored using the canonical `risk_percent` type, with `riskMode=fixed_cash` and cash value above 100. This avoids misinterpreting a cash budget as a percentage.
 - Corrected onboarding validation to determine percentage-vs-cash validation from the explicit persisted risk mode.
 - Latest code/test commit: `ba263f87`. Trading V1 CI run #3514 was created for an earlier code commit and remains queued; it does not include these newest onboarding tests. A new latest-head CI result is required before any implementation can be called verified.
+
+
+### 2026-11-06 — risk-basis precedence hardening
+
+- Updated account normalization, execution planning, and final broker revalidation to prefer an explicitly persisted `lot_sizing_config.riskBasis` over a legacy fallback basis field. This prevents an old/default equity value from overriding an owner's explicit balance selection.
+- Strengthened the production risk-authority regression to include a conflicting legacy `risk_basis: equity` field while asserting that persisted `riskBasis: balance` controls the calculation.
+- Latest code/test commit: `62a4750e`. CI for this exact branch head is pending; prior queued CI runs do not verify these newest changes.
