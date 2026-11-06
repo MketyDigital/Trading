@@ -184,6 +184,28 @@ test('workspace owner can create an account with persisted risk sizing while exe
   assert.equal(create[2].executionEnabled, false);
 });
 
+test('owner can select fixed-cash risk through the canonical risk_percent storage type', async () => {
+  const store = makeStore();
+  const response = await handleAuthorizedV1AdminAccountsRequest(
+    request('/api/v1/admin/accounts', 'POST', mt5Body({
+      lotSizingType: 'risk_percent',
+      lotValue: 250,
+      lotSizingConfig: { riskBasis: 'balance', riskMode: 'fixed_cash' },
+    })),
+    ownerAuthorization,
+    {
+      accountStore: store,
+      env: { TRADING_MASTER_KEY: 'fixture-master-key' },
+      encryptCredentials: async () => 'fixture-envelope',
+    },
+  );
+  assert.equal(response.status, 201);
+  const create = store.calls.find((call) => call[0] === 'createAccount');
+  assert.equal(create[2].lotSizingType, 'risk_percent');
+  assert.equal(create[2].lotValue, 250);
+  assert.deepEqual(create[2].lotSizingConfig, { riskBasis: 'balance', riskMode: 'fixed_cash' });
+});
+
 test('admin cannot create an account with risk sizing even though admins have ordinary account-write permission', async () => {
   const store = makeStore();
   let encryptCalls = 0;
