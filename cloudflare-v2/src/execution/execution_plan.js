@@ -106,7 +106,15 @@ function normalizeFixedLots(value, instrument) {
     : Number.POSITIVE_INFINITY;
   if (!(maximumExecutable >= minimumExecutable)) throw new RangeError('broker volume constraints have no executable lot size');
 
-  const bounded = Math.min(Math.max(lots, minimumExecutable), maximumExecutable);
+  const minimumTolerance = stepIndexTolerance(lots / step) * step;
+  if (lots < minimumExecutable - minimumTolerance) {
+    const error = new RangeError('fixed lots are below the broker minimum; explicit risk sizing is required to authorize a minimum-volume floor');
+    error.code = 'FIXED_LOTS_BELOW_BROKER_MINIMUM';
+    error.minimumLots = Number(minimumExecutable.toFixed(precision));
+    error.requestedLots = lots;
+    throw error;
+  }
+  const bounded = Math.min(lots, maximumExecutable);
   let executable = Math.floor((bounded / step) + stepIndexTolerance(bounded / step)) * step;
   if (executable < minimumExecutable) executable = minimumExecutable;
   if (executable > maximumExecutable) executable = maximumExecutable;
