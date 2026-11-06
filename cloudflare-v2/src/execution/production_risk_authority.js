@@ -146,7 +146,7 @@ export function validateProductionRiskAction({
       riskAmount: riskAmountOverridesPercent || mode === 'FIXED_RISK' ? explicitRiskAmount : undefined,
       riskBasis: mode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.riskBasis ?? account.risk_basis ?? account.lot_sizing_config?.riskBasis ?? account.lot_sizing_config?.risk_basis ?? (brokerEquity(brokerAccount) != null ? 'EQUITY' : 'BALANCE')),
       entry,
-      minimumLotPolicy: account.safetyPolicy?.minimumLotPolicy ?? account.safety_policy?.minimumLotPolicy ?? 'REJECT',
+      minimumLotPolicy: account.safetyPolicy?.minimumLotPolicy ?? account.safety_policy?.minimumLotPolicy ?? 'FLOOR',
       stopLoss,
       targetCount: 1,
       instrument,
