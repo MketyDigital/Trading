@@ -58,11 +58,13 @@ function checksumsFor(migrations) {
 // historical SQL files contain their own outer BEGIN/COMMIT wrappers; remove
 // only those standalone boundary statements so they cannot commit the install
 // transaction before its migration-ledger write and final safety checks.
-function migrationSqlWithinInstallerTransaction(sql) {
-  return String(sql)
-    .replace(/^\\s*BEGIN\\s*;\\s*/i, '')
-    .replace(/\\s*COMMIT\\s*;\\s*$/i, '')
-    .trim();
+export function migrationSqlWithinInstallerTransaction(sql) {
+  const withoutOuterBegin = String(sql).replace(/^\s*BEGIN\s*;\s*/i, '');
+  const withoutOuterCommit = withoutOuterBegin.replace(/\s*COMMIT\s*;\s*$/i, '');
+  if (/(?:^|;)\s*(?:BEGIN|COMMIT|ROLLBACK)\s*;/i.test(withoutOuterCommit)) {
+    throw new Error('PostgreSQL migration contains an unsupported nested transaction-control statement');
+  }
+  return withoutOuterCommit.trim();
 }
 
 /** Apply the reviewed additive schema once, transactionally, to the existing mkety database. */

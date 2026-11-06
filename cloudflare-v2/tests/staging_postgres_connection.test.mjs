@@ -27,6 +27,7 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
     schemaName: 'public',
     transactionReadOnly: true,
     tradingSchemaExists: false,
+    tradingSchemaAudit: null,
     roleIsSuperuser: false,
     tradingOwnerRoleIsRestricted: true,
     availableTradingDatabaseNames: ['trading_stage']
@@ -53,6 +54,71 @@ test('staging PostgreSQL probe uses a read-only transaction and returns safe ide
   assert.match(calls[3][1], /trading_owner/);
   assert.doesNotMatch(calls[3][1], /^\s*(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/im);
   assert.doesNotMatch(JSON.stringify(result), /secret-user|secret-password|private\.invalid/);
+});
+
+test('read-only PostgreSQL probe reports existing Trading schema safety and migration ledger state', async () => {
+  const calls = [];
+  class Client {
+    async connect() { calls.push('connect'); }
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{
+        database_name: 'mkety',
+        schema_name: 'public',
+        transaction_read_only: 'on',
+        trading_schema_exists: true,
+        role_is_superuser: true,
+        trading_owner_is_superuser: false,
+        trading_owner_can_login: false,
+        trading_owner_can_create_database: false,
+        trading_owner_can_create_roles: false,
+        trading_owner_bypasses_rls: false,
+        trading_owner_inherits_roles: false,
+        available_trading_database_names: ['mkety']
+      }] };
+      if (sql.includes('to_regclass')) return { rows: [{
+        authority_control_exists: true,
+        runtime_controls_exists: true,
+        migration_ledger_exists: true
+      }] };
+      if (sql.includes('active_authority')) return { rows: [{
+        active_authority: 'd1',
+        writes_fenced: true,
+        control_count: 3,
+        disabled_control_count: 3,
+        schema_owner: 'trading_owner',
+        unsafe_definer_owner_count: 0,
+        public_definer_execute_count: 0,
+        migration_versions: ['0001', '0002', '0003', '0004', '0005', '0006']
+      }] };
+      return { rows: [] };
+    }
+    async end() { calls.push('end'); }
+  }
+
+  const result = await checkStagingPostgresConnection({
+    connectionString: 'postgres://user:password@private.invalid/mkety',
+    expectedDatabaseName: 'mkety',
+    caFilePath: '/etc/ssl/certs/coolify-ca.crt',
+    caCertificate: 'synthetic trusted CA certificate',
+    ClientClass: Client
+  });
+
+  assert.deepEqual(result.tradingSchemaAudit, {
+    status: 'complete',
+    activeAuthority: 'd1',
+    writesFenced: true,
+    runtimeControlCount: 3,
+    disabledRuntimeControlCount: 3,
+    schemaOwner: 'trading_owner',
+    unsafeDefinerOwnerCount: 0,
+    publicDefinerExecuteCount: 0,
+    migrationVersions: ['0001', '0002', '0003', '0004', '0005', '0006']
+  });
+  assert.deepEqual(calls.filter((value) => typeof value === 'string' && /^(BEGIN READ ONLY|ROLLBACK)$/.test(value)), ['BEGIN READ ONLY', 'ROLLBACK']);
+  assert.ok(calls.some((value) => typeof value === 'string' && value.includes('to_regclass')));
+  assert.ok(calls.some((value) => typeof value === 'string' && value.includes('active_authority')));
+  assert.doesNotMatch(calls.filter((value) => typeof value === 'string').join('\n'), /^\s*(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b/im);
 });
 
 test('staging PostgreSQL probe refuses a connection that is not read-only and still closes it', async () => {

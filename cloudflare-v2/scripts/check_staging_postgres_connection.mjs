@@ -20,6 +20,40 @@ const IDENTITY_QUERY = `
     ), ARRAY[]::text[]) AS available_trading_database_names
 `;
 
+const SCHEMA_TABLES_QUERY = `
+  SELECT
+    to_regclass('trading_storage.authority_control') IS NOT NULL AS authority_control_exists,
+    to_regclass('trading_storage.runtime_controls') IS NOT NULL AS runtime_controls_exists,
+    to_regclass('trading_storage.schema_migrations') IS NOT NULL AS migration_ledger_exists
+`;
+
+const SCHEMA_SAFETY_QUERY = `
+  SELECT
+    (SELECT active_authority FROM trading_storage.authority_control WHERE singleton_id = 1) AS active_authority,
+    (SELECT writes_fenced FROM trading_storage.authority_control WHERE singleton_id = 1) AS writes_fenced,
+    (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls) AS control_count,
+    (SELECT COUNT(*)::integer FROM trading_storage.runtime_controls WHERE enabled = false) AS disabled_control_count,
+    (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'trading_storage') AS schema_owner,
+    (SELECT COUNT(*)::integer
+       FROM pg_proc AS p
+       JOIN pg_namespace AS function_namespace ON function_namespace.oid = p.pronamespace
+      WHERE function_namespace.nspname = 'trading_storage'
+        AND p.prosecdef
+        AND pg_get_userbyid(p.proowner) <> 'trading_owner') AS unsafe_definer_owner_count,
+    (SELECT COUNT(*)::integer
+       FROM pg_proc AS p
+       JOIN pg_namespace AS function_namespace ON function_namespace.oid = p.pronamespace
+      WHERE function_namespace.nspname = 'trading_storage'
+        AND p.prosecdef
+        AND EXISTS (
+          SELECT 1
+            FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl_entry
+           WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE'
+        )) AS public_definer_execute_count,
+    (SELECT COALESCE(array_agg(version ORDER BY version), ARRAY[]::text[])
+       FROM trading_storage.schema_migrations) AS migration_versions
+`;
+
 function safeIdentifier(value) {
   const identifier = String(value ?? '');
   return /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/.test(identifier) ? identifier : '[redacted]';
@@ -98,6 +132,45 @@ export async function checkStagingPostgresConnection({
     const result = await client.query(IDENTITY_QUERY);
     const identity = result?.rows?.[0];
     if (!identity) throw new Error('Database identity query returned no row');
+    let tradingSchemaAudit = null;
+    if (identity.trading_schema_exists === true) {
+      stage = 'inspect existing Trading schema objects';
+      const presenceResult = await client.query(SCHEMA_TABLES_QUERY);
+      const presence = presenceResult?.rows?.[0];
+      if (!presence) throw new Error('Trading schema object inventory returned no row');
+      if (presence.authority_control_exists === true
+        && presence.runtime_controls_exists === true
+        && presence.migration_ledger_exists === true) {
+        stage = 'read existing Trading schema safety state';
+        const auditResult = await client.query(SCHEMA_SAFETY_QUERY);
+        const audit = auditResult?.rows?.[0];
+        if (!audit) throw new Error('Trading schema safety audit returned no row');
+        const versions = Array.isArray(audit.migration_versions)
+          ? audit.migration_versions.filter((version) => typeof version === 'string' && /^\d{4}$/.test(version))
+          : [];
+        const safeCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+        tradingSchemaAudit = {
+          status: 'complete',
+          activeAuthority: audit.active_authority === 'd1' || audit.active_authority === 'postgres'
+            ? audit.active_authority
+            : 'unknown',
+          writesFenced: audit.writes_fenced === true,
+          runtimeControlCount: safeCount(audit.control_count),
+          disabledRuntimeControlCount: safeCount(audit.disabled_control_count),
+          schemaOwner: safeIdentifier(audit.schema_owner),
+          unsafeDefinerOwnerCount: safeCount(audit.unsafe_definer_owner_count),
+          publicDefinerExecuteCount: safeCount(audit.public_definer_execute_count),
+          migrationVersions: versions
+        };
+      } else {
+        tradingSchemaAudit = {
+          status: 'incomplete',
+          authorityControlExists: presence.authority_control_exists === true,
+          runtimeControlsExist: presence.runtime_controls_exists === true,
+          migrationLedgerExists: presence.migration_ledger_exists === true
+        };
+      }
+    }
     if (identity.transaction_read_only !== 'on') {
       throw new Error('Staging PostgreSQL session must be read-only');
     }
@@ -113,6 +186,7 @@ export async function checkStagingPostgresConnection({
       schemaName: safeIdentifier(identity.schema_name),
       transactionReadOnly: true,
       tradingSchemaExists: identity.trading_schema_exists === true,
+      tradingSchemaAudit,
       roleIsSuperuser: identity.role_is_superuser === true,
       tradingOwnerRoleIsRestricted: identity.trading_owner_is_superuser === false
         && identity.trading_owner_can_login === false

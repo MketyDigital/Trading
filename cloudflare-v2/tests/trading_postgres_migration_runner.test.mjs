@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { loadMigrations, applyTradingPostgresMigrations } from '../scripts/apply_trading_postgres_migrations.mjs';
+import { loadMigrations, applyTradingPostgresMigrations, migrationSqlWithinInstallerTransaction } from '../scripts/apply_trading_postgres_migrations.mjs';
 
 const migrations = [
   { name: '0001_trading_storage_replication_authority.sql', sql: 'CREATE SCHEMA IF NOT EXISTS trading_storage;' },
@@ -9,7 +9,7 @@ const migrations = [
   { name: '0003_trading_replication_health.sql', sql: 'CREATE TABLE IF NOT EXISTS trading_storage.health (id integer);' },
   { name: '0004_account_followers.sql', sql: `BEGIN;\nCREATE TABLE IF NOT EXISTS trading_storage.trading_account_followers (id uuid PRIMARY KEY);\nCOMMIT;` },
   { name: '0005_broker_observation_due_index.sql', sql: 'CREATE INDEX IF NOT EXISTS idx_test_due ON trading_storage.position_legs(status);' },
-  { name: '0006_account_follower_risk_sizing.sql', sql: 'ALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT \'fixed_lot\';' }
+  { name: '0006_account_follower_risk_sizing.sql', sql: `BEGIN;\nALTER TABLE trading_storage.trading_account_followers ADD COLUMN IF NOT EXISTS risk_mode text NOT NULL DEFAULT 'fixed_lot';\nCOMMIT;` }
 ];
 const restrictedOwner = {
   owner_is_superuser: false,
@@ -28,6 +28,15 @@ const safeSchemaState = {
   unsafe_definer_owner_count: 0,
   public_definer_execute_count: 0
 };
+
+test('legacy migration BEGIN/COMMIT wrappers are removed before execution', () => {
+  for (const migration of [migrations[3], migrations[5]]) {
+    const executableSql = migrationSqlWithinInstallerTransaction(migration.sql);
+    assert.doesNotMatch(executableSql, /^\s*BEGIN\s*;/im);
+    assert.doesNotMatch(executableSql, /(?:^|;)\s*COMMIT\s*;/im);
+    assert.match(executableSql, /^(?:CREATE TABLE|ALTER TABLE)\b/i);
+  }
+});
 
 test('PostgreSQL schema installer requires an explicit apply confirmation', async () => {
   let connected = false;
@@ -82,9 +91,13 @@ test('PostgreSQL schema installer applies only approved migrations in one transa
   assert.ok(queries.includes('CREATE SCHEMA trading_storage AUTHORIZATION trading_owner'));
   assert.ok(queries.includes('SET LOCAL ROLE trading_owner'));
   assert.ok(migrations.every(({ sql }) => {
-    const transactionalSql = sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
-    return queries.includes(transactionalSql);
+    const transactionalSql = migrationSqlWithinInstallerTransaction(sql);
+    assert.ok(queries.includes(transactionalSql));
+    if (transactionalSql !== sql.trim()) assert.equal(queries.includes(sql), false);
+    return true;
   }));
+  assert.equal(queries.filter((sql) => sql === 'BEGIN').length, 1);
+  assert.equal(queries.filter((sql) => sql === 'COMMIT').length, 1);
   assert.ok(queries.includes('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())'));
   assert.doesNotMatch(JSON.stringify(result), /secret|private\.invalid/);
 });
@@ -248,9 +261,9 @@ test('existing PostgreSQL schema applies only the unapplied additive migration s
   });
   assert.ok(calls.includes('SET LOCAL ROLE trading_owner'));
   for (const migration of migrations.slice(3)) {
-    const transactionalSql = migration.sql.replace(/^\\s*BEGIN\\s*;\\s*/i, '').replace(/\\s*COMMIT\\s*;\\s*$/i, '').trim();
+    const transactionalSql = migrationSqlWithinInstallerTransaction(migration.sql);
     assert.ok(calls.includes(transactionalSql));
-    if (/^\\s*BEGIN\\s*;/i.test(migration.sql)) assert.equal(calls.includes(migration.sql), false);
+    if (transactionalSql !== migration.sql.trim()) assert.equal(calls.includes(migration.sql), false);
   }
   assert.equal(calls.filter((sql) => typeof sql === 'string' && sql.startsWith('CREATE SCHEMA')).length, 0);
   assert.ok(calls.includes('COMMIT'));
