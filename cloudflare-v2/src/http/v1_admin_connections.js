@@ -11,7 +11,7 @@ const SOURCE_SECRET_KEY_PATTERN = /(secret|cipher|session|token|password|api[_-]
 const ACCOUNT_SELECT = 'id,workspace_id,account_label,platform,account_id,server_name,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy,fast_entry_policy,entry_zone_policy,credential_ciphertext,provider_mode,environment,roles,provider_config,created_at';
 const SOURCE_SELECT = 'id,workspace_id,source_type,source_instance_id,display_name,is_active,source_family,provider_type,is_default,priority,external_identity,public_source_handle,config,provider_secret_ciphertext,health_status,last_heartbeat_at,last_event_at,last_connected_at,last_disconnected_at,restart_count,last_error_code';
 const ALLOWED_ROLES = new Set(['source', 'execution']);
-const RISK_SIZING_TYPES = new Set(['risk_percent', 'equity_risk_percent', 'balance_risk_percent']);
+const RISK_SIZING_TYPES = new Set(['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk']);
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -395,7 +395,7 @@ async function handleAccountConnection(request, authorization, supabase, account
       }
       const riskPercent = Number(update.lot_value ?? current.lot_value);
       const basis = String(effectiveConfig.riskBasis ?? effectiveConfig.risk_basis ?? (effectiveSizingType === 'balance_risk_percent' ? 'balance' : 'equity')).toLowerCase();
-      if (!(riskPercent > 0 && riskPercent <= 100) || !['equity', 'balance'].includes(basis)
+      if (!(riskPercent > 0) || (effectiveSizingType !== 'fixed_risk' && riskPercent > 100) || !['equity', 'balance'].includes(basis)
         || (effectiveSizingType === 'balance_risk_percent' && basis !== 'balance')
         || (effectiveSizingType === 'equity_risk_percent' && basis !== 'equity')) {
         return json({ ok: false, reason: 'ACCOUNT_RISK_CONFIG_REQUIRED' }, 400);
