@@ -40,6 +40,27 @@ test('explicit fixed monetary risk overrides percentage sizing during planning',
   assert.equal(plan.risk.totalLots, 0.1);
 });
 
+test('plans persisted fixed-cash risk from the existing risk_percent account mode', () => {
+  const plan = buildExecutionPlan({
+    side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'XAUUSD' }, entry: { kind: 'PRICE', value: 2500 }, stopLoss: 2490,
+    takeProfits: [2510],
+  }, {
+    account: {
+      equity: 20000,
+      balance: 5000,
+      lot_sizing_type: 'risk_percent',
+      lot_value: 100,
+      lot_sizing_config: { riskBasis: 'balance', riskMode: 'fixed_cash' },
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 3 },
+    },
+    instrument,
+  });
+  assert.equal(plan.status, 'READY');
+  assert.equal(plan.risk.riskBasis, 'BALANCE');
+  assert.equal(plan.risk.riskAmountPerLeg, 100);
+  assert.equal(plan.actions[0].lots, 0.1);
+});
+
 test('marks only newly planned pending order legs for future lifecycle tracking', () => {
   const pending = buildExecutionPlan({
     side: 'BUY', orderType: 'LIMIT', symbol: { canonical: 'EURUSD' }, entry: { kind: 'PRICE', value: 1.08 },
