@@ -36,6 +36,25 @@ function setup() {
   return { sqlite, store: createTradingAccountFollowerRepository({ authority: { kind: 'd1', binding, authorityEpoch: 1 }, idFactory: () => 'link-1', now: () => '2026-10-19T00:00:00.000Z' }) };
 }
 
+
+test('additive follower-risk migration leaves existing account sizing and execution state unchanged', () => {
+  const sqlite = new DatabaseSync(':memory:');
+  sqlite.exec(readFileSync(new URL('../db/d1-migrations/0001_trading_storage_replication.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../db/d1-migrations/0002_trading_domain_schema.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../db/d1-migrations/0004_account_followers.sql', import.meta.url), 'utf8'));
+  sqlite.prepare(`INSERT INTO trading_workspace_access(id) VALUES ('ws')`).run();
+  sqlite.prepare(`INSERT INTO trade_accounts(id,workspace_id,account_label,platform,account_id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy)
+    VALUES ('existing','ws','Existing','mt5','100','fixed','0.03','{}',1,0,'{"killSwitch":true}')`).run();
+
+  const before = sqlite.prepare(`SELECT id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy FROM trade_accounts WHERE id='existing'`).get();
+  sqlite.exec(readFileSync(new URL('../db/d1-migrations/0006_account_follower_risk_sizing.sql', import.meta.url), 'utf8'));
+  const after = sqlite.prepare(`SELECT id,lot_sizing_type,lot_value,lot_sizing_config,is_active,execution_enabled,safety_policy FROM trade_accounts WHERE id='existing'`).get();
+
+  assert.deepEqual(after, before);
+  const followerColumns = new Set(sqlite.prepare(`PRAGMA table_info(trading_account_followers)`).all().map((column) => column.name));
+  for (const column of ['risk_mode', 'risk_percent', 'risk_amount', 'risk_basis']) assert.equal(followerColumns.has(column), true);
+});
+
 test('follower link repository enforces one parent per follower and batches parent lookup', async () => {
   const { sqlite, store } = setup();
   const row = await store.upsertLink('ws', { followerAccountId: 'follower', parentAccountId: 'parent', enabled: true, lotMultiplier: 0.5 });
