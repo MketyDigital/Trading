@@ -94,6 +94,63 @@ test('production account loader normalizes persisted lot sizing mode and risk pe
   assert.equal(loaded.riskBasis, 'equity');
 });
 
+test('production risk authority exposes minimum-floor capability only for the exact policy-approved intent', async () => {
+  const row = account({
+    lot_sizing_type: 'risk_percent',
+    lot_value: 0.01,
+    safety_policy: {
+      enabled: true,
+      killSwitch: false,
+      maxRiskPercent: 1,
+      minimumVolumeRiskTolerancePercent: 0.1,
+    },
+  });
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: createAccountQuerySupabase(row),
+    workspaceId: 'ws-a',
+  }, {
+    decryptCredentialsFn: mt5CredentialDecryptor(),
+    mt5ContextLoader: async () => ({
+      brokerAccount: { equity: 10000, balance: 10000 },
+      catalog: [{
+        canonical: 'XAUUSD', platformSymbol: 'XAUUSD', tickSize: 0.01,
+        tickValuePerLot: 1, minLots: 0.01, maxLots: 100, stepLots: 0.01,
+      }],
+    }),
+  });
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  const action = {
+    type: 'OPEN_POSITION',
+    side: 'BUY',
+    orderType: 'MARKET',
+    symbol: 'XAUUSD',
+    entry: { kind: 'PRICE', value: 2500 },
+    stopLoss: 2490,
+    lots: 0.001,
+    idempotencyKey: 'risk-floor-authorized',
+  };
+  const result = await deps.riskMaterializer({ workspaceId: 'ws-a', account: loaded, action });
+  assert.equal(result.allowed, true);
+  assert.equal(result.risk.minimumFloorApplied, true);
+  assert.equal(result.action.minimumVolumeFallbackAuthorized, true);
+  assert.equal(typeof result.authorizeMinimumVolumeFallback, 'function');
+
+  const approvedPolicy = { allowed: true, reasons: [] };
+  assert.equal(result.authorizeMinimumVolumeFallback(result.action, approvedPolicy, result.policyContext), true);
+  assert.equal(result.authorizeMinimumVolumeFallback(
+    { ...result.action, lots: result.action.lots + 0.01 },
+    approvedPolicy,
+    result.policyContext,
+  ), false);
+  assert.equal(result.authorizeMinimumVolumeFallback(
+    result.action,
+    approvedPolicy,
+    { ...result.policyContext, riskPercent: result.policyContext.riskPercent + 0.1 },
+  ), false);
+});
+
+
 test('production account loader applies follower equity-risk settings before broker risk revalidation', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
