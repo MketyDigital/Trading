@@ -94,13 +94,14 @@ async function handleFollowerUpdate(request, env, dependencies, followerAccountI
         const { data: nestedRows, error: nestedError } = await supabase.from('trading_account_followers').select('id').eq('workspace_id', workspaceId).eq('follower_account_id', parentAccountId).eq('enabled', true).limit(1);
         if (nestedError) throw new Error('FOLLOWER_UPDATE_FAILED');
         if (nestedRows?.length) throw new Error('FOLLOWER_LINK_PARENT_IS_FOLLOWER');
-        const lotMultiplier = body.lotMultiplier == null ? 1 : Number(body.lotMultiplier);
-        const fixedLot = body.fixedLot == null ? null : Number(body.fixedLot);
-        if (!(lotMultiplier > 0) || (fixedLot != null && !(fixedLot > 0))) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
-        const { data: existingLink, error: existingLinkError } = await supabase.from('trading_account_followers').select('risk_mode,risk_percent,risk_amount,risk_basis').eq('workspace_id', workspaceId).eq('follower_account_id', followerAccountId).maybeSingle();
+        const { data: existingLink, error: existingLinkError } = await supabase.from('trading_account_followers').select('lot_multiplier,fixed_lot,risk_mode,risk_percent,risk_amount,risk_basis').eq('workspace_id', workspaceId).eq('follower_account_id', followerAccountId).maybeSingle();
         if (existingLinkError) throw new Error('FOLLOWER_UPDATE_FAILED');
         const pick = (camel, snake, existing, fallback) => Object.prototype.hasOwnProperty.call(body, camel)
           ? body[camel] : Object.prototype.hasOwnProperty.call(body, snake) ? body[snake] : (existing ?? fallback);
+        const lotMultiplier = Number(pick('lotMultiplier', 'lot_multiplier', existingLink?.lot_multiplier, 1));
+        const fixedLotValue = pick('fixedLot', 'fixed_lot', existingLink?.fixed_lot, null);
+        const fixedLot = fixedLotValue == null ? null : Number(fixedLotValue);
+        if (!(lotMultiplier > 0) || (fixedLot != null && !(fixedLot > 0))) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
         const riskMode = String(pick('riskMode', 'risk_mode', existingLink?.risk_mode, 'fixed_lot')).trim().toLowerCase();
         const riskPercent = pick('riskPercent', 'risk_percent', existingLink?.risk_percent, null);
         const riskAmount = pick('riskAmount', 'risk_amount', existingLink?.risk_amount, null);
