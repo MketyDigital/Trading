@@ -94,3 +94,33 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Strengthened `cloudflare-v2/tests/risk_engine.test.mjs` to assert the inferred BALANCE basis.
 - Commits: `0fcbab0c`, `e781112a`, `fab01437`.
 - The previous CI run #3461 was created before these code corrections and therefore cannot verify them. A new exact-head CI result is still required before this fix is marked verified.
+
+
+### 2026-11-06 — owner-only configuration and schema compatibility
+
+- Added `cloudflare-v2/src/security/risk_policy_authorization.js`. Only the exact workspace role `owner` passes the risk mutation guard; `admin`, `operator`, and `viewer` are denied even though admins retain ordinary `accounts.write`.
+- Enforced owner-only changes to follower links/risk settings in the account-controls route.
+- Added owner-only checks to the account-connection update path whenever the selected account is in risk mode, a risk mode is selected, or risk-policy fields are submitted.
+- Added account risk configuration validation and persistence for:
+  - percentage risk with explicit equity/balance basis;
+  - fixed-cash risk using the same existing persisted `risk_percent` sizing type plus `lot_sizing_config.riskMode=fixed_cash`;
+  - per-leg, aggregate-open, daily-loss and broker-minimum tolerance controls in the account safety policy;
+  - explicit selected-account and workspace scoping.
+- Kept the persisted sizing type compatible with the existing D1 schema CHECK constraint. Explicit UI/API aliases are canonicalized to `risk_percent`; no account table rebuild or new sizing enum is required.
+- Updated execution planning, production risk revalidation, and orchestration normalization to read the persisted risk basis and fixed-cash mode. Added regression tests for balance-only broker snapshots, persisted balance basis, fixed-cash planning/revalidation, owner-only authorization, and the account configuration API.
+- Account onboarding now accepts owner-selected risk modes but still forces new accounts inactive, execution-disabled, and kill-switched. Admins cannot submit risk modes or risk-limit fields during onboarding.
+- Restored `0046_broker_aware_lot_sizing_modes.sql` byte-for-byte to the version on `main`.
+- Removed the colliding follower-risk migration files and reintroduced the additive schema changes at unused versions: PostgreSQL `0052`, D1 `0006`, and namespaced PostgreSQL `0006`. Updated the follower repository test to load D1 migration `0006`.
+- Updated `docs/LOT_SIZING_MODES.md` with the canonical storage contract, owner authorization, risk caps, per-leg semantics, follower independence, and fail-closed platform rules.
+- Tests added/updated but not yet CI-verified. Trading V1 CI run #3496 was queued for an earlier commit in this implementation sequence; it does not include all later commits in this log. No local repository shell is available here to run Node tests directly.
+- Production remains untouched: no migration applied, no account policy written to production, and no deployment triggered.
+
+## Current remaining work
+
+1. Confirm full Trading V1 CI against the latest feature-branch head; resolve every test failure.
+2. Add/verify route-level tests for follower owner-only changes and verify per-follower policy does not inherit parent risk policy.
+3. Complete follower dispatch acceptance: each follower must use its own broker account snapshot and fresh symbol economics immediately before OPEN; one follower failure must not suppress the parent or sibling followers.
+4. Recheck cTrader risk-sized OPEN rejection and MT5 broker-minimum/exposure handling with integration tests.
+5. Add deploy/restart/schema non-mutation tests and verify existing fixed-lot account behavior.
+6. Review the full branch diff and update all related design/roadmap docs with only CI-verified outcomes.
+7. Keep PR #253 draft and do not deploy until all checks pass and a separate explicit production release decision is made.
