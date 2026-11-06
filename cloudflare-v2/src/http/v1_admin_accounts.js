@@ -86,6 +86,13 @@ function publicAccount(account = {}) {
     lotSizingType: account.lot_sizing_type ?? account.lotSizingType ?? null,
     lotValue: account.lot_value ?? account.lotValue ?? null,
     lotSizingConfig: { ...safeObject(account.lot_sizing_config ?? account.lotSizingConfig) },
+    riskPolicy: {
+      maxRiskPercent: safetyPolicy?.maxRiskPercent ?? null,
+      maxOpenRiskPercent: safetyPolicy?.maxOpenRiskPercent ?? null,
+      maxDailyLossPercent: safetyPolicy?.maxDailyLossPercent ?? null,
+      minimumVolumeRiskTolerancePercent: safetyPolicy?.minimumVolumeRiskTolerancePercent ?? null,
+      minimumLotPolicy: safetyPolicy?.minimumLotPolicy ?? 'FLOOR',
+    },
     fastEntryPolicy: { ...ALWAYS_ON_FAST_ENTRY_POLICY },
     entryZonePolicy: canonicalEntryZonePolicy(account.entry_zone_policy ?? account.entryZonePolicy),
     credentialConfigured,
