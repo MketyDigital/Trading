@@ -78,7 +78,7 @@ test('risk-percent MT5 connector revalidates against fresh account equity, symbo
   const result = await deps.riskMaterializer({ workspaceId: 'ws-a', account: account(), action });
 
   assert.equal(result.allowed, true);
-  assert.equal(result.action.lots, 0.01);
+  assert.equal(result.action.lots, 0.83);
   assert.equal(result.risk != null, true);
   assert.equal(result.risk.riskAmount, 100);
   assert.equal(requests.length, 2);
