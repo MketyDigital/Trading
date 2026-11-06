@@ -54,6 +54,17 @@ function checksumsFor(migrations) {
   }));
 }
 
+// The installer owns one transaction for the complete migration set. Some
+// historical SQL files contain their own outer BEGIN/COMMIT wrappers; remove
+// only those standalone boundary statements so they cannot commit the install
+// transaction before its migration-ledger write and final safety checks.
+function migrationSqlWithinInstallerTransaction(sql) {
+  return String(sql)
+    .replace(/^\\s*BEGIN\\s*;\\s*/i, '')
+    .replace(/\\s*COMMIT\\s*;\\s*$/i, '')
+    .trim();
+}
+
 /** Apply the reviewed additive schema once, transactionally, to the existing mkety database. */
 export async function applyTradingPostgresMigrations({
   connectionString = process.env.TRADING_PG_STAGING_DATABASE_URL,
@@ -174,7 +185,7 @@ export async function applyTradingPostgresMigrations({
         }
         for (const migration of pending) {
           stage = `apply migration ${migration.name}`;
-          await client.query(migration.sql);
+          await client.query(migrationSqlWithinInstallerTransaction(migration.sql));
           await client.query('INSERT INTO trading_storage.schema_migrations (version, checksum) VALUES ($1, $2)', [migration.version, migration.checksum]);
         }
       }
@@ -201,7 +212,7 @@ export async function applyTradingPostgresMigrations({
     for (let index = 0; index < migrationSet.length; index += 1) {
       const migration = migrationSet[index];
       stage = `apply migration ${migration.name}`;
-      await client.query(migration.sql);
+      await client.query(migrationSqlWithinInstallerTransaction(migration.sql));
       if (index === 0) {
         await client.query('CREATE TABLE trading_storage.schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())');
       }
