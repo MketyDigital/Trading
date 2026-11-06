@@ -182,7 +182,7 @@ test('V1 production-shaped DEMO path executes exactly once through real coordina
       brokerOrderId: 'fake-order-1',
       brokerDealId: 'fake-deal-1',
       fillPrice: 2500.5,
-      executedLots: 0.01,
+      executedLots: null,
       volumeStepLots: null,
       minimumLots: null,
     },
