@@ -15,7 +15,7 @@ function encodeBase64Url(bytes) {
   return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-async function masterKeyBytes(masterKey) {
+export async function deriveSecretBoxKeyBytes(masterKey) {
   const value = String(masterKey ?? '');
   if (!value) throw new TypeError('master key is required');
 
@@ -31,7 +31,7 @@ async function masterKeyBytes(masterKey) {
 }
 
 async function importMasterKey(masterKey) {
-  const raw = await masterKeyBytes(masterKey);
+  const raw = await deriveSecretBoxKeyBytes(masterKey);
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
