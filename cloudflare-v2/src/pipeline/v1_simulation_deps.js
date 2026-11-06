@@ -752,8 +752,9 @@ async function expandFollowerRefs(parentRefs, workspaceId, persistenceRuntime, f
       if (ref && !seen.has(ref)) { seen.add(ref); refs.push(ref); }
     }
   } catch {
-    // Follower configuration is additive. A temporary link-table outage must
-    // preserve the existing explicit routes instead of blocking parent trades.
+    const error = new Error('failed to load enabled follower routes');
+    error.code = 'FOLLOWER_LINK_LOAD_FAILED';
+    throw error;
   }
   return refs;
 }
