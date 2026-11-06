@@ -17,7 +17,9 @@ function resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis
   if (!Number.isFinite(base) || !(base > 0) || !Number.isFinite(percent) || !(percent > 0) || percent > 100) {
     throw new TypeError(`positive ${basis.toLowerCase()} and riskPercent between 0 and 100 required`);
   }
-  return base * percent / 100;
+  const amount = base * percent / 100;
+  if (!Number.isFinite(amount) || !(amount > 0)) throw new TypeError('finite positive risk amount required');
+  return amount;
 }
 
 function resolveLossPerLot({ entry, stopLoss, instrument }) {
@@ -56,6 +58,7 @@ export function calculateRiskPlan({
   if (!Number.isInteger(targetCount) || targetCount < 1) throw new TypeError('targetCount must be >= 1');
   // Risk amount / percentage is per TP leg. Each leg gets its own risk budget.
   const riskPerLeg = resolveRiskAmount({ equity, balance, riskPercent, riskAmount, riskBasis });
+  if (!Number.isFinite(riskPerLeg) || !(riskPerLeg > 0)) throw new TypeError('finite positive per-leg risk budget required');
   const lossPerLotAtStop = resolveLossPerLot({ entry, stopLoss, instrument });
   const step = Number(instrument.stepLots ?? 0.01);
   const min = Number(instrument.minLots ?? step);
@@ -99,12 +102,17 @@ export function calculateRiskPlan({
   const totalLots = Number((lotsPerLeg * targetCount).toFixed(volumePrecision(step)));
   const legLots = allocateVolumeAcrossTargets(totalLots, targetCount, step);
   const actualRiskPerLeg = lotsPerLeg * lossPerLotAtStop;
-  if (!Number.isFinite(actualRiskPerLeg) || !(actualRiskPerLeg > 0)) throw new RangeError('estimated stop-loss risk is not finite');
+  const totalRiskExact = riskPerLeg * targetCount;
+  const estimatedRiskExact = actualRiskPerLeg * targetCount;
+  if (!Number.isFinite(actualRiskPerLeg) || !(actualRiskPerLeg > 0)
+    || !Number.isFinite(totalRiskExact) || !Number.isFinite(estimatedRiskExact)) {
+    throw new RangeError('estimated stop-loss risk is not finite');
+  }
   return {
     riskAmount: Number(riskPerLeg.toFixed(2)),
     riskAmountExact: riskPerLeg,
     riskAmountPerLeg: Number(riskPerLeg.toFixed(2)),
-    totalRiskAmount: Number((riskPerLeg * targetCount).toFixed(2)),
+    totalRiskAmount: Number(totalRiskExact.toFixed(2)),
     riskBasis: String(riskBasis).toUpperCase(),
     lossPerLotAtStop: Number(lossPerLotAtStop.toFixed(8)),
     rawLotsPerLeg: Number(rawLotsPerLeg.toFixed(8)),
@@ -114,8 +122,8 @@ export function calculateRiskPlan({
     maximumCapApplied,
     estimatedRiskPerLeg: Number(actualRiskPerLeg.toFixed(2)),
     estimatedRiskPerLegExact: actualRiskPerLeg,
-    estimatedRisk: Number((actualRiskPerLeg * targetCount).toFixed(2)),
-    estimatedRiskExact: actualRiskPerLeg * targetCount,
+    estimatedRisk: Number(estimatedRiskExact.toFixed(2)),
+    estimatedRiskExact,
     riskOverBudgetPerLeg: Number(Math.max(0, actualRiskPerLeg - riskPerLeg).toFixed(2)),
   };
 }
