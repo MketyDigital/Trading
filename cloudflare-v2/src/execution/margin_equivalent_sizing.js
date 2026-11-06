@@ -144,8 +144,7 @@ export async function buildSymbolEquivalentSizing({
 
   // The owner's chosen lot is a ceiling/reference, not a target to maximize.
   // Target products may be reduced when the same lot is heavier, but are never
-  // increased above the chosen lot merely because their margin is cheaper.
-  // The only upward exception is an unavoidable broker minimum.
+  // increased above the owner's chosen lot or silently raised to a broker minimum.
   const targetRequestedLots = normalizeReferenceLots(referenceLots, targetInstrument, { belowMinimumCode: 'SYMBOL_EQUIVALENT_BELOW_BROKER_MINIMUM' });
   const targetRequestedMargin = Number(await estimateTargetMargin(targetRequestedLots));
   if (!(Number.isFinite(targetRequestedMargin) && targetRequestedMargin >= 0)) {
@@ -160,7 +159,7 @@ export async function buildSymbolEquivalentSizing({
       lots: targetRequestedLots,
       expectedMargin: targetRequestedMargin,
       marginBudget: referenceMargin,
-      minimumFloorApplied: targetRequestedLots > normalizedReferenceLots + 1e-12,
+      minimumFloorApplied: false,
       reduced: false,
     };
   }
