@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Optional explicit release tag (main only), e.g. mt5-connector-v1.1.17'
+        description: 'Optional explicit release tag (main only), e.g. mt5-connector-v1.1.0'
         required: false
         type: string
         default: ''
@@ -145,7 +145,7 @@ jobs:
             echo "Release tag must use mt5-connector-vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          existing_sha="$(git ls-remote --tags origin "refs/tags/$tag" | awk 'NR==1 {print $1}')"
+          existing_sha="$(git ls-remote --exit-code --tags origin "refs/tags/$tag" | awk 'NR==1 {print $1}' || true)"
           if [ -n "$existing_sha" ]; then
             if [ "$existing_sha" != "$GITHUB_SHA" ]; then
               echo "Release tag already points to a different commit; refusing to replace it." >&2
