@@ -337,6 +337,7 @@ test('final durable authority is reloaded before every action so revocation afte
 
 test('minimum-volume fallback authorization is still blocked when its risk overage exceeds account tolerance', async () => {
   let dispatchCalls = 0;
+  let authorizationCalls = 0;
   const summary = await executeProductionPlan({
     workspaceId: 'ws-a', eventId: 'evt-min-floor', brokerExecutionEnabled: true,
     accountPlans: [plan()],
@@ -347,6 +348,7 @@ test('minimum-volume fallback authorization is still blocked when its risk overa
     riskMaterializer: async ({ action }) => ({
       allowed: true,
       action: { ...action, minimumVolumeFallbackAuthorized: true },
+      authorizeMinimumVolumeFallback: () => { authorizationCalls += 1; return true; },
       policyRequest: {
         totalLots: 0.1,
         riskPercent: 0.1,
@@ -360,9 +362,47 @@ test('minimum-volume fallback authorization is still blocked when its risk overa
   });
 
   assert.equal(dispatchCalls, 0);
+  assert.equal(authorizationCalls, 0, 'fallback capability must not be minted before policy approval');
   assert.equal(summary.accounts[0].status, 'BLOCKED');
   assert.ok(summary.accounts[0].actions[0].policy.reasons.includes('MINIMUM_VOLUME_RISK_TOLERANCE_EXCEEDED'));
 });
+
+test('minimum-volume fallback capability is minted only after the coordinator approves policy', async () => {
+  let authorizationCalls = 0;
+  let dispatchCalls = 0;
+  const summary = await executeProductionPlan({
+    workspaceId: 'ws-a', eventId: 'evt-min-floor-approved', brokerExecutionEnabled: true,
+    accountPlans: [plan()],
+  }, {
+    accountLoader: async () => account({
+      safety_policy: { enabled: true, killSwitch: false, maxRiskPercent: 1 },
+    }),
+    riskMaterializer: async ({ action }) => ({
+      allowed: true,
+      action: { ...action, minimumVolumeFallbackAuthorized: true },
+      policyRequest: {
+        totalLots: 0.1,
+        riskPercent: 0.95,
+        minimumVolumeRiskOveragePercent: 0.05,
+        currentDailyPnlPercent: 0,
+        currentOpenRiskPercent: 0,
+      },
+      authorizeMinimumVolumeFallback: (candidate, policy) => {
+        authorizationCalls += 1;
+        assert.equal(policy.allowed, true);
+        assert.equal(candidate.minimumVolumeFallbackAuthorized, true);
+        return true;
+      },
+    }),
+    dispatchAction: async () => { dispatchCalls += 1; return { ok: true, brokerPositionId: 'p-min-floor' }; },
+    stateBinder: async () => {},
+  });
+
+  assert.equal(authorizationCalls, 1);
+  assert.equal(dispatchCalls, 1);
+  assert.equal(summary.accounts[0].status, 'SUCCEEDED');
+});
+
 
 test('maxLotsPerTrade accumulates accepted TP-leg volume within one account plan', async () => {
   let dispatchCalls = 0;
