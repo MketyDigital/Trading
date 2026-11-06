@@ -173,3 +173,11 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Replaced both aggregate-lot assertions with a tight numeric tolerance (`1e-12`); production risk calculations and volume rounding were not weakened or changed.
 - CI #3504 also marked `execution_plan.test.mjs` failed, but its diagnostic output was truncated to the first 6,000 characters, before the later test failure detail. The aggregate-lot assertion was the corresponding strict-float issue in that suite; the next CI run must confirm both files green.
 - Follow-up commits: `21dee683` and `2dfc2490`. Latest-head CI remains required; prior run #3514 was created before these test corrections.
+
+
+### 2026-11-06 — production non-activation check and CI diagnostics
+
+- Added a production account-loader regression proving that reading an existing fixed-lot account leaves its lot size, active flag, execution flag and kill switch unchanged; the test also asserts the loader performs only reads.
+- Increased the CI diagnostic capture limit from 6,000 to 20,000 characters so future failing test files include the full TAP failure context in the workflow logs and step summary.
+- Corrected the strict floating-point aggregate-lot assertions in both risk-engine and execution-plan dynamic-TP tests using a (1e-12) tolerance. No runtime sizing or risk limits were relaxed.
+- Latest code commits: `2dfc2490`, `5b1624ea`. The latest complete branch head still requires its own CI result; #3504 is a pre-fix failing run and #3514 predates the latest tests.
