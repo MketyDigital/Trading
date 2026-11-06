@@ -170,7 +170,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
   const executableIntent = protection.intent;
   const targetCount = Array.isArray(executableIntent.takeProfits) && executableIntent.takeProfits.length ? executableIntent.takeProfits.length : 1;
   const volumeStep = Number(instrument.stepLots ?? 0.01);
-  const sizingMode = String(account.sizingMode ?? 'RISK_PERCENT').toUpperCase();
+  const sizingMode = String(account.sizingMode ?? account.sizing_mode ?? account.lot_sizing_type ?? 'RISK_PERCENT').toUpperCase();
 
   if ((['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT', 'FIXED_RISK'].includes(sizingMode))
       && entryMaterializedIntent.stopLoss != null
@@ -215,7 +215,7 @@ export function buildExecutionPlan(intent, { account = {}, instrument = {}, curr
     risk = calculateRiskPlan({
       equity: account.equity, balance: account.balance,
       riskPercent: ['RISK_PERCENT', 'EQUITY_RISK_PERCENT', 'BALANCE_RISK_PERCENT'].includes(sizingMode) ? account.riskPercent : undefined,
-      riskAmount: sizingMode === 'FIXED_RISK' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount : undefined,
+      riskAmount: sizingMode === 'FIXED_RISK' || Number(account.riskAmount ?? account.risk_amount) > 0 ? account.riskAmount ?? account.risk_amount ?? account.lot_value ?? account.lotValue : undefined,
       riskBasis: sizingMode === 'BALANCE_RISK_PERCENT' ? 'BALANCE' : (account.riskBasis ?? account.risk_basis ?? account.lot_sizing_config?.riskBasis ?? account.lot_sizing_config?.risk_basis ?? (account.equity != null ? 'EQUITY' : 'BALANCE')),
       minimumLotPolicy: safetyPolicy.minimumLotPolicy ?? 'FLOOR',
       entry: riskEntryPrice, stopLoss: executableIntent.stopLoss, targetCount, instrument,
