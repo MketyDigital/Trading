@@ -267,6 +267,16 @@ async function runAccountPlan({ workspaceId, eventId, plan, accountLoader, autho
       if (policy.reasons?.includes('KILL_SWITCH')) return blockedAccount(requestedAccountId, 'ACCOUNT_POLICY_BLOCKED', { policy });
       outcomes.push({ status: 'BLOCKED', legId: executableAction?.legId ?? null, idempotencyKey: executableAction?.idempotencyKey ?? null, policy }); continue;
     }
+    if (typeof materialized?.authorizeMinimumVolumeFallback === 'function'
+      && materialized.authorizeMinimumVolumeFallback(executableAction, policy, mergedPolicyRequest) !== true) {
+      outcomes.push({
+        status: 'BLOCKED',
+        legId: executableAction?.legId ?? null,
+        idempotencyKey: executableAction?.idempotencyKey ?? null,
+        reason: 'BROKER_MINIMUM_FALLBACK_AUTHORIZATION_FAILED',
+      });
+      continue;
+    }
 
     let result;
     try {
