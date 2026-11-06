@@ -267,6 +267,60 @@ test('enabled follower routing fails closed when follower links cannot be read',
 });
 
 
+test('enabled follower decoration fails closed when a follower risk policy cannot be loaded', async () => {
+  const accountRows = ['parent-a', 'follower-a'].map((id) => ({
+    id, workspace_id: 'workspace-1', platform: 'mt5', is_active: true,
+    lot_sizing_type: 'risk_percent', lot_value: 5,
+    provider_config: { symbolCatalog: [{ platformSymbol: 'XAUUSD', tradable: true, minLots: 0.01, maxLots: 10, stepLots: 0.01 }] },
+  }));
+  let followerLookupCount = 0;
+  const supabase = {
+    from(table) {
+      if (table === 'source_destination_routes') return {
+        select() { return this; }, eq() { return this; },
+        order: async () => ({ data: [{ destination_id: 'dest-1', priority: 1 }], error: null }),
+      };
+      if (table === 'trading_destinations') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: [{ id: 'dest-1', destination_ref: 'trade-account:parent-a', destination_type: 'broker_account', is_active: true }], error: null }),
+      };
+      if (table === 'trading_account_followers') {
+        followerLookupCount += 1;
+        const lookup = {
+          select() { return this; }, eq() { return this; },
+          in(column) {
+            if (column === 'parent_account_id') return this;
+            return Promise.resolve({ data: null, error: { message: 'follower risk lookup failed' } });
+          },
+          order: async () => ({
+            data: [{ follower_account_id: 'follower-a', parent_account_id: 'parent-a', risk_mode: 'equity_percent', risk_percent: 1, risk_basis: 'equity', enabled: true }],
+            error: null,
+          }),
+        };
+        return lookup;
+      }
+      if (table === 'trade_accounts') return {
+        select() { return this; }, eq() { return this; },
+        in: async () => ({ data: accountRows, error: null }),
+      };
+      throw new Error('unexpected table ' + table);
+    },
+  };
+  const deps = await createV1SimulationDependencies({
+    env: { ...baseEnv(), PORTAL_ACCOUNT_FOLLOWERS_ENABLED: 'true' },
+    supabase,
+    sourceId: 'source-1',
+    event: { workspace_hint: 'workspace-1' },
+  });
+
+  await assert.rejects(
+    () => deps.accountProvider(),
+    (error) => error?.code === 'FOLLOWER_LINK_LOAD_FAILED',
+  );
+  assert.equal(followerLookupCount, 2);
+});
+
+
 test('routed cTrader account hydrates a missing broker catalog before planning', async () => {
   const account = {
     id: 'acct-ctrader-demo',
