@@ -83,6 +83,7 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       const lotMultiplier = positive(input.lotMultiplier ?? input.lot_multiplier, 1);
       const fixedLot = input.fixedLot ?? input.fixed_lot;
       const fixed = fixedLot == null || fixedLot === '' ? null : positive(fixedLot);
+      const current = await getLink(workspaceId, followerId);
       // A link re-save (for example, enabling/disabling or changing its
       // parent) must not silently reset an existing follower risk policy.
       // Only explicitly supplied risk fields are allowed to replace it.
@@ -101,7 +102,6 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
         : (current?.risk_basis || 'equity');
       if (!['fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'].includes(riskMode) || !['equity','balance'].includes(riskBasis) || (riskPercent != null && (!(positive(riskPercent)) || Number(riskPercent) > 100)) || (riskAmount != null && !(positive(riskAmount))) || (riskMode === 'fixed_risk' && !positive(riskAmount)) || (['equity_percent','balance_percent'].includes(riskMode) && !positive(riskPercent))) throw new Error('FOLLOWER_LINK_RISK_POLICY_INVALID');
       if (!(lotMultiplier > 0) || (fixedLot != null && fixed == null)) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
-      const current = await getLink(workspaceId, followerId);
       const next = { workspace_id: String(workspaceId), follower_account_id: followerId, parent_account_id: parentId, enabled, lot_multiplier: lotMultiplier, fixed_lot: fixed, risk_mode: riskMode, risk_percent: positive(riskPercent), risk_amount: positive(riskAmount), risk_basis: riskBasis, last_source_version: input.lastSourceVersion ?? input.last_source_version ?? null, last_state_fingerprint: input.lastStateFingerprint ?? input.last_state_fingerprint ?? null, updated_at: now() };
       if (current && ['parent_account_id', 'enabled', 'lot_multiplier', 'fixed_lot', 'risk_mode', 'risk_percent', 'risk_amount', 'risk_basis', 'last_source_version', 'last_state_fingerprint'].every((key) => String(current[key] ?? '') === String(next[key] ?? ''))) return current;
       const id = current?.id || String(input.id || idFactory());
