@@ -83,10 +83,22 @@ export function createTradingAccountFollowerRepository({ authority, postgresData
       const lotMultiplier = positive(input.lotMultiplier ?? input.lot_multiplier, 1);
       const fixedLot = input.fixedLot ?? input.fixed_lot;
       const fixed = fixedLot == null || fixedLot === '' ? null : positive(fixedLot);
-      const riskMode = text(input.riskMode ?? input.risk_mode) || 'fixed_lot';
-      const riskPercent = input.riskPercent ?? input.risk_percent;
-      const riskAmount = input.riskAmount ?? input.risk_amount;
-      const riskBasis = text(input.riskBasis ?? input.risk_basis) || 'equity';
+      // A link re-save (for example, enabling/disabling or changing its
+      // parent) must not silently reset an existing follower risk policy.
+      // Only explicitly supplied risk fields are allowed to replace it.
+      const has = (...keys) => keys.some((key) => Object.prototype.hasOwnProperty.call(input, key));
+      const riskMode = has('riskMode', 'risk_mode')
+        ? (text(input.riskMode ?? input.risk_mode) || 'fixed_lot')
+        : (current?.risk_mode || 'fixed_lot');
+      const riskPercent = has('riskPercent', 'risk_percent')
+        ? (input.riskPercent ?? input.risk_percent)
+        : (current?.risk_percent ?? null);
+      const riskAmount = has('riskAmount', 'risk_amount')
+        ? (input.riskAmount ?? input.risk_amount)
+        : (current?.risk_amount ?? null);
+      const riskBasis = has('riskBasis', 'risk_basis')
+        ? (text(input.riskBasis ?? input.risk_basis) || 'equity')
+        : (current?.risk_basis || 'equity');
       if (!['fixed_lot','multiplier','fixed_risk','equity_percent','balance_percent'].includes(riskMode) || !['equity','balance'].includes(riskBasis) || (riskPercent != null && (!(positive(riskPercent)) || Number(riskPercent) > 100)) || (riskAmount != null && !(positive(riskAmount))) || (riskMode === 'fixed_risk' && !positive(riskAmount)) || (['equity_percent','balance_percent'].includes(riskMode) && !positive(riskPercent))) throw new Error('FOLLOWER_LINK_RISK_POLICY_INVALID');
       if (!(lotMultiplier > 0) || (fixedLot != null && fixed == null)) throw new Error('FOLLOWER_LINK_LOT_POLICY_INVALID');
       const current = await getLink(workspaceId, followerId);
