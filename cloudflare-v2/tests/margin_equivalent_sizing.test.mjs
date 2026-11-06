@@ -125,3 +125,20 @@ test('margin-based sizing rejects non-finite budgets and lot ceilings', async ()
     estimateMargin:async (lots) => lots * 10,
   }), /finite positive maximumLots/i);
 });
+
+test('symbol-equivalent and balance-percent sizing reject non-finite broker context', async () => {
+  await assert.rejects(() => buildSymbolEquivalentSizing({
+    referenceLots: 1,
+    referenceInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    targetInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    estimateReferenceMargin:async () => Number.POSITIVE_INFINITY,
+    estimateTargetMargin:async () => 10,
+  }), /reference symbol expected margin unavailable/i);
+  await assert.rejects(() => buildBalancePercentSizing({
+    maximumLots:1,
+    percent:10,
+    accountBalance:Number.POSITIVE_INFINITY,
+    targetInstrument:{minLots:0.01,maxLots:100,stepLots:0.01},
+    estimateTargetMargin:async () => 10,
+  }), /finite positive broker account balance/i);
+});
