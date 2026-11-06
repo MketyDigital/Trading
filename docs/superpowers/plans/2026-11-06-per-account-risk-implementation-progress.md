@@ -216,3 +216,14 @@ Presence of these files is not proof of release readiness. The branch's CI curre
 - Refined the backend authorization condition so an admin may still edit non-risk metadata (such as account label and source/execution roles) on a risk-configured account, while any sizing/risk-policy field mutation remains owner-only.
 - Added regression coverage for that admin metadata-only case and for the active/live account state remaining unchanged during owner risk edits.
 - Current branch head has not yet received a fresh Trading V1 CI run. CI #3514 is an earlier run that fails the pre-fix strict floating-point assertions; the fixes and new dashboard tests are later commits and remain unverified until CI runs on the current head.
+
+
+### 2026-11-06 — owner-only dashboard completion and latest CI
+
+- Added the owner-only risk editor to the unified trading-account dashboard. It operates on the explicitly selected account and supports percentage or fixed-cash risk, explicit equity/balance basis, per-leg/open/daily caps, minimum-volume tolerance, and FLOOR/REJECT minimum-lot handling.
+- The active D1-backed account-list response supplies `riskPolicyEditable` from the authenticated workspace membership. Non-owners do not receive the risk editor; backend owner authorization remains the security boundary.
+- Non-owners may still edit safe account metadata on an account that already has risk sizing, but the UI and API preserve the existing risk policy and sizing fields. Added route tests for the owner capability flag and admin metadata-only updates.
+- Added an embedded dashboard script parse test to catch syntax regressions in the dynamically injected UI.
+- Reviewed the MT5 connector release workflow: on a pull request it only builds, tests, smoke-tests and uploads a Windows artifact. Publishing a versioned connector release is gated to a tag or an explicit dispatch from `main`; this PR run is not publishing a release.
+- Latest-head CI run #3543 is running on PR head `985d9c231dfb4544fcb2b78afc651e25517f5417`. MT5 Compatibility CI #131 has passed. cTrader cBot CI #532 is queued. MT5 Connector Release #292 is packaging/testing only and currently building the artifact.
+- No production deployment, release publication, schema application, or account-policy write has occurred.
