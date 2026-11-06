@@ -88,7 +88,8 @@ function applyFollowerRiskSizing(account = {}, link = null) {
   const mode = text(link.risk_mode ?? link.riskMode).toLowerCase();
   const riskPercent = Number(link.risk_percent ?? link.riskPercent);
   const riskAmount = Number(link.risk_amount ?? link.riskAmount);
-  const riskBasis = text(link.risk_basis ?? link.riskBasis).toLowerCase() || 'equity';
+  const configuredRiskBasis = text(link.risk_basis ?? link.riskBasis).toLowerCase() || 'equity';
+  const riskBasis = mode === 'balance_percent' ? 'balance' : mode === 'equity_percent' ? 'equity' : configuredRiskBasis;
   const fixedLot = link.fixed_lot ?? link.fixedLot;
   const multiplier = Number(link.lot_multiplier ?? link.lotMultiplier ?? 1);
   const validModes = ['fixed_lot', 'multiplier', 'fixed_risk', 'equity_percent', 'balance_percent'];
