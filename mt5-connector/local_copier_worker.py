@@ -288,7 +288,11 @@ def run(args):
                 raise RuntimeError('invalid local copier symbol map') from exc
             # Risk metadata must be calculated against the follower broker's
             # mapped symbol and contract, never the parent's instrument.
-            if args.risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'}:
+            risk_mode = getattr(args, 'risk_mode', 'fixed_lot')
+            risk_percent = getattr(args, 'risk_percent', None)
+            risk_amount = getattr(args, 'risk_amount', None)
+            risk_basis = getattr(args, 'risk_basis', 'equity')
+            if risk_mode in {'fixed_risk', 'equity_percent', 'balance_percent'}:
                 if not mt5.initialize(path=str(args.follower_terminal)):
                     time.sleep(args.poll_seconds)
                     continue
