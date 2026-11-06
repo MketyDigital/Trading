@@ -69,6 +69,28 @@ test('follower link repository enforces one parent per follower and batches pare
   assert.equal(sqlite.prepare(`SELECT COUNT(*) AS n FROM trading_replication_journal`).get().n, 1);
 });
 
+test('partial follower link updates preserve an explicitly configured risk policy', async () => {
+  const { store } = setup();
+  await store.upsertLink('ws', {
+    followerAccountId: 'follower',
+    parentAccountId: 'parent',
+    enabled: true,
+    riskMode: 'equity_percent',
+    riskPercent: 2.5,
+    riskBasis: 'equity',
+  });
+
+  const updated = await store.upsertLink('ws', {
+    followerAccountId: 'follower',
+    parentAccountId: 'parent',
+    enabled: true,
+  });
+
+  assert.equal(updated.risk_mode, 'equity_percent');
+  assert.equal(updated.risk_percent, 2.5);
+  assert.equal(updated.risk_basis, 'equity');
+});
+
 test('follower link repository rejects self and cross-workspace links', async () => {
   const { store } = setup();
   await assert.rejects(() => store.upsertLink('ws', { followerAccountId: 'parent', parentAccountId: 'parent' }), /FOLLOWER_LINK_SELF/);
