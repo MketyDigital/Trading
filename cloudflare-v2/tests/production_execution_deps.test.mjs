@@ -342,10 +342,13 @@ test('cTrader dispatch decrypts exact account credential envelope server-side an
       clientId: 'attacker-client',
       environment: 'live',
       allowLiveTrading: true,
+      minimumVolumeFallbackAuthorized: true,
     },
   });
 
   assert.equal(result.brokerPositionId, 'ct-position-1');
+  assert.equal(seen.runtime.allowBrokerMinimumVolumeFallback, false);
+  assert.equal(Object.hasOwn(seen.action, 'minimumVolumeFallbackAuthorized'), false);
   assert.deepEqual(seen.decrypt, {
     kind: 'ctrader',
     ciphertext: 'synthetic-ctrader-envelope',
