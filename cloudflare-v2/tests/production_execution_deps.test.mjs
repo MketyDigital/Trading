@@ -151,6 +151,29 @@ test('production risk authority exposes minimum-floor capability only for the ex
 });
 
 
+test('cTrader risk-sized OPEN remains blocked until reliable monetary stop-loss economics exist', async () => {
+  const row = account({
+    platform: 'ctrader',
+    lot_sizing_type: 'risk_percent',
+    lot_value: 1,
+    lot_sizing_config: { riskBasis: 'equity', riskMode: 'percent' },
+  });
+  const deps = createProductionExecutionDependencies({
+    env: {},
+    supabase: createAccountQuerySupabase(row),
+    workspaceId: 'ws-a',
+  });
+  const loaded = await deps.accountLoader('ws-a', 'acct-row-a');
+  await assert.rejects(
+    () => deps.riskMaterializer({
+      workspaceId: 'ws-a',
+      account: loaded,
+      action: { type: 'OPEN_POSITION', symbol: 'XAUUSD', lots: 0.1, stopLoss: 2490, entry: { kind: 'PRICE', value: 2500 } },
+    }),
+    (error) => error?.code === 'BROKER_RISK_CONTEXT_UNAVAILABLE',
+  );
+});
+
 test('production account loader applies follower equity-risk settings before broker risk revalidation', async () => {
   const row = account({
     lot_sizing_type: 'risk_percent',
