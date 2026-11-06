@@ -257,6 +257,43 @@ test('existing PostgreSQL schema applies only the unapplied additive migration s
   assert.equal(calls.includes('ROLLBACK'), false);
 });
 
+test('existing PostgreSQL schema rejects a modified or non-prefix migration ledger before applying anything', async () => {
+  const calls = [];
+  const ledger = migrations.slice(0, 3).map(({ name, sql }) => ({
+    version: name.slice(0, 4),
+    checksum: createHash('sha256').update(sql).digest('hex'),
+  }));
+  ledger[1].checksum = 'tampered-checksum';
+  class Client {
+    async connect() {}
+    async query(sql) {
+      calls.push(sql);
+      if (sql.includes('current_database()')) return { rows: [{ database_name: 'mkety', transaction_read_only: 'off', trading_schema_exists: true, schema_owner: 'trading_owner', owner_role_exists: true, current_role_is_superuser: false }] };
+      if (sql.includes('FROM pg_roles') && sql.includes("rolname = 'trading_owner'")) return { rows: [restrictedOwner] };
+      if (sql.includes('pg_has_role')) return { rows: [{ is_member: true }] };
+      if (sql.includes('to_regclass')) return { rows: [{ ledger_exists: true }] };
+      if (sql.includes('SELECT version, checksum')) return { rows: ledger };
+      return { rows: [] };
+    }
+    async end() {}
+  }
+
+  await assert.rejects(
+    applyTradingPostgresMigrations({
+      connectionString: 'postgres://user:secret@private.invalid/mkety',
+      expectedDatabaseName: 'mkety',
+      confirmation: 'APPLY_TRADING_STORAGE_SCHEMA',
+      caCertificate: 'synthetic CA',
+      ClientClass: Client,
+      migrations,
+    }),
+    /migration ledger does not match reviewed files/i,
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.includes('SET LOCAL ROLE trading_owner'), false);
+  assert.equal(calls.some((sql) => migrations.some((migration) => sql === migration.sql)), false);
+});
+
 test('PostgreSQL schema installer does not report an unsafe applied schema as safe', async () => {
   const ledger = migrations.map(({ name, sql }) => ({ version: name.slice(0, 4), checksum: createHash('sha256').update(sql).digest('hex') }));
   const calls = [];
