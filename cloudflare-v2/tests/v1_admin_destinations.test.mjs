@@ -262,3 +262,78 @@ test('updates formatting templates and toggles routes', async () => {
   const routeBody = await routeResponse.json();
   assert.equal(routeBody.route.enabled, false);
 });
+
+test('creates an updates-only Telegram notification template with a heading and an exact allowlist', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'VIP Updates Only',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      header: 'FROM VIP',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+          prependHeader: true,
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.template.header, 'FROM VIP');
+  assert.equal(body.template.formattingMode, 'clean');
+  assert.deepEqual(body.template.layout.deliveryPolicy, {
+    mode: 'updates_only',
+    allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+    prependHeader: true,
+  });
+});
+
+test('rejects an updates-only template allowlist that includes trade signals or unknown types', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Unsafe updates template',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT', 'NEW_SIGNAL'],
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_UPDATE_EVENTS_INVALID');
+});
+
+test('non-owner cannot create an updates-only destination template', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Updates only',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT'],
+        },
+      },
+    }),
+    auth('viewer'),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, 'TRADING_PERMISSION_DENIED');
+});
