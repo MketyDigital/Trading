@@ -115,8 +115,8 @@ export function formatTelegramDestinationMessage(input = {}, template = {}) {
     const cleaned = cleanRawText(input.rawText, template.cleanupRules ?? template.cleanup_rules ?? {});
     const layout = template.layout && typeof template.layout === 'object' && !Array.isArray(template.layout)
       ? template.layout : {};
-    const policy = layout.deliveryPolicy && typeof layout.deliveryPolicy === 'object' && !Array.isArray(layout.deliveryPolicy)
-      ? layout.deliveryPolicy : {};
+    const rawPolicy = layout.deliveryPolicy ?? layout.delivery_policy;
+    const policy = rawPolicy && typeof rawPolicy === 'object' && !Array.isArray(rawPolicy) ? rawPolicy : {};
     const shouldPrependHeading = String(policy.mode ?? policy.type ?? '').trim().toLowerCase() === 'updates_only'
       && policy.prependHeader === true;
     const heading = shouldPrependHeading ? asText(template.header).trim() : '';
