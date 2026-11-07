@@ -54,25 +54,29 @@ export function classifyUpdateEvent(interpretation = {}, event = {}) {
   const brokerFillKind = normalizedKind(brokerFill.kind);
   const brokerActivityKind = normalizedKind(brokerActivity.kind ?? payload.activityKind ?? payload.activity_kind);
   const payloadKind = normalizedKind(payload.kind);
+  const status = normalizedKind(interpretation.status ?? event.processing_status ?? event.processingStatus);
+  const hasTradeIntent = Boolean(interpretation.intent && typeof interpretation.intent === 'object');
+
+  // A route configured to receive notifications must never accept an event
+  // that also carries a trade intent, even when its text mentions a TP/SL hit.
+  if (hasTradeIntent) return null;
 
   if (['TP_HIT', 'TAKE_PROFIT_HIT', 'TARGET_HIT'].includes(managementType)
-    || ['TAKE_PROFIT', 'TP'].includes(brokerFillKind)
+    || (status === 'MANAGEMENT' && ['TAKE_PROFIT', 'TP'].includes(brokerFillKind))
     || ['TAKE_PROFIT', 'TP', 'PARTIAL_TAKE_PROFIT', 'PARTIAL_TP'].includes(brokerActivityKind)
-    || payloadKind === 'BROKER_TP_FILL') return 'TP_HIT';
+    || (status === 'MANAGEMENT' && payloadKind === 'BROKER_TP_FILL')) return 'TP_HIT';
 
   if (['SL_HIT', 'STOP_LOSS_HIT'].includes(managementType)
     || ['STOP_LOSS', 'SL', 'PARTIAL_STOP_LOSS', 'PARTIAL_SL'].includes(brokerActivityKind)
     || ['STOP_LOSS_HIT', 'SL_HIT'].includes(payloadKind)) return 'SL_HIT';
 
-  const status = normalizedKind(interpretation.status ?? event.processing_status ?? event.processingStatus);
-  const hasTradeIntent = Boolean(interpretation.intent && typeof interpretation.intent === 'object');
   const actionableStatuses = new Set([
     'READY', 'FAST_ENTRY', 'SIGNAL_COMPLETION', 'ENTRY_UPDATE', 'SL_UPDATE',
     'TP_UPDATE', 'ADD_POSITION', 'REDUCE_POSITION', 'MOVE_SL_TO_BE', 'MOVE_SL',
     'TRAIL_STOP', 'CLOSE', 'CLOSE_PARTIAL', 'CLOSE_ALL', 'CANCEL', 'CANCEL_PENDING',
-    'PENDING_ORDER', 'PENDING_ORDER_UPDATE', 'MANAGEMENT',
+    'PENDING_ORDER', 'PENDING_ORDER_UPDATE', 'MANAGEMENT', 'NEEDS_REVIEW',
   ]);
-  if (hasTradeIntent || actionableStatuses.has(status)) return null;
+  if (actionableStatuses.has(status)) return null;
 
   const explicitKind = normalizedKind(
     payload.kind
