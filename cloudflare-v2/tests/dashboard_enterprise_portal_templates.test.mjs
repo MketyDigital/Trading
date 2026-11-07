@@ -22,3 +22,10 @@ test('enterprise portal labels update-only templates in template lists and desti
   assert.match(html, /Updates only: /);
   assert.match(html, /Updates-only templates can only be assigned to Telegram channel destinations/);
 });
+
+test('enterprise portal template controls keep inline JavaScript parseable', () => {
+  const html = renderEnterpriseTradingPortal({});
+  const scripts = [...html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script\\s*>/gi)];
+  assert.ok(scripts.length > 0);
+  for (const match of scripts) assert.doesNotThrow(() => new Function(match[1]));
+});
