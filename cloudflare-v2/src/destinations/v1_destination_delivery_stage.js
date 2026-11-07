@@ -422,9 +422,16 @@ async function formatTelegramForDelivery({ destination, event, interpretation },
   const template = safeObject(destination.template);
   const settings = safeObject(destination.settings);
   const requestedMode = text(settings.formattingMode ?? settings.formatting_mode).toLowerCase();
-  const mode = TELEGRAM_FORMAT_MODES.has(requestedMode)
-    ? requestedMode
-    : (text(template.formatting_mode ?? template.formattingMode) || 'template');
+  const templateLayout = safeObject(template.layout);
+  const deliveryPolicy = safeObject(templateLayout.deliveryPolicy ?? templateLayout.delivery_policy);
+  const updatesOnly = text(deliveryPolicy.mode ?? deliveryPolicy.type).toLowerCase() === 'updates_only';
+  // Update-only templates own their deterministic notification presentation;
+  // a destination-level "forward as-is" override must not remove their heading.
+  const mode = updatesOnly
+    ? 'clean'
+    : TELEGRAM_FORMAT_MODES.has(requestedMode)
+      ? requestedMode
+      : (text(template.formatting_mode ?? template.formattingMode) || 'template');
 
   if (mode === 'clean_ai_fallback') {
     const raw = cleanRawFallback(event, template, deps);
