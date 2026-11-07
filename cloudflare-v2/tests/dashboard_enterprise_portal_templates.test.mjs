@@ -20,4 +20,5 @@ test('enterprise portal labels update-only templates in template lists and desti
   assert.match(html, /destinationTemplate/);
   assert.match(html, /Updates only/);
   assert.match(html, /Updates only: /);
+  assert.match(html, /Updates-only templates can only be assigned to Telegram channel destinations/);
 });
