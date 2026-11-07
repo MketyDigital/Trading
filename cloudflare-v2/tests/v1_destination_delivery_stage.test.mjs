@@ -139,3 +139,70 @@ test('one destination failure is isolated and cannot stop a sibling destination'
     ['good', 'SUCCEEDED'],
   ]);
 });
+const updatesOnlyTemplate = {
+  formatting_mode: 'clean',
+  parse_mode: 'plain',
+  header: 'FROM VIP',
+  layout: {
+    deliveryPolicy: {
+      mode: 'updates_only',
+      allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+      prependHeader: true,
+    },
+  },
+};
+
+test('updates-only Telegram destination delivers TP confirmation with heading even if endpoint asks for verbatim mode', async () => {
+  let sent;
+  const stage = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-1',
+    event: {
+      workspace_hint: 'ws-1',
+      text: 'Broker take-profit fill detected',
+      metadata: { broker_fill: { kind: 'TAKE_PROFIT' } },
+    },
+    interpretation: {
+      status: 'MANAGEMENT',
+      management: { type: 'TARGET_HIT', targetIndex: 1 },
+    },
+    env: { TRADING_MASTER_KEY: 'master-key-placeholder', BROKER_EXECUTION_ENABLED: 'false' },
+  }, {
+    destinationStore: {
+      listRoutedDestinations: async () => [routedTelegram({
+        template: updatesOnlyTemplate,
+        settings: { formattingMode: 'none' },
+      })],
+      recordDestinationOutcome: async () => {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'synthetic-bot-token' } }),
+    sendTelegram: async (input) => { sent = input; return { ok: true, status: 200, messageId: 101 }; },
+  });
+
+  assert.equal(stage.status, 'DELIVERED');
+  assert.equal(stage.succeeded, 1);
+  assert.equal(sent.text, 'FROM VIP\n\nBroker take-profit fill detected');
+  assert.equal(sent.parseMode, 'plain');
+});
+
+test('updates-only Telegram destination blocks a new trade signal before sending', async () => {
+  let telegramCalls = 0;
+  const stage = await runV1DestinationDeliveryStage({
+    workspaceId: 'ws-1',
+    sourceId: 'src-1',
+    event,
+    interpretation,
+    env: { TRADING_MASTER_KEY: 'master-key-placeholder', BROKER_EXECUTION_ENABLED: 'false' },
+  }, {
+    destinationStore: {
+      listRoutedDestinations: async () => [routedTelegram({ template: updatesOnlyTemplate })],
+      recordDestinationOutcome: async () => {},
+    },
+    decryptCredentials: async () => JSON.stringify({ version: 1, kind: 'destination', data: { botToken: 'synthetic-bot-token' } }),
+    sendTelegram: async () => { telegramCalls += 1; return { ok: true, status: 200 }; },
+  });
+
+  assert.equal(telegramCalls, 0);
+  assert.equal(stage.succeeded, 0);
+  assert.equal(stage.routed, 0);
+});
