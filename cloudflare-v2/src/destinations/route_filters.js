@@ -60,8 +60,16 @@ export function classifyUpdateEvent(interpretation = {}, event = {}) {
   const hasTradeIntent = Boolean(interpretation.intent && typeof interpretation.intent === 'object');
 
   // A route configured to receive notifications must never accept an event
-  // that also carries a trade intent, even when its text mentions a TP/SL hit.
-  if (hasTradeIntent) return null;
+  // that carries a trade intent, needs review, or is in a trade-action state,
+  // even when accompanying metadata/text mentions a TP/SL hit.
+  if (hasTradeIntent || status === 'NEEDS_REVIEW') return null;
+  const tradeActionStatuses = new Set([
+    'READY', 'FAST_ENTRY', 'SIGNAL_COMPLETION', 'ENTRY_UPDATE', 'SL_UPDATE',
+    'TP_UPDATE', 'ADD_POSITION', 'REDUCE_POSITION', 'MOVE_SL_TO_BE', 'MOVE_SL',
+    'TRAIL_STOP', 'CLOSE', 'CLOSE_PARTIAL', 'CLOSE_ALL', 'CANCEL', 'CANCEL_PENDING',
+    'PENDING_ORDER', 'PENDING_ORDER_UPDATE',
+  ]);
+  if (tradeActionStatuses.has(status)) return null;
 
   if (['TP_HIT', 'TAKE_PROFIT_HIT', 'TARGET_HIT'].includes(managementType)
     || (status === 'MANAGEMENT' && ['TAKE_PROFIT', 'TP'].includes(brokerFillKind))
@@ -72,13 +80,9 @@ export function classifyUpdateEvent(interpretation = {}, event = {}) {
     || ['STOP_LOSS', 'SL', 'PARTIAL_STOP_LOSS', 'PARTIAL_SL'].includes(brokerActivityKind)
     || ['STOP_LOSS_HIT', 'SL_HIT'].includes(payloadKind)) return 'SL_HIT';
 
-  const actionableStatuses = new Set([
-    'READY', 'FAST_ENTRY', 'SIGNAL_COMPLETION', 'ENTRY_UPDATE', 'SL_UPDATE',
-    'TP_UPDATE', 'ADD_POSITION', 'REDUCE_POSITION', 'MOVE_SL_TO_BE', 'MOVE_SL',
-    'TRAIL_STOP', 'CLOSE', 'CLOSE_PARTIAL', 'CLOSE_ALL', 'CANCEL', 'CANCEL_PENDING',
-    'PENDING_ORDER', 'PENDING_ORDER_UPDATE', 'MANAGEMENT', 'NEEDS_REVIEW',
-  ]);
-  if (actionableStatuses.has(status)) return null;
+  // MANAGEMENT is the only canonical status that can qualify as a TP/SL
+  // notification, and only via the explicit lifecycle fields checked above.
+  if (status === 'MANAGEMENT') return null;
 
   const explicitKind = normalizedKind(
     payload.kind
