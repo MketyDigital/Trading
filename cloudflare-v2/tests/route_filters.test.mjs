@@ -151,3 +151,32 @@ test('updates-only templates reject weekly-looking posts left in needs-review', 
     { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
   );
 });
+
+test('updates-only templates reject TP/SL broker metadata when the event is marked for review', () => {
+  for (const metadata of [
+    { broker_fill: { kind: 'TAKE_PROFIT' } },
+    { broker_activity: { kind: 'STOP_LOSS' } },
+  ]) {
+    assert.deepEqual(
+      evaluateRouteFilters(
+        {},
+        { status: 'NEEDS_REVIEW' },
+        updatesOnlyTelegram,
+        { metadata, text: 'Broker event requires review' },
+      ),
+      { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+    );
+  }
+});
+
+test('updates-only templates reject trade-action statuses even when trade intent is missing', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'READY' },
+      updatesOnlyTelegram,
+      { metadata: { broker_fill: { kind: 'TAKE_PROFIT' } }, text: 'BUY XAUUSD' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
