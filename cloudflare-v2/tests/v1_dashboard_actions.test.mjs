@@ -38,3 +38,12 @@ test('source provider selection owns the backend-defined source family instead o
   assert.match(html, /ctrader_source/);
   assert.match(html, /custom_signed_api/);
 });
+
+test('account sizing editor saves the selected lot or risk method through the owner-guarded connection API', () => {
+  const html = renderDashboard({});
+  assert.match(html, /data-action="account-sizing"/);
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-risk-basis/);
+  assert.match(html, /riskPolicyEditable/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\/['"]?\+encodeURIComponent\(button\.dataset\.id\)\+['"]?/);
+});
