@@ -528,7 +528,7 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
         const current = (destinations || []).find((item) => text(item.id) === id);
         const selected = (templates || []).find((item) => text(item.id) === parsed.input.templateId);
         const currentType = text(current?.destination_type ?? current?.destinationType).toLowerCase();
-        if (selected && templateIsUpdatesOnly(selected) && currentType !== 'telegram') {
+        if (current && selected && templateIsUpdatesOnly(selected) && currentType !== 'telegram') {
           return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY' }, 400);
         }
       } catch {
