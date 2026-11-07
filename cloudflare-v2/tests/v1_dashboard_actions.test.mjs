@@ -14,10 +14,11 @@ test('dashboard exposes only backend-supported broker account lifecycle actions'
   assert.match(html, /\/active/);
   assert.match(html, /\/execution/);
   assert.match(html, /\/kill-switch/);
-  assert.match(html, /\/fixed-lot/);
   assert.match(html, /\/auto-tp-protection/);
   assert.match(html, /data-action="account-auto-tp"/);
-  assert.match(html, /data-fixed-lot-input/);
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-action="account-sizing"/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\//);
   assert.match(html, /lotValue/);
   assert.equal(html.includes('/api/v1/admin/accounts/'+"${id}"+'/delete'), false);
 });
