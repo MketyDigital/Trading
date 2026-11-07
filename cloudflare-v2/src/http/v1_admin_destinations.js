@@ -158,7 +158,13 @@ function parseTemplateInput(body = {}) {
   if (!FORMAT_MODES.has(formattingMode)) return { ok: false, reason: 'FORMAT_MODE_UNSUPPORTED' };
   if (!PARSE_MODES.has(parseMode)) return { ok: false, reason: 'PARSE_MODE_UNSUPPORTED' };
   const layout = { ...safeObject(body.layout) };
-  const rawPolicy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
+  const hasDeliveryPolicy = Object.prototype.hasOwnProperty.call(layout, 'deliveryPolicy')
+    || Object.prototype.hasOwnProperty.call(layout, 'delivery_policy');
+  const rawPolicyValue = layout.deliveryPolicy ?? layout.delivery_policy;
+  if (hasDeliveryPolicy && (!rawPolicyValue || typeof rawPolicyValue !== 'object' || Array.isArray(rawPolicyValue))) {
+    return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_INVALID' };
+  }
+  const rawPolicy = safeObject(rawPolicyValue);
   if (Object.keys(rawPolicy).length) {
     const policyMode = text(rawPolicy.mode ?? rawPolicy.type).toLowerCase();
     if (policyMode !== 'updates_only') return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_UNSUPPORTED' };
