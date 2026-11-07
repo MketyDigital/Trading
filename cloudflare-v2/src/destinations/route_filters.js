@@ -44,6 +44,8 @@ function normalizedKind(value) {
  * weekly roundup posts. Unknown commentary is not treated as a notification.
  */
 export function classifyUpdateEvent(interpretation = {}, event = {}) {
+  interpretation = safeObject(interpretation);
+  event = safeObject(event);
   const management = safeObject(interpretation.management);
   const metadata = safeObject(event.metadata);
   const payload = safeObject(event.structured_payload ?? event.structuredPayload);
