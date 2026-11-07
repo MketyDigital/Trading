@@ -671,7 +671,7 @@ export async function runV1DestinationDeliveryStage({
 
   const outcomes = [];
   for (const destination of destinations) {
-    const filterDecision = evaluateRouteFilters(destination.route_filters ?? destination.routeFilters ?? {}, interpretation, destination);
+    const filterDecision = evaluateRouteFilters(destination.route_filters ?? destination.routeFilters ?? {}, interpretation, destination, event);
     if (!filterDecision.allowed) continue;
 
     let outcome;
