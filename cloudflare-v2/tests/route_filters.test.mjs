@@ -127,3 +127,27 @@ test('updates-only template fails closed on non-Telegram destinations and invali
     { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' },
   );
 });
+
+test('updates-only templates reject TP metadata attached to a new trade intent', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } },
+      updatesOnlyTelegram,
+      { metadata: { broker_fill: { kind: 'TAKE_PROFIT' } }, text: 'BUY XAUUSD' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only templates reject weekly-looking posts left in needs-review', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'NEEDS_REVIEW' },
+      updatesOnlyTelegram,
+      { text: 'WEEKLY ROUNDUP\nUnclear trade instruction' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
