@@ -195,6 +195,12 @@ function parseTemplateInput(body = {}) {
   };
 }
 
+function templateIsUpdatesOnly(template = {}) {
+  const layout = safeObject(template.layout);
+  const policy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
+  return text(policy.mode ?? policy.type).toLowerCase() === 'updates_only';
+}
+
 function normalizeCanonicalSymbolList(value) {
   if (value === undefined || value === null) return { ok: true, value: undefined };
   if (!Array.isArray(value)) return { ok: false };
@@ -463,6 +469,17 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
       const parsed = parseDestinationInput(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+      if (parsed.input.templateId && parsed.input.destinationType !== 'telegram') {
+        try {
+          const templates = await destinationStore.listTemplates(workspaceId);
+          const selected = (templates || []).find((item) => text(item.id) === parsed.input.templateId);
+          if (selected && templateIsUpdatesOnly(selected)) {
+            return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY' }, 400);
+          }
+        } catch {
+          return json({ ok: false, reason: 'TEMPLATE_LOOKUP_FAILED' }, 503);
+        }
+      }
       let cipher = null;
       if (parsed.credentials != null) {
         try { cipher = await encryptCredentialPayload(parsed.credentials, env.TRADING_MASTER_KEY, encryptCredentials); } catch { return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_INVALID' }, 400); }
@@ -496,6 +513,22 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseDestinationUpdateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    if (parsed.input.templateId) {
+      try {
+        const [destinations, templates] = await Promise.all([
+          destinationStore.listDestinations(workspaceId),
+          destinationStore.listTemplates(workspaceId),
+        ]);
+        const current = (destinations || []).find((item) => text(item.id) === id);
+        const selected = (templates || []).find((item) => text(item.id) === parsed.input.templateId);
+        const currentType = text(current?.destination_type ?? current?.destinationType).toLowerCase();
+        if (selected && templateIsUpdatesOnly(selected) && currentType !== 'telegram') {
+          return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY' }, 400);
+        }
+      } catch {
+        return json({ ok: false, reason: 'TEMPLATE_LOOKUP_FAILED' }, 503);
+      }
+    }
     try {
       const row = await destinationStore.updateDestination(workspaceId, id, parsed.input);
       if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
@@ -568,8 +601,22 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseTemplateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    const templateId = decodeURIComponent(templateItem[1]);
+    if (templateIsUpdatesOnly({ layout: parsed.input.layout })) {
+      try {
+        const destinations = await destinationStore.listDestinations(workspaceId);
+        const conflicts = (destinations || []).filter((item) => {
+          const assigned = text(item.template_id ?? item.templateId);
+          const type = text(item.destination_type ?? item.destinationType).toLowerCase();
+          return assigned === templateId && type !== 'telegram';
+        });
+        if (conflicts.length) return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_HAS_NON_TELEGRAM_DESTINATIONS' }, 409);
+      } catch {
+        return json({ ok: false, reason: 'DESTINATION_LIST_FAILED' }, 503);
+      }
+    }
     try {
-      const row = await destinationStore.updateTemplate(workspaceId, decodeURIComponent(templateItem[1]), parsed.input);
+      const row = await destinationStore.updateTemplate(workspaceId, templateId, parsed.input);
       if (!row) return json({ ok: false, reason: 'TEMPLATE_NOT_FOUND' }, 404);
       return json({ ok: true, workspaceId, template: publicTemplate(row) });
     } catch {
