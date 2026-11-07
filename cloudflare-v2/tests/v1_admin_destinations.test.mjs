@@ -455,3 +455,20 @@ test('rejects converting a template to updates-only while it remains assigned to
   assert.equal(response.status, 409);
   assert.equal((await response.json()).reason, 'UPDATES_ONLY_TEMPLATE_HAS_NON_TELEGRAM_DESTINATIONS');
 });
+
+test('rejects malformed notification delivery-policy shapes', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Malformed updates template',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: { deliveryPolicy: 'updates_only' },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_DELIVERY_POLICY_INVALID');
+});
