@@ -25,7 +25,7 @@ test('enterprise portal labels update-only templates in template lists and desti
 
 test('enterprise portal template controls keep inline JavaScript parseable', () => {
   const html = renderEnterpriseTradingPortal({});
-  const scripts = [...html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script\\s*>/gi)];
+  const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script\s*>/gi)];
   assert.ok(scripts.length > 0);
   for (const match of scripts) assert.doesNotThrow(() => new Function(match[1]));
 });
