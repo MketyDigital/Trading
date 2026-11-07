@@ -2,6 +2,10 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function safeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
 function destinationType(destination = {}) {
   return text(destination.destination_type ?? destination.destinationType ?? destination.type).toLowerCase();
 }
@@ -29,7 +33,108 @@ function normalizedList(value) {
   return { ok: true, values };
 }
 
-export function evaluateRouteFilters(filters, interpretation, destination = {}) {
+const UPDATE_EVENT_TYPES = new Set(['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP']);
+
+function normalizedKind(value) {
+  return text(value).toUpperCase().replace(/[\s-]+/g, '_');
+}
+
+/**
+ * Resolve only well-sourced broker lifecycle confirmations or unmistakable
+ * weekly roundup posts. Unknown commentary is not treated as a notification.
+ */
+export function classifyUpdateEvent(interpretation = {}, event = {}) {
+  interpretation = safeObject(interpretation);
+  event = safeObject(event);
+  const management = safeObject(interpretation.management);
+  const metadata = safeObject(event.metadata);
+  const payload = safeObject(event.structured_payload ?? event.structuredPayload);
+  const brokerFill = safeObject(metadata.broker_fill ?? metadata.brokerFill);
+  const brokerActivity = safeObject(metadata.broker_activity ?? metadata.brokerActivity);
+
+  const managementType = normalizedKind(management.type ?? management.action);
+  const brokerFillKind = normalizedKind(brokerFill.kind);
+  const brokerActivityKind = normalizedKind(brokerActivity.kind ?? payload.activityKind ?? payload.activity_kind);
+  const payloadKind = normalizedKind(payload.kind);
+  const status = normalizedKind(interpretation.status ?? event.processing_status ?? event.processingStatus);
+  const hasTradeIntent = Boolean(interpretation.intent && typeof interpretation.intent === 'object');
+
+  // A route configured to receive notifications must never accept an event
+  // that carries a trade intent, needs review, or is in a trade-action state,
+  // even when accompanying metadata/text mentions a TP/SL hit.
+  if (hasTradeIntent || status === 'NEEDS_REVIEW') return null;
+  const tradeActionStatuses = new Set([
+    'READY', 'FAST_ENTRY', 'SIGNAL_COMPLETION', 'ENTRY_UPDATE', 'SL_UPDATE',
+    'TP_UPDATE', 'ADD_POSITION', 'REDUCE_POSITION', 'MOVE_SL_TO_BE', 'MOVE_SL',
+    'TRAIL_STOP', 'CLOSE', 'CLOSE_PARTIAL', 'CLOSE_ALL', 'CANCEL', 'CANCEL_PENDING',
+    'PENDING_ORDER', 'PENDING_ORDER_UPDATE',
+  ]);
+  if (tradeActionStatuses.has(status)) return null;
+
+  if (['TP_HIT', 'TAKE_PROFIT_HIT', 'TARGET_HIT'].includes(managementType)
+    || (status === 'MANAGEMENT' && ['TAKE_PROFIT', 'TP'].includes(brokerFillKind))
+    || ['TAKE_PROFIT', 'TP', 'PARTIAL_TAKE_PROFIT', 'PARTIAL_TP'].includes(brokerActivityKind)
+    || (status === 'MANAGEMENT' && payloadKind === 'BROKER_TP_FILL')) return 'TP_HIT';
+
+  if (['SL_HIT', 'STOP_LOSS_HIT'].includes(managementType)
+    || ['STOP_LOSS', 'SL', 'PARTIAL_STOP_LOSS', 'PARTIAL_SL'].includes(brokerActivityKind)
+    || ['STOP_LOSS_HIT', 'SL_HIT'].includes(payloadKind)) return 'SL_HIT';
+
+  // MANAGEMENT is the only canonical status that can qualify as a TP/SL
+  // notification, and only via the explicit lifecycle fields checked above.
+  if (status === 'MANAGEMENT') return null;
+
+  const explicitKind = normalizedKind(
+    payload.kind
+    ?? metadata.deliveryCategory
+    ?? metadata.delivery_category
+    ?? metadata.routeCategory
+    ?? metadata.route_category
+    ?? metadata.eventType
+    ?? metadata.event_type,
+  );
+  if (['WEEKLY_ROUNDUP', 'WEEKLY_RECAP', 'WEEKLY_SUMMARY'].includes(explicitKind)) return 'WEEKLY_ROUNDUP';
+
+  const rawText = text(event.text ?? event.raw_text ?? event.rawText);
+  const hasWeeklyHeading = /(?:^|\n)\s*(?:📊|🗓️|📰)?\s*(?:starpips\s+)?weekly\s+(?:round[ -]?up|recap|summary)\b/i.test(rawText);
+  return hasWeeklyHeading ? 'WEEKLY_ROUNDUP' : null;
+}
+
+function updateOnlyDecision(destination, interpretation, event) {
+  const template = safeObject(destination?.template);
+  const layout = safeObject(template.layout);
+  const hasPolicy = Object.prototype.hasOwnProperty.call(layout, 'deliveryPolicy')
+    || Object.prototype.hasOwnProperty.call(layout, 'delivery_policy');
+  if (!hasPolicy) return null;
+  const rawPolicy = layout.deliveryPolicy ?? layout.delivery_policy;
+  if (!rawPolicy || typeof rawPolicy !== 'object' || Array.isArray(rawPolicy)) {
+    return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' };
+  }
+  const policy = safeObject(rawPolicy);
+  const mode = normalizedKind(policy.mode ?? policy.type);
+  if (mode !== 'UPDATES_ONLY') return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' };
+
+  if (destinationType(destination) !== 'telegram') {
+    return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_TELEGRAM_ONLY' };
+  }
+
+  const allowed = normalizedList(policy.allowedEvents ?? policy.allowed_events);
+  if (!allowed.ok || allowed.values.length === 0
+    || allowed.values.some((item) => !UPDATE_EVENT_TYPES.has(item))) {
+    return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' };
+  }
+
+  const eventType = classifyUpdateEvent(interpretation, event);
+  if (!eventType || !allowed.values.includes(eventType)) {
+    return { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' };
+  }
+  return null;
+}
+
+export function evaluateRouteFilters(filters, interpretation, destination = {}, event = {}) {
+  const updateOnly = updateOnlyDecision(destination, interpretation, event);
+  if (updateOnly) return updateOnly;
+
   if (filters === undefined || filters === null) return { allowed: true, reason: null };
   if (typeof filters !== 'object' || Array.isArray(filters)) {
     return destinationType(destination) === 'broker_account'
