@@ -46,5 +46,5 @@ test('account sizing editor saves the selected lot or risk method through the ow
   assert.match(html, /data-sizing-type/);
   assert.match(html, /data-risk-basis/);
   assert.match(html, /riskPolicyEditable/);
-  assert.match(html, /\\/api\\/v1\\/admin\\/connections\\/accounts\\/['\"]?\\+encodeURIComponent\\(button\\.dataset\\.id\\)/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\/'\+encodeURIComponent\(button\.dataset\.id\)/);
 });
