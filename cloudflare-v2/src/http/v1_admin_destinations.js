@@ -167,6 +167,9 @@ function parseTemplateInput(body = {}) {
       || allowedEvents.value.some((item) => !UPDATE_TEMPLATE_EVENTS.has(item))) {
       return { ok: false, reason: 'TEMPLATE_UPDATE_EVENTS_INVALID' };
     }
+    if (formattingMode !== 'clean' || parseMode !== 'plain') {
+      return { ok: false, reason: 'TEMPLATE_UPDATE_FORMAT_MODE_REQUIRED' };
+    }
     delete layout.delivery_policy;
     layout.deliveryPolicy = {
       mode: 'updates_only',
