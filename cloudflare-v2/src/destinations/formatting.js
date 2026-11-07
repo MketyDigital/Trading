@@ -112,7 +112,20 @@ export function formatTelegramDestinationMessage(input = {}, template = {}) {
   }
 
   if (mode === 'clean') {
-    return { ok: true, text: cleanRawText(input.rawText, template.cleanupRules ?? template.cleanup_rules ?? {}), parseMode: 'plain' };
+    const cleaned = cleanRawText(input.rawText, template.cleanupRules ?? template.cleanup_rules ?? {});
+    const layout = template.layout && typeof template.layout === 'object' && !Array.isArray(template.layout)
+      ? template.layout : {};
+    const policy = layout.deliveryPolicy && typeof layout.deliveryPolicy === 'object' && !Array.isArray(layout.deliveryPolicy)
+      ? layout.deliveryPolicy : {};
+    const shouldPrependHeading = String(policy.mode ?? policy.type ?? '').trim().toLowerCase() === 'updates_only'
+      && policy.prependHeader === true;
+    const heading = shouldPrependHeading ? asText(template.header).trim() : '';
+    return {
+      ok: Boolean(cleaned),
+      text: cleaned ? (heading ? `${heading}\n\n${cleaned}` : cleaned) : '',
+      parseMode: 'plain',
+      ...(cleaned ? {} : { reason: 'DESTINATION_FORMAT_EMPTY_AFTER_CLEANUP' }),
+    };
   }
 
   if (mode === 'template' || mode === 'ai_then_fallback') {
