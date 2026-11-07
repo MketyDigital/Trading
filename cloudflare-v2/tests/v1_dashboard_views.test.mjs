@@ -23,3 +23,13 @@ test('lifecycle mutations refresh canonical server state instead of mutating bro
   assert.match(html, /source-default[\s\S]*refreshSources\(\)/);
   assert.match(html, /account-credentials[\s\S]*refreshAccounts\(\)/);
 });
+
+test('account risk table exposes all per-account sizing modes, including fixed cash risk', () => {
+  const html = renderDashboard({});
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-sizing-mode="risk_percent"/);
+  assert.match(html, /data-risk-mode/);
+  assert.match(html, /Fixed cash risk per TP leg/);
+  assert.match(html, /data-action="account-sizing"/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\//);
+});
