@@ -60,3 +60,13 @@ test('normal Telegram Bot API source visibly owns one encrypted bot token and ma
   assert.match(html, /Allowed chat \/ channel IDs/);
   assert.match(html, /credentials:\{botToken:token\}/);
 });
+test('Telegram destination template picker exposes update-only notification templates and headings', () => {
+  const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
+  assert.match(html, /granularTelegramTemplate/);
+  assert.match(html, /Updates only/);
+  assert.match(html, /FROM VIP|Heading:/);
+  assert.match(html, /TP hits/);
+  assert.match(html, /SL hits/);
+  assert.match(html, /Weekly roundup/);
+  assert.match(html, /allowedEvents/);
+});
