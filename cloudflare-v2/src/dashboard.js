@@ -92,14 +92,16 @@ async function saveDashboardAccountSizing(button){
 var row=button.closest('tr');if(!row)throw new Error('Account row not found');
 var mode=row.querySelector('[data-sizing-type]').value,section=row.querySelector('[data-sizing-mode="'+mode+'"]');
 if(!section)throw new Error('Sizing controls are unavailable');
-var valueInput=section.querySelector('[data-sizing-value]'),lotValue=Number(valueInput&&valueInput.value);
+var riskMode=mode==='risk_percent'?section.querySelector('[data-risk-mode]').value:null;
+var valueHost=mode==='risk_percent'?section.querySelector('[data-risk-value-mode="'+riskMode+'"]'):section;
+var valueInput=valueHost&&valueHost.querySelector('[data-sizing-value]'),lotValue=Number(valueInput&&valueInput.value);
 if(!(lotValue>0)||!Number.isFinite(lotValue))throw new Error('Enter a positive sizing value');
 var config={},payload={lotSizingType:mode,lotValue:lotValue};
 if(mode==='adaptive_percent'||mode==='balance_percent'){var pct=Number(section.querySelector('[data-sizing-percent]').value);if(!(pct>0&&pct<=100))throw new Error('Percentage must be greater than 0 and no more than 100');config.percent=pct}
 if(mode==='symbol_equivalent'){var symbol=String(section.querySelector('[data-reference-symbol]').value||'').trim();if(!symbol)throw new Error('Reference symbol is required');config.referenceSymbol=symbol}
 if(mode==='risk_percent'){
 if(!state.riskPolicyEditable)throw new Error('Only the workspace owner can change risk settings');
-var riskMode=section.querySelector('[data-risk-mode]').value,basis=section.querySelector('[data-risk-basis]').value;
+var basis=section.querySelector('[data-risk-basis]').value;
 if(!['percent','fixed_cash'].includes(riskMode)||!['equity','balance'].includes(basis))throw new Error('Choose a valid risk calculation and account basis');
 if(riskMode==='percent'&&lotValue>100)throw new Error('Risk percentage cannot exceed 100%');
 config={riskMode:riskMode,riskBasis:basis};
