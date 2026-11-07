@@ -2,6 +2,11 @@ export function withSimplifiedAccountControls(html) {
   let output = String(html);
 
   output = output.replace(
+    "+' • '+esc(x.executionEnabled?'Execution flag ON':'Execution flag OFF')+' • '+esc(x.killSwitch?'Kill switch ON':'Kill switch OFF')",
+    '',
+  );
+
+  output = output.replace(
     'New accounts remain inactive with execution blocked until explicitly enabled through the existing safety controls.',
     'Connected execution accounts have a simple Trading ON/OFF control. Live accounts additionally require explicit real-money permission.',
   );
