@@ -20,6 +20,7 @@ const ROUTE_SELECT = [
 const DESTINATION_TYPES = new Set(['telegram', 'broker_account', 'internal_webhook', 'audit_only']);
 const FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback']);
 const PARSE_MODES = new Set(['HTML', 'Markdown', 'MarkdownV2', 'plain']);
+const UPDATE_TEMPLATE_EVENTS = new Set(['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP']);
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -156,6 +157,23 @@ function parseTemplateInput(body = {}) {
   if (!templateName) return { ok: false, reason: 'TEMPLATE_NAME_REQUIRED' };
   if (!FORMAT_MODES.has(formattingMode)) return { ok: false, reason: 'FORMAT_MODE_UNSUPPORTED' };
   if (!PARSE_MODES.has(parseMode)) return { ok: false, reason: 'PARSE_MODE_UNSUPPORTED' };
+  const layout = { ...safeObject(body.layout) };
+  const rawPolicy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
+  if (Object.keys(rawPolicy).length) {
+    const policyMode = text(rawPolicy.mode ?? rawPolicy.type).toLowerCase();
+    if (policyMode !== 'updates_only') return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_UNSUPPORTED' };
+    const allowedEvents = normalizedList(rawPolicy.allowedEvents ?? rawPolicy.allowed_events);
+    if (!allowedEvents.ok || allowedEvents.values.length === 0
+      || allowedEvents.values.some((item) => !UPDATE_TEMPLATE_EVENTS.has(item))) {
+      return { ok: false, reason: 'TEMPLATE_UPDATE_EVENTS_INVALID' };
+    }
+    delete layout.delivery_policy;
+    layout.deliveryPolicy = {
+      mode: 'updates_only',
+      allowedEvents: allowedEvents.values,
+      prependHeader: rawPolicy.prependHeader !== false,
+    };
+  }
   return {
     ok: true,
     input: {
@@ -168,7 +186,7 @@ function parseTemplateInput(body = {}) {
       disclaimer: text(body.disclaimer),
       emojiStyle: text(body.emojiStyle ?? body.emoji_style) || 'standard',
       cleanupRules: safeObject(body.cleanupRules ?? body.cleanup_rules),
-      layout: safeObject(body.layout),
+      layout,
       isDefault: Boolean(body.isDefault ?? body.is_default),
     },
   };
