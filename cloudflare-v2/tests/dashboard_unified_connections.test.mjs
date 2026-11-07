@@ -11,4 +11,13 @@ test('unified trading account dashboard script parses and exposes owner-only ris
   assert.match(match[1], /Only the workspace owner can change risk settings/);
   assert.match(match[1], /fixed_cash/);
   assert.match(match[1], /minimumVolumeRiskTolerancePercent/);
+  assert.match(match[1], /data-account-sizing-toggle/);
+  assert.match(match[1], /data-account-sizing-editor/);
+  assert.match(match[1], /data-sizing-type/);
+  assert.match(match[1], /data-risk-mode/);
+  assert.match(match[1], /data-account-sizing-save/);
+  assert.match(match[1], /Fixed cash risk per TP leg/);
+  assert.match(match[1], /Configure sizing/);
+  assert.match(match[1], /\/api\/v1\/admin\/connections\/accounts\//);
+  assert.match(match[1], /Use Configure sizing to change its lot\/risk method/);
 });
