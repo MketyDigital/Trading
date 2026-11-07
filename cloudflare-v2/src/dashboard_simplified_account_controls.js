@@ -7,7 +7,7 @@ export function withSimplifiedAccountControls(html) {
   );
 
   const accountButtonsStart = output.indexOf('function accountButtons(x){');
-  const accountButtonsEnd = output.indexOf('\\nfunction accountSizingEditor', accountButtonsStart);
+  const accountButtonsEnd = output.indexOf('function accountSizingEditor', accountButtonsStart);
   if (accountButtonsStart >= 0 && accountButtonsEnd > accountButtonsStart) {
     const accountButtons = `function accountButtons(x){var exec=(x.roles||[]).indexOf('execution')>=0;var destination=exec?'':'<button class="btn secondary" data-account-destination="'+esc(x.id)+'" data-account-roles="'+esc((x.roles||[]).join(','))+'">Use as destination</button>';var trading=exec?'<button class="btn '+(x.tradingEnabled?'primary':'secondary')+'" data-account-trading="'+esc(x.id)+'" data-enabled="'+(x.tradingEnabled?'true':'false')+'">'+(x.tradingEnabled?'Trading ON':'Trading OFF')+'</button>':'';var live=exec&&x.environment==='live'?'<button class="btn '+(x.liveExecutionEnabled?'danger':'secondary')+'" data-account-live="'+esc(x.id)+'" data-enabled="'+(x.liveExecutionEnabled?'true':'false')+'">Allow real-money: '+(x.liveExecutionEnabled?'ON':'OFF')+'</button>':'';return '<div class="actions" style="margin-top:7px">'+destination+trading+live+'<button class="btn secondary" data-account-edit="'+esc(x.id)+'">Edit details</button><button class="btn secondary" data-account-sizing-toggle="'+esc(x.id)+'">Configure sizing</button><button class="btn danger" data-account-remove="'+esc(x.id)+'">Remove</button></div>'}`;
     output = output.slice(0, accountButtonsStart) + accountButtons + output.slice(accountButtonsEnd);
