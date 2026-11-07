@@ -70,3 +70,11 @@ test('Telegram destination template picker exposes update-only notification temp
   assert.match(html, /Weekly roundup/);
   assert.match(html, /allowedEvents/);
 });
+
+test('updates-only Telegram templates control the destination formatting mode and heading', () => {
+  const html = withGranularRoutingConsole('<html><body><main></main></body></html>');
+  assert.match(html, /syncTelegramTemplateFormatting/);
+  assert.match(html, /Updates-only template controls delivery formatting/);
+  assert.match(html, /select\.disabled=true/);
+  assert.match(html, /isUpdatesOnlyTemplate\(q\('granularTelegramTemplate'\)\.value\)\?'inherit'/);
+});
