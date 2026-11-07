@@ -180,3 +180,17 @@ test('updates-only templates reject trade-action statuses even when trade intent
     { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
   );
 });
+
+test('updates-only routes fail closed when stored delivery policy is malformed or unsupported', () => {
+  for (const deliveryPolicy of ['updates_only', { mode: 'future_unknown_mode', allowedEvents: ['TP_HIT'] }]) {
+    assert.deepEqual(
+      evaluateRouteFilters(
+        {},
+        { status: 'COMMENTARY' },
+        { destination_type: 'telegram', template: { layout: { deliveryPolicy } } },
+        { text: 'WEEKLY ROUNDUP' },
+      ),
+      { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' },
+    );
+  }
+});
