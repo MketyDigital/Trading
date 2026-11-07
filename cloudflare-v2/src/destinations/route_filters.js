@@ -103,9 +103,16 @@ export function classifyUpdateEvent(interpretation = {}, event = {}) {
 function updateOnlyDecision(destination, interpretation, event) {
   const template = safeObject(destination?.template);
   const layout = safeObject(template.layout);
-  const policy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
+  const hasPolicy = Object.prototype.hasOwnProperty.call(layout, 'deliveryPolicy')
+    || Object.prototype.hasOwnProperty.call(layout, 'delivery_policy');
+  if (!hasPolicy) return null;
+  const rawPolicy = layout.deliveryPolicy ?? layout.delivery_policy;
+  if (!rawPolicy || typeof rawPolicy !== 'object' || Array.isArray(rawPolicy)) {
+    return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' };
+  }
+  const policy = safeObject(rawPolicy);
   const mode = normalizedKind(policy.mode ?? policy.type);
-  if (mode !== 'UPDATES_ONLY') return null;
+  if (mode !== 'UPDATES_ONLY') return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' };
 
   if (destinationType(destination) !== 'telegram') {
     return { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_TELEGRAM_ONLY' };
