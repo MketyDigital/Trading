@@ -162,15 +162,15 @@ function parseTemplateInput(body = {}) {
   if (Object.keys(rawPolicy).length) {
     const policyMode = text(rawPolicy.mode ?? rawPolicy.type).toLowerCase();
     if (policyMode !== 'updates_only') return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_UNSUPPORTED' };
-    const allowedEvents = normalizedList(rawPolicy.allowedEvents ?? rawPolicy.allowed_events);
-    if (!allowedEvents.ok || allowedEvents.values.length === 0
-      || allowedEvents.values.some((item) => !UPDATE_TEMPLATE_EVENTS.has(item))) {
+    const allowedEvents = normalizeCanonicalSymbolList(rawPolicy.allowedEvents ?? rawPolicy.allowed_events);
+    if (!allowedEvents.ok || !Array.isArray(allowedEvents.value) || allowedEvents.value.length === 0
+      || allowedEvents.value.some((item) => !UPDATE_TEMPLATE_EVENTS.has(item))) {
       return { ok: false, reason: 'TEMPLATE_UPDATE_EVENTS_INVALID' };
     }
     delete layout.delivery_policy;
     layout.deliveryPolicy = {
       mode: 'updates_only',
-      allowedEvents: allowedEvents.values,
+      allowedEvents: allowedEvents.value,
       prependHeader: rawPolicy.prependHeader !== false,
     };
   }
