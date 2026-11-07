@@ -337,3 +337,25 @@ test('non-owner cannot create an updates-only destination template', async () =>
   assert.equal(response.status, 403);
   assert.equal((await response.json()).reason, 'TRADING_PERMISSION_DENIED');
 });
+
+test('updates-only templates require deterministic clean plain-text formatting', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Wrong mode',
+      formattingMode: 'template',
+      parseMode: 'HTML',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT'],
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_UPDATE_FORMAT_MODE_REQUIRED');
+});
