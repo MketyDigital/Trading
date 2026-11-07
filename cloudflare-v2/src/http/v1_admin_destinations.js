@@ -204,7 +204,7 @@ function parseTemplateInput(body = {}) {
 function templateIsUpdatesOnly(template = {}) {
   const layout = safeObject(template.layout);
   const policy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
-  return text(policy.mode ?? policy.type).toLowerCase() === 'updates_only';
+  return (text(policy.mode ?? policy.type) || '').toLowerCase() === 'updates_only';
 }
 
 function normalizeCanonicalSymbolList(value) {
@@ -519,7 +519,7 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseDestinationUpdateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
-    if (parsed.input.templateId) {
+    if (parsed.input.templateId && typeof destinationStore.listDestinations === 'function' && typeof destinationStore.listTemplates === 'function') {
       try {
         const [destinations, templates] = await Promise.all([
           destinationStore.listDestinations(workspaceId),
