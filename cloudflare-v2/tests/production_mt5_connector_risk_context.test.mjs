@@ -146,3 +146,41 @@ test('MT5 break-even becomes eligible once the stop-trigger side has crossed ent
   const result = await deps.riskMaterializer({ workspaceId: 'ws-a', account: account({ sizing_mode: 'FIXED_LOTS' }), action });
   assert.equal(result.allowed, true);
 });
+
+test('owner opt-in uses zero exposure only for a genuine transient provider error', async () => {
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, {
+    exposureLoader: async () => { const error = new Error('temporary timeout'); error.code = 'ETIMEDOUT'; throw error; },
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'control-secret' }),
+    fetchFn: connectorFetch(),
+  });
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 };
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } }),
+    action,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.policyContext.currentOpenRiskPercent, 0);
+});
+
+test('opt-in never masks an unimplemented exposure provider or non-transient failure', async () => {
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 };
+  const configured = account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } });
+  await assert.rejects(
+    depsWithFetch(connectorFetch()).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
+    /authoritative production exposure context is required/,
+  );
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, { exposureLoader: async () => { const error = new Error('bad credentials'); error.code = 'EACCES'; throw error; } });
+  await assert.rejects(
+    deps.riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
+    /bad credentials/,
+  );
+});
