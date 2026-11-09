@@ -273,7 +273,19 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       // connector implementation is not a transient outage and never qualifies
       // for owner opt-in zero fallback.
       const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
-      const context = await loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure: true });
+      let context;
+      try {
+        context = await loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure: true });
+      } catch (error) {
+        // The opt-in is limited to an explicit, classified temporary provider
+        // outage; missing endpoints, offline connectors and malformed responses
+        // are implementation/identity failures, not zero-exposure evidence.
+        if (safetyPolicyOf(account).allowTransientExposureZeroFallback === true
+            && text(error?.code) === 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE') {
+          return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
+        }
+        throw error;
+      }
       const exposure = context.exposure;
       if (!exposure || typeof exposure !== 'object') {
         const error = new Error('MT5 connector exposure implementation unavailable');
