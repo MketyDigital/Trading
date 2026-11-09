@@ -282,6 +282,8 @@ export function buildV1LifecycleEvidence({
               accountId: account?.accountId ?? null,
               status: account?.status ?? null,
               reason: account?.reason ?? null,
+              ...(Array.isArray(account?.policy?.reasons) ? { policyReasons: account.policy.reasons.map((reason) => text(reason)).filter(Boolean) } : {}),
+              ...(text(account?.blockReason) ? { blockReason: text(account.blockReason) } : {}),
               actions: Array.isArray(account?.actions)
                 ? account.actions.map((action) => ({
                     ...(text(action?.type) ? { type: text(action.type) } : {}),
