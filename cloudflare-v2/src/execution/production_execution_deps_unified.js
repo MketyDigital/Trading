@@ -184,6 +184,17 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
     throw error;
   }
+  // A gateway-generated timeout is a classified transient provider failure.
+  // Do not classify 404, 409, malformed responses or offline identities as transient.
+  if (includeExposure && response.status === 504) {
+    let timeoutBody = null;
+    try { timeoutBody = await response.clone().json(); } catch {}
+    if (text(timeoutBody?.reason) === 'MT5_CONTEXT_TIMEOUT') {
+      const error = new Error('MT5 exposure provider timed out');
+      error.code = 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE';
+      throw error;
+    }
+  }
   const body = await readJson(response, 'MT5 connector context');
   if (String(body.accountRowId ?? '') !== accountRef(account)) {
     const error = new Error('broker risk context unavailable: MT5 connector context account mismatch');
