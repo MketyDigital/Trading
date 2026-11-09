@@ -185,4 +185,12 @@ test('connections UI exposes one Trading toggle for demo and a separate real-mon
   assert.match(ui, /x\.environment==='live'/);
   assert.doesNotMatch(ui, /Execution flag ON/);
   assert.doesNotMatch(ui, /Kill switch ON/);
+  // Runtime handlers must actually be injected, not merely buttons in HTML.
+  assert.match(ui, /async function toggleAccountTrading\(/);
+  assert.match(ui, /async function toggleAccountLive\(/);
+  assert.match(ui, /async function enableAccountDestination\(/);
+  assert.match(ui, /else if\(t\.dataset\.accountTrading\)toggleAccountTrading/);
+  assert.match(ui, /else if\(t\.dataset\.accountLive\)toggleAccountLive/);
+  assert.match(ui, /else if\(t\.dataset\.accountDestination\)enableAccountDestination/);
+  assert.doesNotMatch(ui, /Configure sizing<\/button>/);
 });
