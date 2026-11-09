@@ -157,7 +157,7 @@ test('owner opt-in uses zero exposure only for a genuine transient provider erro
     decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'control-secret' }),
     fetchFn: connectorFetch(),
   });
-  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 };
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 };
   const result = await deps.riskMaterializer({
     workspaceId: 'ws-a',
     account: account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } }),
@@ -168,7 +168,7 @@ test('owner opt-in uses zero exposure only for a genuine transient provider erro
 });
 
 test('opt-in never masks an unimplemented exposure provider or non-transient failure', async () => {
-  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 };
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 };
   const configured = account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } });
   await assert.rejects(
     depsWithFetch(connectorFetch()).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
