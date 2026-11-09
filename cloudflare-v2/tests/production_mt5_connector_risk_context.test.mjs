@@ -146,3 +146,41 @@ test('MT5 break-even becomes eligible once the stop-trigger side has crossed ent
   const result = await deps.riskMaterializer({ workspaceId: 'ws-a', account: account({ sizing_mode: 'FIXED_LOTS' }), action });
   assert.equal(result.allowed, true);
 });
+
+test('live account with exposure limits fails closed with a specific missing-exposure diagnostic before broker calls', async () => {
+  let requests = 0;
+  const deps = depsWithFetch(async () => { requests += 1; throw new Error('should not call connector'); });
+  await assert.rejects(
+    deps.riskMaterializer({
+      workspaceId: 'ws-a',
+      account: account({
+        environment: 'live',
+        safety_policy: { killSwitch: false, maxOpenRiskPercent: 20, maxDailyLossPercent: 50 },
+      }),
+      action: {
+        type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'LIMIT',
+        entryPrice: 2500, stopLoss: 2499, lots: 0.01,
+      },
+    }),
+    (error) => error.code === 'BROKER_EXPOSURE_CONTEXT_MISSING',
+  );
+  assert.equal(requests, 0);
+});
+
+test('invalid authoritative exposure remains blocked with a distinct diagnostic', async () => {
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, {
+    exposureLoader: async () => ({ currentOpenRiskPercent: null, currentDailyPnlPercent: 'not-a-number' }),
+  });
+  await assert.rejects(
+    deps.riskMaterializer({
+      workspaceId: 'ws-a',
+      account: account({ safety_policy: { maxOpenRiskPercent: 20 } }),
+      action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'LIMIT', entryPrice: 2500, stopLoss: 2499 },
+    }),
+    (error) => error.code === 'BROKER_EXPOSURE_CONTEXT_INCOMPLETE',
+  );
+});
