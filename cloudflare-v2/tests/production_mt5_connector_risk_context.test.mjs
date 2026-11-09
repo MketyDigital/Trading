@@ -84,6 +84,29 @@ test('risk-percent MT5 connector revalidates against fresh account equity, symbo
   assert.equal(requests.length, 2);
 });
 
+test('MT5 connector fixed-cash risk uses the monetary budget, not the percentage alias', async () => {
+  const requests = [];
+  const deps = depsWithFetch(connectorFetch({}, requests));
+  const action = {
+    type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01,
+    stopLoss: 2499.5, idempotencyKey: 'event-fixed-cash:acct-mt5-risk:1',
+  };
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({
+      sizing_mode: 'RISK_PERCENT', lot_sizing_type: 'risk_percent', lot_value: 50,
+      risk_percent: undefined, lot_sizing_config: { riskBasis: 'balance', riskMode: 'fixed_cash' },
+    }),
+    action,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.risk.riskAmountPerLeg, 50);
+  assert.equal(result.risk.riskBasis, 'BALANCE');
+  assert.equal(result.action.lots, 0.41);
+  assert.ok(result.policyContext.riskPercent < 1);
+  assert.equal(requests.length, 2);
+});
+
 test('MT5 BUY break-even uses fresh bid and blocks while bid is below entry', async () => {
   const requests = [];
   const deps = depsWithFetch(connectorFetch({ bid: 4305.9, ask: 4306.1 }, requests));
