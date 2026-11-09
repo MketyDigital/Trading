@@ -262,7 +262,7 @@ const controlServer = http.createServer(async (request, response) => {
       const result = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => { pendingContext.delete(key); reject(new Error('MT5_CONTEXT_TIMEOUT')); }, contextTimeoutMs);
         pendingContext.set(key, { resolve, reject, timer });
-        session.socket.send(JSON.stringify({ type: 'context_request', requestId, symbol }));
+        session.socket.send(JSON.stringify({ type: 'context_request', requestId, symbol, includeExposure: url.searchParams.get('includeExposure') === 'true' }));
       });
       return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
     } catch (error) {
