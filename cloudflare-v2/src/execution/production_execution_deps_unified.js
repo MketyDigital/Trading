@@ -244,7 +244,20 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
 
   async function loadExposure(account, action) {
     if (typeof exposureLoader === 'function') {
-      const exposure = await exposureLoader({ workspaceId, tradingEventId: tradingEventId || null, account, action });
+      let exposure;
+      try {
+        exposure = await exposureLoader({ workspaceId, tradingEventId: tradingEventId || null, account, action });
+      } catch (error) {
+        // Owner opt-in applies only to a real provider's explicit transient failure.
+        // Never mask missing implementation, malformed data, authentication errors,
+        // or known policy violations.
+        const transientCodes = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE']);
+        if (safetyPolicyOf(account).allowTransientExposureZeroFallback === true
+            && transientCodes.has(text(error?.code).toUpperCase())) {
+          return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
+        }
+        throw error;
+      }
       const daily = Number(exposure?.currentDailyPnlPercent);
       const open = Number(exposure?.currentOpenRiskPercent);
       if (!Number.isFinite(daily) || !Number.isFinite(open)) {
