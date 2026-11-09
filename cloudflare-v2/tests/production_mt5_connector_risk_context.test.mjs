@@ -47,6 +47,7 @@ function connectorFetch({ bid = 2500.4, ask = 2500.5 } = {}, requests = []) {
           tickSize: 0.01, tickValueLoss: 1.2, tickValue: 1.2, digits: 2,
         },
         tick: { ask, bid, last: (ask + bid) / 2 },
+        exposure: { currentDailyPnlPercent: -1.5, currentOpenRiskPercent: 4.25 },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
@@ -172,7 +173,7 @@ test('opt-in never masks an unimplemented exposure provider or non-transient fai
   const configured = account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } });
   await assert.rejects(
     depsWithFetch(connectorFetch()).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
-    /authoritative production exposure context is required/,
+    /MT5 connector exposure implementation unavailable/,
   );
   const deps = createProductionExecutionDependencies({
     env: { TRADING_MASTER_KEY: 'master' },
@@ -183,4 +184,22 @@ test('opt-in never masks an unimplemented exposure provider or non-transient fai
     deps.riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
     /bad credentials/,
   );
+});
+
+test('live MT5 connector obtains authoritative exposure from the gateway before risk sizing', async () => {
+  const requests = [];
+  const deps = depsWithFetch(connectorFetch({}, requests));
+  const action = {
+    type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET',
+    lots: 0.01, stopLoss: 2499.5,
+  };
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({ safety_policy: { maxOpenRiskPercent: 20, maxDailyLossPercent: 50 } }),
+    action,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.policyContext.currentOpenRiskPercent, 4.25);
+  assert.equal(result.policyContext.currentDailyPnlPercent, -1.5);
+  assert.equal(requests.some(({ url }) => url.includes('includeExposure=true')), true);
 });
