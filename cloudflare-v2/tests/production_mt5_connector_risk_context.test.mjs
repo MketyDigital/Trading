@@ -37,7 +37,7 @@ function connectorFetch({ bid = 2500.4, ask = 2500.5 } = {}, requests = []) {
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
-    assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r$/);
+    assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r(?:&includeExposure=true)?$/);
     return new Response(JSON.stringify({
       ok: true, accountRowId: 'acct-mt5-risk',
       context: {
