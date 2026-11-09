@@ -160,7 +160,7 @@ function instrumentForRisk(resolved, contextSymbol = {}) {
   };
 }
 
-async function loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn }) {
+async function loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure = false }) {
   const connection = await loadConnectorIdentity({ account, credentials, fetchFn });
   const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
   const liveCatalog = Array.isArray(connection.identity.symbols) && connection.identity.symbols.length
@@ -174,7 +174,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
   }
   let response;
   try {
-    response = await fetchFn(`${connection.baseUrl}/v1/mt5-context/${encodeURIComponent(accountRef(account))}?symbol=${encodeURIComponent(resolved.platformSymbol)}`, {
+    response = await fetchFn(`${connection.baseUrl}/v1/mt5-context/${encodeURIComponent(accountRef(account))}?symbol=${encodeURIComponent(resolved.platformSymbol)}${includeExposure ? '&includeExposure=true' : ''}`, {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${connection.controlSecret}` },
       signal: AbortSignal.timeout(7000),
@@ -197,6 +197,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     throw error;
   }
   return {
+    exposure: context.exposure ?? null,
     brokerAccount: context.account || {},
     instrument: instrumentForRisk(resolved, context.symbol || {}),
     currentMarketPrice: currentMarketPrice(action, context.tick || {}),
@@ -268,9 +269,25 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
     }
     if (requiresDynamicExposure(account)) {
-      const error = new Error('authoritative production exposure context is required by account policy');
-      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
-      throw error;
+      // The default provider is the authenticated live MT5 connector. A missing
+      // connector implementation is not a transient outage and never qualifies
+      // for owner opt-in zero fallback.
+      const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
+      const context = await loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure: true });
+      const exposure = context.exposure;
+      if (!exposure || typeof exposure !== 'object') {
+        const error = new Error('MT5 connector exposure implementation unavailable');
+        error.code = 'BROKER_EXPOSURE_PROVIDER_UNIMPLEMENTED';
+        throw error;
+      }
+      const daily = exposure.currentDailyPnlPercent;
+      const open = exposure.currentOpenRiskPercent;
+      if (typeof daily !== 'number' || typeof open !== 'number' || !Number.isFinite(daily) || !Number.isFinite(open) || open < 0) {
+        const error = new Error('MT5 connector exposure context is invalid');
+        error.code = 'BROKER_EXPOSURE_CONTEXT_INVALID';
+        throw error;
+      }
+      return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
     }
     return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
   }
