@@ -183,9 +183,9 @@ def terminal_exposure(mt5, account_info):
     realized = 0.0
     for deal in deals:
         entry = getattr(deal, 'entry', None)
-        if entry not in (getattr(mt5, 'DEAL_ENTRY_OUT', 1), getattr(mt5, 'DEAL_ENTRY_INOUT', 2), getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3)):
-            continue
-        for attr in ('profit', 'commission', 'swap', 'fee'):
+        is_exit = entry in (getattr(mt5, 'DEAL_ENTRY_OUT', 1), getattr(mt5, 'DEAL_ENTRY_INOUT', 2), getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3))
+        # Entry commissions also contribute to daily loss.
+        for attr in (('profit', 'commission', 'swap', 'fee') if is_exit else ('commission', 'fee')):
             value = _finite(getattr(deal, attr, 0))
             if value is None:
                 raise RuntimeError('EXPOSURE_DAILY_HISTORY_INVALID')
@@ -198,7 +198,10 @@ def terminal_exposure(mt5, account_info):
         symbol = str(getattr(position, 'symbol', '') or '')
         if not stop or not volume or not opened or not symbol:
             raise RuntimeError('EXPOSURE_POSITION_UNPROTECTED_OR_INVALID')
-        order_type = mt5.ORDER_TYPE_BUY if getattr(position, 'type', None) == getattr(mt5, 'POSITION_TYPE_BUY', 0) else mt5.ORDER_TYPE_SELL
+        kind = getattr(position, 'type', None)
+        if kind not in (getattr(mt5, 'POSITION_TYPE_BUY', 0), getattr(mt5, 'POSITION_TYPE_SELL', 1)):
+            raise RuntimeError('EXPOSURE_POSITION_TYPE_INVALID')
+        order_type = mt5.ORDER_TYPE_BUY if kind == getattr(mt5, 'POSITION_TYPE_BUY', 0) else mt5.ORDER_TYPE_SELL
         loss = mt5.order_calc_profit(order_type, symbol, volume, opened, stop)
         if loss is None or _finite(loss) is None:
             raise RuntimeError('EXPOSURE_POSITION_RISK_CALCULATION_FAILED')
@@ -212,6 +215,9 @@ def terminal_exposure(mt5, account_info):
             raise RuntimeError('EXPOSURE_PENDING_ORDER_UNPROTECTED_OR_INVALID')
         kind = getattr(order, 'type', None)
         buy_types = {getattr(mt5, 'ORDER_TYPE_BUY_LIMIT', 2), getattr(mt5, 'ORDER_TYPE_BUY_STOP', 4), getattr(mt5, 'ORDER_TYPE_BUY_STOP_LIMIT', 6)}
+        sell_types = {getattr(mt5, 'ORDER_TYPE_SELL_LIMIT', 3), getattr(mt5, 'ORDER_TYPE_SELL_STOP', 5), getattr(mt5, 'ORDER_TYPE_SELL_STOP_LIMIT', 7)}
+        if kind not in buy_types and kind not in sell_types:
+            raise RuntimeError('EXPOSURE_PENDING_ORDER_TYPE_INVALID')
         order_type = mt5.ORDER_TYPE_BUY if kind in buy_types else mt5.ORDER_TYPE_SELL
         loss = mt5.order_calc_profit(order_type, symbol, volume, opened, stop)
         if loss is None or _finite(loss) is None:
