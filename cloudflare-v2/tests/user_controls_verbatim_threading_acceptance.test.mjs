@@ -38,11 +38,13 @@ function threadingSupabase(onUpsert = () => {}) {
   };
 }
 
-test('enterprise portal exposes existing account lot and TP-protection settings for existing accounts', () => {
+test('enterprise portal exposes universal account sizing and TP-protection settings for existing accounts', () => {
   const html = acceptancePortal();
-  assert.match(html, /data-account-fixed-lot/);
+  assert.match(html, /data-account-sizing-editor/);
+  assert.match(html, /data-risk-mode/);
+  assert.doesNotMatch(html, /data-account-save-lot/);
   assert.match(html, /data-account-auto-tp-protection/);
-  assert.match(html, /\/api\/v1\/admin\/accounts\/.*\/fixed-lot/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\//);
   assert.match(html, /\/api\/v1\/admin\/accounts\/.*\/auto-tp-protection/);
   assert.match(html, /lotValue/);
   assert.match(html, /autoTpProtection/);
