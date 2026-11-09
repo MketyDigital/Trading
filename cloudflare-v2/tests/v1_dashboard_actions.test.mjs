@@ -14,10 +14,11 @@ test('dashboard exposes only backend-supported broker account lifecycle actions'
   assert.match(html, /\/active/);
   assert.match(html, /\/execution/);
   assert.match(html, /\/kill-switch/);
-  assert.match(html, /\/fixed-lot/);
   assert.match(html, /\/auto-tp-protection/);
   assert.match(html, /data-action="account-auto-tp"/);
-  assert.match(html, /data-fixed-lot-input/);
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-action="account-sizing"/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\//);
   assert.match(html, /lotValue/);
   assert.equal(html.includes('/api/v1/admin/accounts/'+"${id}"+'/delete'), false);
 });
@@ -37,4 +38,13 @@ test('source provider selection owns the backend-defined source family instead o
   assert.match(html, /mt5_source_bridge/);
   assert.match(html, /ctrader_source/);
   assert.match(html, /custom_signed_api/);
+});
+
+test('account sizing editor saves the selected lot or risk method through the owner-guarded connection API', () => {
+  const html = renderDashboard({});
+  assert.match(html, /data-action="account-sizing"/);
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-risk-basis/);
+  assert.match(html, /riskPolicyEditable/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\/'\+encodeURIComponent\(button\.dataset\.id\)/);
 });
