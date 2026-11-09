@@ -118,6 +118,30 @@ test('fixed-lot DEMO planning derives a bounded lot-only instrument only after d
   });
 });
 
+test('risk-sized account planning preserves cash and percent budgets without inventing lot constraints', async () => {
+  const deps = await createV1SimulationDependencies({
+    env: baseEnv(),
+    supabase: { from() { throw new Error('database should not be used for instrument fallback'); } },
+    event: { workspace_hint: 'workspace-1' },
+  });
+  for (const lot_sizing_type of ['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk']) {
+    for (const riskMode of ['fixed_cash', 'percent']) {
+      const account = {
+        ...demoFixedAccount({ catalog: [{ platformSymbol: 'EURUSD', minLots: 0.01, maxLots: 100, stepLots: 0.01 }] }),
+        lot_sizing_type, lot_value: 50,
+        lot_sizing_config: { riskMode, riskBasis: 'balance' },
+      };
+      assert.deepEqual(await deps.instrumentProvider(account, { symbol: { canonical: 'EURUSD' } }), {
+        canonical: 'EURUSD', platformSymbol: 'EURUSD',
+      });
+      await assert.rejects(
+        () => deps.instrumentProvider(account, { symbol: { canonical: 'XAUUSD' } }),
+        (error) => error.code === 'DESTINATION_SYMBOL_NOT_SUPPORTED',
+      );
+    }
+  }
+});
+
 test('destination catalog resolves canonical Deriv synthetic against the raw broker symbol before planning', async () => {
   const deps = await createV1SimulationDependencies({
     env: baseEnv(),
