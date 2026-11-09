@@ -27,6 +27,7 @@ test('enterprise portal template controls keep inline JavaScript parseable', () 
   const html = renderEnterpriseTradingPortal({});
   const scriptPattern = /<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi;
   const scripts = [...html.matchAll(scriptPattern)];
+  assert.ok(scripts.length > 0);
   for (const match of scripts) assert.doesNotThrow(() => new Function(match[1]));
   const unusualClosingTag = '<script>globalThis.safe = true;</script' + '\t\n' + ' data-x="1">';
   assert.equal([...unusualClosingTag.matchAll(scriptPattern)].length, 1);
