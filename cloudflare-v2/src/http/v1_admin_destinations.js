@@ -20,6 +20,7 @@ const ROUTE_SELECT = [
 const DESTINATION_TYPES = new Set(['telegram', 'broker_account', 'internal_webhook', 'audit_only']);
 const FORMAT_MODES = new Set(['none', 'clean', 'template', 'ai_then_fallback', 'clean_ai_fallback']);
 const PARSE_MODES = new Set(['HTML', 'Markdown', 'MarkdownV2', 'plain']);
+const UPDATE_TEMPLATE_EVENTS = new Set(['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP']);
 
 function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -156,6 +157,32 @@ function parseTemplateInput(body = {}) {
   if (!templateName) return { ok: false, reason: 'TEMPLATE_NAME_REQUIRED' };
   if (!FORMAT_MODES.has(formattingMode)) return { ok: false, reason: 'FORMAT_MODE_UNSUPPORTED' };
   if (!PARSE_MODES.has(parseMode)) return { ok: false, reason: 'PARSE_MODE_UNSUPPORTED' };
+  const layout = { ...safeObject(body.layout) };
+  const hasDeliveryPolicy = Object.prototype.hasOwnProperty.call(layout, 'deliveryPolicy')
+    || Object.prototype.hasOwnProperty.call(layout, 'delivery_policy');
+  const rawPolicyValue = layout.deliveryPolicy ?? layout.delivery_policy;
+  if (hasDeliveryPolicy && (!rawPolicyValue || typeof rawPolicyValue !== 'object' || Array.isArray(rawPolicyValue))) {
+    return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_INVALID' };
+  }
+  const rawPolicy = safeObject(rawPolicyValue);
+  if (Object.keys(rawPolicy).length) {
+    const policyMode = text(rawPolicy.mode ?? rawPolicy.type).toLowerCase();
+    if (policyMode !== 'updates_only') return { ok: false, reason: 'TEMPLATE_DELIVERY_POLICY_UNSUPPORTED' };
+    const allowedEvents = normalizeCanonicalSymbolList(rawPolicy.allowedEvents ?? rawPolicy.allowed_events);
+    if (!allowedEvents.ok || !Array.isArray(allowedEvents.value) || allowedEvents.value.length === 0
+      || allowedEvents.value.some((item) => !UPDATE_TEMPLATE_EVENTS.has(item))) {
+      return { ok: false, reason: 'TEMPLATE_UPDATE_EVENTS_INVALID' };
+    }
+    if (formattingMode !== 'clean' || parseMode !== 'plain') {
+      return { ok: false, reason: 'TEMPLATE_UPDATE_FORMAT_MODE_REQUIRED' };
+    }
+    delete layout.delivery_policy;
+    layout.deliveryPolicy = {
+      mode: 'updates_only',
+      allowedEvents: allowedEvents.value,
+      prependHeader: rawPolicy.prependHeader !== false,
+    };
+  }
   return {
     ok: true,
     input: {
@@ -168,10 +195,16 @@ function parseTemplateInput(body = {}) {
       disclaimer: text(body.disclaimer),
       emojiStyle: text(body.emojiStyle ?? body.emoji_style) || 'standard',
       cleanupRules: safeObject(body.cleanupRules ?? body.cleanup_rules),
-      layout: safeObject(body.layout),
+      layout,
       isDefault: Boolean(body.isDefault ?? body.is_default),
     },
   };
+}
+
+function templateIsUpdatesOnly(template = {}) {
+  const layout = safeObject(template.layout);
+  const policy = safeObject(layout.deliveryPolicy ?? layout.delivery_policy);
+  return (text(policy.mode ?? policy.type) || '').toLowerCase() === 'updates_only';
 }
 
 function normalizeCanonicalSymbolList(value) {
@@ -442,6 +475,17 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
       if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
       const parsed = parseDestinationInput(body);
       if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+      if (parsed.input.templateId && parsed.input.destinationType !== 'telegram') {
+        try {
+          const templates = await destinationStore.listTemplates(workspaceId);
+          const selected = (templates || []).find((item) => text(item.id) === parsed.input.templateId);
+          if (selected && templateIsUpdatesOnly(selected)) {
+            return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY' }, 400);
+          }
+        } catch {
+          return json({ ok: false, reason: 'TEMPLATE_LOOKUP_FAILED' }, 503);
+        }
+      }
       let cipher = null;
       if (parsed.credentials != null) {
         try { cipher = await encryptCredentialPayload(parsed.credentials, env.TRADING_MASTER_KEY, encryptCredentials); } catch { return json({ ok: false, reason: 'DESTINATION_CREDENTIALS_INVALID' }, 400); }
@@ -475,6 +519,22 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseDestinationUpdateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    if (parsed.input.templateId && typeof destinationStore.listDestinations === 'function' && typeof destinationStore.listTemplates === 'function') {
+      try {
+        const [destinations, templates] = await Promise.all([
+          destinationStore.listDestinations(workspaceId),
+          destinationStore.listTemplates(workspaceId),
+        ]);
+        const current = (destinations || []).find((item) => text(item.id) === id);
+        const selected = (templates || []).find((item) => text(item.id) === parsed.input.templateId);
+        const currentType = text(current?.destination_type ?? current?.destinationType).toLowerCase();
+        if (current && selected && templateIsUpdatesOnly(selected) && currentType !== 'telegram') {
+          return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY' }, 400);
+        }
+      } catch {
+        return json({ ok: false, reason: 'TEMPLATE_LOOKUP_FAILED' }, 503);
+      }
+    }
     try {
       const row = await destinationStore.updateDestination(workspaceId, id, parsed.input);
       if (!row) return json({ ok: false, reason: 'DESTINATION_NOT_FOUND' }, 404);
@@ -547,8 +607,22 @@ export async function handleAuthorizedV1AdminDestinationsRequest(request, author
     if (body === null) return json({ ok: false, reason: 'INVALID_JSON' }, 400);
     const parsed = parseTemplateInput(body);
     if (!parsed.ok) return json({ ok: false, reason: parsed.reason }, 400);
+    const templateId = decodeURIComponent(templateItem[1]);
+    if (templateIsUpdatesOnly({ layout: parsed.input.layout })) {
+      try {
+        const destinations = await destinationStore.listDestinations(workspaceId);
+        const conflicts = (destinations || []).filter((item) => {
+          const assigned = text(item.template_id ?? item.templateId);
+          const type = text(item.destination_type ?? item.destinationType).toLowerCase();
+          return assigned === templateId && type !== 'telegram';
+        });
+        if (conflicts.length) return json({ ok: false, reason: 'UPDATES_ONLY_TEMPLATE_HAS_NON_TELEGRAM_DESTINATIONS' }, 409);
+      } catch {
+        return json({ ok: false, reason: 'DESTINATION_LIST_FAILED' }, 503);
+      }
+    }
     try {
-      const row = await destinationStore.updateTemplate(workspaceId, decodeURIComponent(templateItem[1]), parsed.input);
+      const row = await destinationStore.updateTemplate(workspaceId, templateId, parsed.input);
       if (!row) return json({ ok: false, reason: 'TEMPLATE_NOT_FOUND' }, 404);
       return json({ ok: true, workspaceId, template: publicTemplate(row) });
     } catch {

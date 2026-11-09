@@ -46,3 +46,151 @@ test('malformed/noncanonical filters never block non-broker Telegram forwarding'
     { allowed: true, reason: null },
   );
 });
+
+const updatesOnlyTelegram = {
+  destination_type: 'telegram',
+  template: {
+    layout: {
+      deliveryPolicy: {
+        mode: 'updates_only',
+        allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+      },
+    },
+  },
+};
+
+test('updates-only Telegram template permits confirmed TP-hit broker events', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'MANAGEMENT', management: { type: 'TARGET_HIT', targetIndex: 1 } },
+      updatesOnlyTelegram,
+      { metadata: { broker_fill: { kind: 'TAKE_PROFIT' } }, text: 'Broker take-profit fill detected' },
+    ),
+    { allowed: true, reason: null },
+  );
+});
+
+test('updates-only Telegram template permits broker-confirmed SL-hit events', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'MANAGEMENT', management: { type: 'CLOSE' } },
+      updatesOnlyTelegram,
+      { metadata: { broker_activity: { kind: 'STOP_LOSS' } }, text: 'Broker stop_loss detected' },
+    ),
+    { allowed: true, reason: null },
+  );
+});
+
+test('updates-only Telegram template permits a clearly headed weekly roundup without trade intent', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'COMMENTARY' },
+      updatesOnlyTelegram,
+      { text: '📊 WEEKLY ROUNDUP\nA summary of the week.' },
+    ),
+    { allowed: true, reason: null },
+  );
+});
+
+test('updates-only Telegram template blocks trade signals even when the text says weekly roundup', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } },
+      updatesOnlyTelegram,
+      { text: 'WEEKLY ROUNDUP\nBUY XAUUSD now' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only Telegram template blocks ordinary commentary and unknown event types', () => {
+  assert.deepEqual(
+    evaluateRouteFilters({}, { status: 'COMMENTARY' }, updatesOnlyTelegram, { text: 'Market is quiet today.' }),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only template fails closed on non-Telegram destinations and invalid allowlists', () => {
+  assert.deepEqual(
+    evaluateRouteFilters({}, { status: 'COMMENTARY' }, { ...updatesOnlyTelegram, destination_type: 'broker_account' }, { text: 'WEEKLY ROUNDUP' }),
+    { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_TELEGRAM_ONLY' },
+  );
+  assert.deepEqual(
+    evaluateRouteFilters({}, { status: 'COMMENTARY' }, {
+      destination_type: 'telegram',
+      template: { layout: { deliveryPolicy: { mode: 'updates_only', allowedEvents: ['NEW_SIGNAL'] } } },
+    }, { text: 'WEEKLY ROUNDUP' }),
+    { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' },
+  );
+});
+
+test('updates-only templates reject TP metadata attached to a new trade intent', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'READY', intent: { side: 'BUY', symbol: { canonical: 'XAUUSD' } } },
+      updatesOnlyTelegram,
+      { metadata: { broker_fill: { kind: 'TAKE_PROFIT' } }, text: 'BUY XAUUSD' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only templates reject weekly-looking posts left in needs-review', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'NEEDS_REVIEW' },
+      updatesOnlyTelegram,
+      { text: 'WEEKLY ROUNDUP\nUnclear trade instruction' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only templates reject TP/SL broker metadata when the event is marked for review', () => {
+  for (const metadata of [
+    { broker_fill: { kind: 'TAKE_PROFIT' } },
+    { broker_activity: { kind: 'STOP_LOSS' } },
+  ]) {
+    assert.deepEqual(
+      evaluateRouteFilters(
+        {},
+        { status: 'NEEDS_REVIEW' },
+        updatesOnlyTelegram,
+        { metadata, text: 'Broker event requires review' },
+      ),
+      { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+    );
+  }
+});
+
+test('updates-only templates reject trade-action statuses even when trade intent is missing', () => {
+  assert.deepEqual(
+    evaluateRouteFilters(
+      {},
+      { status: 'READY' },
+      updatesOnlyTelegram,
+      { metadata: { broker_fill: { kind: 'TAKE_PROFIT' } }, text: 'BUY XAUUSD' },
+    ),
+    { allowed: false, reason: 'ROUTE_UPDATE_EVENT_NOT_ALLOWED' },
+  );
+});
+
+test('updates-only routes fail closed when stored delivery policy is malformed or unsupported', () => {
+  for (const deliveryPolicy of ['updates_only', { mode: 'future_unknown_mode', allowedEvents: ['TP_HIT'] }]) {
+    assert.deepEqual(
+      evaluateRouteFilters(
+        {},
+        { status: 'COMMENTARY' },
+        { destination_type: 'telegram', template: { layout: { deliveryPolicy } } },
+        { text: 'WEEKLY ROUNDUP' },
+      ),
+      { allowed: false, reason: 'ROUTE_UPDATE_TEMPLATE_INVALID' },
+    );
+  }
+});

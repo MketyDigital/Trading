@@ -24,6 +24,9 @@ function memoryStore() {
   const templates = [];
   const routes = [];
   return {
+    _destinations: destinations,
+    _templates: templates,
+    _routes: routes,
     async listDestinations(workspaceId) {
       return destinations.filter((item) => item.workspace_id === workspaceId);
     },
@@ -261,4 +264,211 @@ test('updates formatting templates and toggles routes', async () => {
   assert.equal(routeResponse.status, 200);
   const routeBody = await routeResponse.json();
   assert.equal(routeBody.route.enabled, false);
+});
+
+test('creates an updates-only Telegram notification template with a heading and an exact allowlist', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'VIP Updates Only',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      header: 'FROM VIP',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+          prependHeader: true,
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.template.header, 'FROM VIP');
+  assert.equal(body.template.formattingMode, 'clean');
+  assert.deepEqual(body.template.layout.deliveryPolicy, {
+    mode: 'updates_only',
+    allowedEvents: ['TP_HIT', 'SL_HIT', 'WEEKLY_ROUNDUP'],
+    prependHeader: true,
+  });
+});
+
+test('rejects an updates-only template allowlist that includes trade signals or unknown types', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Unsafe updates template',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT', 'NEW_SIGNAL'],
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_UPDATE_EVENTS_INVALID');
+});
+
+test('non-owner cannot create an updates-only destination template', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Updates only',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT'],
+        },
+      },
+    }),
+    auth('viewer'),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).reason, 'TRADING_PERMISSION_DENIED');
+});
+
+test('updates-only templates require deterministic clean plain-text formatting', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Wrong mode',
+      formattingMode: 'template',
+      parseMode: 'HTML',
+      layout: {
+        deliveryPolicy: {
+          mode: 'updates_only',
+          allowedEvents: ['TP_HIT'],
+        },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_UPDATE_FORMAT_MODE_REQUIRED');
+});
+
+test('rejects assigning an updates-only template to a non-Telegram destination on create and update', async () => {
+  const store = memoryStore();
+  const templateResponse = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'VIP Updates Only',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      header: 'FROM VIP',
+      layout: {
+        deliveryPolicy: { mode: 'updates_only', allowedEvents: ['TP_HIT', 'SL_HIT'] },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+  assert.equal(templateResponse.status, 201);
+
+  const createBroker = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/destinations', 'POST', {
+      destinationType: 'broker_account',
+      displayName: 'MT5 execution',
+      destinationRef: 'account-1',
+      templateId: 'tpl-1',
+      settings: {},
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+  assert.equal(createBroker.status, 400);
+  assert.equal((await createBroker.json()).reason, 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY');
+
+  const createPlainBroker = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/destinations', 'POST', {
+      destinationType: 'broker_account',
+      displayName: 'MT5 execution',
+      destinationRef: 'account-2',
+      settings: {},
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+  assert.equal(createPlainBroker.status, 201);
+
+  const updateBroker = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/destinations/dest-1', 'PUT', {
+      displayName: 'MT5 execution',
+      destinationRef: 'account-2',
+      templateId: 'tpl-1',
+      settings: {},
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+  assert.equal(updateBroker.status, 400);
+  assert.equal((await updateBroker.json()).reason, 'UPDATES_ONLY_TEMPLATE_TELEGRAM_ONLY');
+});
+
+test('rejects converting a template to updates-only while it remains assigned to a non-Telegram destination', async () => {
+  const store = memoryStore();
+  await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Standard',
+      formattingMode: 'template',
+      parseMode: 'HTML',
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+  store._destinations.push({
+    id: 'legacy-broker',
+    workspace_id: 'ws-1',
+    destination_type: 'broker_account',
+    template_id: 'tpl-1',
+  });
+
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates/tpl-1', 'PUT', {
+      templateName: 'Standard',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      header: 'FROM VIP',
+      layout: {
+        deliveryPolicy: { mode: 'updates_only', allowedEvents: ['WEEKLY_ROUNDUP'] },
+      },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).reason, 'UPDATES_ONLY_TEMPLATE_HAS_NON_TELEGRAM_DESTINATIONS');
+});
+
+test('rejects malformed notification delivery-policy shapes', async () => {
+  const store = memoryStore();
+  const response = await handleAuthorizedV1AdminDestinationsRequest(
+    jsonRequest('/api/v1/admin/templates', 'POST', {
+      templateName: 'Malformed updates template',
+      formattingMode: 'clean',
+      parseMode: 'plain',
+      layout: { deliveryPolicy: 'updates_only' },
+    }),
+    auth(),
+    { destinationStore: store },
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).reason, 'TEMPLATE_DELIVERY_POLICY_INVALID');
 });

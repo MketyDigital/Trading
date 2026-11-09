@@ -112,3 +112,41 @@ test('clean formatting supports case-insensitive regex line cleanup without touc
   assert.match(result.text, /TP1: 44850/);
   assert.match(result.text, /Analysis: resistance is holding/);
 });
+
+test('updates-only clean template prepends its configured heading to forwarded notification text', () => {
+  const result = formatTelegramDestinationMessage({
+    mode: 'clean',
+    rawText: 'Broker take-profit fill detected',
+    interpretation: { status: 'MANAGEMENT', management: { type: 'TARGET_HIT' } },
+  }, {
+    header: 'FROM VIP',
+    layout: { deliveryPolicy: { mode: 'updates_only', allowedEvents: ['TP_HIT'], prependHeader: true } },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'FROM VIP\n\nBroker take-profit fill detected');
+  assert.equal(result.parseMode, 'plain');
+});
+
+test('standard clean templates do not unexpectedly prepend their header', () => {
+  const result = formatTelegramDestinationMessage({
+    mode: 'clean',
+    rawText: 'Market commentary',
+  }, { header: 'FROM VIP', layout: {} });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'Market commentary');
+});
+
+test('forward-as-is remains verbatim and does not add an update-only heading', () => {
+  const result = formatTelegramDestinationMessage({
+    mode: 'none',
+    rawText: 'Original notification',
+  }, {
+    header: 'FROM VIP',
+    layout: { deliveryPolicy: { mode: 'updates_only', allowedEvents: ['TP_HIT'], prependHeader: true } },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'Original notification');
+});
