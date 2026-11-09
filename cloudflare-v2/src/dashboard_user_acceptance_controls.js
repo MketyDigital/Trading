@@ -24,6 +24,7 @@ return '<div class="formbox" data-account-sizing-editor="'+esc(x.id)+'" hidden s
 '<div data-risk-value-mode="percent" '+(riskMode==='percent'?'':'hidden')+'>'+field('Risk percentage per TP leg (%)','data-sizing-value step="any" min="0.00000001" max="100"',percentValue)+'</div>'+
 '<div data-risk-value-mode="fixed_cash" '+(riskMode==='fixed_cash'?'':'hidden')+'>'+field('Fixed cash risk per TP leg ($)','data-sizing-value step="any" min="0.01"',cashValue)+'</div>'+
 '<div class="grid">'+field('Maximum risk per TP leg (%)','data-max-risk step="any" min="0.01" max="100"',rp.maxRiskPercent)+field('Maximum aggregate open risk (%)','data-max-open-risk step="any" min="0.01" max="100"',rp.maxOpenRiskPercent)+field('Daily loss limit (%)','data-daily-loss step="any" min="0.01" max="100"',rp.maxDailyLossPercent)+field('Minimum-volume tolerance (%)','data-min-volume-tolerance step="any" min="0" max="1"',rp.minimumVolumeRiskTolerancePercent==null?1:rp.minimumVolumeRiskTolerancePercent)+'</div><div class="field"><label>Broker minimum-lot policy</label><select class="lot-input" data-minimum-lot-policy><option value="FLOOR" '+(String(rp.minimumLotPolicy||'FLOOR').toUpperCase()==='FLOOR'?'selected':'')+'>FLOOR — allow within tolerance</option><option value="REJECT" '+(String(rp.minimumLotPolicy||'FLOOR').toUpperCase()==='REJECT'?'selected':'')+'>REJECT — block if below minimum</option></select></div></div>'+
+'<div class="field"><label><input type="checkbox" data-transient-exposure-zero '+(rp.allowTransientExposureZeroFallback===true?'checked':'')+'> Use zero open risk and daily loss ONLY if a configured exposure provider reports a temporary connection failure (owner opt-in; limits may be bypassed)</label></div>'+ 
 '<div class="actions" style="margin-top:8px"><button class="btn primary" data-account-sizing-save="'+esc(x.id)+'" '+(locked?'disabled':'')+'>Save sizing settings</button></div><div class="muted small" style="margin-top:6px">'+(locked?'Only the workspace owner can change this risk policy.':'Changes apply only to this selected account. Fixed-cash values are money amounts, not lots. Risk budgets apply per executable TP leg.')+'</div></div>';
 }
 function syncSizingEditor(form){
@@ -54,6 +55,7 @@ keys.forEach(function(pair){var input=section.querySelector('['+pair[0]+']'),raw
 var toleranceRaw=String(section.querySelector('[data-min-volume-tolerance]').value||'').trim();
 if(toleranceRaw!==''){var tolerance=Number(toleranceRaw);if(!Number.isFinite(tolerance)||tolerance<0||tolerance>1)throw new Error('Minimum-volume tolerance must be between 0 and 1 percent');policy.minimumVolumeRiskTolerancePercent=tolerance}
 policy.minimumLotPolicy=section.querySelector('[data-minimum-lot-policy]').value;
+policy.allowTransientExposureZeroFallback=section.querySelector('[data-transient-exposure-zero]').checked;
 payload.riskPolicy=policy;
 }
 payload.lotSizingConfig=config;
