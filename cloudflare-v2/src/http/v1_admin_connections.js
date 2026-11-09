@@ -125,6 +125,7 @@ function publicAccount(row = {}) {
       maxDailyLossPercent: safety.maxDailyLossPercent ?? null,
       minimumVolumeRiskTolerancePercent: safety.minimumVolumeRiskTolerancePercent ?? null,
       minimumLotPolicy: safety.minimumLotPolicy ?? 'FLOOR',
+      allowTransientExposureZeroFallback: safety.allowTransientExposureZeroFallback === true,
     },
     createdAt: row.created_at ?? row.createdAt ?? null,
   };
@@ -417,7 +418,7 @@ async function handleAccountConnection(request, authorization, supabase, account
     }
     if (Object.prototype.hasOwnProperty.call(body, 'riskPolicy') || Object.prototype.hasOwnProperty.call(body, 'risk_policy')) {
       const riskPolicy = safeObject(body.riskPolicy ?? body.risk_policy);
-      const allowedRiskPolicyKeys = new Set(['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy']);
+      const allowedRiskPolicyKeys = new Set(['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent', 'minimumVolumeRiskTolerancePercent', 'minimumLotPolicy', 'allowTransientExposureZeroFallback']);
       if (Object.keys(riskPolicy).some((key) => !allowedRiskPolicyKeys.has(key))) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
       const normalizedRiskPolicy = {};
       for (const key of ['maxRiskPercent', 'maxOpenRiskPercent', 'maxDailyLossPercent']) {
@@ -431,6 +432,10 @@ async function handleAccountConnection(request, authorization, supabase, account
         const value = Number(riskPolicy.minimumVolumeRiskTolerancePercent);
         if (!Number.isFinite(value) || value < 0 || value > 1) return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
         normalizedRiskPolicy.minimumVolumeRiskTolerancePercent = value;
+      }
+      if (Object.prototype.hasOwnProperty.call(riskPolicy, 'allowTransientExposureZeroFallback')) {
+        if (typeof riskPolicy.allowTransientExposureZeroFallback !== 'boolean') return json({ ok: false, reason: 'ACCOUNT_RISK_POLICY_INVALID' }, 400);
+        normalizedRiskPolicy.allowTransientExposureZeroFallback = riskPolicy.allowTransientExposureZeroFallback;
       }
       if (Object.prototype.hasOwnProperty.call(riskPolicy, 'minimumLotPolicy')) {
         const value = String(riskPolicy.minimumLotPolicy).trim().toUpperCase();
