@@ -902,6 +902,15 @@ export async function createV1SimulationDependencies({ env = {}, supabase, persi
         };
       }
 
+      // SL-risk sizing is not a lot preference: lot_value may be a fixed cash
+      // budget (or a percentage). Never reuse it as a volume min/max/step.
+      // The orchestrator subsequently merges fresh broker-authoritative MT5
+      // account/symbol risk context and fails closed if it is unavailable.
+      const riskSizingType = String(account?.sizingMode ?? account?.sizing_mode ?? account?.lot_sizing_type ?? '').trim().toLowerCase();
+      if (['risk_percent', 'equity_risk_percent', 'balance_risk_percent', 'fixed_risk'].includes(riskSizingType)) {
+        return { canonical: symbol, platformSymbol: resolvedSymbol.platformSymbol };
+      }
+
       const lotSizingType = String(account?.lot_sizing_type || '').trim().toLowerCase();
       const lotValue = Number(account?.lot_value);
       if (['fixed', 'adaptive_percent', 'symbol_equivalent', 'balance_percent'].includes(lotSizingType) && Number.isFinite(lotValue) && lotValue > 0) {
