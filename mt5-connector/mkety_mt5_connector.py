@@ -225,7 +225,7 @@ def terminal_exposure(mt5, account_info):
     }
 
 
-def terminal_context(mt5, symbol_name):
+def terminal_context(mt5, symbol_name, include_exposure=False):
     account_info = mt5.account_info()
     if account_info is None:
         raise RuntimeError('MT5 account is not available')
@@ -255,7 +255,10 @@ def terminal_context(mt5, symbol_name):
             value = _finite(getattr(tick_info, key, None))
             if value is not None and value > 0:
                 tick[key] = value
-    return {'account': account, 'symbol': symbol, 'tick': tick, 'exposure': terminal_exposure(mt5, account_info)}
+    context = {'account': account, 'symbol': symbol, 'tick': tick}
+    if include_exposure:
+        context['exposure'] = terminal_exposure(mt5, account_info)
+    return context
 
 
 def _volume_decimals(step):
@@ -618,7 +621,7 @@ class MketyMt5Connector:
         if kind == 'context_request':
             request_id = str(message.get('requestId') or '')
             try:
-                context = terminal_context(self.mt5, message.get('symbol'))
+                context = terminal_context(self.mt5, message.get('symbol'), bool(message.get('includeExposure', False)))
                 return {'type': 'context_result', 'requestId': request_id, 'ok': True, 'context': context}
             except Exception as exc:
                 return {'type': 'context_result', 'requestId': request_id, 'ok': False, 'reason': str(exc)}
