@@ -92,7 +92,7 @@ jobs:
             assert.match(shippedScripts, /data-risk-mode/);
             assert.match(shippedScripts, /data-risk-basis/);
             assert.match(shippedScripts, /Percentage risk/);
-            assert.match(shippedScripts, /Fixed cash risk \\(\\$\\)/);
+            assert.match(shippedScripts, /Fixed cash risk \(\$\)/);
             assert.match(shippedScripts, /Only the workspace owner can change risk settings/);
             assert.equal(await page.locator('#showMt5CloudBtn').isVisible(), false);
 
