@@ -100,25 +100,25 @@ async function loadConnectorIdentity({ account, credentials, fetchFn }) {
     });
   } catch {
     const error = new Error('MT5 connector identity is unavailable');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_IDENTITY_UNAVAILABLE';
     throw error;
   }
   const body = await readJson(response, 'MT5 connector identity');
   if (String(body.accountRowId ?? '') !== rowId || body.online !== true) {
     const error = new Error('MT5 connector identity mismatch or offline');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_IDENTITY_OFFLINE_OR_MISMATCH';
     throw error;
   }
   const identity = body.identity && typeof body.identity === 'object' ? body.identity : {};
   if (text(identity.accountNumber) !== brokerAccountIdOf(account)) {
     const error = new Error('MT5 connector broker account identity mismatch');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_ACCOUNT_IDENTITY_MISMATCH';
     throw error;
   }
   const expectedServer = text(account.server_name ?? account.serverName);
   if (expectedServer && text(identity.serverName) !== expectedServer) {
     const error = new Error('MT5 connector broker server identity mismatch');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_SERVER_IDENTITY_MISMATCH';
     throw error;
   }
   return { baseUrl, controlSecret, identity };
@@ -169,7 +169,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
   const resolved = resolveAccountSymbol(action.symbol, liveCatalog, persisted.aliases);
   if (!resolved.ok) {
     const error = new Error(`broker risk context unavailable: ${resolved.reason || 'symbol resolution failed'}`);
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'BROKER_RISK_SYMBOL_UNRESOLVED';
     throw error;
   }
   let response;
@@ -181,19 +181,19 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     });
   } catch {
     const error = new Error('broker risk context unavailable: MT5 connector context request failed');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_RISK_CONTEXT_REQUEST_FAILED';
     throw error;
   }
   const body = await readJson(response, 'MT5 connector context');
   if (String(body.accountRowId ?? '') !== accountRef(account)) {
     const error = new Error('broker risk context unavailable: MT5 connector context account mismatch');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_RISK_CONTEXT_ROW_MISMATCH';
     throw error;
   }
   const context = body.context && typeof body.context === 'object' ? body.context : {};
   if (text(context?.account?.accountNumber) !== brokerAccountIdOf(account)) {
     const error = new Error('broker risk context unavailable: MT5 broker account mismatch');
-    error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+    error.code = 'MT5_CONNECTOR_RISK_CONTEXT_ACCOUNT_MISMATCH';
     throw error;
   }
   return {
@@ -249,14 +249,14 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       const open = Number(exposure?.currentOpenRiskPercent);
       if (!Number.isFinite(daily) || !Number.isFinite(open)) {
         const error = new Error('authoritative production exposure context is incomplete');
-        error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+        error.code = 'BROKER_EXPOSURE_CONTEXT_INCOMPLETE';
         throw error;
       }
       return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
     }
     if (requiresDynamicExposure(account)) {
       const error = new Error('authoritative production exposure context is required by account policy');
-      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+      error.code = 'BROKER_EXPOSURE_CONTEXT_MISSING';
       throw error;
     }
     return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
