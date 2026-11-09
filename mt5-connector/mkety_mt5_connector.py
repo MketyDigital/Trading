@@ -165,6 +165,66 @@ def symbol_catalog(mt5, limit=MAX_SYMBOLS):
     return result
 
 
+def terminal_exposure(mt5, account_info):
+    """Broker-derived exposure; unavailable MT5 responses are never treated as zero."""
+    balance = _finite(getattr(account_info, 'balance', None))
+    equity = _finite(getattr(account_info, 'equity', None))
+    if balance is None or balance <= 0 or equity is None or equity <= 0:
+        raise RuntimeError('EXPOSURE_ACCOUNT_BALANCE_UNAVAILABLE')
+    positions = mt5.positions_get()
+    orders = mt5.orders_get()
+    if positions is None or orders is None:
+        raise RuntimeError('EXPOSURE_POSITIONS_OR_ORDERS_UNAVAILABLE')
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    deals = mt5.history_deals_get(start, now)
+    if deals is None:
+        raise RuntimeError('EXPOSURE_DAILY_HISTORY_UNAVAILABLE')
+    realized = 0.0
+    for deal in deals:
+        entry = getattr(deal, 'entry', None)
+        if entry not in (getattr(mt5, 'DEAL_ENTRY_OUT', 1), getattr(mt5, 'DEAL_ENTRY_INOUT', 2), getattr(mt5, 'DEAL_ENTRY_OUT_BY', 3)):
+            continue
+        for attr in ('profit', 'commission', 'swap', 'fee'):
+            value = _finite(getattr(deal, attr, 0))
+            if value is None:
+                raise RuntimeError('EXPOSURE_DAILY_HISTORY_INVALID')
+            realized += value
+    risk = 0.0
+    for position in positions:
+        stop = _finite(getattr(position, 'sl', None))
+        volume = _finite(getattr(position, 'volume', None))
+        opened = _finite(getattr(position, 'price_open', None))
+        symbol = str(getattr(position, 'symbol', '') or '')
+        if not stop or not volume or not opened or not symbol:
+            raise RuntimeError('EXPOSURE_POSITION_UNPROTECTED_OR_INVALID')
+        order_type = mt5.ORDER_TYPE_BUY if getattr(position, 'type', None) == getattr(mt5, 'POSITION_TYPE_BUY', 0) else mt5.ORDER_TYPE_SELL
+        loss = mt5.order_calc_profit(order_type, symbol, volume, opened, stop)
+        if loss is None or _finite(loss) is None:
+            raise RuntimeError('EXPOSURE_POSITION_RISK_CALCULATION_FAILED')
+        risk += max(0.0, -float(loss))
+    for order in orders:
+        stop = _finite(getattr(order, 'sl', None))
+        volume = _finite(getattr(order, 'volume_initial', None))
+        opened = _finite(getattr(order, 'price_open', None))
+        symbol = str(getattr(order, 'symbol', '') or '')
+        if not stop or not volume or not opened or not symbol:
+            raise RuntimeError('EXPOSURE_PENDING_ORDER_UNPROTECTED_OR_INVALID')
+        kind = getattr(order, 'type', None)
+        buy_types = {getattr(mt5, 'ORDER_TYPE_BUY_LIMIT', 2), getattr(mt5, 'ORDER_TYPE_BUY_STOP', 4), getattr(mt5, 'ORDER_TYPE_BUY_STOP_LIMIT', 6)}
+        order_type = mt5.ORDER_TYPE_BUY if kind in buy_types else mt5.ORDER_TYPE_SELL
+        loss = mt5.order_calc_profit(order_type, symbol, volume, opened, stop)
+        if loss is None or _finite(loss) is None:
+            raise RuntimeError('EXPOSURE_PENDING_ORDER_RISK_CALCULATION_FAILED')
+        risk += max(0.0, -float(loss))
+    return {
+        'currentOpenRiskPercent': 100.0 * risk / equity,
+        'currentDailyPnlPercent': 100.0 * realized / balance,
+        'asOfUtc': now.isoformat(),
+        'dayBoundary': 'UTC',
+    }
+
+
 def terminal_context(mt5, symbol_name):
     account_info = mt5.account_info()
     if account_info is None:
@@ -195,7 +255,7 @@ def terminal_context(mt5, symbol_name):
             value = _finite(getattr(tick_info, key, None))
             if value is not None and value > 0:
                 tick[key] = value
-    return {'account': account, 'symbol': symbol, 'tick': tick}
+    return {'account': account, 'symbol': symbol, 'tick': tick, 'exposure': terminal_exposure(mt5, account_info)}
 
 
 def _volume_decimals(step):
