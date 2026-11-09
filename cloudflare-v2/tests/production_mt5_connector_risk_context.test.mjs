@@ -172,7 +172,7 @@ test('opt-in never masks an unimplemented exposure provider or non-transient fai
   const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 };
   const configured = account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } });
   await assert.rejects(
-    depsWithFetch(connectorFetch()).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
+    depsWithFetch(async (url, options) => { const response = await connectorFetch()(url, options); if (url.includes('includeExposure=true')) { const body = await response.json(); delete body.context.exposure; return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }); } return response; }).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
     /MT5 connector exposure implementation unavailable/,
   );
   const deps = createProductionExecutionDependencies({
