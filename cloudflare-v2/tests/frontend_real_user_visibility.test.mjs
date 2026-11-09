@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { collapseMketyWorkspaceAccessRows } from '../src/dashboard_mkety_admin_access_codes.js';
+import { withUserAcceptanceControls } from '../src/dashboard_user_acceptance_controls.js';
 import { withUnifiedTradingConnections } from '../src/dashboard_unified_connections.js';
 import { withSimplifiedAccountControls } from '../src/dashboard_simplified_account_controls.js';
 import { withCTraderCbotConnections } from '../src/dashboard_ctrader_cbot_connections.js';
@@ -73,4 +74,23 @@ test('staff workspace list uses the newest historical row when no active access 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id, 'newer');
   assert.equal(rows[0].historyCount, 2);
+});
+
+
+test('existing-account trading settings universally select risk or lot mode, never the fixed-lot shortcut', () => {
+  const html = withUserAcceptanceControls('<html><body></body></html>');
+  assert.match(html, /Account trading settings/);
+  assert.match(html, /data-account-sizing-editor/);
+  assert.match(html, /data-sizing-type/);
+  assert.match(html, /data-risk-mode/);
+  assert.match(html, /Fixed cash risk per TP leg/);
+  assert.match(html, /data-account-sizing-save/);
+  assert.match(html, /lotSizingConfig/);
+  assert.match(html, /riskPolicyEditable/);
+  assert.match(html, /\/api\/v1\/admin\/connections\/accounts\//);
+  assert.doesNotMatch(html, /data-account-save-lot/);
+  assert.doesNotMatch(html, /\/fixed-lot/);
+  assert.match(html, /Automatic TP protection/);
+  assert.match(html, /Portal follower/);
+  assert.match(html, /Entry-zone policy/);
 });
