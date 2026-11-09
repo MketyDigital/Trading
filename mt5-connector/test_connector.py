@@ -141,6 +141,31 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(catalog[0]['contractSize'], 100.0)
         self.assertNotIn('password', catalog[0])
 
+    def test_exposure_empty_account_is_verified_zero(self):
+        exposure = module.terminal_exposure(FakeMT5(), FakeMT5().account_info())
+        self.assertEqual(exposure['currentOpenRiskPercent'], 0)
+        self.assertEqual(exposure['currentDailyPnlPercent'], 0)
+        self.assertEqual(exposure['dayBoundary'], 'UTC')
+
+    def test_exposure_rejects_missing_position_data(self):
+        class MissingPositions(FakeMT5):
+            def positions_get(self, **kwargs):
+                return None
+        with self.assertRaisesRegex(RuntimeError, 'EXPOSURE_POSITIONS_OR_ORDERS_UNAVAILABLE'):
+            module.terminal_exposure(MissingPositions(), MissingPositions().account_info())
+
+    def test_exposure_calculates_position_and_pending_order_stop_risk(self):
+        class OpenTrades(FakeMT5):
+            POSITION_TYPE_BUY = 0
+            def positions_get(self, **kwargs):
+                return (SimpleNamespace(sl=2490, volume=0.1, price_open=2500, symbol='XAUUSD.r', type=0),)
+            def orders_get(self):
+                return (SimpleNamespace(sl=2510, volume_initial=0.2, price_open=2500, symbol='XAUUSD.r', type=3),)
+            def order_calc_profit(self, kind, symbol, volume, opened, stop):
+                return -abs(stop - opened) * volume * 100
+        exposure = module.terminal_exposure(OpenTrades(), OpenTrades().account_info())
+        self.assertAlmostEqual(exposure['currentOpenRiskPercent'], 100 * 300 / 9950)
+
     def test_live_terminal_context_preserves_risk_economics_and_tick_without_credentials(self):
         context = module.terminal_context(FakeMT5(), 'XAUUSD.r')
         self.assertEqual(context['account']['accountNumber'], '123456')

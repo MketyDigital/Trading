@@ -37,7 +37,7 @@ function connectorFetch({ bid = 2500.4, ask = 2500.5 } = {}, requests = []) {
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
-    assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r$/);
+    assert.match(url, /\/v1\/mt5-context\/acct-mt5-risk\?symbol=XAUUSD\.r(?:&includeExposure=true)?$/);
     return new Response(JSON.stringify({
       ok: true, accountRowId: 'acct-mt5-risk',
       context: {
@@ -47,6 +47,7 @@ function connectorFetch({ bid = 2500.4, ask = 2500.5 } = {}, requests = []) {
           tickSize: 0.01, tickValueLoss: 1.2, tickValue: 1.2, digits: 2,
         },
         tick: { ask, bid, last: (ask + bid) / 2 },
+        exposure: { currentDailyPnlPercent: -1.5, currentOpenRiskPercent: 4.25 },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
@@ -145,4 +146,60 @@ test('MT5 break-even becomes eligible once the stop-trigger side has crossed ent
 
   const result = await deps.riskMaterializer({ workspaceId: 'ws-a', account: account({ sizing_mode: 'FIXED_LOTS' }), action });
   assert.equal(result.allowed, true);
+});
+
+test('owner opt-in uses zero exposure only for a genuine transient provider error', async () => {
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, {
+    exposureLoader: async () => { const error = new Error('temporary timeout'); error.code = 'ETIMEDOUT'; throw error; },
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'control-secret' }),
+    fetchFn: connectorFetch(),
+  });
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 };
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } }),
+    action,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.policyContext.currentOpenRiskPercent, 0);
+});
+
+test('opt-in never masks an unimplemented exposure provider or non-transient failure', async () => {
+  const action = { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 };
+  const configured = account({ safety_policy: { maxOpenRiskPercent: 20, allowTransientExposureZeroFallback: true } });
+  await assert.rejects(
+    depsWithFetch(async (url, options) => { const response = await connectorFetch()(url, options); if (url.includes('includeExposure=true')) { const body = await response.json(); delete body.context.exposure; return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }); } return response; }).riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
+    /MT5 connector exposure implementation unavailable/,
+  );
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, { exposureLoader: async () => { const error = new Error('bad credentials'); error.code = 'EACCES'; throw error; } });
+  await assert.rejects(
+    deps.riskMaterializer({ workspaceId: 'ws-a', account: configured, action }),
+    /bad credentials/,
+  );
+});
+
+test('live MT5 connector obtains authoritative exposure from the gateway before risk sizing', async () => {
+  const requests = [];
+  const deps = depsWithFetch(connectorFetch({}, requests));
+  const action = {
+    type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET',
+    lots: 0.01, stopLoss: 2499.5,
+  };
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({ safety_policy: { maxOpenRiskPercent: 20, maxDailyLossPercent: 50 } }),
+    action,
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.policyContext.currentOpenRiskPercent, 4.25);
+  assert.equal(result.policyContext.currentDailyPnlPercent, -1.5);
+  assert.equal(requests.some(({ url }) => url.includes('includeExposure=true')), true);
 });

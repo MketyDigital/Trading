@@ -160,7 +160,7 @@ function instrumentForRisk(resolved, contextSymbol = {}) {
   };
 }
 
-async function loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn }) {
+async function loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure = false }) {
   const connection = await loadConnectorIdentity({ account, credentials, fetchFn });
   const persisted = accountSymbolCatalogFromProviderConfig(providerConfigOf(account));
   const liveCatalog = Array.isArray(connection.identity.symbols) && connection.identity.symbols.length
@@ -174,7 +174,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
   }
   let response;
   try {
-    response = await fetchFn(`${connection.baseUrl}/v1/mt5-context/${encodeURIComponent(accountRef(account))}?symbol=${encodeURIComponent(resolved.platformSymbol)}`, {
+    response = await fetchFn(`${connection.baseUrl}/v1/mt5-context/${encodeURIComponent(accountRef(account))}?symbol=${encodeURIComponent(resolved.platformSymbol)}${includeExposure ? '&includeExposure=true' : ''}`, {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${connection.controlSecret}` },
       signal: AbortSignal.timeout(7000),
@@ -183,6 +183,17 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     const error = new Error('broker risk context unavailable: MT5 connector context request failed');
     error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
     throw error;
+  }
+  // A gateway-generated timeout is a classified transient provider failure.
+  // Do not classify 404, 409, malformed responses or offline identities as transient.
+  if (includeExposure && response.status === 504) {
+    let timeoutBody = null;
+    try { timeoutBody = await response.clone().json(); } catch {}
+    if (text(timeoutBody?.reason) === 'MT5_CONTEXT_TIMEOUT') {
+      const error = new Error('MT5 exposure provider timed out');
+      error.code = 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE';
+      throw error;
+    }
   }
   const body = await readJson(response, 'MT5 connector context');
   if (String(body.accountRowId ?? '') !== accountRef(account)) {
@@ -197,6 +208,7 @@ async function loadMt5ConnectorRiskContext({ account, action, credentials, fetch
     throw error;
   }
   return {
+    exposure: context.exposure ?? null,
     brokerAccount: context.account || {},
     instrument: instrumentForRisk(resolved, context.symbol || {}),
     currentMarketPrice: currentMarketPrice(action, context.tick || {}),
@@ -244,7 +256,20 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
 
   async function loadExposure(account, action) {
     if (typeof exposureLoader === 'function') {
-      const exposure = await exposureLoader({ workspaceId, tradingEventId: tradingEventId || null, account, action });
+      let exposure;
+      try {
+        exposure = await exposureLoader({ workspaceId, tradingEventId: tradingEventId || null, account, action });
+      } catch (error) {
+        // Owner opt-in applies only to a real provider's explicit transient failure.
+        // Never mask missing implementation, malformed data, authentication errors,
+        // or known policy violations.
+        const transientCodes = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE']);
+        if (safetyPolicyOf(account).allowTransientExposureZeroFallback === true
+            && transientCodes.has(text(error?.code).toUpperCase())) {
+          return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
+        }
+        throw error;
+      }
       const daily = Number(exposure?.currentDailyPnlPercent);
       const open = Number(exposure?.currentOpenRiskPercent);
       if (!Number.isFinite(daily) || !Number.isFinite(open)) {
@@ -255,9 +280,37 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
       return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
     }
     if (requiresDynamicExposure(account)) {
-      const error = new Error('authoritative production exposure context is required by account policy');
-      error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
-      throw error;
+      // The default provider is the authenticated live MT5 connector. A missing
+      // connector implementation is not a transient outage and never qualifies
+      // for owner opt-in zero fallback.
+      const credentials = await loadConnectorCredentials(account, env, decryptCredentialsFn);
+      let context;
+      try {
+        context = await loadMt5ConnectorRiskContext({ account, action, credentials, fetchFn, includeExposure: true });
+      } catch (error) {
+        // The opt-in is limited to an explicit, classified temporary provider
+        // outage; missing endpoints, offline connectors and malformed responses
+        // are implementation/identity failures, not zero-exposure evidence.
+        if (safetyPolicyOf(account).allowTransientExposureZeroFallback === true
+            && text(error?.code) === 'EXPOSURE_PROVIDER_TEMPORARY_UNAVAILABLE') {
+          return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
+        }
+        throw error;
+      }
+      const exposure = context.exposure;
+      if (!exposure || typeof exposure !== 'object') {
+        const error = new Error('MT5 connector exposure implementation unavailable');
+        error.code = 'BROKER_EXPOSURE_PROVIDER_UNIMPLEMENTED';
+        throw error;
+      }
+      const daily = exposure.currentDailyPnlPercent;
+      const open = exposure.currentOpenRiskPercent;
+      if (typeof daily !== 'number' || typeof open !== 'number' || !Number.isFinite(daily) || !Number.isFinite(open) || open < 0) {
+        const error = new Error('MT5 connector exposure context is invalid');
+        error.code = 'BROKER_EXPOSURE_CONTEXT_INVALID';
+        throw error;
+      }
+      return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
     }
     return { currentDailyPnlPercent: 0, currentOpenRiskPercent: 0 };
   }
