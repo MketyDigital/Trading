@@ -110,7 +110,17 @@ function safeContext(context, expectedIdentity) {
     const value = finiteOrNull(context?.tick?.[key]);
     if (value !== null && value > 0) tick[key] = value;
   }
-  return { account, symbol: symbols[0], tick };
+  const sanitized = { account, symbol: symbols[0], tick };
+  if (Object.prototype.hasOwnProperty.call(context, 'exposure')) {
+    const source = context.exposure;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    const open = source.currentOpenRiskPercent;
+    const daily = source.currentDailyPnlPercent;
+    if (typeof open !== 'number' || !Number.isFinite(open) || open < 0
+        || typeof daily !== 'number' || !Number.isFinite(daily)) return null;
+    sanitized.exposure = { currentOpenRiskPercent: open, currentDailyPnlPercent: daily };
+  }
+  return sanitized;
 }
 
 const wsServer = new WebSocketServer({ port: wsPort, host: wsHost, path: '/v1/mt5' });
@@ -166,7 +176,8 @@ wsServer.on('connection', (socket) => {
       clearTimeout(waiter.timer);
       if (message.ok === false) return waiter.resolve({ ok: false, reason: String(message.reason || 'MT5_CONTEXT_FAILED') });
       const context = safeContext(message.context, session?.identity);
-      if (!context) return waiter.resolve({ ok: false, reason: 'MT5_CONTEXT_IDENTITY_INVALID' });
+      if (!context) return waiter.resolve({ ok: false, reason: 'MT5_CONTEXT_INVALID' });
+      if (waiter.includeExposure && !context.exposure) return waiter.resolve({ ok: false, reason: 'MT5_EXPOSURE_CONTEXT_MISSING' });
       return waiter.resolve({ ok: true, context });
     }
     if (message?.type === 'sizing_result' && message.requestId) {
@@ -261,8 +272,9 @@ const controlServer = http.createServer(async (request, response) => {
     try {
       const result = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => { pendingContext.delete(key); reject(new Error('MT5_CONTEXT_TIMEOUT')); }, contextTimeoutMs);
-        pendingContext.set(key, { resolve, reject, timer });
-        session.socket.send(JSON.stringify({ type: 'context_request', requestId, symbol, includeExposure: url.searchParams.get('includeExposure') === 'true' }));
+        const includeExposure = url.searchParams.get('includeExposure') === 'true';
+        pendingContext.set(key, { resolve, reject, timer, includeExposure });
+        session.socket.send(JSON.stringify({ type: 'context_request', requestId, symbol, includeExposure }));
       });
       return json(response, result.ok === false ? 409 : 200, { ...result, accountRowId: id });
     } catch (error) {
