@@ -57,7 +57,7 @@ test('source renderer itself includes original action controls even without late
   const start = html.indexOf('function accountButtons(x){');
   const end = html.indexOf('function accountSizingEditor', start);
   assert.ok(start >= 0 && end > start);
-  const render = new Function('x', 'esc', html.slice(start, end) + '\\nreturn accountButtons(x);');
+  const render = new Function('x', 'esc', html.slice(start, end) + String.fromCharCode(10) + 'return accountButtons(x);');
   const mt5 = render(base, value => String(value ?? ''));
   for (const name of [
     'data-account-edit', 'data-account-sizing-toggle', 'data-account-remove',
@@ -72,7 +72,7 @@ test('source renderer itself includes original action controls even without late
 
 test('connected account panel spans the source/broker grid rather than nesting inside half-width broker card', () => {
   const html = withUnifiedTradingConnections('<html><body><div id="accountRows"></div></body></html>');
-  assert.match(html, /panel\.style\.gridColumn='1 \\/ -1'/);
+  assert.ok(html.includes("panel.style.gridColumn='1 / -1'"));
   assert.match(html, /card\.parentNode\.insertBefore\(panel,card\.nextSibling\)/);
   assert.doesNotMatch(html, /card\.insertBefore\(panel,accountRows\.closest/);
   assert.match(html, /function accountSizingEditor/);
