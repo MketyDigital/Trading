@@ -116,6 +116,40 @@ test('MT5 gateway accepts reusable pairing auth until expiry, issues instance re
   assert.equal(body.context.symbol.platformSymbol, 'XAUUSD.r');
   assert.equal(body.context.tick.ask, 2500.5);
 
+  // The broker-derived exposure fields must survive the gateway's identity/symbol
+  // sanitizer. This is the regression for the 2026-11-09 FBS LIVE incident.
+  async function exposureProbe(exposure, expectedStatus) {
+    const pending = fetch(`${controlBase}/v1/mt5-context/${accountRowId}?symbol=XAUUSD.r&includeExposure=true`, {
+      headers: { Authorization: `Bearer ${controlSecret}` },
+    });
+    const question = await readMessage(reconnect);
+    assert.equal(question.type, 'context_request');
+    assert.equal(question.includeExposure, true);
+    const context = {
+      account: { accountNumber: '50123456', serverName: 'Broker-Demo', balance: 10000, equity: 9900 },
+      symbol: { platformSymbol: 'XAUUSD.r', minLots: 0.01, maxLots: 100, stepLots: 0.01, tickSize: 0.01, tickValueLoss: 1.2, digits: 2 },
+      tick: { bid: 2500.4, ask: 2500.5 },
+    };
+    if (exposure !== undefined) context.exposure = exposure;
+    reconnect.send(JSON.stringify({ type: 'context_result', requestId: question.requestId, ok: true, context }));
+    const result = await pending;
+    assert.equal(result.status, expectedStatus);
+    return result.json();
+  }
+  const exposed = await exposureProbe({ currentOpenRiskPercent: 4.25, currentDailyPnlPercent: -1.5 }, 200);
+  assert.deepEqual(exposed.context.exposure, { currentOpenRiskPercent: 4.25, currentDailyPnlPercent: -1.5 });
+  const omitted = await exposureProbe(undefined, 409);
+  assert.equal(omitted.reason, 'MT5_EXPOSURE_CONTEXT_MISSING');
+  for (const invalid of [
+    { currentOpenRiskPercent: null, currentDailyPnlPercent: 0 },
+    { currentOpenRiskPercent: -1, currentDailyPnlPercent: 0 },
+    { currentOpenRiskPercent: '0', currentDailyPnlPercent: 0 },
+    { currentOpenRiskPercent: 0, currentDailyPnlPercent: false },
+  ]) {
+    const rejected = await exposureProbe(invalid, 409);
+    assert.equal(rejected.reason, 'MT5_CONTEXT_INVALID');
+  }
+
   const sizingRequest = fetch(`${controlBase}/v1/mt5-broker-sizing/${accountRowId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${controlSecret}`, 'Content-Type': 'application/json' },
