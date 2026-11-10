@@ -230,7 +230,7 @@ test('external exposure override rejects absent, coerced, nonfinite and negative
       deps.riskMaterializer({
         workspaceId: 'ws-a',
         account: account({ safety_policy: { maxOpenRiskPercent: 20 } }),
-        action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 },
+        action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 },
       }),
       (error) => error.code === 'BROKER_EXPOSURE_CONTEXT_INCOMPLETE',
     );
@@ -251,7 +251,7 @@ test('external exposure override retains finite signed daily PnL and nonnegative
   const result = await deps.riskMaterializer({
     workspaceId: 'ws-a',
     account: account({ safety_policy: { maxOpenRiskPercent: 20, maxDailyLossPercent: 50 } }),
-    action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', stopLoss: 2499.5 },
+    action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 },
   });
   assert.equal(result.allowed, true);
   assert.equal(result.policyContext.currentDailyPnlPercent, -1.5);
