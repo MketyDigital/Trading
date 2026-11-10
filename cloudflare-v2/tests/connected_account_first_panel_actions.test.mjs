@@ -51,3 +51,30 @@ test('existing pre-rendered MT5 action buttons receive their real click handlers
   assert.match(html, /if\(!card\.querySelector\('\[data-mt5-connector-token\]'\)\)/);
   assert.match(html, /if\(!b\)\{/);
 });
+
+test('source renderer itself includes original action controls even without later HTML rewriting', () => {
+  const html = withUnifiedTradingConnections('<html><body><div id="accountRows"></div></body></html>');
+  const start = html.indexOf('function accountButtons(x){');
+  const end = html.indexOf('function accountSizingEditor', start);
+  assert.ok(start >= 0 && end > start);
+  const render = new Function('x', 'esc', html.slice(start, end) + String.fromCharCode(10) + 'return accountButtons(x);');
+  const mt5 = render(base, value => String(value ?? ''));
+  for (const name of [
+    'data-account-edit', 'data-account-sizing-toggle', 'data-account-remove',
+    'data-account-trading', 'data-account-live',
+    'data-mt5-connector-token', 'data-mt5-connector-sync',
+  ]) assert.match(mt5, new RegExp(name));
+  const ctrader = render({ ...base, providerMode: 'ctrader_oauth' }, value => String(value ?? ''));
+  assert.match(ctrader, /data-account-edit/);
+  assert.match(ctrader, /data-account-sizing-toggle/);
+  assert.doesNotMatch(ctrader, /data-mt5-connector-token/);
+});
+
+test('connected account panel spans the source/broker grid rather than nesting inside half-width broker card', () => {
+  const html = withUnifiedTradingConnections('<html><body><div id="accountRows"></div></body></html>');
+  assert.ok(html.includes("panel.style.gridColumn='1 / -1'"));
+  assert.match(html, /card\.parentNode\.insertBefore\(panel,card\.nextSibling\)/);
+  assert.doesNotMatch(html, /card\.insertBefore\(panel,accountRows\.closest/);
+  assert.match(html, /function accountSizingEditor/);
+  assert.match(html, /function saveAccountSizing/);
+});
