@@ -105,6 +105,77 @@ jobs:
           if (!succeeded.length) console.log('LAST_SUCCESSFUL_GATEWAY_DEPLOYMENT=UNKNOWN');
           else console.log('LAST_SUCCESSFUL_GATEWAY_DEPLOYMENT=' + JSON.stringify(succeeded[0]));
           NODE
+      - name: Verify authenticated FBS exposure context (GET only, no order)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const target = '5fd04cbf-fb82-4ca3-a9e1-cda6adbe4f51';
+          const expectedNumber = '110664480', expectedServer = 'FBS-Real';
+          const root = String(process.env.OCI_COOLIFY_URL || '').replace(/\/$/, '');
+          const base = root.endsWith('/api/v1') ? root : root + '/api/v1';
+          const apiToken = String(process.env.OCI_COOLIFY_TOKEN || '');
+          const timeout = 12000;
+          const get = async (url, options = {}) => {
+            const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeout), ...options });
+            let body = null;
+            try { body = await response.json(); } catch {}
+            return { status: response.status, body };
+          };
+          (async () => {
+            // Coolify API is queried inside this trusted production-environment job.
+            // Raw environment values and the full broker context are never printed.
+            const envs = await get(base + '/applications/' + process.env.EXPECTED_APP_UUID + '/envs', {
+              headers: { Authorization: 'Bearer ' + apiToken, Accept: 'application/json' },
+            });
+            console.log('FBS_EXPOSURE_CONTROL_ENV_HTTP=' + envs.status);
+            if (envs.status !== 200) { console.log('FBS_EXPOSURE_CHECK=NO_COOLIFY_ENV_ACCESS'); return; }
+            const rows = Array.isArray(envs.body) ? envs.body : envs.body?.data;
+            if (!Array.isArray(rows)) { console.log('FBS_EXPOSURE_CHECK=UNKNOWN_ENV_RESPONSE'); return; }
+            const candidates = rows.filter(row => row?.key === 'CBOT_CONTROL_SECRET');
+            if (candidates.length !== 1) { console.log('FBS_EXPOSURE_CHECK=CONTROL_SECRET_NOT_UNIQUE'); return; }
+            const item = candidates[0];
+            const candidatesValues = [item.real_value, item.value].filter(v => typeof v === 'string' && v.trim());
+            const controlSecret = candidatesValues.find(v => !/^(\*+|\[hidden\]|\[redacted\]|<redacted>|null)$/i.test(v.trim()));
+            if (!controlSecret) { console.log('FBS_EXPOSURE_CHECK=CONTROL_SECRET_MASKED'); return; }
+            const context = await get('https://cbot.mkety.com:25345/v1/mt5-context/' + target + '?symbol=EURUSD&includeExposure=true', {
+              headers: { Authorization: 'Bearer ' + controlSecret, Accept: 'application/json' },
+            });
+            console.log('FBS_EXPOSURE_CONTEXT_HTTP=' + context.status);
+            const response = context.body || {};
+            const record = response.context || {};
+            const identity = record.account || {};
+            const accountMatch = String(identity.accountNumber ?? '') === expectedNumber;
+            const serverMatch = String(identity.serverName ?? '') === expectedServer;
+            const exposure = record.exposure;
+            const open = exposure?.currentOpenRiskPercent;
+            const daily = exposure?.currentDailyPnlPercent;
+            const numerical = typeof open === 'number' && Number.isFinite(open) && open >= 0
+              && typeof daily === 'number' && Number.isFinite(daily);
+            const reason = typeof response.reason === 'string' && /^[A-Z0-9_]{2,100}$/.test(response.reason)
+              ? response.reason : null;
+            console.log('FBS_EXPOSURE_RESULT=' + JSON.stringify({
+              status: context.status,
+              ok: response.ok === true,
+              accountBound: String(response.accountRowId ?? '') === target,
+              brokerAccountMatch: accountMatch,
+              brokerServerMatch: serverMatch,
+              exposurePresent: Boolean(exposure && typeof exposure === 'object'),
+              validNumericRiskValues: numerical,
+              reasonCode: reason,
+            }));
+            if (context.status === 200 && response.ok === true
+              && String(response.accountRowId ?? '') === target && accountMatch && serverMatch && numerical) {
+              console.log('FBS_EXPOSURE_CHECK=PASS_AUTHENTICATED_BROKER_EXPOSURE');
+            } else {
+              console.log('FBS_EXPOSURE_CHECK=NOT_VERIFIED');
+            }
+          })().catch(err => {
+            const name = String(err?.name || 'UnknownError');
+            console.log('FBS_EXPOSURE_CHECK=REQUEST_FAILED:' + (/^[A-Za-z]+Error$/.test(name) ? name : 'UnknownError'));
+            process.exitCode = 0;
+          });
+          NODE
       - name: Public gateway health (no authentication or trading)
         shell: bash
         run: |
