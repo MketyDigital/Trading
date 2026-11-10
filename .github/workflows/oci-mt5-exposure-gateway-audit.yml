@@ -1,0 +1,87 @@
+name: OCI MT5 Exposure Gateway Deployment Audit (Read Only)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-mt5-exposure-gateway-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-active-oci-gateway:
+    name: Inspect active OCI gateway without mutations
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    env:
+      OCI_COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL }}
+      OCI_COOLIFY_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN }}
+      EXPECTED_APP_UUID: wp23orxgfa9py7giponnvcjt
+      REQUIRED_EXPOSURE_COMMIT: a94013778aedfee29f373f362c32b2396102cead
+    steps:
+      - name: Read active application metadata (GET only, sanitized)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OCI_COOLIFY_URL:-}" || { echo 'OCI_COOLIFY_URL is not configured'; exit 1; }
+          test -n "${OCI_COOLIFY_TOKEN:-}" || { echo 'OCI_COOLIFY_TOKEN is not configured'; exit 1; }
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          body="$RUNNER_TEMP/oci-gateway-audit.json"
+          trap 'rm -f "$body"' EXIT
+          # Only authenticated metadata GETs. Never print raw API JSON, headers, credentials or env values.
+          code="$(curl --proto '=https' --tlsv1.2 --fail-with-body -sS \
+            --connect-timeout 10 --max-time 35 -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+            -H 'Accept: application/json' \
+            "$api/applications/$EXPECTED_APP_UUID")"
+          echo "OCI_COOLIFY_APPLICATION_HTTP=$code"
+          APP_METADATA_PATH="$body" node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync(process.env.APP_METADATA_PATH, 'utf8'));
+          const app = response.application ?? response.data ?? response.result ?? response;
+          const string = value => typeof value === 'string' ? value : '';
+          const uuid = string(app.uuid);
+          if (uuid !== process.env.EXPECTED_APP_UUID) throw new Error('Active Coolify application UUID mismatch');
+          const revisionCandidates = [
+            app.git_commit_sha, app.commit_sha, app.current_commit, app.last_deployed_commit,
+            app.latest_deployment?.commit, app.latest_deployment?.commit_sha,
+            app.latest_deployment?.git_commit_sha,
+          ].map(string).filter(Boolean);
+          const safe = {
+            applicationUuid: uuid,
+            applicationName: string(app.name),
+            status: string(app.status),
+            gitBranch: string(app.git_branch),
+            buildPack: string(app.build_pack),
+            configuredRevision: revisionCandidates[0] || null,
+            configuredRevisionFields: revisionCandidates.length,
+          };
+          console.log('ACTIVE_OCI_GATEWAY_METADATA=' + JSON.stringify(safe));
+          const expected = process.env.REQUIRED_EXPOSURE_COMMIT;
+          if (!revisionCandidates.length) {
+            console.log('DEPLOYED_EXPOSURE_REVISION=UNKNOWN (application API omitted commit fields; inspect deployment record/image)');
+          } else if (revisionCandidates.some(x => x === expected || x.startsWith(expected.slice(0, 10)))) {
+            console.log('DEPLOYED_EXPOSURE_REVISION=REPORTED_REQUIRED_COMMIT (still verify running image)');
+          } else {
+            console.log('DEPLOYED_EXPOSURE_REVISION=UNVERIFIED_OTHER_COMMIT (check ancestry/build and active container)');
+          }
+          NODE
+      - name: Public gateway health (no authentication or trading)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 --fail -sS \
+            --connect-timeout 10 --max-time 20 \
+            -o "$RUNNER_TEMP/oci-gateway-health.json" \
+            'https://cbot.mkety.com:25345/health'
+          HEALTH_PATH="$RUNNER_TEMP/oci-gateway-health.json" node <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync(process.env.HEALTH_PATH, 'utf8'));
+          if (response.ok !== true) throw new Error('Public gateway health is not OK');
+          console.log('PUBLIC_GATEWAY_HEALTH=PASS');
+          NODE
+          rm -f "$RUNNER_TEMP/oci-gateway-health.json"
