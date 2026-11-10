@@ -270,11 +270,14 @@ export function createProductionExecutionDependencies(config = {}, overrides = {
         }
         throw error;
       }
-      const daily = Number(exposure?.currentDailyPnlPercent);
-      const open = Number(exposure?.currentOpenRiskPercent);
-      if (!Number.isFinite(daily) || !Number.isFinite(open)) {
+      // An external authority must provide actual finite numeric measurements.
+      // Number(null), Number('') and Number(false) otherwise silently become zero.
+      const daily = exposure?.currentDailyPnlPercent;
+      const open = exposure?.currentOpenRiskPercent;
+      if (typeof daily !== 'number' || typeof open !== 'number'
+          || !Number.isFinite(daily) || !Number.isFinite(open) || open < 0) {
         const error = new Error('authoritative production exposure context is incomplete');
-        error.code = 'BROKER_RISK_CONTEXT_UNAVAILABLE';
+        error.code = 'BROKER_EXPOSURE_CONTEXT_INCOMPLETE';
         throw error;
       }
       return { currentDailyPnlPercent: daily, currentOpenRiskPercent: open };
