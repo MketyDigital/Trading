@@ -193,5 +193,5 @@ test('connections UI exposes one Trading toggle for demo and a separate real-mon
   assert.match(ui, /else if\(t\.dataset\.accountLive\)toggleAccountLive/);
   assert.match(ui, /else if\(t\.dataset\.accountDestination\)enableAccountDestination/);
   assert.match(ui, /data-account-sizing-toggle/);
-  assert.match(ui, /Configure sizing<\\/button>/);
+  assert.match(ui, /Configure sizing<\/button>/);
 });
