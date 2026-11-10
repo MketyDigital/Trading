@@ -11,8 +11,15 @@ export function withSimplifiedAccountControls(html) {
     'Connected execution accounts have a simple Trading ON/OFF control. Live accounts additionally require explicit real-money permission.',
   );
 
-  // Account action markup is owned by dashboard_unified_connections.js.
-  // Avoid overwriting that renderer a second time during HTML enhancement.
+  const accountButtonsStart = output.indexOf('function accountButtons(x){');
+  const accountButtonsEnd = output.indexOf('function accountSizingEditor', accountButtonsStart);
+  if (accountButtonsStart >= 0 && accountButtonsEnd > accountButtonsStart) {
+    // Keep connector actions in the first-panel markup itself. Previously they
+    // appeared only after a separate script mutated the card, so missing/late
+    // observation could silently hide the only recovery controls.
+    const accountButtons = `function accountButtons(x){var exec=(x.roles||[]).indexOf('execution')>=0;var destination=exec?'':'<button class="btn secondary" data-account-destination="'+esc(x.id)+'" data-account-roles="'+esc((x.roles||[]).join(','))+'">Use as destination</button>';var trading=exec?'<button class="btn '+(x.tradingEnabled?'primary':'secondary')+'" data-account-trading="'+esc(x.id)+'" data-enabled="'+(x.tradingEnabled?'true':'false')+'">'+(x.tradingEnabled?'Trading ON':'Trading OFF')+'</button>':'';var live=exec&&x.environment==='live'?'<button class="btn '+(x.liveExecutionEnabled?'danger':'secondary')+'" data-account-live="'+esc(x.id)+'" data-enabled="'+(x.liveExecutionEnabled?'true':'false')+'">Allow real-money: '+(x.liveExecutionEnabled?'ON':'OFF')+'</button>':'';var mt5=String(x.providerMode||'')==='mt5_connector';var connector=mt5?'<button class="btn secondary" type="button" data-mt5-connector-token="'+esc(x.id)+'">Regenerate connection token</button><button class="btn secondary" type="button" data-mt5-connector-sync="'+esc(x.id)+'">'+(String((x.providerConfig||{}).status||'').toLowerCase()==='connected'?'Refresh MT5 connection':'Sync MT5 identity')+'</button>':'';return '<div class="actions" style="margin-top:7px">'+destination+trading+live+connector+'<button class="btn secondary" data-account-edit="'+esc(x.id)+'">Edit details</button><button class="btn secondary" data-account-sizing-toggle="'+esc(x.id)+'">Configure sizing</button><button class="btn danger" data-account-remove="'+esc(x.id)+'">Remove</button></div>'}`;
+    output = output.slice(0, accountButtonsStart) + accountButtons + output.slice(accountButtonsEnd);
+  }
 
   output = output.replace(
     "+esc(x.active?'Active':'Inactive')+' • '+esc(x.executionEnabled?'Execution flag ON':'Execution flag OFF')+' • '+esc(x.killSwitch?'Kill switch ON':'Kill switch OFF')+'</div>'+accountButtons(x)",
