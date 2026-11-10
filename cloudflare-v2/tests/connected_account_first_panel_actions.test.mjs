@@ -78,3 +78,25 @@ test('connected account panel spans the source/broker grid rather than nesting i
   assert.match(html, /function accountSizingEditor/);
   assert.match(html, /function saveAccountSizing/);
 });
+
+test('only one connected-account list is visible: legacy table is hidden but retained for existing handlers', () => {
+  const html = withUnifiedTradingConnections('<html><body><div id="accountRows"></div></body></html>');
+  assert.match(html, /redundantTable=accountRows\.closest/);
+  assert.match(html, /redundantTable\.hidden=true/);
+  assert.match(html, /redundantTable\.style\.display='none'/);
+  assert.match(html, /redundantTable\.setAttribute\('aria-hidden','true'\)/);
+  assert.match(html, /id="unifiedAccountRows"/);
+  assert.match(html, /id="accountRows"/);
+});
+
+test('all legacy actions precede hidden sizing editor, with sizing code and broker risk unchanged', () => {
+  const original = withUnifiedTradingConnections('<html><body><div id="accountRows"></div></body></html>');
+  const enhanced = withSimplifiedAccountControls(original);
+  assert.match(original, /accountSizingMeta\(x\)\+accountButtons\(x\)\+accountSizingEditor\(x\)/);
+  assert.equal(enhanced.match(/function accountButtons\(x\)\{/g).length, 1);
+  assert.match(enhanced, /data-account-sizing-toggle/);
+  assert.match(enhanced, /function saveAccountSizing/);
+  assert.match(enhanced, /function accountSizingEditor/);
+  assert.match(enhanced, /data-account-live/);
+  assert.match(enhanced, /data-mt5-connector-token/);
+});
