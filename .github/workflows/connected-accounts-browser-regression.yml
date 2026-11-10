@@ -1,0 +1,35 @@
+name: Connected Account Browser Regression
+on:
+  pull_request:
+    paths:
+      - 'cloudflare-v2/src/dashboard_*'
+      - 'cloudflare-v2/scripts/connected_accounts_browser_acceptance.mjs'
+      - '.github/workflows/connected-accounts-browser-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-authenticated-mock-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Reproduce first-panel UI with six representative synthetic accounts
+        run: node cloudflare-v2/scripts/connected_accounts_browser_acceptance.mjs
+      - name: Upload visible browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: connected-account-browser-${{ github.run_id }}
+          path: connected-account-browser-artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
