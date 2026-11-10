@@ -133,11 +133,23 @@ jobs:
             const rows = Array.isArray(envs.body) ? envs.body : envs.body?.data;
             if (!Array.isArray(rows)) { console.log('FBS_EXPOSURE_CHECK=UNKNOWN_ENV_RESPONSE'); return; }
             const candidates = rows.filter(row => row?.key === 'CBOT_CONTROL_SECRET');
-            if (candidates.length !== 1) { console.log('FBS_EXPOSURE_CHECK=CONTROL_SECRET_NOT_UNIQUE'); return; }
-            const item = candidates[0];
-            const candidatesValues = [item.real_value, item.value].filter(v => typeof v === 'string' && v.trim());
-            const controlSecret = candidatesValues.find(v => !/^(\*+|\[hidden\]|\[redacted\]|<redacted>|null)$/i.test(v.trim()));
-            if (!controlSecret) { console.log('FBS_EXPOSURE_CHECK=CONTROL_SECRET_MASKED'); return; }
+            const liveEntries = candidates.filter(row => row.is_runtime !== false && row.is_preview !== true);
+            console.log('FBS_EXPOSURE_CONTROL_ENV_METADATA=' + JSON.stringify({
+              namedEntries: candidates.length,
+              runtimeNonPreviewEntries: liveEntries.length,
+              sourceIds: [...new Set(liveEntries.map(row => String(row.resourceable_id ?? 'unknown')))],
+              labels: liveEntries.map(row => ({ runtime: row.is_runtime === true, preview: row.is_preview === true, shared: row.is_shared === true }))
+            }));
+            if (!liveEntries.length) { console.log('FBS_EXPOSURE_CHECK=NO_RUNTIME_CONTROL_SECRET'); return; }
+            const secrets = liveEntries.flatMap(row => [row.real_value, row.value])
+              .filter(v => typeof v === 'string' && v.trim())
+              .filter(v => !/^(\*+|\[hidden\]|\[redacted\]|<redacted>|null)$/i.test(v.trim()));
+            const distinct = [...new Set(secrets)];
+            if (distinct.length !== 1) {
+              console.log('FBS_EXPOSURE_CHECK=' + (distinct.length === 0 ? 'CONTROL_SECRET_MASKED' : 'AMBIGUOUS_RUNTIME_CONTROL_SECRETS'));
+              return;
+            }
+            const controlSecret = distinct[0];
             const context = await get('https://cbot.mkety.com:25345/v1/mt5-context/' + target + '?symbol=EURUSD&includeExposure=true', {
               headers: { Authorization: 'Bearer ' + controlSecret, Accept: 'application/json' },
             });
