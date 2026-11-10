@@ -2,6 +2,10 @@ name: OCI MT5 Exposure Gateway Deployment Audit (Read Only)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-mt5-exposure-gateway-audit.yml'
 
 permissions:
   contents: read
@@ -52,7 +56,6 @@ jobs:
             applicationName: string(app.name),
             status: string(app.status),
             gitBranch: string(app.git_branch),
-            repository: string(app.git_repository) || string(app.git_full_url).replace(/https:\/\/[^/@]+@/, 'https://'),
             buildPack: string(app.build_pack),
             configuredRevision: revisionCandidates[0] || null,
             configuredRevisionFields: revisionCandidates.length,
