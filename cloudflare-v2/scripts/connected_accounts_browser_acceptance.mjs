@@ -129,11 +129,22 @@ try {
       },
     };
   });
+  const fbsCard = page.locator('#unifiedAccountRows [data-account-id="mt5-fbs"]');
+  const sizingToggle = fbsCard.locator('[data-account-sizing-toggle]');
+  const sizingEditor = fbsCard.locator('[data-account-sizing-editor]');
+  await sizingToggle.click({ timeout: 5000 });
+  await sizingEditor.waitFor({ state: 'visible', timeout: 4000 });
+  assert.equal(await sizingEditor.locator('[data-risk-mode]').inputValue(), 'fixed_cash');
+  assert.equal(await sizingEditor.locator('[data-minimum-lot-policy]').inputValue(), 'FLOOR');
+  await sizingToggle.click({ timeout: 5000 });
+  await sizingEditor.waitFor({ state: 'hidden', timeout: 4000 });
+  console.log('CONNECTED_ACCOUNT_SIZING_EDITOR_TOGGLE=PASS');
   console.log('CONNECTED_ACCOUNT_BROWSER_REPORT=' + JSON.stringify(observed));
   await page.screenshot({ path: artifacts + '/accounts-full-page.png', fullPage: true, timeout: 7000 });
   if (failures.length) console.log('CONNECTED_ACCOUNT_BROWSER_JS_ERRORS=' + JSON.stringify(failures.slice(0,8)));
   assert.equal(observed.cardCount, 6, 'all six representative account cards must render');
   assert.equal(observed.panelCount, 1, 'one unified connection manager');
+  assert.equal(observed.legacyVisible, false, 'duplicated legacy account table must remain hidden');
   assert.ok(observed.accountButtons.every(a => a.editorExists && a.sizingLabel), 'existing sizing editor and summary remain');
   assert.ok(observed.accountButtons.every(a => a.actionButtons.includes('Edit details') && a.actionButtons.includes('Configure sizing')),
     'original actions must be visible on every connection card');
