@@ -203,3 +203,57 @@ test('live MT5 connector obtains authoritative exposure from the gateway before 
   assert.equal(result.policyContext.currentDailyPnlPercent, -1.5);
   assert.equal(requests.some(({ url }) => url.includes('includeExposure=true')), true);
 });
+
+test('external exposure override rejects absent, coerced, nonfinite and negative risk values before broker calls', async () => {
+  const cases = [
+    null,
+    {},
+    { currentDailyPnlPercent: null, currentOpenRiskPercent: 0 },
+    { currentDailyPnlPercent: 0, currentOpenRiskPercent: null },
+    { currentDailyPnlPercent: '', currentOpenRiskPercent: 0 },
+    { currentDailyPnlPercent: false, currentOpenRiskPercent: 0 },
+    { currentDailyPnlPercent: '0', currentOpenRiskPercent: 0 },
+    { currentDailyPnlPercent: 0, currentOpenRiskPercent: -1 },
+    { currentDailyPnlPercent: Number.NaN, currentOpenRiskPercent: 0 },
+  ];
+  for (const exposure of cases) {
+    let brokerCalls = 0;
+    const deps = createProductionExecutionDependencies({
+      env: { TRADING_MASTER_KEY: 'master' },
+      supabase: { from() { throw new Error('unexpected DB query'); } },
+      workspaceId: 'ws-a', tradingEventId: 'event-1',
+    }, {
+      exposureLoader: async () => exposure,
+      fetchFn: async () => { brokerCalls += 1; throw new Error('unexpected broker call'); },
+    });
+    await assert.rejects(
+      deps.riskMaterializer({
+        workspaceId: 'ws-a',
+        account: account({ safety_policy: { maxOpenRiskPercent: 20 } }),
+        action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 },
+      }),
+      (error) => error.code === 'BROKER_EXPOSURE_CONTEXT_INCOMPLETE',
+    );
+    assert.equal(brokerCalls, 0);
+  }
+});
+
+test('external exposure override retains finite signed daily PnL and nonnegative open risk', async () => {
+  const deps = createProductionExecutionDependencies({
+    env: { TRADING_MASTER_KEY: 'master' },
+    supabase: { from() { throw new Error('unexpected DB query'); } },
+    workspaceId: 'ws-a', tradingEventId: 'event-1',
+  }, {
+    exposureLoader: async () => ({ currentDailyPnlPercent: -1.5, currentOpenRiskPercent: 4.25 }),
+    decryptCredentialsFn: async () => ({ gatewayUrl: 'https://gateway.example:25345', controlSecret: 'control-secret' }),
+    fetchFn: connectorFetch(),
+  });
+  const result = await deps.riskMaterializer({
+    workspaceId: 'ws-a',
+    account: account({ safety_policy: { maxOpenRiskPercent: 20, maxDailyLossPercent: 50 } }),
+    action: { type: 'OPEN_POSITION', symbol: 'GOLD', side: 'BUY', orderType: 'MARKET', lots: 0.01, stopLoss: 2499.5 },
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.policyContext.currentDailyPnlPercent, -1.5);
+  assert.equal(result.policyContext.currentOpenRiskPercent, 4.25);
+});
