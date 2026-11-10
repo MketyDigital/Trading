@@ -70,6 +70,41 @@ jobs:
             console.log('DEPLOYED_EXPOSURE_REVISION=UNVERIFIED_OTHER_COMMIT (check ancestry/build and active container)');
           }
           NODE
+      - name: Inspect latest deployments of active application (GET only, sanitized)
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${OCI_COOLIFY_URL%/}"
+          [[ "$root" == */api/v1 ]] && api="$root" || api="$root/api/v1"
+          body="$RUNNER_TEMP/oci-gateway-deployments.json"
+          trap 'rm -f "$body"' EXIT
+          code="$(curl --proto '=https' --tlsv1.2 -sS \
+            --connect-timeout 10 --max-time 35 -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer $OCI_COOLIFY_TOKEN" \
+            -H 'Accept: application/json' \
+            "$api/deployments/applications/$EXPECTED_APP_UUID?take=12")"
+          echo "OCI_GATEWAY_DEPLOYMENTS_HTTP=$code"
+          if [ "$code" != '200' ]; then
+            echo 'OCI_GATEWAY_DEPLOYMENTS=UNAVAILABLE'
+            exit 0
+          fi
+          DEPLOYMENTS_PATH="$body" node <<'NODE'
+          const fs = require('fs');
+          const raw = JSON.parse(fs.readFileSync(process.env.DEPLOYMENTS_PATH,'utf8'));
+          const data = Array.isArray(raw) ? raw : raw.data ?? raw.deployments ?? [];
+          if (!Array.isArray(data)) throw new Error('Unexpected deployments response');
+          const safe = data.slice(0,12).map((d) => ({
+            deploymentUuid: typeof d.deployment_uuid === 'string' ? d.deployment_uuid : (typeof d.uuid === 'string' ? d.uuid : null),
+            commit: typeof d.commit === 'string' ? d.commit : (typeof d.git_commit_sha === 'string' ? d.git_commit_sha : null),
+            status: typeof d.status === 'string' ? d.status : null,
+            createdAt: typeof d.created_at === 'string' ? d.created_at : null,
+            updatedAt: typeof d.updated_at === 'string' ? d.updated_at : null,
+          }));
+          console.log('OCI_GATEWAY_DEPLOYMENT_HISTORY=' + JSON.stringify(safe));
+          const succeeded = safe.filter(d => /finished|success|completed/i.test(d.status || ''));
+          if (!succeeded.length) console.log('LAST_SUCCESSFUL_GATEWAY_DEPLOYMENT=UNKNOWN');
+          else console.log('LAST_SUCCESSFUL_GATEWAY_DEPLOYMENT=' + JSON.stringify(succeeded[0]));
+          NODE
       - name: Public gateway health (no authentication or trading)
         shell: bash
         run: |
