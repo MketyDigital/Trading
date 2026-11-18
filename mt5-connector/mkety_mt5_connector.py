@@ -781,6 +781,9 @@ def resolve_startup_config(args, input_fn=input):
 
 def main(argv=None):
     if argv is None and len(sys.argv) > 1 and sys.argv[1] == '--local-copy-worker':
+        # The windowed EXE has no stdout/stderr; copier error reporting must not
+        # itself crash when a broker rejects an action.
+        ensure_console_streams()
         from local_copier_worker import main as local_copy_main
         return local_copy_main(sys.argv[2:])
     if argv is None and getattr(sys, 'frozen', False) and len(sys.argv) == 1:
