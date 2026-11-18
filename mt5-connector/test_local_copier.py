@@ -566,9 +566,10 @@ class LocalCopierTests(unittest.TestCase):
             def poll(self): return None
         with patch('copy_supervisor.sys.frozen', True, create=True), \
                 patch('copy_supervisor.sys.executable', 'MketyMT5Connector.exe'):
-            supervisor = LocalCopySupervisor(popen_factory=lambda args, close_fds=True: (calls.append(args) or Process()))
+            supervisor = LocalCopySupervisor(popen_factory=lambda args, **kwargs: (calls.append((args, kwargs)) or Process()))
             supervisor.start(CopyPairSpec('parent', 'follower', Path('parent.exe'), Path('follower.exe')))
-        self.assertEqual(calls[0][:2], ['MketyMT5Connector.exe', '--local-copy-worker'])
+        self.assertEqual(calls[0][0][:2], ['MketyMT5Connector.exe', '--local-copy-worker'])
+        self.assertEqual(calls[0][1]['env']['PYINSTALLER_RESET_ENVIRONMENT'], '1')
 
     def test_stop_and_stop_all_terminate_local_copy_processes(self):
         calls = []

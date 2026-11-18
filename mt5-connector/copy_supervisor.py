@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,7 +69,13 @@ class LocalCopySupervisor:
             args.extend(['--journal', str(spec.journal_path)])
         if spec.stop_file is not None:
             args.extend(['--stop-file', str(spec.stop_file)])
-        process = self.popen_factory(args, close_fds=True)
+        # An independent frozen one-file worker may survive the manager's exit.
+        # PyInstaller 6.9+ must unpack it as a new application instance instead
+        # of borrowing the manager's temporary embedded-Python environment.
+        popen_kwargs = {'close_fds': True}
+        if getattr(sys, 'frozen', False) and self.command_prefix[:1] == [sys.executable]:
+            popen_kwargs['env'] = {**os.environ, 'PYINSTALLER_RESET_ENVIRONMENT': '1'}
+        process = self.popen_factory(args, **popen_kwargs)
         self._processes[key] = process
         return process.pid
 
